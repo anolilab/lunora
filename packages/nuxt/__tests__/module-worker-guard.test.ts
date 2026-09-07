@@ -14,6 +14,14 @@ import { checkWorkerEntry } from "../src/module";
  * plain-object integration hooks), so this plain function is the testable
  * seam instead.
  */
+
+/**
+ * The composition the module documents: Nitro keeps `fetch`, Lunora gets the
+ * event entrypoints. Re-exporting Nitro's `default` instead ships a worker whose
+ * `scheduled` only fires an empty `cloudflare:scheduled` hook.
+ */
+const COMPOSED_TAIL = "export { ShardDO };\nexport default { ...nitro, scheduled: (c, e, x) => app.scheduled(c, e, x) };\n";
+
 describe("checkWorkerEntry", () => {
     let directory: string;
 
@@ -35,7 +43,7 @@ describe("checkWorkerEntry", () => {
     });
 
     it("warns when worker.ts exists but only re-exports the Nitro handler (no ShardDO) — FAILS ON BASELINE (the old presence-only guard stayed silent)", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
         writeFileSync(join(directory, "worker.ts"), 'export { default } from "./.output/server/index.mjs";\n');
@@ -44,15 +52,35 @@ describe("checkWorkerEntry", () => {
 
         checkWorkerEntry(directory, warn);
 
-        expect(warn).toHaveBeenCalledTimes(1);
         expect(warn.mock.calls[0]?.[0]).toMatch(/does not appear to export `ShardDO`/u);
     });
 
-    it("is silent when worker.ts has the documented two-line snippet (no false positive on a correct file)", () => {
+    it("warns when worker.ts re-exports Nitro's default and never forwards `scheduled` — FAILS ON BASELINE (the guard only ever checked ShardDO)", () => {
+        expect.assertions(2);
+
+        directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
+        // The shape every Nuxt project shipped: Cloudflare finds a `scheduled`
+        // entrypoint (Nitro exports one), calls it successfully, and it fires an
+        // empty hook. A cron declared in `lunora/crons.ts` is provisioned by
+        // `lunora deploy` and then runs nothing, with no error anywhere.
+        writeFileSync(join(directory, "worker.ts"), 'export { default } from "./.output/server/index.mjs";\nexport { ShardDO } from "./lunora/server";\n');
+
+        const warn = vi.fn<(message: string) => void>();
+
+        checkWorkerEntry(directory, warn);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toMatch(/does not forward `scheduled`/u);
+    });
+
+    it("is silent for the documented composition (no false positive on a correct file)", () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
-        writeFileSync(join(directory, "worker.ts"), 'export { default } from "./.output/server/index.mjs";\nexport { ShardDO } from "./lunora/server";\n');
+        writeFileSync(
+            join(directory, "worker.ts"),
+            `import nitro from "./.output/server/index.mjs";\nimport app, { ShardDO } from "./lunora/server";\n${COMPOSED_TAIL}`,
+        );
 
         const warn = vi.fn<(message: string) => void>();
 
@@ -65,7 +93,7 @@ describe("checkWorkerEntry", () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
-        writeFileSync(join(directory, "worker.ts"), 'export { default } from "./.output/server/index.mjs";\nexport * from "./lunora/server";\n');
+        writeFileSync(join(directory, "worker.ts"), `export * from "./lunora/server";\n${COMPOSED_TAIL}`);
 
         const warn = vi.fn<(message: string) => void>();
 
@@ -78,10 +106,7 @@ describe("checkWorkerEntry", () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
-        writeFileSync(
-            join(directory, "worker.ts"),
-            'import { ShardDO } from "./lunora/server";\nexport { default } from "./.output/server/index.mjs";\nexport { ShardDO };\n',
-        );
+        writeFileSync(join(directory, "worker.ts"), `import app, { ShardDO } from "./lunora/server";\n${COMPOSED_TAIL}`);
 
         const warn = vi.fn<(message: string) => void>();
 
@@ -120,7 +145,7 @@ describe("checkWorkerEntry", () => {
         // documented imprecision, not a regression; a real TS parse would not
         // have this gap, which is exactly the tradeoff the pattern's docblock
         // calls out (a build-time warning hook doesn't warrant one).
-        writeFileSync(join(directory, "worker.ts"), '// TODO: remember to export ShardDO from here\nexport { default } from "./.output/server/index.mjs";\n');
+        writeFileSync(join(directory, "worker.ts"), `// TODO: remember to export ShardDO from here\n${COMPOSED_TAIL}`);
 
         const warn = vi.fn<(message: string) => void>();
 

@@ -747,11 +747,7 @@ interface FivetranResponse {
 ### `FrameworkHostHandler` (type)
 
 ```ts
-type FrameworkHostHandler = ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & {
-    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-    queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-    scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-});
+type FrameworkHostHandler = ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
 ```
 
 ### `FrameworkWorkerOptions` (type)

@@ -319,7 +319,6 @@ abstract class ShardDO {
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
-    protected setOutboundBookmark(bookmark: string | undefined, sink: DispatchBookmark | undefined): void;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
     protected getCurrentTraceparent(): string | undefined;
@@ -483,6 +482,7 @@ interface ShardDOState {
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
+        jurisdiction?: string;
         name?: string;
     };
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;

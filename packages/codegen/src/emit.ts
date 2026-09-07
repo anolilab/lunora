@@ -4975,7 +4975,7 @@ ${vectorNamespaceField}
     // D1 Sessions API bookmark: `bookmark` lets a D1-backed factory pin reads to
     // the caller's own prior writes (read-your-writes across replicas), and
     // `onBookmark` lets it report back the bookmark a write produced so this DO
-    // can record it via `setOutboundBookmark` and echo it on the response.
+    // can record it on the dispatch's sink and echo it on the response.
     //
     // The bookmark lands in `options.bookmarks` — the DISPATCH's own sink,
     // value-threaded down from `handleRpc`, the way `headroom` and `scope` are.
@@ -4991,7 +4991,7 @@ ${vectorNamespaceField}
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue, options.bookmarks); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
+        ? `            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND

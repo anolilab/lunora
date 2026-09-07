@@ -118,7 +118,11 @@ class BookmarkRaceShard extends ShardDO {
         bookmarks?: DispatchBookmark,
     ): Promise<unknown> {
         if (functionPath === "slow") {
-            this.setOutboundBookmark("bm-slow", bookmarks);
+            if (bookmarks !== undefined) {
+                // `Object.assign` because `no-param-reassign` forbids writing a
+                // parameter's properties directly.
+                Object.assign(bookmarks, { value: "bm-slow" });
+            }
             this.started.resolve();
 
             // The third-party round trip an action awaits. A sibling dispatch

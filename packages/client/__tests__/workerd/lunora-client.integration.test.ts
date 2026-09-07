@@ -194,7 +194,8 @@ describe("lunoraClient (workerd integration)", () => {
             requestHeaders.push(new Headers(init?.headers));
 
             // Have the worker echo a synthetic bookmark on the mutation response.
-            // The shard sets the response bookmark via `setOutboundBookmark`,
+            // The shard sets the response bookmark by writing the per-dispatch
+            // `DispatchBookmark` sink its generated `onBookmark` is handed,
             // which the runtime then forwards. We piggy-back by stamping it
             // into the response that comes back from SELF.
             return SELF.fetch(input as never, init as never).then((response: Response) => {

@@ -2584,20 +2584,6 @@ const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefine
 };
 
 /**
- * Refuse to build a worker whose paywall cannot see the functions it is meant to
- * charge for.
- *
- * `.x402({ price })` tags live on the `functions` registry, so with no registry
- * there is nothing to read them off: every paid procedure would dispatch FREE —
- * no 402, no settlement, no diagnostic — under a docblock promising the paywall
- * is fail-closed by construction. `defineApp()` always supplies the registry, so
- * only a hand-rolled `createWorker({ shardDO, x402Charge })` can land here, and
- * that is a configuration mistake with exactly one honest moment to report it:
- * when the worker is built. Warning per isolate while paid dispatches sail
- * through trades a revenue/authorization hole for a log line nobody reads.
- */
-
-/**
  * Refuse to build a worker whose app routes shadow the reserved `/_lunora/*`
  * plane.
  *
@@ -2625,6 +2611,19 @@ const assertNoReservedRoutes = (routes: Readonly<Record<string, unknown>> | unde
     }
 };
 
+/**
+ * Refuse to build a worker whose paywall cannot see the functions it is meant to
+ * charge for.
+ *
+ * `.x402({ price })` tags live on the `functions` registry, so with no registry
+ * there is nothing to read them off: every paid procedure would dispatch FREE —
+ * no 402, no settlement, no diagnostic — under a docblock promising the paywall
+ * is fail-closed by construction. `defineApp()` always supplies the registry, so
+ * only a hand-rolled `createWorker({ shardDO, x402Charge })` can land here, and
+ * that is a configuration mistake with exactly one honest moment to report it:
+ * when the worker is built. Warning per isolate while paid dispatches sail
+ * through trades a revenue/authorization hole for a log line nobody reads.
+ */
 const assertX402Configurable = (options: WorkerOptions): void => {
     if (options.x402Charge !== undefined && options.functions === undefined) {
         throw new LunoraError(
@@ -5517,6 +5516,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 const composeWorker = (options: WorkerOptions): LunoraWorker => createWorker(options);
 
 /**
+ * The three Cloudflare dispatches a module worker can export beside `fetch`,
+ * named once because {@link FrameworkHostHandler} and {@link hostTriggers} both
+ * have to agree on the exact member list — a copy that drifts is a trigger
+ * {@link withFrameworkWorker} silently drops.
+ *
+ * `Promise<void> | void` because these describe what a framework adapter emits,
+ * not what Lunora returns (see {@link LunoraWorker}, whose own entries always
+ * hand back a promise).
+ */
+interface FrameworkTriggers {
+    email: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    queue: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+}
+
+/**
  * A meta-framework's emitted Cloudflare handler: either a bare `fetch` function
  * or a `{ fetch }` module object, optionally carrying its own trigger entries.
  * Every class-B adapter output (`@sveltejs/adapter-cloudflare`, Nitro's
@@ -5528,12 +5543,7 @@ const composeWorker = (options: WorkerOptions): LunoraWorker => createWorker(opt
  * {@link withFrameworkWorker} drop them with the type checker's blessing.
  */
 type FrameworkHostHandler =
-    | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
-    | (HttpRouterLike & {
-          email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-          queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-          scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-      });
+    ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
 
 /** Lunora worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
 type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
@@ -5570,13 +5580,7 @@ const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
  * so the declared type is a description of what those adapters emit, not a
  * guarantee the value satisfies it.
  */
-const hostTriggers = (
-    host: FrameworkHostHandler,
-): {
-    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-    queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-    scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
-} => {
+const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> => {
     if (typeof host !== "object") {
         return {};
     }
@@ -5659,9 +5663,13 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
         scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
         serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
-        // Declared only when the host actually has an `email` entry: an exported
-        // `email` the deployment cannot serve is a module shape wrangler reads as a
-        // capability the worker claims.
+        // `email` is the only trigger declared conditionally, and the asymmetry
+        // with `queue` above is deliberate: Lunora always exports a `queue`
+        // (`createWorker`'s consumer, a no-op when the app declares no push
+        // queues), so that export always resolves to something that can serve a
+        // batch. Lunora has no `email` implementation at all, so without a host
+        // entry the export would be a module shape wrangler reads as a capability
+        // the deployment cannot actually serve.
         ...(hostEmail === undefined
             ? {}
             : {

@@ -206,7 +206,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
 ```
 
 ### `checkLunoraProxy` (const)

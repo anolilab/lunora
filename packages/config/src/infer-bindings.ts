@@ -505,7 +505,8 @@ interface WorkerEntry {
 
 /**
  * The Durable Object classes the composed class-A entry exports. It emits
- * exactly one — `export const ShardDO = createShardDO()` — plus star
+ * exactly one — `export const ShardDO = app.ShardDO` off the generated
+ * `defineApp()` builder — plus star
  * re-exports of the generated container/workflow/agent modules (handled by
  * {@link detectClassExports}). `SchedulerDO`/`SessionDO` are NOT composed in, so
  * they stay unprovisioned, which is honest: binding them would name a class the
