@@ -257,3 +257,70 @@ describe("rls — .global() rows addressed by id", () => {
         expect(probes).toStrictEqual([]);
     });
 });
+
+/**
+ * The cost of the fallback above, bounded.
+ *
+ * A `.global()` row always misses `lookupById`, so every id falls through to the
+ * probe path. `deleteAll`/`deleteWhere` must leave `expectedTable` unpinned —
+ * pinning it blocks the writer's global fallback and makes every global delete a
+ * silent no-op — and unpinned USED to mean "probe every policy-gated table", so a
+ * chunked erase of N rows over a T-table schema issued N × T `findFirst` round
+ * trips (2 + T subrequests per row) and hit workerd's 1000-subrequest ceiling
+ * partway through an account deletion. Both callers know the table their ids came
+ * from, so it rides along as a probe scope that pins nothing.
+ */
+describe("rls — probe scope on chunked erases", () => {
+    /** Three policy-gated tables; only `profiles` is ever erased. */
+    const manyTablePolicies: ReadonlyArray<Policy<TestContext>> = [
+        definePolicy<TestContext>({ on: "delete", table: "profiles", when: () => true }),
+        definePolicy<TestContext>({ on: "read", table: "profiles", when: () => true }),
+        definePolicy<TestContext>({ on: "read", table: "audits", when: () => true }),
+        definePolicy<TestContext>({ on: "read", table: "notes", when: () => true }),
+    ];
+
+    const spyProbes = (database: ReturnType<typeof createSplitWriter>) => {
+        const probes: string[] = [];
+
+        return {
+            probes,
+            writer: {
+                ...database.writer,
+                findFirst: async (tableName: string, args?: { where?: { _id?: string } }) => {
+                    probes.push(tableName);
+
+                    return database.writer.findFirst(tableName, args);
+                },
+            },
+        };
+    };
+
+    it("deleteAll() probes only the table it erases, once per row", async () => {
+        expect.assertions(3);
+
+        const database = createSplitWriter(seed);
+        const spied = spyProbes(database);
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(manyTablePolicies))
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.deleteAll("profiles"));
+
+        await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
+
+        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+        expect(database.rows.size).toBe(0);
+    });
+
+    it("deleteWhere() probes only the matched table, once per row", async () => {
+        expect.assertions(2);
+
+        const database = createSplitWriter(seed);
+        const spied = spyProbes(database);
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(manyTablePolicies))
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.deleteWhere("profiles", { global: true }));
+
+        await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
+
+        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+    });
+});
