@@ -2156,3 +2156,276 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `validateFiles` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CallRunnerSinks` (interface)
+
+```ts
+interface CallRunnerSinks<R> {
+    setError: (error: Error) => void;
+    setPending: (pending: boolean) => void;
+    setResult: (result: R) => void;
+}
+```
+
+### `ClientAckMessage` (interface)
+
+```ts
+interface ClientAckMessage {
+    id: string;
+    type: "ack";
+}
+```
+
+### `ClientConnectMessage` (interface)
+
+```ts
+interface ClientConnectMessage {
+    caps?: ReadonlyArray<string>;
+    clientId?: string;
+    context?: Record<string, unknown>;
+    id: string;
+    type: "connect";
+}
+```
+
+### `ClientStreamMessage` (interface)
+
+```ts
+interface ClientStreamMessage {
+    generation?: number;
+    id: string;
+    query: {
+        args?: Record<string, unknown>;
+        functionPath: string;
+        shardKey?: string;
+    };
+    sinceChunk?: number;
+    type: "stream";
+}
+```
+
+### `ClientSubscribeMessage` (interface)
+
+```ts
+interface ClientSubscribeMessage {
+    id: string;
+    query: {
+        args?: Record<string, unknown>;
+        functionPath?: string;
+        sinceEpoch?: string;
+        sinceSeq?: number;
+        table?: string;
+    };
+    type: "subscribe";
+}
+```
+
+### `ClientUnsubscribeMessage` (interface)
+
+```ts
+interface ClientUnsubscribeMessage {
+    id: string;
+    type: "unsubscribe";
+}
+```
+
+### `ClientWhisperMessage` (interface)
+
+```ts
+interface ClientWhisperMessage {
+    data?: unknown;
+    topic: string;
+    type: "whisper";
+}
+```
+
+### `ClientWhisperSubscribeMessage` (interface)
+
+```ts
+interface ClientWhisperSubscribeMessage {
+    topic: string;
+    type: "whisper_subscribe" | "whisper_unsubscribe";
+}
+```
+
+### `EvictHandler` (type)
+
+```ts
+type EvictHandler = (entry: QueuedMutation, error: Error & {
+    code?: string;
+}) => void;
+```
+
+### `FunctionKind` (type)
+
+```ts
+type FunctionKind = "action" | "mutation" | "query" | "stream";
+```
+
+### `NullableTimestamp` (type)
+
+```ts
+type NullableTimestamp = null | number | string;
+```
+
+### `OfflineQueueDeps` (interface)
+
+```ts
+interface OfflineQueueDeps {
+    onEvict?: EvictHandler;
+    onSizeChange?: (size: number) => void;
+    persistence?: PersistenceAdapter;
+    version?: string;
+}
+```
+
+### `OptimisticLayer` (interface)
+
+```ts
+interface OptimisticLayer {
+    commitCursor?: number;
+    readonly id: symbol;
+    readonly transform: (current: unknown) => unknown;
+}
+```
+
+### `PersistenceErrorContext` (interface)
+
+```ts
+interface PersistenceErrorContext {
+    readonly error: unknown;
+    readonly mutationId?: string;
+    readonly operation: PersistenceOperation;
+}
+```
+
+### `PersistenceOperation` (type)
+
+```ts
+type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
+```
+
+### `ServerAckMessage` (interface)
+
+```ts
+interface ServerAckMessage {
+    id: string;
+    type: "ack";
+}
+```
+
+### `ServerChunkMessage` (interface)
+
+```ts
+interface ServerChunkMessage {
+    data: unknown;
+    generation?: number;
+    id: string;
+    seq?: number;
+    type: "chunk";
+}
+```
+
+### `ServerCompleteMessage` (interface)
+
+```ts
+interface ServerCompleteMessage {
+    id: string;
+    type: "complete";
+}
+```
+
+### `ServerDataMessage` (interface)
+
+```ts
+interface ServerDataMessage {
+    cursor?: number;
+    data?: unknown;
+    delta?: unknown;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "data" | "delta";
+}
+```
+
+### `ServerErrorMessage` (interface)
+
+```ts
+interface ServerErrorMessage {
+    error?: unknown;
+    id?: string;
+    message?: string;
+    type: "error";
+}
+```
+
+### `ServerResumeMessage` (interface)
+
+```ts
+interface ServerResumeMessage {
+    cursor?: number;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "resume";
+}
+```
+
+### `ServerSettledMessage` (interface)
+
+```ts
+interface ServerSettledMessage {
+    cursor?: number;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "settled";
+}
+```
+
+### `ServerWhisperMessage` (interface)
+
+```ts
+interface ServerWhisperMessage {
+    data: unknown;
+    from?: string;
+    topic: string;
+    type: "whisper";
+}
+```
+
+### `ShapeCallback` (type)
+
+```ts
+type ShapeCallback = (rows: Record<string, unknown>[]) => void;
+```
+
+### `TabCoordinatorOptions` (interface)
+
+```ts
+interface TabCoordinatorOptions {
+    channelName?: string;
+    heartbeatInterval?: number;
+    leaderTimeout?: number;
+    onBecomeLeader?: () => void;
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
+    onLeaderClaimAnswered?: () => void;
+    onStopBeingLeader?: () => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+}
+```
+
+### `WSState` (type)
+
+```ts
+type WSState = "idle" | "connecting" | "open" | "closed";
+```

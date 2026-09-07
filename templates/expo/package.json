@@ -2,10 +2,10 @@
     "name": "{{name}}",
     "version": "0.0.0",
     "private": true,
+    "main": "index.ts",
     "imports": {
         "#lunora/*": "./lunora/*"
     },
-    "main": "index.ts",
     "scripts": {
         "start": "expo start",
         "android": "expo start --android",

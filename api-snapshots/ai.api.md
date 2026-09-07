@@ -541,3 +541,41 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `vectorizeStore` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `RagSyncEvent` (interface)
+
+```ts
+interface RagSyncEvent {
+    readonly doc?: Record<string, unknown>;
+    readonly id: string;
+    readonly previous?: Record<string, unknown>;
+}
+```
+
+### `RagSyncHandler` (type)
+
+```ts
+type RagSyncHandler = (context: RagSyncTriggerContext, event: RagSyncEvent) => Promise<void>;
+```
+
+### `RagSyncScheduler` (interface)
+
+```ts
+interface RagSyncScheduler {
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+}
+```
+
+### `RagSyncTriggerContext` (interface)
+
+```ts
+interface RagSyncTriggerContext {
+    readonly scheduler: RagSyncScheduler;
+}
+```

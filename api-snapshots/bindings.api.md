@@ -1095,3 +1095,64 @@ const createVectorSyncHook: (options: {
 ```ts
 const createVectors: (options: LunoraVectorsOptions) => LunoraVectors;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CreateContextVectorsOptions` (interface)
+
+```ts
+interface CreateContextVectorsOptions {
+    namespace?: string;
+    shardedIndexNames?: ReadonlyArray<string>;
+}
+```
+
+### `KvKeyEntryLike` (interface)
+
+```ts
+interface KvKeyEntryLike {
+    expiration?: number;
+    metadata?: unknown;
+    name: string;
+}
+```
+
+### `KvKeyListResultLike` (interface)
+
+```ts
+interface KvKeyListResultLike {
+    cursor?: string;
+    keys: KvKeyEntryLike[];
+    listComplete: boolean;
+}
+```
+
+### `KvNamespaceSummaryLike` (interface)
+
+```ts
+interface KvNamespaceSummaryLike {
+    binding: string;
+}
+```
+
+### `KvValueResultLike` (interface)
+
+```ts
+interface KvValueResultLike {
+    metadata: unknown;
+    value: null | string;
+}
+```
+
+### `SetMember` (interface)
+
+```ts
+interface SetMember {
+    operator?: string;
+    query: Queryable<unknown>;
+}
+```

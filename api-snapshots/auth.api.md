@@ -1650,3 +1650,96 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 ### `verifyTurnstileMiddleware` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AuditHookContext` (interface)
+
+```ts
+interface AuditHookContext {
+    body?: Record<string, unknown>;
+    context?: {
+        newSession?: {
+            session?: {
+                userId?: string;
+            };
+            user?: {
+                email?: string;
+                id?: string;
+            };
+        } | null;
+        returned?: unknown;
+        session?: {
+            session?: {
+                userId?: string;
+            };
+            user?: {
+                email?: string;
+                id?: string;
+            };
+        } | null;
+    };
+    headers?: Headers;
+    path?: string;
+    request?: Request;
+}
+```
+
+### `D1Like` (interface)
+
+```ts
+interface D1Like {
+    prepare: (sql: string) => {
+        bind: (...values: unknown[]) => {
+            all: () => Promise<{
+                results?: Record<string, unknown>[];
+            }>;
+            run: () => Promise<unknown>;
+        };
+    };
+}
+```
+
+### `DatabaseHooks` (type)
+
+```ts
+type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
+```
+
+### `DoStorageLike` (interface)
+
+```ts
+interface DoStorageLike {
+    sql: {
+        exec: (query: string, ...bindings: unknown[]) => Iterable<Record<string, unknown>>;
+    };
+    transaction: <R>(closure: () => Promise<R>) => Promise<R>;
+}
+```
+
+### `MiddlewareNext` (interface)
+
+```ts
+interface MiddlewareNext<ContextIn> {
+    (): Promise<ContextIn>;
+    <Extension extends Record<string, unknown>>(options: {
+        ctx: Extension;
+    }): Promise<ContextIn & Extension>;
+}
+```
+
+### `TransactionRunner` (type)
+
+```ts
+type TransactionRunner = <R>(closure: () => Promise<R>) => Promise<R>;
+```
+
+### `WhereValue` (type)
+
+```ts
+type WhereValue = boolean | number | string;
+```

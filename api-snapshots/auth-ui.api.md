@@ -20,7 +20,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `AUTH_UI_CONTEXT` (const)
 
 ```ts
-const AUTH_UI_CONTEXT: InjectionToken<AuthUIAngularContext> = new InjectionToken<AuthUIAngularContext>("lunora.auth-ui.context");
+const AUTH_UI_CONTEXT: InjectionToken<AuthUIAngularContext>;
 ```
 
 ### `AcceptInvitationActions` (interface)
@@ -3676,37 +3676,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `controllerSignal` (const)
 
 ```ts
-const controllerSignal = <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>, options: ControllerSignalOptions = {}): ControllerSignalResult<TState, TActions> => {
-    const context = options.context ?? injectAuthUIContext();
-    const injector = options.injector ?? inject(Injector);
-    let controller = untracked(() => factory(untracked(context)));
-    let identity = untracked(context);
-    const state = signal<TState>(controller.getState());
-    const listen = (owner: Controller<TState, TActions>): (() => void) => owner.subscribe(() => {
-        state.set(owner.getState());
-    });
-    let unsubscribe = listen(controller);
-    effect(() => {
-        const next = context();
-        if (next === identity) {
-            return;
-        }
-        identity = next;
-        unsubscribe();
-        controller.destroy();
-        controller = untracked(() => factory(next));
-        state.set(controller.getState());
-        unsubscribe = listen(controller);
-    }, { injector });
-    injector.get(DestroyRef).onDestroy(() => {
-        unsubscribe();
-        controller.destroy();
-    });
-    const actions = new Proxy({}, {
-        get: (_target: object, property: PropertyKey): unknown => (controller.actions as Record<PropertyKey, unknown>)[property],
-    }) as TActions;
-    return { actions, state: state.asReadonly() };
-};
+const controllerSignal: <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>, options?: ControllerSignalOptions) => ControllerSignalResult<TState, TActions>;
 ```
 
 ### `createAcceptInvitationController` (const)
@@ -3928,31 +3898,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `injectAuthUI` (const)
 
 ```ts
-const injectAuthUI = (): ControllerContext => {
-    const context = inject(AUTH_UI_CONTEXT, { optional: true });
-    if (!context) {
-        throw new LunoraError("INTERNAL", "injectAuthUI() requires provideAuthUI(...) in the application providers");
-    }
-    return untracked(context.core);
-};
+const injectAuthUI: () => ControllerContext;
 ```
 
 ### `injectAuthUIContext` (const)
 
 ```ts
-const injectAuthUIContext = (): Signal<ControllerContext> => {
-    const context = inject(AUTH_UI_CONTEXT, { optional: true });
-    if (!context) {
-        throw new LunoraError("INTERNAL", "injectAuthUIContext() requires provideAuthUI(...) in the application providers");
-    }
-    return context.core;
-};
+const injectAuthUIContext: () => Signal<ControllerContext>;
 ```
 
 ### `injectAuthUILink` (const)
 
 ```ts
-const injectAuthUILink = (): ((href: string) => void) | undefined => inject(AUTH_UI_CONTEXT, { optional: true })?.link;
+const injectAuthUILink: () => ((href: string) => void) | undefined;
 ```
 
 ### `isFlowEnabled` (const)
@@ -4010,52 +3968,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `provideAuthUI` (const)
 
 ```ts
-const provideAuthUI = (config: AuthUIAngularConfig): EnvironmentProviders => makeEnvironmentProviders([
-    {
-        provide: AUTH_UI_CONTEXT,
-        useFactory: (): AuthUIAngularContext => {
-            const base: AuthUIConfig = {
-                authClient: config.authClient,
-                avatar: config.avatar,
-                basePath: config.basePath,
-                forgotPassword: config.forgotPassword,
-                localization: config.localization,
-                nav: {
-                    navigate: (to: string) => {
-                        (config.nav ?? defaultNav).navigate(to);
-                    },
-                    replace: (to: string) => {
-                        (config.nav ?? defaultNav).replace(to);
-                    },
-                },
-                onError: (error: unknown) => {
-                    config.onError?.(error);
-                },
-                onSessionChange: () => {
-                    config.onSessionChange?.();
-                },
-                organization: config.organization,
-                password: config.password,
-                plugins: config.plugins,
-                redirects: config.redirects,
-                social: config.social,
-                theme: config.theme,
-                viewPaths: config.viewPaths,
-            };
-            const discovered = signal<DiscoveredConfig | undefined>(undefined);
-            const resolved = computed(() => resolveContext(base, discovered()));
-            if (config.discover !== false) {
-                const handle = discoverAuthConfig(config.basePath ?? DEFAULT_BASE_PATH);
-                discovered.set(handle.getState().config);
-                const unsubscribe = handle.subscribe(() => {
-                    discovered.set(handle.getState().config);
-                });
-                inject(DestroyRef).onDestroy(unsubscribe);
-            }
-            return { core: resolved, link: config.link };
-        },
-    },
-]);
+const provideAuthUI: (config: AuthUIAngularConfig) => EnvironmentProviders;
 ```
 
 ### `providerLabel` (const)
@@ -4175,13 +4088,13 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `ACCEPTED_TYPES` (const)
 
 ```ts
-const ACCEPTED_TYPES = new Set(["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"]);
+const ACCEPTED_TYPES: Set<string>;
 ```
 
 ### `ACCEPT_ATTRIBUTE` (const)
 
 ```ts
-const ACCEPT_ATTRIBUTE = [...ACCEPTED_TYPES].join(",");
+const ACCEPT_ATTRIBUTE: string;
 ```
 
 ### `AcceptInvitationActions` (interface)
@@ -5009,21 +4922,13 @@ interface BackupCodesHandle {
 ### `CAPTCHA_HEADER` (const)
 
 ```ts
-const CAPTCHA_HEADER = "x-captcha-response";
+const CAPTCHA_HEADER: "x-captcha-response";
 ```
 
 ### `CAPTCHA_PROVIDERS` (const)
 
 ```ts
-const PROVIDERS: Readonly<Record<CaptchaProvider, {
-    global: string;
-    script: string;
-}>> = {
-    captchafox: { global: "CaptchaFox", script: "https://cdn.captchafox.com/api.js?render=explicit" },
-    "cloudflare-turnstile": { global: "turnstile", script: "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" },
-    "google-recaptcha": { global: "grecaptcha", script: "https://www.google.com/recaptcha/api.js?render=explicit" },
-    hcaptcha: { global: "hcaptcha", script: "https://js.hcaptcha.com/1/api.js?render=explicit" },
-};
+const PROVIDERS: Readonly<Record<CaptchaProvider, { global: string; script: string; }>>;
 ```
 
 ### `CaptchaProvider` (type)
@@ -5126,224 +5031,31 @@ interface ControllerContext {
 ### `DEFAULT_AVATAR_MAX_SIZE` (const)
 
 ```ts
-const DEFAULT_AVATAR_MAX_SIZE = 2 * 1024 * 1024;
+const DEFAULT_AVATAR_MAX_SIZE: number;
 ```
 
 ### `DEFAULT_BASE_PATH` (const)
 
 ```ts
-const DEFAULT_BASE_PATH = "/api/auth";
+const DEFAULT_BASE_PATH: "/api/auth";
 ```
 
 ### `DEFAULT_LOCALIZATION` (const)
 
 ```ts
-const DEFAULT_LOCALIZATION: Localization = {
-    accountsEmpty: "No accounts linked yet.",
-    accountsLastOne: "You can't unlink your only sign-in method.",
-    accountsLink: "Link account",
-    accountsTitle: "Linked accounts",
-    activeBadge: "Active",
-    adminBan: "Ban",
-    adminImpersonate: "Impersonate",
-    adminSearch: "Search users by email",
-    adminStopImpersonating: "Stop impersonating",
-    adminTitle: "Users",
-    adminUnban: "Unban",
-    adminUsersEmpty: "No users match that search.",
-    anonymousSignIn: "Continue as guest",
-    appearance: "Appearance",
-    authorizedApps: "Authorized applications",
-    authorizedAppsEmpty: "You haven't authorized any applications.",
-    avatar: "Avatar",
-    avatarNoUploader: "Avatar uploads are not configured for this app.",
-    avatarRemove: "Remove photo",
-    avatarTooLarge: "That image is too large.",
-    avatarUpload: "Upload photo",
-    avatarUploadFailed: "Could not upload that image. Try again.",
-    avatarWrongType: "Choose a PNG, JPEG, WebP, GIF, or AVIF image.",
-    backToSignIn: "Back to sign in",
-    backupCodeLabel: "Backup code",
-    backupCodes: "Save these backup codes somewhere safe:",
-    backupCodeSignIn: "Use a backup code",
-    backupCodesRegenerate: "Regenerate backup codes",
-    backupCodesRegenerated: "New backup codes generated. The old ones no longer work.",
-    cancel: "Cancel",
-    changeEmail: "Change email",
-    changeEmailSent: "Check your new inbox to confirm the change.",
-    changePassword: "Change password",
-    changePasswordDone: "Your password has been changed.",
-    codeLabel: "Verification code",
-    confirmPasswordLabel: "Confirm password",
-    consentAllow: "Allow",
-    consentDeny: "Deny",
-    consentExpired: "This request is no longer valid. Start again from the application.",
-    consentMissing: "There's no authorization request to review.",
-    consentTitle: "Authorize application",
-    consentWants: "wants access to:",
-    copied: "Copied",
-    copy: "Copy",
-    createOrganization: "Create organization",
-    currentPasswordLabel: "Current password",
-    currentSession: "This device",
-    deleteAccount: "Delete account",
-    deleteAccountWarning: "This permanently deletes your account and cannot be undone.",
-    deviceApprove: "Approve",
-    deviceApproved: "Device approved. You can close this page.",
-    deviceCodeLabel: "Device code",
-    deviceCodeRequired: "Enter the code shown on your device.",
-    deviceDenied: "Device denied.",
-    deviceDeny: "Deny",
-    deviceFailed: "That code is not valid or has expired.",
-    deviceTitle: "Authorize device",
-    dismiss: "Dismiss",
-    emailInvalid: "Enter a valid email address.",
-    emailLabel: "Email",
-    emailOtp: "Email me a code",
-    emailOtpSent: "We emailed you a one-time code.",
-    emailRequired: "Email is required.",
-    forgotPassword: "Reset password",
-    forgotPasswordLink: "Forgot your password?",
-    forgotPasswordSent: "If that email exists, a reset link is on its way.",
-    genericError: "Something went wrong. Please try again.",
-    haveAccount: "Already have an account? Sign in",
-    invitationAccept: "Accept invitation",
-    invitationMissing: "That invitation link is not valid or has expired.",
-    invitationReject: "Decline",
-    invitations: "Pending invitations",
-    invitationsEmpty: "No invitations waiting for you.",
-    invitationTitle: "You've been invited",
-    inviteEmailLabel: "Email to invite",
-    inviteMember: "Invite member",
-    lastUsed: "Last used",
-    leaveOrganization: "Leave organization",
-    loading: "Loading…",
-    magicLink: "Email me a link",
-    magicLinkSent: "Check your email for a sign-in link.",
-    members: "Members",
-    multiSessionEmpty: "No other accounts signed in on this device.",
-    multiSessionTitle: "Switch account",
-    nameLabel: "Name",
-    nameRequired: "Name is required.",
-    newEmailLabel: "New email",
-    newPasswordLabel: "New password",
-    noAccount: "Don't have an account? Sign up",
-    noOrganizations: "You're not in any organization yet.",
-    organizationCreateDisallowed: "Your account can't create organizations.",
-    organizationLimitReached: "You've reached the maximum number of organizations.",
-    organizationLogo: "Logo URL",
-    organizationName: "Organization name",
-    organizationNameRequired: "Organization name is required.",
-    organizations: "Organizations",
-    organizationSaved: "Organization settings saved.",
-    organizationSettings: "Organization settings",
-    organizationSlug: "Slug",
-    organizationSlugRequired: "Slug is required.",
-    otpRequired: "Enter the code we sent you.",
-    passkeyAdd: "Add a passkey",
-    passkeyName: "Passkey name",
-    passkeyRename: "Rename",
-    passkeys: "Passkeys",
-    passkeysEmpty: "No passkeys registered yet.",
-    passkeyUnnamed: "Unnamed passkey",
-    passwordLabel: "Password",
-    passwordMismatch: "Passwords do not match.",
-    passwordRequired: "Password is required.",
-    passwordRuleDigit: "At least one number",
-    passwordRuleLength: "At least {min} characters",
-    passwordRuleLowercase: "At least one lowercase letter",
-    passwordRuleSymbol: "At least one symbol",
-    passwordRuleUppercase: "At least one uppercase letter",
-    passwordTooLong: "Password must be at most {max} characters.",
-    passwordTooShort: "Password must be at least {min} characters.",
-    phoneLabel: "Phone number",
-    phoneOtpSent: "We texted you a code.",
-    phoneRequired: "Phone number is required.",
-    phoneVerified: "Phone number verified.",
-    phoneVerify: "Verify phone number",
-    profile: "Profile",
-    profileSaved: "Your profile has been updated.",
-    remove: "Remove",
-    resetPassword: "Set new password",
-    resetPasswordOtpDescription: "Enter the code we emailed you, then choose a new password.",
-    revoke: "Revoke",
-    revokeAccess: "Revoke access",
-    revokeOthers: "Sign out other sessions",
-    roleLabel: "Role",
-    saveChanges: "Save changes",
-    sendNewCode: "Use a different email",
-    sessionNotFresh: "For your security, sign in again before making this change.",
-    sessions: "Active sessions",
-    sessionsEmpty: "No other active sessions.",
-    signIn: "Sign in",
-    signInFailed: "Could not sign you in. Check your details and try again.",
-    signInWith: "Continue with",
-    signOut: "Sign out",
-    signUp: "Create account",
-    signUpFailed: "Could not create your account. Try again.",
-    switchAccount: "Switch to this account",
-    switchOrganization: "Switch",
-    teamNameLabel: "Team name",
-    teams: "Teams",
-    teamsEmpty: "No teams yet.",
-    themeDark: "Dark",
-    themeLight: "Light",
-    themeSystem: "System",
-    twoFactor: "Verify",
-    twoFactorDisable: "Disable 2FA",
-    twoFactorEnable: "Enable 2FA",
-    twoFactorEnabled: "Two-factor authentication is on.",
-    twoFactorFailed: "That code is not valid. Try again.",
-    twoFactorNeedsPassword: "Set a password before turning on two-factor authentication.",
-    twoFactorScan: "Add this account to your authenticator app using the setup key below, then enter the 6-digit code it generates.",
-    twoFactorSecret: "Setup key:",
-    twoFactorSetup: "Two-factor authentication",
-    twoFactorUseAuthenticator: "Use your authenticator app instead",
-    unknownDevice: "Unknown device",
-    usernameAvailable: "That username is available.",
-    usernameChecking: "Checking…",
-    usernameLabel: "Username",
-    usernameRequired: "Username is required.",
-    usernameSaved: "Your username has been updated.",
-    usernameTaken: "That username is taken.",
-    verifyEmail: "Verify your email",
-    verifyEmailFailed: "We couldn't verify that link. Try again.",
-    verifyEmailNoToken: "This page needs a verification link to work.",
-    verifyEmailResend: "Send a new link",
-    verifyEmailRetry: "Try again",
-    verifyEmailSent: "Check your email for a verification link.",
-    verifyEmailVerifying: "Verifying your email…",
-};
+const DEFAULT_LOCALIZATION: Localization;
 ```
 
 ### `DEFAULT_PASSWORD_POLICY` (const)
 
 ```ts
-const DEFAULT_PASSWORD_POLICY: Required<Pick<PasswordPolicy, "maxLength" | "minLength">> = { maxLength: 128, minLength: 8 };
+const DEFAULT_PASSWORD_POLICY: Required<Pick<PasswordPolicy, "maxLength" | "minLength">>;
 ```
 
 ### `DEFAULT_THEME_TOKENS` (const)
 
 ```ts
-const DEFAULT_THEME_TOKENS: ThemeTokens = {
-    background: "hsl(0 0% 100%)",
-    border: "hsl(228 16% 88%)",
-    card: "hsl(0 0% 100%)",
-    cardForeground: "hsl(240 14% 10%)",
-    destructive: "hsl(0 72% 45%)",
-    fontMono: "ui-monospace, monospace",
-    fontSans: "ui-sans-serif, system-ui, sans-serif",
-    input: "hsl(228 16% 88%)",
-    muted: "hsl(228 16% 93%)",
-    mutedForeground: "hsl(235 9% 42%)",
-    primary: "hsl(240 14% 12%)",
-    primaryForeground: "hsl(228 32% 97%)",
-    radius: "0.5rem",
-    ring: "hsl(256 72% 68%)",
-    secondary: "hsl(228 16% 93%)",
-    secondaryForeground: "hsl(240 14% 14%)",
-    success: "hsl(160 60% 28%)",
-};
+const DEFAULT_THEME_TOKENS: ThemeTokens;
 ```
 
 ### `DeleteAccountField` (type)
@@ -5488,23 +5200,7 @@ interface EmailOtpState {
 ### `FLOW_NAMES` (const)
 
 ```ts
-const FLOW_NAMES: ReadonlyArray<FlowName> = [
-    "admin",
-    "anonymous",
-    "apiKey",
-    "deviceAuthorization",
-    "emailOtp",
-    "lastLoginMethod",
-    "magicLink",
-    "multiSession",
-    "oauthProvider",
-    "oneTap",
-    "organization",
-    "passkey",
-    "phoneNumber",
-    "twoFactor",
-    "username",
-];
+const FLOW_NAMES: readonly (keyof PluginFlags)[];
 ```
 
 ### `FieldSpec` (interface)
@@ -5606,25 +5302,25 @@ interface FormSubmitResult {
 ### `LAST_LOGIN_METHOD_COOKIE` (const)
 
 ```ts
-const LAST_LOGIN_METHOD_COOKIE = "better-auth.last_used_login_method";
+const LAST_LOGIN_METHOD_COOKIE: "better-auth.last_used_login_method";
 ```
 
 ### `LAST_METHOD_EMAIL` (const)
 
 ```ts
-const LAST_METHOD_EMAIL = "email";
+const LAST_METHOD_EMAIL: "email";
 ```
 
 ### `LAST_METHOD_MAGIC_LINK` (const)
 
 ```ts
-const LAST_METHOD_MAGIC_LINK = "magic-link";
+const LAST_METHOD_MAGIC_LINK: "magic-link";
 ```
 
 ### `LAST_METHOD_PASSKEY` (const)
 
 ```ts
-const LAST_METHOD_PASSKEY = "passkey";
+const LAST_METHOD_PASSKEY: "passkey";
 ```
 
 ### `Localization` (interface)
@@ -5845,7 +5541,7 @@ interface LogoUploadState {
 ### `MIN_PASSWORD_LENGTH` (const)
 
 ```ts
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH: 8;
 ```
 
 ### `MagicLinkField` (type)
@@ -5887,7 +5583,7 @@ interface MembersState {
 ### `NON_SOCIAL_PROVIDERS` (const)
 
 ```ts
-const NON_SOCIAL_PROVIDERS = new Set(["credential", "email", "passkey"]);
+const NON_SOCIAL_PROVIDERS: Set<string>;
 ```
 
 ### `NavAdapter` (interface)
@@ -5959,28 +5655,13 @@ type OrganizationsController = Controller<ResourceState<AuthOrganization>, Organ
 ### `PLUGIN_ID_TO_FLOW` (const)
 
 ```ts
-const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>> = {
-    admin: "admin",
-    anonymous: "anonymous",
-    "device-authorization": "deviceAuthorization",
-    "email-otp": "emailOtp",
-    "last-login-method": "lastLoginMethod",
-    "magic-link": "magicLink",
-    "multi-session": "multiSession",
-    "oauth-provider": "oauthProvider",
-    "one-tap": "oneTap",
-    organization: "organization",
-    passkey: "passkey",
-    "phone-number": "phoneNumber",
-    "two-factor": "twoFactor",
-    username: "username",
-};
+const PLUGIN_ID_TO_FLOW: Readonly<Record<string, string>>;
 ```
 
 ### `PREFILLABLE` (const)
 
 ```ts
-const PREFILLABLE = new Set(["email", "name", "username"]);
+const PREFILLABLE: Set<string>;
 ```
 
 ### `PasskeysActions` (interface)
@@ -6116,7 +5797,7 @@ interface ProfileOptions {
 ### `ROLE_OPTIONS` (const)
 
 ```ts
-const ROLE_OPTIONS: ReadonlyArray<string> = ["member", "admin", "owner"];
+const ROLE_OPTIONS: readonly string[];
 ```
 
 ### `RedirectConfig` (interface)
@@ -6205,12 +5886,7 @@ interface ResourceState<T, TExtra extends object = Record<never, never>> {
 ### `SCOPE_LABELS` (const)
 
 ```ts
-const SCOPE_LABELS: Readonly<Record<string, string>> = {
-    email: "Your email address",
-    offline_access: "Access while you're away",
-    openid: "Your identity",
-    profile: "Your name and picture",
-};
+const SCOPE_LABELS: Readonly<Record<string, string>>;
 ```
 
 ### `SessionActions` (interface)
@@ -6299,19 +5975,19 @@ interface Store<T> {
 ### `THEME_MODES` (const)
 
 ```ts
-const THEME_MODES: ReadonlyArray<ThemeMode> = ["system", "light", "dark"];
+const THEME_MODES: readonly ThemeMode[];
 ```
 
 ### `THEME_STORAGE_KEY` (const)
 
 ```ts
-const THEME_STORAGE_KEY = "lunora-theme";
+const THEME_STORAGE_KEY: "lunora-theme";
 ```
 
 ### `TOAST_DURATION_MS` (const)
 
 ```ts
-const TOAST_DURATION_MS = 6000;
+const TOAST_DURATION_MS: 6000;
 ```
 
 ### `TeamsActions` (interface)
@@ -6581,2528 +6257,583 @@ interface ViewPaths {
 ### `assertOk` (const)
 
 ```ts
-const assertOk = <T>(response: AuthResponse<T>): AuthResponse<T> => {
-    if (response.error) {
-        throw new AuthActionError(response.error);
-    }
-    return response;
-};
+const assertOk: <T>(response: AuthResponse<T>) => AuthResponse<T>;
 ```
 
 ### `captchaHeaders` (const)
 
 ```ts
-const captchaHeaders = (path?: string, options: CaptchaHeaderOptions = {}): Record<string, string> => {
-    if (path !== undefined && !isGuarded(path, options.endpoints ?? CAPTCHA_ENDPOINTS, options.basePath ?? "/api/auth")) {
-        return {};
-    }
-    const { token } = store.get();
-    if (token === undefined || token === "") {
-        return {};
-    }
-    store.set({});
-    return { [CAPTCHA_HEADER]: token };
-};
+const captchaHeaders: (path?: string, options?: CaptchaHeaderOptions) => Record<string, string>;
 ```
 
 ### `createAcceptInvitationController` (const)
 
 ```ts
-const createAcceptInvitationController = (context: ControllerContext, options: AcceptInvitationOptions = {}): AcceptInvitationController => {
-    const store = createStore<AcceptInvitationState>({ loading: true, status: "idle" });
-    const load = async (): Promise<void> => {
-        const id = options.invitationId?.trim();
-        if (id === undefined || id === "") {
-            store.update({ error: context.localization.invitationMissing, loading: false, status: "error" });
-            return;
-        }
-        store.update({ error: undefined, loading: true });
-        try {
-            const invitation = assertOk(await context.authClient.organization.getInvitation({ query: { id } })).data ?? undefined;
-            store.update({ invitation, loading: false, status: "idle" });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.invitationMissing), loading: false, status: "error" });
-        }
-    };
-    const decide = async (decision: "accept" | "reject"): Promise<void> => {
-        const id = options.invitationId?.trim();
-        if (id === undefined || id === "" || store.get().status === "submitting") {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            const session = assertOk(await context.authClient.getSession());
-            if (!session.data?.user) {
-                const invited = store.get().invitation?.email;
-                const parameters: Record<string, string> = { redirectTo: currentPath() };
-                if (invited !== undefined && invited !== "") {
-                    parameters.email = invited;
-                }
-                context.nav.replace(mergeQuery(context.redirects.signIn, parameters));
-                return;
-            }
-            await (decision === "accept"
-                ? context.authClient.organization.acceptInvitation({ invitationId: id }).then(assertOk)
-                : context.authClient.organization.rejectInvitation({ invitationId: id }).then(assertOk));
-            store.update({ status: "success" });
-            context.onSessionChange?.();
-            context.nav.replace(context.redirects.afterSignIn);
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
-        }
-    };
-    if (options.autoLoad !== false && isBrowser()) {
-        void load();
-    }
-    return {
-        actions: { accept: () => decide("accept"), load, reject: () => decide("reject") },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createAcceptInvitationController: (context: ControllerContext, options?: AcceptInvitationOptions) => AcceptInvitationController;
 ```
 
 ### `createAccountsController` (const)
 
 ```ts
-const createAccountsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): AccountsController => {
-    const resource = createResourceController<AuthAccount>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.listAccounts()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            link: async (provider: string) => {
-                try {
-                    assertOk(await context.authClient.linkSocial({ callbackURL: context.redirects.afterSignIn, provider }));
-                }
-                catch (error) {
-                    notifyError(context, error, context.localization.genericError);
-                }
-            },
-            refetch: resource.refetch,
-            unlink: (providerId: string, accountId?: string) => resource.mutate(async () => {
-                if (resource.getState().items.length <= 1) {
-                    throw new Error(context.localization.accountsLastOne);
-                }
-                assertOk(await context.authClient.unlinkAccount(accountId === undefined ? { providerId } : { accountId, providerId }));
-            }),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createAccountsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => AccountsController;
 ```
 
 ### `createActiveMemberController` (const)
 
 ```ts
-const createActiveMemberController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): ActiveMemberController => {
-    const store = createStore<ActiveMemberState>({ loading: true, status: "idle" });
-    const refetch = async (): Promise<void> => {
-        store.update({ error: undefined, loading: true });
-        try {
-            const [session, organization] = await Promise.all([
-                context.authClient.getSession().then(assertOk),
-                context.authClient.organization.getFullOrganization(),
-            ]);
-            const userId = session.data?.user?.id;
-            if (userId === undefined) {
-                store.update({ loading: false, role: undefined, status: "success" });
-                return;
-            }
-            const role = assertOk(organization).data?.members?.find((member) => member.userId === userId)?.role;
-            store.update({ loading: false, role, status: "success" });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), loading: false, status: "error" });
-        }
-    };
-    if (options.autoLoad !== false) {
-        void refetch();
-    }
-    return {
-        actions: { refetch },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createActiveMemberController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => ActiveMemberController;
 ```
 
 ### `createAdminUsersController` (const)
 
 ```ts
-const createAdminUsersController = (context: ControllerContext, options: AdminUsersOptions = {}): AdminUsersController => {
-    const resource = createResourceController<AuthAdminUser, AdminUsersExtra>(context, async (context_, extra) => {
-        const search = extra.search.trim();
-        const response = assertOk(await context_.authClient.admin.listUsers({
-            query: {
-                limit: options.limit ?? 50,
-                ...(search === "" ? {} : { searchField: "email", searchOperator: "contains", searchValue: search }),
-            },
-        }));
-        const { total, users } = readUsers(response.data);
-        return { extra: { total }, items: users };
-    }, { autoLoad: options.autoLoad, initialExtra: { search: "" } });
-    const debounceMs = options.debounceMs ?? 300;
-    let searchTimer: ReturnType<typeof setTimeout> | undefined;
-    let searchResolve: (() => void) | undefined;
-    const clearSearchTimer = (): void => {
-        if (searchTimer !== undefined) {
-            clearTimeout(searchTimer);
-            searchTimer = undefined;
-        }
-        if (searchResolve !== undefined) {
-            const resolve = searchResolve;
-            searchResolve = undefined;
-            resolve();
-        }
-    };
-    const afterSessionSwap = async (run: () => Promise<boolean>): Promise<void> => {
-        if (await run()) {
-            context.onSessionChange?.();
-            context.nav.navigate(context.redirects.afterSignIn);
-        }
-    };
-    return {
-        actions: {
-            ban: (userId: string, reason?: string) => resource.mutate(async () => assertOk(await context.authClient.admin.banUser({ banReason: reason, userId }))),
-            impersonate: (userId: string) => afterSessionSwap(async () => resource.mutateOk(async () => assertOk(await context.authClient.admin.impersonateUser({ userId })))),
-            refetch: resource.refetch,
-            remove: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.removeUser({ userId }))),
-            setRole: (userId: string, role: string) => resource.mutate(async () => assertOk(await context.authClient.admin.setRole({ role, userId }))),
-            setSearch: (value: string) => {
-                resource.patch({ search: value });
-                clearSearchTimer();
-                if (typeof setTimeout !== "function") {
-                    return resource.refetch();
-                }
-                return new Promise<void>((resolve) => {
-                    searchResolve = resolve;
-                    searchTimer = setTimeout(() => {
-                        searchTimer = undefined;
-                        searchResolve = undefined;
-                        resolve(resource.refetch());
-                    }, debounceMs);
-                });
-            },
-            stopImpersonating: () => afterSessionSwap(async () => resource.mutateOk(async () => assertOk(await context.authClient.admin.stopImpersonating()))),
-            unban: (userId: string) => resource.mutate(async () => assertOk(await context.authClient.admin.unbanUser({ userId }))),
-        },
-        destroy: () => {
-            clearSearchTimer();
-            resource.destroy();
-        },
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createAdminUsersController: (context: ControllerContext, options?: AdminUsersOptions) => AdminUsersController;
 ```
 
 ### `createAnonymousController` (const)
 
 ```ts
-const createAnonymousController = (context: ControllerContext): AnonymousController => {
-    const store = createStore<AnonymousState>({ status: "idle" });
-    const signIn = async (): Promise<void> => {
-        if (store.get().status === "submitting") {
-            return;
-        }
-        store.update({ status: "submitting" });
-        try {
-            assertOk(await context.authClient.signIn.anonymous());
-            store.update({ status: "success" });
-            context.onSessionChange?.();
-            context.nav.replace(postAuthDestination(context));
-        }
-        catch (error) {
-            store.update({ status: "error" });
-            notifyError(context, error, context.localization.signInFailed);
-        }
-    };
-    return {
-        actions: { signIn },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createAnonymousController: (context: ControllerContext) => AnonymousController;
 ```
 
 ### `createAuthorizedAppsController` (const)
 
 ```ts
-const createAuthorizedAppsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): AuthorizedAppsController => {
-    const resource = createResourceController<OAuthConsent>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.oauth2.getConsents()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            refetch: resource.refetch,
-            revoke: (consentId: string) => resource.mutate(async () => assertOk(await context.authClient.oauth2.deleteConsent({ id: consentId }))),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createAuthorizedAppsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => AuthorizedAppsController;
 ```
 
 ### `createAvatarUploadController` (const)
 
 ```ts
-const createAvatarUploadController = (context: ControllerContext, options: {
-    initialImage?: string;
-} = {}): AvatarUploadController => {
-    const store = createStore<AvatarUploadState>({ imageUrl: options.initialImage, status: "idle" });
-    const save = async (image: string | undefined, successStatus: FlowStatus): Promise<void> => {
-        assertOk(await context.authClient.updateUser({ image }));
-        store.update({ imageUrl: image, status: successStatus });
-        context.onSessionChange?.();
-    };
-    return {
-        actions: {
-            remove: async () => {
-                if (store.get().status === "submitting") {
-                    return;
-                }
-                store.update({ error: undefined, status: "submitting" });
-                try {
-                    await save(undefined, "success");
-                }
-                catch (error) {
-                    context.onError?.(error);
-                    store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
-                }
-            },
-            upload: async (file: File) => {
-                const { upload } = context.avatar;
-                if (upload === undefined) {
-                    store.update({ error: context.localization.avatarNoUploader, status: "error" });
-                    return;
-                }
-                const maxSize = context.avatar.maxSize ?? Number.POSITIVE_INFINITY;
-                if (file.size > maxSize) {
-                    store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
-                    return;
-                }
-                if (!(await isAcceptedImage(file))) {
-                    store.update({ error: context.localization.avatarWrongType, status: "error" });
-                    return;
-                }
-                if (store.get().status === "submitting") {
-                    return;
-                }
-                store.update({ error: undefined, status: "submitting" });
-                try {
-                    await save(await upload(file), "success");
-                }
-                catch (error) {
-                    context.onError?.(error);
-                    store.update({ error: mapAuthError(error, context.localization, context.localization.avatarUploadFailed), status: "error" });
-                }
-            },
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createAvatarUploadController: (context: ControllerContext, options?: { initialImage?: string; }) => AvatarUploadController;
 ```
 
 ### `createBackupCodeSignInController` (const)
 
 ```ts
-const createBackupCodeSignInController = (context: ControllerContext, options: {
-    trustDevice?: boolean;
-} = {}): FormController<BackupCodeSignInField> => createFormController<BackupCodeSignInField>(context, {
-    fallbackError: (localization) => localization.twoFactorFailed,
-    fields: { code: { validate: (value, _values, localization) => required(value, localization.otpRequired) } },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.twoFactor.verifyBackupCode({ code: values.code.trim(), trustDevice: options.trustDevice }));
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createBackupCodeSignInController: (context: ControllerContext, options?: { trustDevice?: boolean; }) => FormController<BackupCodeSignInField>;
 ```
 
 ### `createBackupCodesController` (const)
 
 ```ts
-const createBackupCodesController = (context: ControllerContext): BackupCodesHandle => {
-    const codes = createStore<{
-        values: ReadonlyArray<string>;
-    }>({ values: [] });
-    const controller = createFormController<BackupCodesField>(context, {
-        fallbackError: (localization) => localization.genericError,
-        fields: { password: { validate: (value, _values, localization) => required(value, localization.passwordRequired) } },
-        submit: async (values, context_) => {
-            const response = assertOk(await context_.authClient.twoFactor.generateBackupCodes({ password: values.password }));
-            codes.set({ values: response.data?.backupCodes ?? [] });
-            return { successMessage: context_.localization.backupCodesRegenerated };
-        },
-    });
-    return {
-        controller: {
-            ...controller,
-            destroy: () => {
-                controller.destroy();
-                codes.clear();
-            },
-        },
-        getCodes: () => codes.get().values,
-        subscribeCodes: codes.subscribe,
-    };
-};
+const createBackupCodesController: (context: ControllerContext) => BackupCodesHandle;
 ```
 
 ### `createChangeEmailController` (const)
 
 ```ts
-const createChangeEmailController = (context: ControllerContext): FormController<ChangeEmailField> => createFormController<ChangeEmailField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        newEmail: { validate: (value, _values, localization) => validateEmail(value, localization) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.changeEmail({
-            callbackURL: context_.redirects.afterSignIn,
-            newEmail: values.newEmail.trim(),
-        }));
-        return { successMessage: context_.localization.changeEmailSent };
-    },
-});
+const createChangeEmailController: (context: ControllerContext) => FormController<ChangeEmailField>;
 ```
 
 ### `createChangePasswordController` (const)
 
 ```ts
-const createChangePasswordController = (context: ControllerContext): FormController<ChangePasswordField> => createFormController<ChangePasswordField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        confirmPassword: {
-            validate: (value, values, localization) => (value === values.newPassword ? undefined : localization.passwordMismatch),
-        },
-        currentPassword: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-        newPassword: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.changePassword({
-            currentPassword: values.currentPassword,
-            newPassword: values.newPassword,
-            revokeOtherSessions: true,
-        }));
-        return { successMessage: context_.localization.changePasswordDone };
-    },
-});
+const createChangePasswordController: (context: ControllerContext) => FormController<ChangePasswordField>;
 ```
 
 ### `createConsentController` (const)
 
 ```ts
-const createConsentController = (context: ControllerContext, options: ConsentOptions = {}): ConsentController => {
-    const store = createStore<ConsentState>({ loading: true, status: "idle" });
-    const load = async (): Promise<void> => {
-        const id = options.consentId?.trim();
-        if (id === undefined || id === "") {
-            store.update({ error: context.localization.consentMissing, loading: false, status: "error" });
-            return;
-        }
-        store.update({ error: undefined, loading: true });
-        try {
-            const request = assertOk(await context.authClient.oauth2.getConsent({ query: { id } })).data ?? undefined;
-            store.update({ loading: false, request, status: "idle" });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.consentMissing), loading: false, status: "error" });
-        }
-    };
-    const decide = async (accept: boolean): Promise<void> => {
-        if (store.get().status === "submitting" || store.get().request === undefined) {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            const response = assertOk(await context.authClient.oauth2.consent({ accept }));
-            const redirect = response.data?.redirectURI;
-            if (redirect === undefined || redirect === "") {
-                store.update({ error: context.localization.consentExpired, status: "error" });
-                return;
-            }
-            if (isSafeRedirect(redirect)) {
-                store.update({ status: "success" });
-                context.nav.replace(redirect);
-            }
-            else if (isHttpUrl(redirect)) {
-                store.update({ status: "success" });
-                globalThis.location.assign(redirect);
-            }
-            else {
-                store.update({ error: context.localization.genericError, status: "error" });
-            }
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
-        }
-    };
-    if (options.autoLoad !== false) {
-        void load();
-    }
-    return {
-        actions: { accept: () => decide(true), deny: () => decide(false), load },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createConsentController: (context: ControllerContext, options?: ConsentOptions) => ConsentController;
 ```
 
 ### `createDeleteAccountController` (const)
 
 ```ts
-const createDeleteAccountController = (context: ControllerContext): FormController<DeleteAccountField> => createFormController<DeleteAccountField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        password: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.deleteUser({ password: values.password }));
-        return { redirectTo: context_.redirects.afterSignOut };
-    },
-});
+const createDeleteAccountController: (context: ControllerContext) => FormController<DeleteAccountField>;
 ```
 
 ### `createDeviceAuthorizationController` (const)
 
 ```ts
-const createDeviceAuthorizationController = (context: ControllerContext, options: DeviceAuthorizationOptions = {}): DeviceAuthorizationController => {
-    const store = createStore<DeviceAuthorizationState>({ code: options.userCode ?? "", status: "idle" });
-    const decide = async (decision: "approved" | "denied"): Promise<void> => {
-        const code = store.get().code.trim();
-        if (code === "") {
-            store.update({ error: context.localization.deviceCodeRequired, status: "error" });
-            return;
-        }
-        if (store.get().status === "submitting") {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            await (decision === "approved"
-                ? context.authClient.device.approve({ userCode: code }).then(assertOk)
-                : context.authClient.device.deny({ userCode: code }).then(assertOk));
-            store.update({ decision, status: "success" });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.deviceFailed), status: "error" });
-        }
-    };
-    return {
-        actions: {
-            approve: () => decide("approved"),
-            deny: () => decide("denied"),
-            setCode: (value: string) => {
-                store.update({ code: value, error: undefined, status: "idle" });
-            },
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createDeviceAuthorizationController: (context: ControllerContext, options?: DeviceAuthorizationOptions) => DeviceAuthorizationController;
 ```
 
 ### `createDeviceSessionsController` (const)
 
 ```ts
-const createDeviceSessionsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): DeviceSessionsController => {
-    const resource = createResourceController<AuthDeviceSession>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.multiSession.listDeviceSessions()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            refetch: resource.refetch,
-            revoke: (sessionToken: string) => resource.mutate(async () => {
-                assertOk(await context.authClient.multiSession.revoke({ sessionToken }));
-                context.onSessionChange?.();
-            }),
-            setActive: (sessionToken: string) => resource.mutate(async () => {
-                assertOk(await context.authClient.multiSession.setActive({ sessionToken }));
-                context.onSessionChange?.();
-            }),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createDeviceSessionsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => DeviceSessionsController;
 ```
 
 ### `createEmailOtpController` (const)
 
 ```ts
-const createEmailOtpController = (context: ControllerContext): EmailOtpController => {
-    const store = createStore<EmailOtpState>({
-        code: emptyField(),
-        email: emptyField(),
-        status: "idle",
-        step: "request",
-    });
-    const setEmail = (value: string): void => {
-        store.update({ email: { ...store.get().email, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
-    };
-    const setCode = (value: string): void => {
-        store.update({ code: { ...store.get().code, value }, formError: undefined, status: statusAfterEdit(store.get().status) });
-    };
-    const sendCode = async (): Promise<void> => {
-        const state = store.get();
-        if (state.status === "submitting") {
-            return;
-        }
-        const error = validateEmail(state.email.value, context.localization);
-        if (error) {
-            store.update({ email: { ...state.email, error, touched: true }, status: "error" });
-            return;
-        }
-        store.update({ email: { ...state.email, error: undefined }, formError: undefined, status: "submitting" });
-        try {
-            assertOk(await context.authClient.emailOtp.sendVerificationOtp({ email: state.email.value.trim(), type: "sign-in" }));
-            store.update({ status: "idle", step: "verify", successMessage: context.localization.emailOtpSent });
-        }
-        catch (error_) {
-            context.onError?.(error_);
-            store.update({ formError: mapAuthError(error_, context.localization, context.localization.genericError), status: "error" });
-        }
-    };
-    const verify = async (): Promise<void> => {
-        const state = store.get();
-        if (state.status === "submitting") {
-            return;
-        }
-        const error = required(state.code.value, context.localization.otpRequired);
-        if (error) {
-            store.update({ code: { ...state.code, error, touched: true }, status: "error" });
-            return;
-        }
-        store.update({ code: { ...state.code, error: undefined }, formError: undefined, status: "submitting" });
-        try {
-            assertOk(await context.authClient.signIn.emailOtp({ email: state.email.value.trim(), otp: state.code.value.trim() }));
-            store.update({ status: "success" });
-            context.onSessionChange?.();
-            context.nav.replace(postAuthDestination(context));
-        }
-        catch (error_) {
-            context.onError?.(error_);
-            store.update({ formError: mapAuthError(error_, context.localization, context.localization.twoFactorFailed), status: "error" });
-        }
-    };
-    const actions: EmailOtpActions = {
-        back: () => {
-            store.update({ code: emptyField(), formError: undefined, status: "idle", step: "request", successMessage: undefined });
-        },
-        reset: () => {
-            store.set({ code: emptyField(), email: emptyField(), status: "idle", step: "request" });
-        },
-        sendCode,
-        setCode,
-        setEmail,
-        verify,
-    };
-    return {
-        actions,
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createEmailOtpController: (context: ControllerContext) => EmailOtpController;
 ```
 
 ### `createForgotPasswordController` (const)
 
 ```ts
-const createForgotPasswordController = (context: ControllerContext, options: ForgotPasswordOptions = {}): FormController<ForgotPasswordField> => createFormController<ForgotPasswordField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        email: { validate: (value, _values, localization) => validateEmail(value, localization) },
-    },
-    submit: async (values, context_) => {
-        const email = values.email.trim();
-        if (context_.forgotPasswordMethod === "otp") {
-            assertOk(await context_.authClient.emailOtp.sendVerificationOtp({ email, type: "forget-password" }));
-            return { successMessage: context_.localization.emailOtpSent };
-        }
-        assertOk(await context_.authClient.forgetPassword({
-            email,
-            redirectTo: options.resetPath ?? viewHref(context_, "resetPassword"),
-        }));
-        return { successMessage: context_.localization.forgotPasswordSent };
-    },
-});
+const createForgotPasswordController: (context: ControllerContext, options?: ForgotPasswordOptions) => FormController<ForgotPasswordField>;
 ```
 
 ### `createFormController` (const)
 
 ```ts
-const createFormController = <TField extends string>(context: ControllerContext, options: FormControllerOptions<TField>): FormController<TField> => {
-    const fieldNames = Object.keys(options.fields) as TField[];
-    const buildInitialFields = (): Record<TField, FieldState> => {
-        const fields = {} as Record<TField, FieldState>;
-        for (const name of fieldNames) {
-            fields[name] = { touched: false, value: options.fields[name].initial ?? "" };
-        }
-        return fields;
-    };
-    const initialState = (): FormState<TField> => {
-        return { fields: buildInitialFields(), loading: options.prefill !== undefined, status: "idle" };
-    };
-    const store = createStore<FormState<TField>>(initialState());
-    let generation = 0;
-    const edited = new Set<TField>();
-    const state = (): FormState<TField> => store.get();
-    const values = (): Record<TField, string> => {
-        const out = {} as Record<TField, string>;
-        for (const name of fieldNames) {
-            out[name] = state().fields[name].value;
-        }
-        return out;
-    };
-    const validateField = (name: TField): string | undefined => options.fields[name].validate?.(state().fields[name].value, values(), context.localization);
-    const setField = (name: TField, value: string): void => {
-        edited.add(name);
-        const current = state();
-        store.set({
-            ...current,
-            fields: { ...current.fields, [name]: { ...current.fields[name], error: undefined, value } },
-            formError: undefined,
-            status: statusAfterEdit(current.status),
-            successMessage: undefined,
-        });
-    };
-    const blur = (name: TField): void => {
-        const error = validateField(name);
-        const current = state();
-        store.set({
-            ...current,
-            fields: { ...current.fields, [name]: { ...current.fields[name], error, touched: true } },
-        });
-    };
-    const submit = async (): Promise<void> => {
-        if (state().status === "submitting") {
-            return;
-        }
-        const nextFields = { ...state().fields };
-        let hasError = false;
-        for (const name of fieldNames) {
-            const error = validateField(name);
-            nextFields[name] = { ...nextFields[name], error, touched: true };
-            if (error) {
-                hasError = true;
-            }
-        }
-        if (hasError) {
-            store.set({ ...state(), fields: nextFields, formError: undefined, status: "error" });
-            return;
-        }
-        store.set({ ...state(), fields: nextFields, formError: undefined, status: "submitting" });
-        try {
-            const result = (await options.submit(values(), context)) ?? {};
-            store.set({
-                ...state(),
-                fields: { ...state().fields },
-                status: "success",
-                successMessage: result.successMessage,
-            });
-            if (options.sessionChanging) {
-                context.onSessionChange?.();
-            }
-            if (result.redirectTo !== undefined) {
-                context.nav.replace(result.redirectTo);
-            }
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.set({
-                ...state(),
-                formError: mapAuthError(error, context.localization, options.fallbackError(context.localization)),
-                status: "error",
-            });
-        }
-    };
-    const load = async (): Promise<void> => {
-        if (!options.prefill) {
-            return;
-        }
-        generation += 1;
-        const ticket = generation;
-        store.set({ ...state(), loading: true });
-        try {
-            const seeded = await options.prefill(context);
-            if (ticket !== generation) {
-                return;
-            }
-            const current = state();
-            if (current.status === "submitting" || current.status === "success") {
-                store.set({ ...current, loading: false });
-                return;
-            }
-            const fields = { ...current.fields };
-            for (const name of fieldNames) {
-                const value = seeded[name];
-                if (value !== undefined && !edited.has(name)) {
-                    fields[name] = { ...fields[name], error: undefined, touched: false, value };
-                }
-            }
-            store.set({ ...current, fields, loading: false });
-        }
-        catch (error) {
-            context.onError?.(error);
-            if (ticket === generation) {
-                store.set({ ...state(), loading: false });
-            }
-        }
-    };
-    const reset = (): void => {
-        edited.clear();
-        store.set(initialState());
-        if (options.prefill) {
-            void load();
-        }
-    };
-    if (options.prefill) {
-        void load();
-    }
-    const actions: FormActions<TField> = { blur, load, reset, setField, submit };
-    return {
-        actions,
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createFormController: <TField extends string>(context: ControllerContext, options: FormControllerOptions<TField>) => FormController<TField>;
 ```
 
 ### `createMagicLinkController` (const)
 
 ```ts
-const createMagicLinkController = (context: ControllerContext): FormController<MagicLinkField> => createFormController<MagicLinkField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        email: { validate: (value, _values, localization) => validateEmail(value, localization) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.signIn.magicLink({
-            callbackURL: postAuthDestination(context_),
-            email: values.email.trim(),
-        }));
-        return { successMessage: context_.localization.magicLinkSent };
-    },
-});
+const createMagicLinkController: (context: ControllerContext) => FormController<MagicLinkField>;
 ```
 
 ### `createMembersController` (const)
 
 ```ts
-const createMembersController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): MembersController => {
-    const store = createStore<MembersState>({ busy: false, invitations: [], loading: true, members: [] });
-    const refetch = async (): Promise<void> => {
-        store.update({ error: undefined, loading: true });
-        try {
-            const organization = assertOk(await context.authClient.organization.getFullOrganization()).data;
-            store.update({ invitations: organization?.invitations ?? [], loading: false, members: organization?.members ?? [] });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), loading: false });
-        }
-    };
-    const mutate = async (run: () => Promise<unknown>): Promise<void> => {
-        if (store.get().busy) {
-            return;
-        }
-        store.update({ busy: true, error: undefined });
-        try {
-            await run();
-            store.update({ busy: false });
-            await refetch();
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ busy: false, error: mapAuthError(error, context.localization, context.localization.genericError) });
-        }
-    };
-    if (options.autoLoad !== false) {
-        void refetch();
-    }
-    return {
-        actions: {
-            cancelInvitation: (invitationId: string) => mutate(async () => assertOk(await context.authClient.organization.cancelInvitation({ invitationId }))),
-            invite: (email: string, role: string) => mutate(async () => assertOk(await context.authClient.organization.inviteMember({ email, role }))),
-            refetch,
-            removeMember: (memberIdOrEmail: string) => mutate(async () => assertOk(await context.authClient.organization.removeMember({ memberIdOrEmail }))),
-            updateRole: (memberId: string, role: string) => mutate(async () => assertOk(await context.authClient.organization.updateMemberRole({ memberId, role }))),
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createMembersController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => MembersController;
 ```
 
 ### `createOrganizationLogoController` (const)
 
 ```ts
-const createOrganizationLogoController = (context: ControllerContext, options: LogoUploadOptions = {}): LogoUploadController => {
-    const store = createStore<LogoUploadState>({ logoUrl: options.initialLogo, status: "idle" });
-    const save = async (logo: string | undefined): Promise<void> => {
-        assertOk(await context.authClient.organization.update({ data: { logo }, organizationId: options.organizationId }));
-        store.update({ logoUrl: logo, status: "success" });
-    };
-    const guard = async (run: () => Promise<void>, fallback: string): Promise<void> => {
-        if (store.get().status === "submitting") {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            await run();
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
-        }
-    };
-    return {
-        actions: {
-            remove: () => guard(async () => save(undefined), context.localization.genericError),
-            upload: async (file: File) => {
-                const { upload } = context.avatar;
-                if (upload === undefined) {
-                    store.update({ error: context.localization.avatarNoUploader, status: "error" });
-                    return;
-                }
-                const maxSize = context.avatar.maxSize ?? Number.POSITIVE_INFINITY;
-                if (file.size > maxSize) {
-                    store.update({ error: `${context.localization.avatarTooLarge} (${megabytes(maxSize)})`, status: "error" });
-                    return;
-                }
-                if (!(await isAcceptedImage(file))) {
-                    store.update({ error: context.localization.avatarWrongType, status: "error" });
-                    return;
-                }
-                await guard(async () => save(await upload(file)), context.localization.avatarUploadFailed);
-            },
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createOrganizationLogoController: (context: ControllerContext, options?: LogoUploadOptions) => LogoUploadController;
 ```
 
 ### `createOrganizationSettingsController` (const)
 
 ```ts
-const createOrganizationSettingsController = (context: ControllerContext, options: OrganizationSettingsOptions = {}): FormController<OrganizationSettingsField> => {
-    const { organizationId } = options;
-    return createFormController<OrganizationSettingsField>(context, {
-        fallbackError: (localization) => localization.genericError,
-        fields: {
-            logo: {},
-            name: { validate: (value, _values, localization) => required(value, localization.organizationNameRequired) },
-            slug: { validate: (value, _values, localization) => required(value, localization.organizationSlugRequired) },
-        },
-        prefill: options.autoLoad === false
-            ? undefined
-            : async (context_) => {
-                const organization = assertOk(await context_.authClient.organization.getFullOrganization(organizationId === undefined ? undefined : { organizationId })).data;
-                return { logo: organization?.logo ?? "", name: organization?.name ?? "", slug: organization?.slug ?? "" };
-            },
-        submit: async (values, context_) => {
-            const logo = values.logo.trim();
-            assertOk(await context_.authClient.organization.update({
-                data: { logo: logo === "" ? undefined : logo, name: values.name.trim(), slug: values.slug.trim() },
-                organizationId,
-            }));
-            return { successMessage: context_.localization.organizationSaved };
-        },
-    });
-};
+const createOrganizationSettingsController: (context: ControllerContext, options?: OrganizationSettingsOptions) => FormController<OrganizationSettingsField>;
 ```
 
 ### `createOrganizationsController` (const)
 
 ```ts
-const createOrganizationsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): OrganizationsController => {
-    const resource = createResourceController<AuthOrganization>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.organization.list()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            create: (name: string, slug: string) => resource.mutate(async () => assertOk(await context.authClient.organization.create({ name, slug }))),
-            leave: (organizationId: string) => resource.mutate(async () => {
-                assertOk(await context.authClient.organization.leave({ organizationId }));
-                context.onSessionChange?.();
-            }),
-            refetch: resource.refetch,
-            remove: (organizationId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.delete({ organizationId }))),
-            setActive: (organizationId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.setActive({ organizationId }))),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createOrganizationsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => OrganizationsController;
 ```
 
 ### `createPasskeysController` (const)
 
 ```ts
-const createPasskeysController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): PasskeysController => {
-    const resource = createResourceController<AuthPasskey>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.passkey.listUserPasskeys()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            add: (name?: string) => resource.mutate(async () => {
-                const trimmed = name?.trim();
-                const response = await context.authClient.passkey.addPasskey(trimmed === undefined || trimmed === "" ? undefined : { name: trimmed });
-                if (!response || (response.error && CANCELLED_CODES.has(response.error.code ?? ""))) {
-                    return;
-                }
-                assertOk(response);
-            }),
-            refetch: resource.refetch,
-            remove: (id: string) => resource.mutate(async () => assertOk(await context.authClient.passkey.deletePasskey({ id }))),
-            rename: (id: string, name: string) => resource.mutate(async () => assertOk(await context.authClient.passkey.updatePasskey({ id, name: name.trim() }))),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createPasskeysController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => PasskeysController;
 ```
 
 ### `createPhoneForgotPasswordController` (const)
 
 ```ts
-const createPhoneForgotPasswordController = (context: ControllerContext): FormController<PhoneForgotPasswordField> => createFormController<PhoneForgotPasswordField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: { phoneNumber: { validate: (value, _values, localization) => required(value, localization.phoneRequired) } },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.phoneNumber.requestPasswordReset({ phoneNumber: values.phoneNumber.trim() }));
-        return { successMessage: context_.localization.phoneOtpSent };
-    },
-});
+const createPhoneForgotPasswordController: (context: ControllerContext) => FormController<PhoneForgotPasswordField>;
 ```
 
 ### `createPhoneResetPasswordController` (const)
 
 ```ts
-const createPhoneResetPasswordController = (context: ControllerContext): FormController<PhoneResetPasswordField> => createFormController<PhoneResetPasswordField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        confirmPassword: {
-            validate: (value, values, localization) => (value === values.newPassword ? undefined : localization.passwordMismatch),
-        },
-        newPassword: { validate: (value, _values, localization) => passwordValidator(value, localization, context.password) },
-        otp: { validate: (value, _values, localization) => required(value, localization.otpRequired) },
-        phoneNumber: { validate: (value, _values, localization) => required(value, localization.phoneRequired) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.phoneNumber.resetPassword({
-            newPassword: values.newPassword,
-            otp: values.otp.trim(),
-            phoneNumber: values.phoneNumber.trim(),
-        }));
-        return { redirectTo: context_.redirects.signIn };
-    },
-});
+const createPhoneResetPasswordController: (context: ControllerContext) => FormController<PhoneResetPasswordField>;
 ```
 
 ### `createPhoneSignInController` (const)
 
 ```ts
-const createPhoneSignInController = (context: ControllerContext): FormController<PhoneSignInField> => createFormController<PhoneSignInField>(context, {
-    fallbackError: (localization) => localization.signInFailed,
-    fields: {
-        password: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-        phoneNumber: { validate: (value, _values, localization) => required(value, localization.phoneRequired) },
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        const response = assertOk(await context_.authClient.signIn.phoneNumber({ password: values.password, phoneNumber: values.phoneNumber.trim() }));
-        if (response.data?.twoFactorRedirect) {
-            return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
-        }
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createPhoneSignInController: (context: ControllerContext) => FormController<PhoneSignInField>;
 ```
 
 ### `createPhoneVerifyController` (const)
 
 ```ts
-const createPhoneVerifyController = (context: ControllerContext, options: PhoneVerifyOptions = {}): PhoneVerifyController => {
-    const store = createStore<PhoneVerifyState>({ phoneNumber: "", status: "idle", step: "request" });
-    const run = async (work: () => Promise<Partial<PhoneVerifyState>>, fallback: string): Promise<void> => {
-        if (store.get().status === "submitting") {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting", successMessage: undefined });
-        try {
-            store.update({ status: "idle", ...(await work()) });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
-        }
-    };
-    return {
-        actions: {
-            restart: () => {
-                store.set({ phoneNumber: "", status: "idle", step: "request" });
-            },
-            send: async (phoneNumber: string) => {
-                const trimmed = phoneNumber.trim();
-                if (trimmed === "") {
-                    store.update({ error: context.localization.phoneRequired, status: "error" });
-                    return;
-                }
-                await run(async () => {
-                    assertOk(await context.authClient.phoneNumber.sendOtp({ phoneNumber: trimmed }));
-                    return { phoneNumber: trimmed, step: "verify", successMessage: context.localization.phoneOtpSent };
-                }, context.localization.genericError);
-            },
-            verify: async (code: string) => {
-                const trimmed = code.trim();
-                if (trimmed === "") {
-                    store.update({ error: context.localization.otpRequired, status: "error" });
-                    return;
-                }
-                await run(async () => {
-                    assertOk(await context.authClient.phoneNumber.verify({
-                        code: trimmed,
-                        phoneNumber: store.get().phoneNumber,
-                        updatePhoneNumber: options.updatePhoneNumber,
-                    }));
-                    context.onSessionChange?.();
-                    if (options.updatePhoneNumber !== true) {
-                        context.nav.replace(postAuthDestination(context));
-                    }
-                    return { status: "success", successMessage: context.localization.phoneVerified };
-                }, context.localization.twoFactorFailed);
-            },
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createPhoneVerifyController: (context: ControllerContext, options?: PhoneVerifyOptions) => PhoneVerifyController;
 ```
 
 ### `createProfileController` (const)
 
 ```ts
-const createProfileController = (context: ControllerContext, options: ProfileOptions = {}): FormController<ProfileField> => {
-    const seeded = options.initialImage !== undefined || options.initialName !== undefined;
-    return createFormController<ProfileField>(context, {
-        fallbackError: (localization) => localization.genericError,
-        fields: {
-            image: { initial: options.initialImage ?? "" },
-            name: { initial: options.initialName ?? "", validate: (value, _values, localization) => required(value, localization.nameRequired) },
-        },
-        prefill: seeded
-            ? undefined
-            : async (context_) => {
-                const session = assertOk(await context_.authClient.getSession());
-                const user = session.data?.user;
-                const values: Partial<Record<ProfileField, string>> = {};
-                if (typeof user?.image === "string") {
-                    values.image = user.image;
-                }
-                if (typeof user?.name === "string") {
-                    values.name = user.name;
-                }
-                return values;
-            },
-        submit: async (values, context_) => {
-            const image = values.image.trim();
-            assertOk(await context_.authClient.updateUser({ image: image === "" ? undefined : image, name: values.name.trim() }));
-            return { successMessage: context_.localization.profileSaved };
-        },
-    });
-};
+const createProfileController: (context: ControllerContext, options?: ProfileOptions) => FormController<ProfileField>;
 ```
 
 ### `createResendVerificationController` (const)
 
 ```ts
-const createResendVerificationController = (context: ControllerContext, options: {
-    initialEmail?: string;
-} = {}): FormController<ResendVerificationField> => createFormController<ResendVerificationField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: { email: { initial: options.initialEmail ?? "", validate: (value, _values, localization) => emailValidator(value, localization) } },
-    prefill: options.initialEmail === undefined
-        ? async (context_) => {
-            const session = assertOk(await context_.authClient.getSession());
-            const email = session.data?.user?.email;
-            return typeof email === "string" ? { email } : {};
-        }
-        : undefined,
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.sendVerificationEmail({
-            callbackURL: postAuthDestination(context_),
-            email: values.email.trim(),
-        }));
-        return { successMessage: context_.localization.verifyEmailSent };
-    },
-});
+const createResendVerificationController: (context: ControllerContext, options?: { initialEmail?: string; }) => FormController<ResendVerificationField>;
 ```
 
 ### `createResetPasswordController` (const)
 
 ```ts
-const createResetPasswordController = (context: ControllerContext, options: ResetPasswordOptions = {}): FormController<ResetPasswordField> => createFormController<ResetPasswordField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        confirmPassword: {
-            validate: (value, values, localization) => (value === values.password ? undefined : localization.passwordMismatch),
-        },
-        password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.resetPassword({
-            newPassword: values.password,
-            token: options.token,
-        }));
-        return { redirectTo: context_.redirects.signIn };
-    },
-});
+const createResetPasswordController: (context: ControllerContext, options?: ResetPasswordOptions) => FormController<ResetPasswordField>;
 ```
 
 ### `createResetPasswordOtpController` (const)
 
 ```ts
-const createResetPasswordOtpController = (context: ControllerContext, options: {
-    initialEmail?: string;
-} = {}): FormController<ResetPasswordOtpField> => createFormController<ResetPasswordOtpField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        confirmPassword: {
-            validate: (value, values, localization) => (value === values.password ? undefined : localization.passwordMismatch),
-        },
-        email: { initial: options.initialEmail ?? "", validate: (value, _values, localization) => validateEmail(value, localization) },
-        otp: { validate: (value, _values, localization) => required(value, localization.otpRequired) },
-        password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.emailOtp.resetPassword({
-            email: values.email.trim(),
-            otp: values.otp.trim(),
-            password: values.password,
-        }));
-        return { redirectTo: context_.redirects.signIn };
-    },
-});
+const createResetPasswordOtpController: (context: ControllerContext, options?: { initialEmail?: string; }) => FormController<ResetPasswordOtpField>;
 ```
 
 ### `createResourceController` (const)
 
 ```ts
-const createResourceController = <T, TExtra extends object = Record<never, never>>(context: ControllerContext, load: (context: ControllerContext, extra: TExtra) => Promise<{
-    extra?: Partial<TExtra>;
-    items: ReadonlyArray<T>;
-}>, options: ResourceOptions<TExtra> = {}): ResourceHandle<T, TExtra> => {
-    const store = createStore<ResourceState<T, TExtra>>({
-        busy: false,
-        extra: options.initialExtra ?? ({} as TExtra),
-        items: [],
-        loading: true,
-        status: "idle",
-    });
-    let generation = 0;
-    const refetch = async (): Promise<void> => {
-        generation += 1;
-        const ticket = generation;
-        store.update({ error: undefined, loading: true, status: "submitting" });
-        try {
-            const result = await load(context, store.get().extra);
-            if (ticket !== generation) {
-                return;
-            }
-            const { extra: patched, items } = result;
-            store.update({ items, loading: false, status: "success" });
-            if (patched !== undefined) {
-                store.update({ extra: { ...store.get().extra, ...patched } });
-            }
-        }
-        catch (error) {
-            if (ticket !== generation) {
-                return;
-            }
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.genericError), loading: false, status: "error" });
-        }
-    };
-    const mutateOk = async (run: () => Promise<unknown>): Promise<boolean> => {
-        if (store.get().busy) {
-            return false;
-        }
-        store.update({ busy: true, error: undefined });
-        try {
-            await run();
-            store.update({ busy: false });
-            await refetch();
-            return true;
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ busy: false, error: mapAuthError(error, context.localization, context.localization.genericError), status: "error" });
-            return false;
-        }
-    };
-    if (options.autoLoad !== false) {
-        void refetch();
-    }
-    return {
-        destroy: store.clear,
-        getState: store.get,
-        mutate: async (run: () => Promise<unknown>) => {
-            await mutateOk(run);
-        },
-        mutateOk,
-        patch: (next: Partial<TExtra>) => {
-            store.update({ extra: { ...store.get().extra, ...next } });
-        },
-        refetch,
-        subscribe: store.subscribe,
-    };
-};
+const createResourceController: <T, TExtra extends object = Record<never, never>>(context: ControllerContext, load: (context: ControllerContext, extra: TExtra) => Promise<{ extra?: Partial<TExtra>; items: ReadonlyArray<T>; }>, options?: ResourceOptions<TExtra>) => ResourceHandle<T, TExtra>;
 ```
 
 ### `createSessionController` (const)
 
 ```ts
-const createSessionController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): SessionController => {
-    const store = createStore<SessionState>({ loading: true, settled: false, status: "idle" });
-    const refetch = async (): Promise<void> => {
-        store.update({ error: undefined, loading: true });
-        try {
-            const response = assertOk(await context.authClient.getSession());
-            store.update({ loading: false, settled: true, status: "success", user: response.data?.user });
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({
-                error: mapAuthError(error, context.localization, context.localization.genericError),
-                loading: false,
-                settled: true,
-                status: "error",
-                user: undefined,
-            });
-        }
-    };
-    if (options.autoLoad !== false) {
-        void refetch();
-    }
-    return {
-        actions: { refetch },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createSessionController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => SessionController;
 ```
 
 ### `createSessionsController` (const)
 
 ```ts
-const createSessionsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): SessionsController => {
-    const resource = createResourceController<AuthSession>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.listSessions()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            refetch: resource.refetch,
-            revoke: (token: string) => resource.mutate(async () => assertOk(await context.authClient.revokeSession({ token }))),
-            revokeOthers: () => resource.mutate(async () => assertOk(await context.authClient.revokeOtherSessions())),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createSessionsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => SessionsController;
 ```
 
 ### `createSetUsernameController` (const)
 
 ```ts
-const createSetUsernameController = (context: ControllerContext, options: {
-    initialUsername?: string;
-} = {}): FormController<SetUsernameField> => createFormController<SetUsernameField>(context, {
-    fallbackError: (localization) => localization.genericError,
-    fields: {
-        username: { initial: options.initialUsername ?? "", validate: (value, _values, localization) => required(value, localization.usernameRequired) },
-    },
-    submit: async (values, context_) => {
-        assertOk(await context_.authClient.updateUser({ username: values.username.trim() }));
-        return { successMessage: context_.localization.usernameSaved };
-    },
-});
+const createSetUsernameController: (context: ControllerContext, options?: { initialUsername?: string; }) => FormController<SetUsernameField>;
 ```
 
 ### `createSignInController` (const)
 
 ```ts
-const createSignInController = (context: ControllerContext): FormController<SignInField> => createFormController<SignInField>(context, {
-    fallbackError: (localization) => localization.signInFailed,
-    fields: {
-        email: { validate: (value, _values, localization) => validateEmail(value, localization) },
-        password: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        const response = assertOk(await context_.authClient.signIn.email({
-            callbackURL: postAuthDestination(context_),
-            email: values.email.trim(),
-            password: values.password,
-        }));
-        if (response.data?.twoFactorRedirect === true) {
-            return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
-        }
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createSignInController: (context: ControllerContext) => FormController<SignInField>;
 ```
 
 ### `createSignUpController` (const)
 
 ```ts
-const createSignUpController = (context: ControllerContext): FormController<SignUpField> => createFormController<SignUpField>(context, {
-    fallbackError: (localization) => localization.signUpFailed,
-    fields: {
-        email: { validate: (value, _values, localization) => validateEmail(value, localization) },
-        name: { validate: (value, _values, localization) => required(value, localization.nameRequired) },
-        password: { validate: (value, _values, localization) => validatePassword(value, localization, context.password) },
-    },
-    prefill: () => {
-        const seeded: Partial<Record<SignUpField, string>> = {};
-        const email = readFieldPrefill("email");
-        const name = readFieldPrefill("name");
-        if (email !== undefined) {
-            seeded.email = email;
-        }
-        if (name !== undefined) {
-            seeded.name = name;
-        }
-        return Promise.resolve(seeded);
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        const inviteToken = queryParameter("invite");
-        assertOk(await context_.authClient.signUp.email({
-            callbackURL: postAuthDestination(context_),
-            email: values.email.trim(),
-            ...(inviteToken === undefined ? {} : { inviteToken }),
-            name: values.name.trim(),
-            password: values.password,
-        }));
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createSignUpController: (context: ControllerContext) => FormController<SignUpField>;
 ```
 
 ### `createStore` (const)
 
 ```ts
-const createStore = <T extends object>(initial: T): Store<T> => {
-    let state = initial;
-    const listeners = new Set<() => void>();
-    const notify = (): void => {
-        for (const listener of listeners) {
-            listener();
-        }
-    };
-    return {
-        clear: () => {
-            listeners.clear();
-        },
-        get: () => state,
-        set: (next: T) => {
-            state = next;
-            notify();
-        },
-        subscribe: (onChange: () => void) => {
-            listeners.add(onChange);
-            return () => {
-                listeners.delete(onChange);
-            };
-        },
-        update: (patch: Partial<T>) => {
-            state = { ...state, ...patch };
-            notify();
-        },
-    };
-};
+const createStore: <T extends object>(initial: T) => Store<T>;
 ```
 
 ### `createTeamsController` (const)
 
 ```ts
-const createTeamsController = (context: ControllerContext, options: TeamsOptions = {}): TeamsController => {
-    const query = options.organizationId === undefined ? undefined : { organizationId: options.organizationId };
-    const resource = createResourceController<AuthTeam>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.organization.listTeams(query === undefined ? undefined : { query })).data ?? [] };
-    }, { autoLoad: options.autoLoad });
-    return {
-        actions: {
-            create: (name: string) => resource.mutate(async () => assertOk(await context.authClient.organization.createTeam({ name: name.trim(), organizationId: options.organizationId }))),
-            refetch: resource.refetch,
-            remove: (teamId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.removeTeam({ organizationId: options.organizationId, teamId }))),
-            rename: (teamId: string, name: string) => resource.mutate(async () => assertOk(await context.authClient.organization.updateTeam({ data: { name: name.trim() }, teamId }))),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createTeamsController: (context: ControllerContext, options?: TeamsOptions) => TeamsController;
 ```
 
 ### `createThemeModeController` (const)
 
 ```ts
-const createThemeModeController = (options: ThemeModeOptions = {}): ThemeModeController => {
-    const stored = options.persist === false ? undefined : readStored();
-    const initial = stored ?? "system";
-    const store = createStore<ThemeModeState>({ mode: initial, resolved: initial === "system" ? systemPrefers() : initial });
-    const apply = (mode: ThemeMode): void => {
-        const resolved = mode === "system" ? systemPrefers() : mode;
-        if (options.apply) {
-            options.apply(mode, resolved);
-        }
-        else {
-            const dataset = (globalThis as {
-                document?: {
-                    documentElement?: {
-                        dataset?: Record<string, string>;
-                    };
-                };
-            }).document?.documentElement?.dataset;
-            if (dataset) {
-                dataset["theme"] = resolved;
-            }
-        }
-        store.update({ mode, resolved });
-    };
-    if (stored !== undefined) {
-        apply(stored);
-    }
-    return {
-        actions: {
-            setMode: (mode: ThemeMode) => {
-                if (options.persist !== false) {
-                    try {
-                        storage()?.setItem(THEME_STORAGE_KEY, mode);
-                    }
-                    catch {
-                    }
-                }
-                apply(mode);
-            },
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createThemeModeController: (options?: ThemeModeOptions) => ThemeModeController;
 ```
 
 ### `createTwoFactorSetupController` (const)
 
 ```ts
-const createTwoFactorSetupController = (context: ControllerContext): TwoFactorSetupController => {
-    const store = createStore<TwoFactorSetupState>(initialState());
-    const fail = (error: unknown, fallback: string): void => {
-        context.onError?.(error);
-        store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
-    };
-    const enable = async (): Promise<void> => {
-        const state = store.get();
-        const error = required(state.password.value, context.localization.passwordRequired);
-        if (error) {
-            store.update({ password: { ...state.password, error, touched: true }, status: "error" });
-            return;
-        }
-        store.update({ error: undefined, password: { ...state.password, error: undefined }, status: "submitting" });
-        try {
-            const { data } = assertOk(await context.authClient.twoFactor.enable({ password: state.password.value }));
-            store.update({ backupCodes: data?.backupCodes ?? [], password: emptyField(), status: "idle", step: "verify", totpUri: data?.totpURI });
-        }
-        catch (error_) {
-            fail(error_, context.localization.genericError);
-        }
-    };
-    const verify = async (): Promise<void> => {
-        const state = store.get();
-        const error = required(state.code.value, context.localization.otpRequired);
-        if (error) {
-            store.update({ code: { ...state.code, error, touched: true }, status: "error" });
-            return;
-        }
-        store.update({ code: { ...state.code, error: undefined }, error: undefined, status: "submitting" });
-        try {
-            assertOk(await context.authClient.twoFactor.verifyTotp({ code: state.code.value.trim() }));
-            store.update({ code: emptyField(), status: "success", step: "enabled", totpUri: undefined });
-        }
-        catch (error_) {
-            fail(error_, context.localization.twoFactorFailed);
-        }
-    };
-    const disable = async (): Promise<void> => {
-        const state = store.get();
-        const error = required(state.password.value, context.localization.passwordRequired);
-        if (error) {
-            store.update({ password: { ...state.password, error, touched: true }, status: "error" });
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            assertOk(await context.authClient.twoFactor.disable({ password: state.password.value }));
-            store.set(initialState());
-        }
-        catch (error_) {
-            fail(error_, context.localization.genericError);
-        }
-    };
-    return {
-        actions: {
-            disable,
-            enable,
-            reset: () => {
-                store.set(initialState());
-            },
-            setCode: (value: string) => {
-                store.update({ code: { ...store.get().code, value }, error: undefined, status: "idle" });
-            },
-            setPassword: (value: string) => {
-                store.update({ error: undefined, password: { ...store.get().password, value }, status: "idle" });
-            },
-            verify,
-        },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createTwoFactorSetupController: (context: ControllerContext) => TwoFactorSetupController;
 ```
 
 ### `createTwoFactorVerifyController` (const)
 
 ```ts
-const createTwoFactorVerifyController = (context: ControllerContext, options: TwoFactorVerifyOptions = {}): FormController<TwoFactorField> => createFormController<TwoFactorField>(context, {
-    fallbackError: (localization) => localization.twoFactorFailed,
-    fields: {
-        code: { validate: (value, _values, localization) => required(value, localization.otpRequired) },
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        const input = { code: values.code.trim(), trustDevice: options.trustDevice };
-        assertOk(options.method === "otp" ? await context_.authClient.twoFactor.verifyOtp(input) : await context_.authClient.twoFactor.verifyTotp(input));
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createTwoFactorVerifyController: (context: ControllerContext, options?: TwoFactorVerifyOptions) => FormController<TwoFactorField>;
 ```
 
 ### `createUserInvitationsController` (const)
 
 ```ts
-const createUserInvitationsController = (context: ControllerContext, options: {
-    autoLoad?: boolean;
-} = {}): UserInvitationsController => {
-    const resource = createResourceController<AuthInvitationDetail>(context, async (context_) => {
-        return { items: assertOk(await context_.authClient.organization.listUserInvitations()).data ?? [] };
-    }, options);
-    return {
-        actions: {
-            accept: (invitationId: string) => resource.mutate(async () => {
-                assertOk(await context.authClient.organization.acceptInvitation({ invitationId }));
-                context.onSessionChange?.();
-            }),
-            refetch: resource.refetch,
-            reject: (invitationId: string) => resource.mutate(async () => assertOk(await context.authClient.organization.rejectInvitation({ invitationId }))),
-        },
-        destroy: resource.destroy,
-        getState: resource.getState,
-        subscribe: resource.subscribe,
-    };
-};
+const createUserInvitationsController: (context: ControllerContext, options?: { autoLoad?: boolean; }) => UserInvitationsController;
 ```
 
 ### `createUsernameAvailabilityController` (const)
 
 ```ts
-const createUsernameAvailabilityController = (context: ControllerContext, options: UsernameAvailabilityOptions = {}): UsernameAvailabilityController => {
-    const store = createStore<UsernameAvailabilityState>({ status: "idle", username: "" });
-    const debounceMs = options.debounceMs ?? 400;
-    const minLength = options.minLength ?? 3;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let inFlight = "";
-    const clearTimer = (): void => {
-        if (timer !== undefined) {
-            clearTimeout(timer);
-            timer = undefined;
-        }
-    };
-    const ask = async (username: string): Promise<void> => {
-        inFlight = username;
-        store.set({ status: "checking", username });
-        try {
-            const response = await context.authClient.isUsernameAvailable({ username });
-            if (inFlight !== username) {
-                return;
-            }
-            if (response.error) {
-                store.set({ status: "unknown", username });
-                return;
-            }
-            store.set({ status: response.data?.available === false ? "taken" : "available", username });
-        }
-        catch (error) {
-            context.onError?.(error);
-            if (inFlight === username) {
-                store.set({ status: "unknown", username });
-            }
-        }
-    };
-    return {
-        actions: {
-            check: (username: string) => {
-                const trimmed = username.trim();
-                clearTimer();
-                if (trimmed.length < minLength) {
-                    inFlight = "";
-                    store.set({ status: "idle", username: trimmed });
-                    return;
-                }
-                if (typeof setTimeout !== "function") {
-                    void ask(trimmed);
-                    return;
-                }
-                timer = setTimeout(() => {
-                    void ask(trimmed);
-                }, debounceMs);
-            },
-            reset: () => {
-                clearTimer();
-                inFlight = "";
-                store.set({ status: "idle", username: "" });
-            },
-        },
-        destroy: () => {
-            clearTimer();
-            store.clear();
-        },
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createUsernameAvailabilityController: (context: ControllerContext, options?: UsernameAvailabilityOptions) => UsernameAvailabilityController;
 ```
 
 ### `createUsernameSignInController` (const)
 
 ```ts
-const createUsernameSignInController = (context: ControllerContext): FormController<UsernameSignInField> => createFormController<UsernameSignInField>(context, {
-    fallbackError: (localization) => localization.signInFailed,
-    fields: {
-        password: { validate: (value, _values, localization) => required(value, localization.passwordRequired) },
-        username: { validate: (value, _values, localization) => required(value, localization.usernameRequired) },
-    },
-    sessionChanging: true,
-    submit: async (values, context_) => {
-        const response = assertOk(await context_.authClient.signIn.username({ password: values.password, username: values.username.trim() }));
-        if (response.data?.twoFactorRedirect) {
-            return { redirectTo: withRedirectTo(context_.redirects.twoFactor) };
-        }
-        return { redirectTo: postAuthDestination(context_) };
-    },
-});
+const createUsernameSignInController: (context: ControllerContext) => FormController<UsernameSignInField>;
 ```
 
 ### `createVerifyEmailController` (const)
 
 ```ts
-const createVerifyEmailController = (context: ControllerContext, options: VerifyEmailOptions = {}): VerifyEmailController => {
-    const store = createStore<VerifyEmailState>({ status: "idle" });
-    const verify = async (): Promise<void> => {
-        const token = options.token?.trim();
-        if (token === undefined || token === "") {
-            store.update({ error: context.localization.verifyEmailNoToken, status: "error" });
-            return;
-        }
-        if (store.get().status === "submitting") {
-            return;
-        }
-        store.update({ error: undefined, status: "submitting" });
-        try {
-            const response = await context.authClient.verifyEmail({ query: { token } });
-            if (response.error && !ALREADY_VERIFIED_CODES.has(response.error.code ?? "")) {
-                assertOk(response);
-            }
-            store.update({ status: "success" });
-            context.onSessionChange?.();
-            context.nav.replace(postAuthDestination(context));
-        }
-        catch (error) {
-            context.onError?.(error);
-            store.update({ error: mapAuthError(error, context.localization, context.localization.verifyEmailFailed), status: "error" });
-        }
-    };
-    if (options.autoVerify !== false && isBrowser()) {
-        void verify();
-    }
-    return {
-        actions: { verify },
-        destroy: store.clear,
-        getState: store.get,
-        subscribe: store.subscribe,
-    };
-};
+const createVerifyEmailController: (context: ControllerContext, options?: VerifyEmailOptions) => VerifyEmailController;
 ```
 
 ### `defaultNav` (const)
 
 ```ts
-const defaultNav: NavAdapter = {
-    navigate: (to: string): void => {
-        globalThis.location.assign(to);
-    },
-    replace: (to: string): void => {
-        globalThis.location.replace(to);
-    },
-};
+const defaultNav: NavAdapter;
 ```
 
 ### `derivePluginFlags` (const)
 
 ```ts
-const derivePluginFlags = (authClient: unknown): Required<PluginFlags> => {
-    if (authClient === null || (typeof authClient !== "object" && typeof authClient !== "function")) {
-        return withEveryFlow(true);
-    }
-    return registry.get(authClient) ?? withEveryFlow(true);
-};
+const derivePluginFlags: (authClient: unknown) => Required<PluginFlags>;
 ```
 
 ### `discoverAuthConfig` (const)
 
 ```ts
-const discoverAuthConfig = (basePath: string): DiscoveryHandle => {
-    const url = `${basePath.endsWith("/") ? basePath.slice(0, -1) : basePath}/ui-config`;
-    const existing = handles.get(url);
-    if (existing) {
-        return existing;
-    }
-    const store = createStore<DiscoveryState>({ status: "loading" });
-    const handle: DiscoveryHandle = { getState: store.get, subscribe: store.subscribe };
-    handles.set(url, handle);
-    const fetcher = (globalThis as {
-        fetch?: typeof fetch;
-    }).fetch;
-    if (typeof fetcher !== "function") {
-        handles.delete(url);
-        store.update({ status: "unavailable" });
-        return handle;
-    }
-    const origin = (globalThis as {
-        location?: {
-            origin?: string;
-        };
-    }).location?.origin;
-    const hasOrigin = origin !== undefined && origin !== "";
-    let requestUrl: string | undefined = url;
-    if (url.startsWith("/")) {
-        requestUrl = hasOrigin ? `${origin}${url}` : undefined;
-    }
-    if (requestUrl === undefined) {
-        handles.delete(url);
-        store.update({ status: "unavailable" });
-        return handle;
-    }
-    const unavailable = (): void => {
-        handles.delete(url);
-        store.update({ status: "unavailable" });
-    };
-    void (async () => {
-        try {
-            const response = await fetcher(requestUrl, { credentials: "include", headers: { accept: "application/json" } });
-            if (!response.ok) {
-                unavailable();
-                return;
-            }
-            const body: unknown = await response.json();
-            if (isConfig(body)) {
-                store.update({ config: normalize(body), status: "ready" });
-                return;
-            }
-            unavailable();
-        }
-        catch {
-            unavailable();
-        }
-    })();
-    return handle;
-};
+const discoverAuthConfig: (basePath: string) => DiscoveryHandle;
 ```
 
 ### `dismissToast` (const)
 
 ```ts
-const dismissToast = (id: number): void => {
-    const timer = timers.get(id);
-    if (timer !== undefined) {
-        clearTimeout(timer);
-        timers.delete(id);
-    }
-    store.update({ toasts: store.get().toasts.filter((toast) => toast.id !== id) });
-};
+const dismissToast: (id: number) => void;
 ```
 
 ### `email` (const)
 
 ```ts
-const email = (value: string, localization: Localization): string | undefined => {
-    const missing = required(value, localization.emailRequired);
-    if (missing) {
-        return missing;
-    }
-    return EMAIL_RE.test(value.trim()) ? undefined : localization.emailInvalid;
-};
+const email: (value: string, localization: Localization) => string | undefined;
 ```
 
 ### `firstLabel` (const)
 
 ```ts
-const firstLabel = (...candidates: ReadonlyArray<string | undefined>): string | undefined => candidates.find((candidate) => candidate !== undefined && candidate.trim() !== "");
+const firstLabel: (...candidates: ReadonlyArray<string | undefined>) => string | undefined;
 ```
 
 ### `getToasts` (const)
 
 ```ts
-const getToasts = (): ReadonlyArray<Toast> => store.get().toasts;
+const getToasts: () => ReadonlyArray<Toast>;
 ```
 
 ### `isFlowEnabled` (const)
 
 ```ts
-const isFlowEnabled = (context: {
-    plugins: Required<PluginFlags>;
-}, flow: FlowName, component: string): boolean => {
-    if (context.plugins[flow]) {
-        return true;
-    }
-    if (!warned.has(component)) {
-        warned.add(component);
-        console.warn(`[lunora-auth-ui] <${component}> did not render: the "${flow}" flow is off. Turn it on in lunora/auth-ui/client.ts, or pass plugins={{ ${flow}: true }} to <AuthUIProvider>.`);
-    }
-    return false;
-};
+const isFlowEnabled: (context: { plugins: Required<PluginFlags>; }, flow: FlowName, component: string) => boolean;
 ```
 
 ### `isSafeRedirect` (const)
 
 ```ts
-const isSafeRedirect = (target: string): boolean => {
-    const trimmed = target.trim();
-    if (trimmed === "" || !trimmed.startsWith("/")) {
-        return false;
-    }
-    if (trimmed.startsWith("//") || trimmed.startsWith("/\\")) {
-        return false;
-    }
-    return !CONTROL_CHARACTERS.test(trimmed);
-};
+const isSafeRedirect: (target: string) => boolean;
 ```
 
 ### `lastLoginMethodStore` (const)
 
 ```ts
-const lastLoginMethodStore = {
-    getServerSnapshot: (): string | undefined => undefined,
-    getSnapshot: (): string | undefined => readLastLoginMethod(),
-    subscribe: (): (() => void) => () => undefined,
-};
+const lastLoginMethodStore: { getServerSnapshot: () => string | undefined; getSnapshot: () => string | undefined; subscribe: () => (() => void); };
 ```
 
 ### `linkableProviders` (const)
 
 ```ts
-const linkableProviders = (accounts: ReadonlyArray<AuthAccount>, social: ReadonlyArray<string>): ReadonlyArray<string> => {
-    const linked = new Set(linkedProviderIds(accounts));
-    return social.filter((provider) => !linked.has(provider));
-};
+const linkableProviders: (accounts: ReadonlyArray<AuthAccount>, social: ReadonlyArray<string>) => ReadonlyArray<string>;
 ```
 
 ### `lockedPrefill` (const)
 
 ```ts
-const lockedPrefill = (field: string, lock: boolean | undefined): boolean => lock === true && readFieldPrefill(field) !== undefined;
+const lockedPrefill: (field: string, lock: boolean | undefined) => boolean;
 ```
 
 ### `mapAuthError` (const)
 
 ```ts
-const mapAuthError = (error: unknown, localization: Localization, fallback: string): string => {
-    if (error instanceof AuthActionError) {
-        if (error.code !== undefined && NOT_FRESH_CODES.has(error.code)) {
-            return localization.sessionNotFresh;
-        }
-        return error.message.trim() === "" ? fallback : error.message;
-    }
-    if (error instanceof LunoraError) {
-        return error.message.trim() === "" ? fallback : error.message;
-    }
-    return fallback === "" ? localization.genericError : fallback;
-};
+const mapAuthError: (error: unknown, localization: Localization, fallback: string) => string;
 ```
 
 ### `notifyError` (const)
 
 ```ts
-const notifyError = (context: ControllerContext, error: unknown, fallback: string): void => {
-    context.onError?.(error);
-    pushToast(mapAuthError(error, context.localization, fallback));
-};
+const notifyError: (context: ControllerContext, error: unknown, fallback: string) => void;
 ```
 
 ### `passkeyLabel` (const)
 
 ```ts
-const passkeyLabel = (passkey: AuthPasskey, localization: Localization): string => {
-    const name = passkey.name?.trim();
-    return name === undefined || name === "" ? localization.passkeyUnnamed : name;
-};
+const passkeyLabel: (passkey: AuthPasskey, localization: Localization) => string;
 ```
 
 ### `password` (const)
 
 ```ts
-const password = (value: string, localization: Localization, policy?: PasswordPolicy): string | undefined => validatePassword(value, localization, policy);
+const password: (value: string, localization: Localization, policy?: PasswordPolicy) => string | undefined;
 ```
 
 ### `passwordRequirements` (const)
 
 ```ts
-const passwordRequirements = (value: string, localization: Localization, policy: PasswordPolicy = {}): ReadonlyArray<PasswordRequirement> => {
-    const minLength = policy.minLength ?? DEFAULT_PASSWORD_POLICY.minLength;
-    const requirements: PasswordRequirement[] = [
-        { label: localization.passwordRuleLength.replace("{min}", String(minLength)), met: value.length >= minLength },
-    ];
-    if (policy.requireLowercase === true) {
-        requirements.push({ label: localization.passwordRuleLowercase, met: LOWERCASE.test(value) });
-    }
-    if (policy.requireUppercase === true) {
-        requirements.push({ label: localization.passwordRuleUppercase, met: UPPERCASE.test(value) });
-    }
-    if (policy.requireDigit === true) {
-        requirements.push({ label: localization.passwordRuleDigit, met: DIGIT.test(value) });
-    }
-    if (policy.requireSymbol === true) {
-        requirements.push({ label: localization.passwordRuleSymbol, met: SYMBOL.test(value) });
-    }
-    return requirements;
-};
+const passwordRequirements: (value: string, localization: Localization, policy?: PasswordPolicy) => ReadonlyArray<PasswordRequirement>;
 ```
 
 ### `passwordScore` (const)
 
 ```ts
-const passwordScore = (requirements: ReadonlyArray<PasswordRequirement>): number => {
-    if (requirements.length === 0) {
-        return 0;
-    }
-    return requirements.filter((requirement) => requirement.met).length / requirements.length;
-};
+const passwordScore: (requirements: ReadonlyArray<PasswordRequirement>) => number;
 ```
 
 ### `postAuthDestination` (const)
 
 ```ts
-const postAuthDestination = (context: Pick<ControllerContext, "redirects">): string => resolveAfterSignIn(context.redirects.afterSignIn);
+const postAuthDestination: (context: Pick<ControllerContext, "redirects">) => string;
 ```
 
 ### `promptOneTap` (const)
 
 ```ts
-const promptOneTap = async (context: ControllerContext): Promise<void> => {
-    try {
-        await context.authClient.oneTap({ callbackURL: postAuthDestination(context) });
-        context.onSessionChange?.();
-    }
-    catch (error) {
-        context.onError?.(error);
-    }
-};
+const promptOneTap: (context: ControllerContext) => Promise<void>;
 ```
 
 ### `providerLabel` (const)
 
 ```ts
-const providerLabel = (provider: string): string => {
-    const known = PROVIDER_LABELS[provider];
-    if (known !== undefined) {
-        return known;
-    }
-    return provider
-        .split("-")
-        .map((part) => (part === "" ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`))
-        .join(" ");
-};
+const providerLabel: (provider: string) => string;
 ```
 
 ### `pushToast` (const)
 
 ```ts
-const pushToast = (message: string): number => {
-    const current = store.get().toasts;
-    const last = current.at(-1);
-    if (last?.message === message) {
-        return last.id;
-    }
-    nextId += 1;
-    const toast: Toast = { id: nextId, message };
-    store.update({ toasts: [...current, toast] });
-    if (typeof setTimeout === "function") {
-        timers.set(toast.id, setTimeout(() => {
-            dismissToast(toast.id);
-        }, TOAST_DURATION_MS));
-    }
-    return toast.id;
-};
+const pushToast: (message: string) => number;
 ```
 
 ### `readFieldPrefill` (const)
 
 ```ts
-const readFieldPrefill = (field: string): string | undefined => {
-    if (!PREFILLABLE.has(field)) {
-        return undefined;
-    }
-    const value = queryParameter(field);
-    if (value === undefined) {
-        return undefined;
-    }
-    const trimmed = value.trim();
-    return trimmed === "" || CONTROL_CHARACTERS.test(trimmed) ? undefined : trimmed;
-};
+const readFieldPrefill: (field: string) => string | undefined;
 ```
 
 ### `readLastLoginMethod` (const)
 
 ```ts
-const readLastLoginMethod = (cookieName: string = LAST_LOGIN_METHOD_COOKIE): string | undefined => {
-    const cookie = (globalThis as {
-        document?: {
-            cookie?: string;
-        };
-    }).document?.cookie;
-    if (cookie === undefined || cookie === "") {
-        return undefined;
-    }
-    for (const part of cookie.split(";")) {
-        const separator = part.indexOf("=");
-        if (separator === -1) {
-            continue;
-        }
-        if (part.slice(0, separator).trim() !== cookieName) {
-            continue;
-        }
-        const raw = part.slice(separator + 1).trim();
-        let value: string;
-        try {
-            value = decodeURIComponent(raw);
-        }
-        catch {
-            return undefined;
-        }
-        return value === "" ? undefined : value;
-    }
-    return undefined;
-};
+const readLastLoginMethod: (cookieName?: string) => string | undefined;
 ```
 
 ### `readRedirectTo` (const)
 
 ```ts
-const readRedirectTo = (parameter = "redirectTo"): string | undefined => {
-    const value = queryParameter(parameter);
-    if (value === undefined) {
-        return undefined;
-    }
-    const trimmed = value.trim();
-    return isSafeRedirect(trimmed) ? trimmed : undefined;
-};
+const readRedirectTo: (parameter?: string) => string | undefined;
 ```
 
 ### `registerAuthClientPlugins` (const)
 
 ```ts
-const registerAuthClientPlugins = (authClient: unknown, plugins: PluginFlags = {}): void => {
-    if (typeof authClient !== "object" && typeof authClient !== "function") {
-        return;
-    }
-    if (authClient === null) {
-        return;
-    }
-    const flags = withEveryFlow(false);
-    for (const flow of FLOW_NAMES) {
-        flags[flow] = plugins[flow] ?? false;
-    }
-    registry.set(authClient, flags);
-};
+const registerAuthClientPlugins: (authClient: unknown, plugins?: PluginFlags) => void;
 ```
 
 ### `renderCaptcha` (const)
 
 ```ts
-const renderCaptcha = (element: Element, options: RenderCaptchaOptions): (() => void) => {
-    const provider = PROVIDERS[options.provider];
-    let widgetId: unknown;
-    let disposed = false;
-    let ownToken: string | undefined;
-    void loadScript(provider.script)
-        .then(() => {
-        if (disposed) {
-            return false;
-        }
-        const api = (globalThis as unknown as Record<string, CaptchaGlobal | undefined>)[provider.global];
-        if (api === undefined) {
-            throw new Error(`${provider.global} did not appear after its script loaded`);
-        }
-        widgetId = api.render(element, {
-            callback: (token: string) => {
-                ownToken = token;
-                setCaptchaToken(token);
-            },
-            "expired-callback": () => {
-                ownToken = undefined;
-                setCaptchaToken(undefined);
-            },
-            sitekey: options.siteKey,
-        });
-        return true;
-    })
-        .catch((error: unknown) => {
-        options.onError?.(error);
-    });
-    return () => {
-        disposed = true;
-        if (ownToken !== undefined && store.get().token === ownToken) {
-            setCaptchaToken(undefined);
-        }
-        const api = (globalThis as unknown as Record<string, CaptchaGlobal | undefined>)[provider.global];
-        api?.reset?.(widgetId);
-    };
-};
+const renderCaptcha: (element: Element, options: RenderCaptchaOptions) => (() => void);
 ```
 
 ### `required` (const)
 
 ```ts
-const required = (value: string, message: string): string | undefined => (value.trim() === "" ? message : undefined);
+const required: (value: string, message: string) => string | undefined;
 ```
 
 ### `resetAuthConfigDiscovery` (const)
 
 ```ts
-const resetAuthConfigDiscovery = (): void => {
-    handles.clear();
-};
+const resetAuthConfigDiscovery: () => void;
 ```
 
 ### `resetFlowWarnings` (const)
 
 ```ts
-const resetFlowWarnings = (): void => {
-    warned.clear();
-};
+const resetFlowWarnings: () => void;
 ```
 
 ### `resetToasts` (const)
 
 ```ts
-const resetToasts = (): void => {
-    for (const timer of timers.values()) {
-        clearTimeout(timer);
-    }
-    timers.clear();
-    store.set({ toasts: [] });
-};
+const resetToasts: () => void;
 ```
 
 ### `resolveContext` (const)
 
 ```ts
-const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): ControllerContext => {
-    const viewPaths = resolveViewPaths(config.viewPaths);
-    return {
-        authClient: config.authClient as AuthClient,
-        avatar: { maxSize: config.avatar?.maxSize ?? DEFAULT_AVATAR_MAX_SIZE, upload: config.avatar?.upload },
-        basePath: config.basePath ?? DEFAULT_BASE_PATH,
-        credentials: discovered?.emailAndPassword ?? true,
-        forgotPasswordMethod: config.forgotPassword?.method ?? "link",
-        localization: resolveLocalization(config.localization),
-        nav: config.nav,
-        onError: guardCallback(config.onError),
-        onSessionChange: config.onSessionChange,
-        organization: {
-            allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
-            invitationLimit: discovered?.organization?.invitationLimit,
-            limit: discovered?.organization?.limit,
-            membershipLimit: discovered?.organization?.membershipLimit,
-            roles: config.organization?.roles ?? discovered?.organization?.roles ?? false,
-            showSlug: config.organization?.showSlug ?? true,
-            teams: config.organization?.teams ?? discovered?.organization?.teams ?? false,
-        },
-        password: config.password ?? {},
-        plugins: resolvePlugins(config.authClient, config.plugins, discovered),
-        redirects: resolveRedirects(viewPaths, config.redirects),
-        signUp: discovered?.signUp ?? true,
-        social: config.social ?? discovered?.socialProviders ?? [],
-        themeVariables: resolveThemeVariables(config.theme),
-        viewPaths,
-    };
-};
+const resolveContext: (config: AuthUIConfig, discovered?: DiscoveredConfig) => ControllerContext;
 ```
 
 ### `resolveLocalization` (const)
 
 ```ts
-const resolveLocalization = (overrides?: Partial<Localization>): Localization => {
-    return {
-        ...DEFAULT_LOCALIZATION,
-        ...overrides,
-    };
-};
+const resolveLocalization: (overrides?: Partial<Localization>) => Localization;
 ```
 
 ### `resolveThemeVariables` (const)
 
 ```ts
-const resolveThemeVariables = (theme?: (defaults: ThemeTokens) => ThemeTokens): Readonly<Record<string, string>> => {
-    if (!theme) {
-        return {};
-    }
-    const resolved = theme({ ...DEFAULT_THEME_TOKENS });
-    const variables: Record<string, string> = {};
-    for (const token of Object.keys(DEFAULT_THEME_TOKENS) as (keyof ThemeTokens)[]) {
-        const value = resolved[token];
-        if (typeof value === "string" && value !== DEFAULT_THEME_TOKENS[token]) {
-            variables[toCustomProperty(token)] = value;
-        }
-    }
-    return variables;
-};
+const resolveThemeVariables: (theme?: (defaults: ThemeTokens) => ThemeTokens) => Readonly<Record<string, string>>;
 ```
 
 ### `rowActionLabel` (const)
 
 ```ts
-const rowActionLabel = (action: string, subject: string | undefined): string => {
-    const trimmed = subject?.trim();
-    return trimmed === undefined || trimmed === "" ? action : `${action}: ${trimmed}`;
-};
+const rowActionLabel: (action: string, subject: string | undefined) => string;
 ```
 
 ### `scopeLabels` (const)
 
 ```ts
-const scopeLabels = (scope?: string): ReadonlyArray<string> => {
-    const parts = (scope ?? "").split(SCOPE_SEPARATOR).filter((part) => part !== "");
-    return parts.map((part) => SCOPE_LABELS[part] ?? part);
-};
+const scopeLabels: (scope?: string) => ReadonlyArray<string>;
 ```
 
 ### `sessionLabel` (const)
 
 ```ts
-const sessionLabel = (session: AuthSession, localization: Localization): string => {
-    const agent = session.userAgent?.trim();
-    if (agent !== undefined && agent !== "") {
-        return agent;
-    }
-    return session.ipAddress ?? localization.unknownDevice;
-};
+const sessionLabel: (session: AuthSession, localization: Localization) => string;
 ```
 
 ### `setCaptchaToken` (const)
 
 ```ts
-const setCaptchaToken = (token: string | undefined): void => {
-    store.set({ token });
-};
+const setCaptchaToken: (token: string | undefined) => void;
 ```
 
 ### `signInWithSocial` (const)
 
 ```ts
-const signInWithSocial = async (context: ControllerContext, provider: string): Promise<void> => {
-    try {
-        assertOk(await context.authClient.signIn.social({ callbackURL: postAuthDestination(context), provider }));
-    }
-    catch (error) {
-        notifyError(context, error, context.localization.signInFailed);
-    }
-};
+const signInWithSocial: (context: ControllerContext, provider: string) => Promise<void>;
 ```
 
 ### `signOut` (const)
 
 ```ts
-const signOut = async (context: ControllerContext): Promise<void> => {
-    try {
-        assertOk(await context.authClient.signOut());
-        context.onSessionChange?.();
-        context.nav.replace(context.redirects.afterSignOut);
-    }
-    catch (error) {
-        context.onError?.(error);
-    }
-};
+const signOut: (context: ControllerContext) => Promise<void>;
 ```
 
 ### `slugify` (const)
 
 ```ts
-const slugify = (value: string): string => value
-    .toLowerCase()
-    .trim()
-    .replaceAll(/[^a-z0-9]+/gu, "-")
-    .replaceAll(/^-|-$/gu, "");
+const slugify: (value: string) => string;
 ```
 
 ### `subscribeToasts` (const)
 
 ```ts
-const subscribeToasts = (onChange: () => void): (() => void) => store.subscribe(onChange);
+const subscribeToasts: (onChange: () => void) => (() => void);
 ```
 
 ### `totpSecret` (const)
 
 ```ts
-const totpSecret = (totpUri?: string): string | undefined => {
-    if (totpUri === undefined || totpUri === "") {
-        return undefined;
-    }
-    const query = totpUri.slice(totpUri.indexOf("?") + 1);
-    const secret = new URLSearchParams(query).get("secret");
-    return secret === null || secret === "" ? undefined : secret;
-};
+const totpSecret: (totpUri?: string) => string | undefined;
 ```
 
 ### `userInitials` (const)
 
 ```ts
-const userInitials = (user?: AuthUser): string => {
-    const name = user?.name?.trim();
-    if (name !== undefined && name !== "") {
-        const parts = name.split(WHITESPACE).filter((part) => part !== "");
-        const first = parts.at(0) ?? "";
-        const last = parts.at(-1) ?? "";
-        const initials = parts.length > 1 ? `${first.charAt(0)}${last.charAt(0)}` : first.slice(0, 2);
-        return initials.toUpperCase();
-    }
-    const email = user?.email?.trim();
-    return email === undefined || email === "" ? "?" : email.charAt(0).toUpperCase();
-};
+const userInitials: (user?: AuthUser) => string;
 ```
 
 ### `userLabel` (const)
 
 ```ts
-const userLabel = (user?: AuthUser): string => {
-    const name = user?.name?.trim();
-    if (name !== undefined && name !== "") {
-        return name;
-    }
-    return user?.email ?? "";
-};
+const userLabel: (user?: AuthUser) => string;
 ```
 
 ### `validatePassword` (const)
 
 ```ts
-const validatePassword = (value: string, localization: Localization, policy: PasswordPolicy = {}): string | undefined => {
-    if (value.trim() === "") {
-        return localization.passwordRequired;
-    }
-    const minLength = policy.minLength ?? DEFAULT_PASSWORD_POLICY.minLength;
-    const maxLength = policy.maxLength ?? DEFAULT_PASSWORD_POLICY.maxLength;
-    if (value.length < minLength) {
-        return localization.passwordTooShort.replace("{min}", String(minLength));
-    }
-    if (value.length > maxLength) {
-        return localization.passwordTooLong.replace("{max}", String(maxLength));
-    }
-    if (policy.requireLowercase === true && !LOWERCASE.test(value)) {
-        return localization.passwordRuleLowercase;
-    }
-    if (policy.requireUppercase === true && !UPPERCASE.test(value)) {
-        return localization.passwordRuleUppercase;
-    }
-    if (policy.requireDigit === true && !DIGIT.test(value)) {
-        return localization.passwordRuleDigit;
-    }
-    if (policy.requireSymbol === true && !SYMBOL.test(value)) {
-        return localization.passwordRuleSymbol;
-    }
-    return undefined;
-};
+const validatePassword: (value: string, localization: Localization, policy?: PasswordPolicy) => string | undefined;
 ```
 
 ### `viewHref` (const)
 
 ```ts
-const viewHref = (context: Pick<ControllerContext, "viewPaths">, view: ViewName): string => `${context.viewPaths.base}/${context.viewPaths[view]}`;
+const viewHref: (context: Pick<ControllerContext, "viewPaths">, view: ViewName) => string;
 ```
 
 ### `withRedirectTo` (const)
 
 ```ts
-const withRedirectTo = (path: string): string => {
-    const target = readRedirectTo();
-    if (target === undefined) {
-        return path;
-    }
-    return mergeQuery(path, { redirectTo: target });
-};
+const withRedirectTo: (path: string) => string;
 ```
 
 ## `@lunora/auth-ui/react`
@@ -9119,16 +6850,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AcceptInvitationCard` (unknown)
+### `AcceptInvitationCard` (const)
 
 ```ts
-AcceptInvitationCard
+const AcceptInvitationCard: ({ invitationId }?: AcceptInvitationCardProps) => ReactElement;
 ```
 
-### `AcceptInvitationCardProps` (unknown)
+### `AcceptInvitationCardProps` (interface)
 
 ```ts
-AcceptInvitationCardProps
+interface AcceptInvitationCardProps {
+    invitationId?: string;
+}
 ```
 
 ### `AcceptInvitationController` (type)
@@ -9167,10 +6900,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AdminUsersCard` (unknown)
+### `AdminUsersCard` (const)
 
 ```ts
-AdminUsersCard
+const AdminUsersCard: () => ReactElement | null;
 ```
 
 ### `AdminUsersController` (type)
@@ -9189,10 +6922,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AnonymousButton` (unknown)
+### `AnonymousButton` (const)
 
 ```ts
-AnonymousButton
+const AnonymousButton: () => ReactElement;
 ```
 
 ### `AnonymousController` (type)
@@ -9203,10 +6936,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AppearanceCard` (unknown)
+### `AppearanceCard` (const)
 
 ```ts
-AppearanceCard
+const AppearanceCard: () => ReactElement;
 ```
 
 ### `AuthAccount` (interface)
@@ -9221,16 +6954,22 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthCard` (unknown)
+### `AuthCard` (const)
 
 ```ts
-AuthCard
+const AuthCard: ({ children, description, footer, headingLevel, title }: AuthCardProps) => ReactElement;
 ```
 
-### `AuthCardProps` (unknown)
+### `AuthCardProps` (interface)
 
 ```ts
-AuthCardProps
+interface AuthCardProps {
+    children: ReactNode;
+    description?: string;
+    footer?: ReactNode;
+    headingLevel?: 1 | 2 | 3;
+    title: string;
+}
 ```
 
 ### `AuthClient` (interface)
@@ -9245,10 +6984,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthDivider` (unknown)
+### `AuthDivider` (const)
 
 ```ts
-AuthDivider
+const AuthDivider: ({ label }: { label?: string; }) => ReactElement;
 ```
 
 ### `AuthFetchError` (interface)
@@ -9267,10 +7006,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthLink` (unknown)
+### `AuthLink` (const)
 
 ```ts
-AuthLink
+const AuthLink: ({ children, href }: AuthLinkProps) => ReactElement;
 ```
 
 ### `AuthMember` (interface)
@@ -9301,42 +7040,52 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthUIProvider` (unknown)
+### `AuthUIProvider` (const)
 
 ```ts
-AuthUIProvider
+const AuthUIProvider: ({ authClient, avatar, basePath, children, discover, forgotPassword, Link, localization, nav, onError, onSessionChange, organization, password, plugins, redirects, social, theme, viewPaths, }: AuthUIProviderProps) => ReactElement;
 ```
 
-### `AuthUIProviderProps` (unknown)
+### `AuthUIProviderProps` (interface)
 
 ```ts
-AuthUIProviderProps
+interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
+    children: ReactNode;
+    Link?: ComponentType<{
+        children: ReactNode;
+        className?: string;
+        href: string;
+    }>;
+    nav?: AuthUIConfig["nav"];
+}
 ```
 
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthView` (unknown)
+### `AuthView` (const)
 
 ```ts
-AuthView
+const AuthView: ({ view }?: AuthViewProps) => ReactElement;
 ```
 
-### `AuthViewProps` (unknown)
+### `AuthViewProps` (interface)
 
 ```ts
-AuthViewProps
+interface AuthViewProps {
+    view?: string;
+}
 ```
 
 ### `AuthorizedAppsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthorizedAppsCard` (unknown)
+### `AuthorizedAppsCard` (const)
 
 ```ts
-AuthorizedAppsCard
+const AuthorizedAppsCard: () => ReactElement | null;
 ```
 
 ### `AuthorizedAppsController` (type)
@@ -9347,10 +7096,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AvatarCard` (unknown)
+### `AvatarCard` (const)
 
 ```ts
-AvatarCard
+const AvatarCard: () => ReactElement | null;
 ```
 
 ### `AvatarConfig` (interface)
@@ -9373,10 +7122,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `BackupCodesCard` (unknown)
+### `BackupCodesCard` (const)
 
 ```ts
-BackupCodesCard
+const BackupCodesCard: () => ReactElement | null;
 ```
 
 ### `BackupCodesField` (type)
@@ -9395,36 +7144,39 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Captcha` (unknown)
+### `Captcha` (const)
 
 ```ts
-Captcha
+const Captcha: ({ provider, siteKey }: CaptchaProps) => ReactElement | null;
 ```
 
-### `CaptchaProps` (unknown)
+### `CaptchaProps` (interface)
 
 ```ts
-CaptchaProps
+interface CaptchaProps {
+    provider: CaptchaProvider;
+    siteKey?: string;
+}
 ```
 
 ### `CaptchaProvider` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangeEmailCard` (unknown)
+### `ChangeEmailCard` (const)
 
 ```ts
-ChangeEmailCard
+const ChangeEmailCard: () => ReactElement;
 ```
 
 ### `ChangeEmailField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangePasswordCard` (unknown)
+### `ChangePasswordCard` (const)
 
 ```ts
-ChangePasswordCard
+const ChangePasswordCard: () => ReactElement;
 ```
 
 ### `ChangePasswordField` (type)
@@ -9435,16 +7187,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ConsentCard` (unknown)
+### `ConsentCard` (const)
 
 ```ts
-ConsentCard
+const ConsentCard: ({ consentId }?: ConsentCardProps) => ReactElement | null;
 ```
 
-### `ConsentCardProps` (unknown)
+### `ConsentCardProps` (interface)
 
 ```ts
-ConsentCardProps
+interface ConsentCardProps {
+    consentId?: string;
+}
 ```
 
 ### `ConsentController` (type)
@@ -9487,10 +7241,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeleteAccountCard` (unknown)
+### `DeleteAccountCard` (const)
 
 ```ts
-DeleteAccountCard
+const DeleteAccountCard: () => ReactElement;
 ```
 
 ### `DeleteAccountField` (type)
@@ -9501,16 +7255,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeviceAuthorizationCard` (unknown)
+### `DeviceAuthorizationCard` (const)
 
 ```ts
-DeviceAuthorizationCard
+const DeviceAuthorizationCard: ({ userCode }?: DeviceAuthorizationCardProps) => ReactElement | null;
 ```
 
-### `DeviceAuthorizationCardProps` (unknown)
+### `DeviceAuthorizationCardProps` (interface)
 
 ```ts
-DeviceAuthorizationCardProps
+interface DeviceAuthorizationCardProps {
+    userCode?: string;
+}
 ```
 
 ### `DeviceAuthorizationController` (type)
@@ -9557,10 +7313,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `EmailOtpCard` (unknown)
+### `EmailOtpCard` (const)
 
 ```ts
-EmailOtpCard
+const EmailOtpCard: () => ReactElement | null;
 ```
 
 ### `EmailOtpController` (type)
@@ -9571,26 +7327,36 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ErrorToaster` (unknown)
+### `ErrorToaster` (const)
 
 ```ts
-ErrorToaster
+const ErrorToaster: ({ dismissLabel }?: ErrorToasterProps) => ReactElement;
 ```
 
 ### `FLOW_NAMES` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Field` (unknown)
+### `Field` (const)
 
 ```ts
-Field
+const Field: ({ autoComplete, field, inputMode, label, name, onBlur, onChange, placeholder, type }: FieldProps) => ReactElement;
 ```
 
-### `FieldProps` (unknown)
+### `FieldProps` (interface)
 
 ```ts
-FieldProps
+interface FieldProps {
+    autoComplete?: string;
+    field: FieldState;
+    inputMode?: "numeric";
+    label: string;
+    name: string;
+    onBlur: () => void;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    type?: "email" | "password" | "text";
+}
 ```
 
 ### `FieldSpec` (interface)
@@ -9609,16 +7375,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ForgotPasswordCard` (unknown)
+### `ForgotPasswordCard` (const)
 
 ```ts
-ForgotPasswordCard
+const ForgotPasswordCard: ({ resetPath, signInHref }?: ForgotPasswordCardProps) => ReactElement;
 ```
 
-### `ForgotPasswordCardProps` (unknown)
+### `ForgotPasswordCardProps` (interface)
 
 ```ts
-ForgotPasswordCardProps
+interface ForgotPasswordCardProps {
+    resetPath?: string;
+    signInHref?: string;
+}
 ```
 
 ### `ForgotPasswordField` (type)
@@ -9633,10 +7402,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `FormBanner` (unknown)
+### `FormBanner` (const)
 
 ```ts
-FormBanner
+const FormBanner: ({ error, success }: FormBannerProps) => ReactElement | null;
 ```
 
 ### `FormController` (type)
@@ -9671,10 +7440,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `LinkedAccountsCard` (unknown)
+### `LinkedAccountsCard` (const)
 
 ```ts
-LinkedAccountsCard
+const LinkedAccountsCard: () => ReactElement;
 ```
 
 ### `Localization` (interface)
@@ -9701,16 +7470,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MagicLinkCard` (unknown)
+### `MagicLinkCard` (const)
 
 ```ts
-MagicLinkCard
+const MagicLinkCard: ({ signInHref }?: MagicLinkCardProps) => ReactElement | null;
 ```
 
-### `MagicLinkCardProps` (unknown)
+### `MagicLinkCardProps` (interface)
 
 ```ts
-MagicLinkCardProps
+interface MagicLinkCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `MagicLinkField` (type)
@@ -9721,10 +7492,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MembersCard` (unknown)
+### `MembersCard` (const)
 
 ```ts
-MembersCard
+const MembersCard: () => ReactElement | null;
 ```
 
 ### `MembersController` (type)
@@ -9735,10 +7506,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MultiSessionCard` (unknown)
+### `MultiSessionCard` (const)
 
 ```ts
-MultiSessionCard
+const MultiSessionCard: () => ReactElement | null;
 ```
 
 ### `NON_SOCIAL_PROVIDERS` (const)
@@ -9757,34 +7528,38 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OneTap` (unknown)
+### `OneTap` (const)
 
 ```ts
-OneTap
+const OneTap: () => null;
 ```
 
-### `OrganizationLogoCard` (unknown)
+### `OrganizationLogoCard` (const)
 
 ```ts
-OrganizationLogoCard
+const OrganizationLogoCard: ({ organizationId }?: OrganizationLogoCardProps) => ReactElement | null;
 ```
 
-### `OrganizationLogoCardProps` (unknown)
+### `OrganizationLogoCardProps` (interface)
 
 ```ts
-OrganizationLogoCardProps
+interface OrganizationLogoCardProps {
+    organizationId?: string;
+}
 ```
 
-### `OrganizationSettingsCard` (unknown)
+### `OrganizationSettingsCard` (const)
 
 ```ts
-OrganizationSettingsCard
+const OrganizationSettingsCard: ({ organizationId }?: OrganizationSettingsCardProps) => ReactElement | null;
 ```
 
-### `OrganizationSettingsCardProps` (unknown)
+### `OrganizationSettingsCardProps` (interface)
 
 ```ts
-OrganizationSettingsCardProps
+interface OrganizationSettingsCardProps {
+    organizationId?: string;
+}
 ```
 
 ### `OrganizationSettingsField` (type)
@@ -9799,10 +7574,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OrganizationsCard` (unknown)
+### `OrganizationsCard` (const)
 
 ```ts
-OrganizationsCard
+const OrganizationsCard: () => ReactElement | null;
 ```
 
 ### `OrganizationsController` (type)
@@ -9821,10 +7596,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasskeysCard` (unknown)
+### `PasskeysCard` (const)
 
 ```ts
-PasskeysCard
+const PasskeysCard: () => ReactElement | null;
 ```
 
 ### `PasskeysController` (type)
@@ -9839,10 +7614,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasswordStrength` (unknown)
+### `PasswordStrength` (const)
 
 ```ts
-PasswordStrength
+const PasswordStrength: ({ value }: { value: string; }) => ReactElement | null;
 ```
 
 ### `PhoneForgotPasswordField` (type)
@@ -9853,10 +7628,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PhoneSignInCard` (unknown)
+### `PhoneSignInCard` (const)
 
 ```ts
-PhoneSignInCard
+const PhoneSignInCard: () => ReactElement | null;
 ```
 
 ### `PhoneSignInField` (type)
@@ -9883,16 +7658,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ProfileCard` (unknown)
+### `ProfileCard` (const)
 
 ```ts
-ProfileCard
+const ProfileCard: ({ defaultImage, defaultName }?: ProfileCardProps) => ReactElement;
 ```
 
-### `ProfileCardProps` (unknown)
+### `ProfileCardProps` (interface)
 
 ```ts
-ProfileCardProps
+interface ProfileCardProps {
+    defaultImage?: string;
+    defaultName?: string;
+}
 ```
 
 ### `ProfileField` (type)
@@ -9915,26 +7693,28 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResendVerificationCard` (unknown)
+### `ResendVerificationCard` (const)
 
 ```ts
-ResendVerificationCard
+const ResendVerificationCard: () => ReactElement;
 ```
 
 ### `ResendVerificationField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordCard` (unknown)
+### `ResetPasswordCard` (const)
 
 ```ts
-ResetPasswordCard
+const ResetPasswordCard: ({ token }?: ResetPasswordCardProps) => ReactElement;
 ```
 
-### `ResetPasswordCardProps` (unknown)
+### `ResetPasswordCardProps` (interface)
 
 ```ts
-ResetPasswordCardProps
+interface ResetPasswordCardProps {
+    token?: string;
+}
 ```
 
 ### `ResetPasswordField` (type)
@@ -9945,10 +7725,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordOtpCard` (unknown)
+### `ResetPasswordOtpCard` (const)
 
 ```ts
-ResetPasswordOtpCard
+const ResetPasswordOtpCard: () => ReactElement;
 ```
 
 ### `ResetPasswordOtpField` (type)
@@ -9991,90 +7771,97 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SessionsCard` (unknown)
+### `SessionsCard` (const)
 
 ```ts
-SessionsCard
+const SessionsCard: () => ReactElement;
 ```
 
 ### `SessionsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SetUsernameCard` (unknown)
+### `SetUsernameCard` (const)
 
 ```ts
-SetUsernameCard
+const SetUsernameCard: () => ReactElement | null;
 ```
 
 ### `SetUsernameField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignInCard` (unknown)
+### `SignInCard` (const)
 
 ```ts
-SignInCard
+const SignInCard: ({ forgotPasswordHref, signUpHref }?: SignInCardProps) => ReactElement;
 ```
 
-### `SignInCardProps` (unknown)
+### `SignInCardProps` (interface)
 
 ```ts
-SignInCardProps
+interface SignInCardProps {
+    forgotPasswordHref?: string;
+    signUpHref?: string;
+}
 ```
 
 ### `SignInField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignOutButton` (unknown)
+### `SignOutButton` (const)
 
 ```ts
-SignOutButton
+const SignOutButton: ({ children }?: SignOutButtonProps) => ReactElement;
 ```
 
-### `SignOutButtonProps` (unknown)
+### `SignOutButtonProps` (interface)
 
 ```ts
-SignOutButtonProps
+interface SignOutButtonProps {
+    children?: string;
+}
 ```
 
-### `SignUpCard` (unknown)
+### `SignUpCard` (const)
 
 ```ts
-SignUpCard
+const SignUpCard: ({ signInHref }?: SignUpCardProps) => ReactElement | null;
 ```
 
-### `SignUpCardProps` (unknown)
+### `SignUpCardProps` (interface)
 
 ```ts
-SignUpCardProps
+interface SignUpCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `SignUpField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Skeleton` (unknown)
+### `Skeleton` (const)
 
 ```ts
-Skeleton
+const Skeleton: ({ rows }: { rows?: number; }) => ReactElement;
 ```
 
-### `SocialButtons` (unknown)
+### `SocialButtons` (const)
 
 ```ts
-SocialButtons
+const SocialButtons: ({ lastUsed, onSelect, providers }: SocialButtonsProps) => ReactElement | null;
 ```
 
 ### `Store` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SubmitButton` (unknown)
+### `SubmitButton` (const)
 
 ```ts
-SubmitButton
+const SubmitButton: ({ children, pending }: SubmitButtonProps) => ReactElement;
 ```
 
 ### `THEME_MODES` (const)
@@ -10093,10 +7880,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TeamsCard` (unknown)
+### `TeamsCard` (const)
 
 ```ts
-TeamsCard
+const TeamsCard: () => ReactElement | null;
 ```
 
 ### `TeamsController` (type)
@@ -10139,16 +7926,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorCard` (unknown)
+### `TwoFactorCard` (const)
 
 ```ts
-TwoFactorCard
+const TwoFactorCard: ({ method, trustDevice }?: TwoFactorCardProps) => ReactElement | null;
 ```
 
-### `TwoFactorCardProps` (unknown)
+### `TwoFactorCardProps` (interface)
 
 ```ts
-TwoFactorCardProps
+interface TwoFactorCardProps {
+    method?: "otp" | "totp";
+    trustDevice?: boolean;
+}
 ```
 
 ### `TwoFactorField` (type)
@@ -10159,10 +7949,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorSetupCard` (unknown)
+### `TwoFactorSetupCard` (const)
 
 ```ts
-TwoFactorSetupCard
+const TwoFactorSetupCard: () => ReactElement | null;
 ```
 
 ### `TwoFactorSetupController` (type)
@@ -10177,60 +7967,69 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserAvatar` (unknown)
+### `UserAvatar` (const)
 
 ```ts
-UserAvatar
+const UserAvatar: ({ size, user }: UserAvatarProps) => ReactElement;
 ```
 
-### `UserAvatarProps` (unknown)
+### `UserAvatarProps` (interface)
 
 ```ts
-UserAvatarProps
+interface UserAvatarProps {
+    size?: number;
+    user?: AuthUser;
+}
 ```
 
-### `UserButton` (unknown)
+### `UserButton` (const)
 
 ```ts
-UserButton
+const UserButton: ({ children, hideWhenSignedOut }: UserButtonProps) => ReactElement | null;
 ```
 
-### `UserButtonProps` (unknown)
+### `UserButtonProps` (interface)
 
 ```ts
-UserButtonProps
+interface UserButtonProps {
+    children?: ReactNode;
+    hideWhenSignedOut?: boolean;
+}
 ```
 
 ### `UserInvitationsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserInvitationsCard` (unknown)
+### `UserInvitationsCard` (const)
 
 ```ts
-UserInvitationsCard
+const UserInvitationsCard: () => ReactElement;
 ```
 
 ### `UserInvitationsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserView` (unknown)
+### `UserView` (const)
 
 ```ts
-UserView
+const UserView: ({ compact, user }: UserViewProps) => ReactElement;
 ```
 
-### `UserViewProps` (unknown)
+### `UserViewProps` (interface)
 
 ```ts
-UserViewProps
+interface UserViewProps {
+    compact?: boolean;
+    user?: AuthUser;
+}
 ```
 
-### `UsernameAvailability` (unknown)
+### `UsernameAvailability` (const)
 
 ```ts
-UsernameAvailability
+const UsernameAvailability: ({ status }: { status: AvailabilityStatus; }) => ReactElement | null;
 ```
 
 ### `UsernameAvailabilityActions` (interface)
@@ -10249,10 +8048,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UsernameSignInCard` (unknown)
+### `UsernameSignInCard` (const)
 
 ```ts
-UsernameSignInCard
+const UsernameSignInCard: () => ReactElement | null;
 ```
 
 ### `UsernameSignInField` (type)
@@ -10263,16 +8062,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `VerifyEmailCard` (unknown)
+### `VerifyEmailCard` (const)
 
 ```ts
-VerifyEmailCard
+const VerifyEmailCard: ({ token }?: VerifyEmailCardProps) => ReactElement;
 ```
 
-### `VerifyEmailCardProps` (unknown)
+### `VerifyEmailCardProps` (interface)
 
 ```ts
-VerifyEmailCardProps
+interface VerifyEmailCardProps {
+    token?: string;
+}
 ```
 
 ### `VerifyEmailController` (type)
@@ -10663,40 +8464,28 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `useAuthUI` (unknown)
+### `useAuthUI` (const)
 
 ```ts
-useAuthUI
+const useAuthUI: () => ControllerContext;
 ```
 
-### `useAuthUILink` (unknown)
+### `useAuthUILink` (const)
 
 ```ts
-useAuthUILink
+const useAuthUILink: () => AuthUIProviderProps["Link"] | undefined;
 ```
 
 ### `useController` (const)
 
 ```ts
-const useController = <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>, deps: DependencyList = []): [
-    TState,
-    TActions
-] => {
-    const context = useAuthUI();
-    const controller = useMemo(() => factory(context), [context, ...deps]);
-    const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
-    useEffect(() => controller.destroy, [controller]);
-    return [state, controller.actions];
-};
+const useController: <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>, deps?: DependencyList) => [TState, TActions];
 ```
 
 ### `useThemeStyle` (const)
 
 ```ts
-const useThemeStyle = (): CSSProperties | undefined => {
-    const { themeVariables } = useAuthUI();
-    return Object.keys(themeVariables).length === 0 ? undefined : themeVariables;
-};
+const useThemeStyle: () => CSSProperties | undefined;
 ```
 
 ### `userInitials` (const)
@@ -10733,16 +8522,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AcceptInvitationCard` (unknown)
+### `AcceptInvitationCard` (const)
 
 ```ts
-AcceptInvitationCard
+const AcceptInvitationCard: (props?: AcceptInvitationCardProps) => JSX.Element;
 ```
 
-### `AcceptInvitationCardProps` (unknown)
+### `AcceptInvitationCardProps` (interface)
 
 ```ts
-AcceptInvitationCardProps
+interface AcceptInvitationCardProps {
+    invitationId?: string;
+}
 ```
 
 ### `AcceptInvitationController` (type)
@@ -10781,10 +8572,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AdminUsersCard` (unknown)
+### `AdminUsersCard` (const)
 
 ```ts
-AdminUsersCard
+const AdminUsersCard: () => JSX.Element;
 ```
 
 ### `AdminUsersController` (type)
@@ -10803,10 +8594,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AnonymousButton` (unknown)
+### `AnonymousButton` (const)
 
 ```ts
-AnonymousButton
+const AnonymousButton: () => JSX.Element;
 ```
 
 ### `AnonymousController` (type)
@@ -10817,10 +8608,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AppearanceCard` (unknown)
+### `AppearanceCard` (const)
 
 ```ts
-AppearanceCard
+const AppearanceCard: () => JSX.Element;
 ```
 
 ### `AuthAccount` (interface)
@@ -10835,16 +8626,22 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthCard` (unknown)
+### `AuthCard` (const)
 
 ```ts
-AuthCard
+const AuthCard: (props: AuthCardProps) => JSX.Element;
 ```
 
-### `AuthCardProps` (unknown)
+### `AuthCardProps` (interface)
 
 ```ts
-AuthCardProps
+interface AuthCardProps {
+    children: JSX.Element;
+    description?: string;
+    footer?: JSX.Element;
+    headingLevel?: 1 | 2 | 3;
+    title: string;
+}
 ```
 
 ### `AuthClient` (interface)
@@ -10859,10 +8656,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthDivider` (unknown)
+### `AuthDivider` (const)
 
 ```ts
-AuthDivider
+const AuthDivider: (props: { label?: string; }) => JSX.Element;
 ```
 
 ### `AuthFetchError` (interface)
@@ -10881,10 +8678,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthLink` (unknown)
+### `AuthLink` (const)
 
 ```ts
-AuthLink
+const AuthLink: (props: AuthLinkProps) => JSX.Element;
 ```
 
 ### `AuthMember` (interface)
@@ -10915,48 +8712,58 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthUILink` (unknown)
+### `AuthUILink` (type)
 
 ```ts
-AuthUILink
+type AuthUILink = Component<{
+    children: JSX.Element;
+    class?: string;
+    href: string;
+}>;
 ```
 
-### `AuthUIProvider` (unknown)
+### `AuthUIProvider` (const)
 
 ```ts
-AuthUIProvider
+const AuthUIProvider: (props: AuthUIProviderProps) => JSX.Element;
 ```
 
-### `AuthUIProviderProps` (unknown)
+### `AuthUIProviderProps` (interface)
 
 ```ts
-AuthUIProviderProps
+interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
+    children: JSX.Element;
+    Link?: AuthUILink;
+    nav?: AuthUIConfig["nav"];
+}
 ```
 
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthView` (unknown)
+### `AuthView` (const)
 
 ```ts
-AuthView
+const AuthView: (props?: AuthViewProps) => JSX.Element;
 ```
 
-### `AuthViewProps` (unknown)
+### `AuthViewProps` (interface)
 
 ```ts
-AuthViewProps
+interface AuthViewProps {
+    view?: string;
+}
 ```
 
 ### `AuthorizedAppsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthorizedAppsCard` (unknown)
+### `AuthorizedAppsCard` (const)
 
 ```ts
-AuthorizedAppsCard
+const AuthorizedAppsCard: () => JSX.Element;
 ```
 
 ### `AuthorizedAppsController` (type)
@@ -10967,10 +8774,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AvatarCard` (unknown)
+### `AvatarCard` (const)
 
 ```ts
-AvatarCard
+const AvatarCard: () => JSX.Element;
 ```
 
 ### `AvatarConfig` (interface)
@@ -10993,10 +8800,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `BackupCodesCard` (unknown)
+### `BackupCodesCard` (const)
 
 ```ts
-BackupCodesCard
+const BackupCodesCard: () => JSX.Element;
 ```
 
 ### `BackupCodesField` (type)
@@ -11015,36 +8822,39 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Captcha` (unknown)
+### `Captcha` (const)
 
 ```ts
-Captcha
+const Captcha: (props: CaptchaProps) => JSX.Element;
 ```
 
-### `CaptchaProps` (unknown)
+### `CaptchaProps` (interface)
 
 ```ts
-CaptchaProps
+interface CaptchaProps {
+    provider: CaptchaProvider;
+    siteKey?: string;
+}
 ```
 
 ### `CaptchaProvider` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangeEmailCard` (unknown)
+### `ChangeEmailCard` (const)
 
 ```ts
-ChangeEmailCard
+const ChangeEmailCard: () => JSX.Element;
 ```
 
 ### `ChangeEmailField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangePasswordCard` (unknown)
+### `ChangePasswordCard` (const)
 
 ```ts
-ChangePasswordCard
+const ChangePasswordCard: () => JSX.Element;
 ```
 
 ### `ChangePasswordField` (type)
@@ -11055,16 +8865,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ConsentCard` (unknown)
+### `ConsentCard` (const)
 
 ```ts
-ConsentCard
+const ConsentCard: (props?: ConsentCardProps) => JSX.Element;
 ```
 
-### `ConsentCardProps` (unknown)
+### `ConsentCardProps` (interface)
 
 ```ts
-ConsentCardProps
+interface ConsentCardProps {
+    consentId?: string;
+}
 ```
 
 ### `ConsentController` (type)
@@ -11107,10 +8919,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeleteAccountCard` (unknown)
+### `DeleteAccountCard` (const)
 
 ```ts
-DeleteAccountCard
+const DeleteAccountCard: () => JSX.Element;
 ```
 
 ### `DeleteAccountField` (type)
@@ -11121,16 +8933,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeviceAuthorizationCard` (unknown)
+### `DeviceAuthorizationCard` (const)
 
 ```ts
-DeviceAuthorizationCard
+const DeviceAuthorizationCard: (props?: DeviceAuthorizationCardProps) => JSX.Element;
 ```
 
-### `DeviceAuthorizationCardProps` (unknown)
+### `DeviceAuthorizationCardProps` (interface)
 
 ```ts
-DeviceAuthorizationCardProps
+interface DeviceAuthorizationCardProps {
+    userCode?: string;
+}
 ```
 
 ### `DeviceAuthorizationController` (type)
@@ -11177,10 +8991,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `EmailOtpCard` (unknown)
+### `EmailOtpCard` (const)
 
 ```ts
-EmailOtpCard
+const EmailOtpCard: () => JSX.Element;
 ```
 
 ### `EmailOtpController` (type)
@@ -11191,26 +9005,36 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ErrorToaster` (unknown)
+### `ErrorToaster` (const)
 
 ```ts
-ErrorToaster
+const ErrorToaster: (props?: ErrorToasterProps) => JSX.Element;
 ```
 
 ### `FLOW_NAMES` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Field` (unknown)
+### `Field` (const)
 
 ```ts
-Field
+const Field: (props: FieldProps) => JSX.Element;
 ```
 
-### `FieldProps` (unknown)
+### `FieldProps` (interface)
 
 ```ts
-FieldProps
+interface FieldProps {
+    autoComplete?: string;
+    field: FieldState;
+    inputMode?: "numeric";
+    label: string;
+    name: string;
+    onBlur: () => void;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    type?: "email" | "password" | "text";
+}
 ```
 
 ### `FieldSpec` (interface)
@@ -11229,16 +9053,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ForgotPasswordCard` (unknown)
+### `ForgotPasswordCard` (const)
 
 ```ts
-ForgotPasswordCard
+const ForgotPasswordCard: (props?: ForgotPasswordCardProps) => JSX.Element;
 ```
 
-### `ForgotPasswordCardProps` (unknown)
+### `ForgotPasswordCardProps` (interface)
 
 ```ts
-ForgotPasswordCardProps
+interface ForgotPasswordCardProps {
+    resetPath?: string;
+    signInHref?: string;
+}
 ```
 
 ### `ForgotPasswordField` (type)
@@ -11253,10 +9080,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `FormBanner` (unknown)
+### `FormBanner` (const)
 
 ```ts
-FormBanner
+const FormBanner: (props: FormBannerProps) => JSX.Element;
 ```
 
 ### `FormController` (type)
@@ -11291,10 +9118,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `LinkedAccountsCard` (unknown)
+### `LinkedAccountsCard` (const)
 
 ```ts
-LinkedAccountsCard
+const LinkedAccountsCard: () => JSX.Element;
 ```
 
 ### `Localization` (interface)
@@ -11321,16 +9148,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MagicLinkCard` (unknown)
+### `MagicLinkCard` (const)
 
 ```ts
-MagicLinkCard
+const MagicLinkCard: (props?: MagicLinkCardProps) => JSX.Element;
 ```
 
-### `MagicLinkCardProps` (unknown)
+### `MagicLinkCardProps` (interface)
 
 ```ts
-MagicLinkCardProps
+interface MagicLinkCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `MagicLinkField` (type)
@@ -11341,10 +9170,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MembersCard` (unknown)
+### `MembersCard` (const)
 
 ```ts
-MembersCard
+const MembersCard: () => JSX.Element;
 ```
 
 ### `MembersController` (type)
@@ -11355,10 +9184,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MultiSessionCard` (unknown)
+### `MultiSessionCard` (const)
 
 ```ts
-MultiSessionCard
+const MultiSessionCard: () => JSX.Element;
 ```
 
 ### `NON_SOCIAL_PROVIDERS` (const)
@@ -11377,34 +9206,38 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OneTap` (unknown)
+### `OneTap` (const)
 
 ```ts
-OneTap
+const OneTap: () => JSX.Element;
 ```
 
-### `OrganizationLogoCard` (unknown)
+### `OrganizationLogoCard` (const)
 
 ```ts
-OrganizationLogoCard
+const OrganizationLogoCard: (props?: OrganizationLogoCardProps) => JSX.Element;
 ```
 
-### `OrganizationLogoCardProps` (unknown)
+### `OrganizationLogoCardProps` (interface)
 
 ```ts
-OrganizationLogoCardProps
+interface OrganizationLogoCardProps {
+    organizationId?: string;
+}
 ```
 
-### `OrganizationSettingsCard` (unknown)
+### `OrganizationSettingsCard` (const)
 
 ```ts
-OrganizationSettingsCard
+const OrganizationSettingsCard: (props?: OrganizationSettingsCardProps) => JSX.Element;
 ```
 
-### `OrganizationSettingsCardProps` (unknown)
+### `OrganizationSettingsCardProps` (interface)
 
 ```ts
-OrganizationSettingsCardProps
+interface OrganizationSettingsCardProps {
+    organizationId?: string;
+}
 ```
 
 ### `OrganizationSettingsField` (type)
@@ -11419,10 +9252,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OrganizationsCard` (unknown)
+### `OrganizationsCard` (const)
 
 ```ts
-OrganizationsCard
+const OrganizationsCard: () => JSX.Element;
 ```
 
 ### `OrganizationsController` (type)
@@ -11441,10 +9274,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasskeysCard` (unknown)
+### `PasskeysCard` (const)
 
 ```ts
-PasskeysCard
+const PasskeysCard: () => JSX.Element;
 ```
 
 ### `PasskeysController` (type)
@@ -11459,10 +9292,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasswordStrength` (unknown)
+### `PasswordStrength` (const)
 
 ```ts
-PasswordStrength
+const PasswordStrength: (props: { value: string; }) => JSX.Element;
 ```
 
 ### `PhoneForgotPasswordField` (type)
@@ -11473,10 +9306,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PhoneSignInCard` (unknown)
+### `PhoneSignInCard` (const)
 
 ```ts
-PhoneSignInCard
+const PhoneSignInCard: () => JSX.Element;
 ```
 
 ### `PhoneSignInField` (type)
@@ -11503,16 +9336,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ProfileCard` (unknown)
+### `ProfileCard` (const)
 
 ```ts
-ProfileCard
+const ProfileCard: (props?: ProfileCardProps) => JSX.Element;
 ```
 
-### `ProfileCardProps` (unknown)
+### `ProfileCardProps` (interface)
 
 ```ts
-ProfileCardProps
+interface ProfileCardProps {
+    defaultImage?: string;
+    defaultName?: string;
+}
 ```
 
 ### `ProfileField` (type)
@@ -11535,26 +9371,28 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResendVerificationCard` (unknown)
+### `ResendVerificationCard` (const)
 
 ```ts
-ResendVerificationCard
+const ResendVerificationCard: () => JSX.Element;
 ```
 
 ### `ResendVerificationField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordCard` (unknown)
+### `ResetPasswordCard` (const)
 
 ```ts
-ResetPasswordCard
+const ResetPasswordCard: (props?: ResetPasswordCardProps) => JSX.Element;
 ```
 
-### `ResetPasswordCardProps` (unknown)
+### `ResetPasswordCardProps` (interface)
 
 ```ts
-ResetPasswordCardProps
+interface ResetPasswordCardProps {
+    token?: string;
+}
 ```
 
 ### `ResetPasswordField` (type)
@@ -11565,10 +9403,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordOtpCard` (unknown)
+### `ResetPasswordOtpCard` (const)
 
 ```ts
-ResetPasswordOtpCard
+const ResetPasswordOtpCard: () => JSX.Element;
 ```
 
 ### `ResetPasswordOtpField` (type)
@@ -11611,90 +9449,97 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SessionsCard` (unknown)
+### `SessionsCard` (const)
 
 ```ts
-SessionsCard
+const SessionsCard: () => JSX.Element;
 ```
 
 ### `SessionsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SetUsernameCard` (unknown)
+### `SetUsernameCard` (const)
 
 ```ts
-SetUsernameCard
+const SetUsernameCard: () => JSX.Element;
 ```
 
 ### `SetUsernameField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignInCard` (unknown)
+### `SignInCard` (const)
 
 ```ts
-SignInCard
+const SignInCard: (props?: SignInCardProps) => JSX.Element;
 ```
 
-### `SignInCardProps` (unknown)
+### `SignInCardProps` (interface)
 
 ```ts
-SignInCardProps
+interface SignInCardProps {
+    forgotPasswordHref?: string;
+    signUpHref?: string;
+}
 ```
 
 ### `SignInField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignOutButton` (unknown)
+### `SignOutButton` (const)
 
 ```ts
-SignOutButton
+const SignOutButton: (props?: SignOutButtonProps) => JSX.Element;
 ```
 
-### `SignOutButtonProps` (unknown)
+### `SignOutButtonProps` (interface)
 
 ```ts
-SignOutButtonProps
+interface SignOutButtonProps {
+    children?: string;
+}
 ```
 
-### `SignUpCard` (unknown)
+### `SignUpCard` (const)
 
 ```ts
-SignUpCard
+const SignUpCard: (props?: SignUpCardProps) => JSX.Element;
 ```
 
-### `SignUpCardProps` (unknown)
+### `SignUpCardProps` (interface)
 
 ```ts
-SignUpCardProps
+interface SignUpCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `SignUpField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Skeleton` (unknown)
+### `Skeleton` (const)
 
 ```ts
-Skeleton
+const Skeleton: (props: { rows?: number; }) => JSX.Element;
 ```
 
-### `SocialButtons` (unknown)
+### `SocialButtons` (const)
 
 ```ts
-SocialButtons
+const SocialButtons: (props: SocialButtonsProps) => JSX.Element;
 ```
 
 ### `Store` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SubmitButton` (unknown)
+### `SubmitButton` (const)
 
 ```ts
-SubmitButton
+const SubmitButton: (props: SubmitButtonProps) => JSX.Element;
 ```
 
 ### `THEME_MODES` (const)
@@ -11713,10 +9558,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TeamsCard` (unknown)
+### `TeamsCard` (const)
 
 ```ts
-TeamsCard
+const TeamsCard: () => JSX.Element;
 ```
 
 ### `TeamsController` (type)
@@ -11759,16 +9604,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorCard` (unknown)
+### `TwoFactorCard` (const)
 
 ```ts
-TwoFactorCard
+const TwoFactorCard: (props?: TwoFactorCardProps) => JSX.Element;
 ```
 
-### `TwoFactorCardProps` (unknown)
+### `TwoFactorCardProps` (interface)
 
 ```ts
-TwoFactorCardProps
+interface TwoFactorCardProps {
+    method?: "otp" | "totp";
+    trustDevice?: boolean;
+}
 ```
 
 ### `TwoFactorField` (type)
@@ -11779,10 +9627,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorSetupCard` (unknown)
+### `TwoFactorSetupCard` (const)
 
 ```ts
-TwoFactorSetupCard
+const TwoFactorSetupCard: () => JSX.Element;
 ```
 
 ### `TwoFactorSetupController` (type)
@@ -11797,60 +9645,69 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserAvatar` (unknown)
+### `UserAvatar` (const)
 
 ```ts
-UserAvatar
+const UserAvatar: (props: UserAvatarProps) => JSX.Element;
 ```
 
-### `UserAvatarProps` (unknown)
+### `UserAvatarProps` (interface)
 
 ```ts
-UserAvatarProps
+interface UserAvatarProps {
+    size?: number;
+    user?: AuthUser;
+}
 ```
 
-### `UserButton` (unknown)
+### `UserButton` (const)
 
 ```ts
-UserButton
+const UserButton: (props: UserButtonProps) => JSX.Element;
 ```
 
-### `UserButtonProps` (unknown)
+### `UserButtonProps` (interface)
 
 ```ts
-UserButtonProps
+interface UserButtonProps {
+    children?: JSX.Element;
+    hideWhenSignedOut?: boolean;
+}
 ```
 
 ### `UserInvitationsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserInvitationsCard` (unknown)
+### `UserInvitationsCard` (const)
 
 ```ts
-UserInvitationsCard
+const UserInvitationsCard: () => JSX.Element;
 ```
 
 ### `UserInvitationsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserView` (unknown)
+### `UserView` (const)
 
 ```ts
-UserView
+const UserView: (props: UserViewProps) => JSX.Element;
 ```
 
-### `UserViewProps` (unknown)
+### `UserViewProps` (interface)
 
 ```ts
-UserViewProps
+interface UserViewProps {
+    compact?: boolean;
+    user?: AuthUser;
+}
 ```
 
-### `UsernameAvailability` (unknown)
+### `UsernameAvailability` (const)
 
 ```ts
-UsernameAvailability
+const UsernameAvailability: (props: { status: AvailabilityStatus; }) => JSX.Element;
 ```
 
 ### `UsernameAvailabilityActions` (interface)
@@ -11869,10 +9726,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UsernameSignInCard` (unknown)
+### `UsernameSignInCard` (const)
 
 ```ts
-UsernameSignInCard
+const UsernameSignInCard: () => JSX.Element;
 ```
 
 ### `UsernameSignInField` (type)
@@ -11883,16 +9740,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `VerifyEmailCard` (unknown)
+### `VerifyEmailCard` (const)
 
 ```ts
-VerifyEmailCard
+const VerifyEmailCard: (props?: VerifyEmailCardProps) => JSX.Element;
 ```
 
-### `VerifyEmailCardProps` (unknown)
+### `VerifyEmailCardProps` (interface)
 
 ```ts
-VerifyEmailCardProps
+interface VerifyEmailCardProps {
+    token?: string;
+}
 ```
 
 ### `VerifyEmailController` (type)
@@ -11974,22 +9833,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `createController` (const)
 
 ```ts
-const createController = <TState extends object, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>): [
-    TState,
-    TActions
-] => {
-    const context = useAuthUI();
-    const controller = create(context);
-    const [state, setState] = createStore<TState>(controller.getState());
-    const unsubscribe = controller.subscribe(() => {
-        setState(reconcile(controller.getState()));
-    });
-    onCleanup(() => {
-        unsubscribe();
-        controller.destroy();
-    });
-    return [state, controller.actions];
-};
+const createController: <TState extends object, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>) => [TState, TActions];
 ```
 
 ### `createDeleteAccountController` (const)
@@ -12300,26 +10144,26 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `themeStyle` (unknown)
+### `themeStyle` (const)
 
 ```ts
-themeStyle
+const themeStyle: () => Record<string, string> | undefined;
 ```
 
 ### `totpSecret` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `useAuthUI` (unknown)
+### `useAuthUI` (const)
 
 ```ts
-useAuthUI
+const useAuthUI: () => ControllerContext;
 ```
 
-### `useAuthUILink` (unknown)
+### `useAuthUILink` (const)
 
 ```ts
-useAuthUILink
+const useAuthUILink: () => AuthUILink | undefined;
 ```
 
 ### `userInitials` (const)
@@ -12356,16 +10200,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AcceptInvitationCard` (unknown)
+### `AcceptInvitationCard` (const)
 
 ```ts
-AcceptInvitationCard
+const AcceptInvitationCard: (props?: AcceptInvitationCardProps) => JSX.Element;
 ```
 
-### `AcceptInvitationCardProps` (unknown)
+### `AcceptInvitationCardProps` (interface)
 
 ```ts
-AcceptInvitationCardProps
+interface AcceptInvitationCardProps {
+    invitationId?: string;
+}
 ```
 
 ### `AcceptInvitationController` (type)
@@ -12404,10 +10250,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AdminUsersCard` (unknown)
+### `AdminUsersCard` (const)
 
 ```ts
-AdminUsersCard
+const AdminUsersCard: () => JSX.Element;
 ```
 
 ### `AdminUsersController` (type)
@@ -12426,10 +10272,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AnonymousButton` (unknown)
+### `AnonymousButton` (const)
 
 ```ts
-AnonymousButton
+const AnonymousButton: () => JSX.Element;
 ```
 
 ### `AnonymousController` (type)
@@ -12440,10 +10286,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AppearanceCard` (unknown)
+### `AppearanceCard` (const)
 
 ```ts
-AppearanceCard
+const AppearanceCard: () => JSX.Element;
 ```
 
 ### `AuthAccount` (interface)
@@ -12458,16 +10304,22 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthCard` (unknown)
+### `AuthCard` (const)
 
 ```ts
-AuthCard
+const AuthCard: (props: AuthCardProps) => JSX.Element;
 ```
 
-### `AuthCardProps` (unknown)
+### `AuthCardProps` (interface)
 
 ```ts
-AuthCardProps
+interface AuthCardProps {
+    children: JSX.Element;
+    description?: string;
+    footer?: JSX.Element;
+    headingLevel?: 1 | 2 | 3;
+    title: string;
+}
 ```
 
 ### `AuthClient` (interface)
@@ -12482,10 +10334,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthDivider` (unknown)
+### `AuthDivider` (const)
 
 ```ts
-AuthDivider
+const AuthDivider: (props: { label?: string; }) => JSX.Element;
 ```
 
 ### `AuthFetchError` (interface)
@@ -12504,10 +10356,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthLink` (unknown)
+### `AuthLink` (const)
 
 ```ts
-AuthLink
+const AuthLink: (props: AuthLinkProps) => JSX.Element;
 ```
 
 ### `AuthMember` (interface)
@@ -12538,48 +10390,58 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthUILink` (unknown)
+### `AuthUILink` (type)
 
 ```ts
-AuthUILink
+type AuthUILink = Component<{
+    children: JSX.Element;
+    class?: string;
+    href: string;
+}>;
 ```
 
-### `AuthUIProvider` (unknown)
+### `AuthUIProvider` (const)
 
 ```ts
-AuthUIProvider
+const AuthUIProvider: (props: AuthUIProviderProps) => JSX.Element;
 ```
 
-### `AuthUIProviderProps` (unknown)
+### `AuthUIProviderProps` (interface)
 
 ```ts
-AuthUIProviderProps
+interface AuthUIProviderProps extends Omit<AuthUIConfig, "nav"> {
+    children: JSX.Element;
+    Link?: AuthUILink;
+    nav?: AuthUIConfig["nav"];
+}
 ```
 
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthView` (unknown)
+### `AuthView` (const)
 
 ```ts
-AuthView
+const AuthView: (props?: AuthViewProps) => JSX.Element;
 ```
 
-### `AuthViewProps` (unknown)
+### `AuthViewProps` (interface)
 
 ```ts
-AuthViewProps
+interface AuthViewProps {
+    view?: string;
+}
 ```
 
 ### `AuthorizedAppsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AuthorizedAppsCard` (unknown)
+### `AuthorizedAppsCard` (const)
 
 ```ts
-AuthorizedAppsCard
+const AuthorizedAppsCard: () => JSX.Element;
 ```
 
 ### `AuthorizedAppsController` (type)
@@ -12590,10 +10452,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `AvatarCard` (unknown)
+### `AvatarCard` (const)
 
 ```ts
-AvatarCard
+const AvatarCard: () => JSX.Element;
 ```
 
 ### `AvatarConfig` (interface)
@@ -12616,10 +10478,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `BackupCodesCard` (unknown)
+### `BackupCodesCard` (const)
 
 ```ts
-BackupCodesCard
+const BackupCodesCard: () => JSX.Element;
 ```
 
 ### `BackupCodesField` (type)
@@ -12638,36 +10500,39 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Captcha` (unknown)
+### `Captcha` (const)
 
 ```ts
-Captcha
+const Captcha: (props: CaptchaProps) => JSX.Element;
 ```
 
-### `CaptchaProps` (unknown)
+### `CaptchaProps` (interface)
 
 ```ts
-CaptchaProps
+interface CaptchaProps {
+    provider: CaptchaProvider;
+    siteKey?: string;
+}
 ```
 
 ### `CaptchaProvider` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangeEmailCard` (unknown)
+### `ChangeEmailCard` (const)
 
 ```ts
-ChangeEmailCard
+const ChangeEmailCard: () => JSX.Element;
 ```
 
 ### `ChangeEmailField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ChangePasswordCard` (unknown)
+### `ChangePasswordCard` (const)
 
 ```ts
-ChangePasswordCard
+const ChangePasswordCard: () => JSX.Element;
 ```
 
 ### `ChangePasswordField` (type)
@@ -12678,16 +10543,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ConsentCard` (unknown)
+### `ConsentCard` (const)
 
 ```ts
-ConsentCard
+const ConsentCard: (props?: ConsentCardProps) => JSX.Element;
 ```
 
-### `ConsentCardProps` (unknown)
+### `ConsentCardProps` (interface)
 
 ```ts
-ConsentCardProps
+interface ConsentCardProps {
+    consentId?: string;
+}
 ```
 
 ### `ConsentController` (type)
@@ -12730,10 +10597,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeleteAccountCard` (unknown)
+### `DeleteAccountCard` (const)
 
 ```ts
-DeleteAccountCard
+const DeleteAccountCard: () => JSX.Element;
 ```
 
 ### `DeleteAccountField` (type)
@@ -12744,16 +10611,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `DeviceAuthorizationCard` (unknown)
+### `DeviceAuthorizationCard` (const)
 
 ```ts
-DeviceAuthorizationCard
+const DeviceAuthorizationCard: (props?: DeviceAuthorizationCardProps) => JSX.Element;
 ```
 
-### `DeviceAuthorizationCardProps` (unknown)
+### `DeviceAuthorizationCardProps` (interface)
 
 ```ts
-DeviceAuthorizationCardProps
+interface DeviceAuthorizationCardProps {
+    userCode?: string;
+}
 ```
 
 ### `DeviceAuthorizationController` (type)
@@ -12800,10 +10669,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `EmailOtpCard` (unknown)
+### `EmailOtpCard` (const)
 
 ```ts
-EmailOtpCard
+const EmailOtpCard: () => JSX.Element;
 ```
 
 ### `EmailOtpController` (type)
@@ -12814,26 +10683,36 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ErrorToaster` (unknown)
+### `ErrorToaster` (const)
 
 ```ts
-ErrorToaster
+const ErrorToaster: (props?: ErrorToasterProps) => JSX.Element;
 ```
 
 ### `FLOW_NAMES` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Field` (unknown)
+### `Field` (const)
 
 ```ts
-Field
+const Field: (props: FieldProps) => JSX.Element;
 ```
 
-### `FieldProps` (unknown)
+### `FieldProps` (interface)
 
 ```ts
-FieldProps
+interface FieldProps {
+    autoComplete?: string;
+    field: FieldState;
+    inputMode?: "numeric";
+    label: string;
+    name: string;
+    onBlur: () => void;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    type?: "email" | "password" | "text";
+}
 ```
 
 ### `FieldSpec` (interface)
@@ -12852,16 +10731,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ForgotPasswordCard` (unknown)
+### `ForgotPasswordCard` (const)
 
 ```ts
-ForgotPasswordCard
+const ForgotPasswordCard: (props?: ForgotPasswordCardProps) => JSX.Element;
 ```
 
-### `ForgotPasswordCardProps` (unknown)
+### `ForgotPasswordCardProps` (interface)
 
 ```ts
-ForgotPasswordCardProps
+interface ForgotPasswordCardProps {
+    resetPath?: string;
+    signInHref?: string;
+}
 ```
 
 ### `ForgotPasswordField` (type)
@@ -12876,10 +10758,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `FormBanner` (unknown)
+### `FormBanner` (const)
 
 ```ts
-FormBanner
+const FormBanner: (props: FormBannerProps) => JSX.Element;
 ```
 
 ### `FormController` (type)
@@ -12914,10 +10796,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `LinkedAccountsCard` (unknown)
+### `LinkedAccountsCard` (const)
 
 ```ts
-LinkedAccountsCard
+const LinkedAccountsCard: () => JSX.Element;
 ```
 
 ### `Localization` (interface)
@@ -12944,16 +10826,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MagicLinkCard` (unknown)
+### `MagicLinkCard` (const)
 
 ```ts
-MagicLinkCard
+const MagicLinkCard: (props?: MagicLinkCardProps) => JSX.Element;
 ```
 
-### `MagicLinkCardProps` (unknown)
+### `MagicLinkCardProps` (interface)
 
 ```ts
-MagicLinkCardProps
+interface MagicLinkCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `MagicLinkField` (type)
@@ -12964,10 +10848,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MembersCard` (unknown)
+### `MembersCard` (const)
 
 ```ts
-MembersCard
+const MembersCard: () => JSX.Element;
 ```
 
 ### `MembersController` (type)
@@ -12978,10 +10862,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `MultiSessionCard` (unknown)
+### `MultiSessionCard` (const)
 
 ```ts
-MultiSessionCard
+const MultiSessionCard: () => JSX.Element;
 ```
 
 ### `NON_SOCIAL_PROVIDERS` (const)
@@ -13000,34 +10884,38 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OneTap` (unknown)
+### `OneTap` (const)
 
 ```ts
-OneTap
+const OneTap: () => JSX.Element;
 ```
 
-### `OrganizationLogoCard` (unknown)
+### `OrganizationLogoCard` (const)
 
 ```ts
-OrganizationLogoCard
+const OrganizationLogoCard: (props?: OrganizationLogoCardProps) => JSX.Element;
 ```
 
-### `OrganizationLogoCardProps` (unknown)
+### `OrganizationLogoCardProps` (interface)
 
 ```ts
-OrganizationLogoCardProps
+interface OrganizationLogoCardProps {
+    organizationId?: string;
+}
 ```
 
-### `OrganizationSettingsCard` (unknown)
+### `OrganizationSettingsCard` (const)
 
 ```ts
-OrganizationSettingsCard
+const OrganizationSettingsCard: (props?: OrganizationSettingsCardProps) => JSX.Element;
 ```
 
-### `OrganizationSettingsCardProps` (unknown)
+### `OrganizationSettingsCardProps` (interface)
 
 ```ts
-OrganizationSettingsCardProps
+interface OrganizationSettingsCardProps {
+    organizationId?: string;
+}
 ```
 
 ### `OrganizationSettingsField` (type)
@@ -13042,10 +10930,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `OrganizationsCard` (unknown)
+### `OrganizationsCard` (const)
 
 ```ts
-OrganizationsCard
+const OrganizationsCard: () => JSX.Element;
 ```
 
 ### `OrganizationsController` (type)
@@ -13064,10 +10952,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasskeysCard` (unknown)
+### `PasskeysCard` (const)
 
 ```ts
-PasskeysCard
+const PasskeysCard: () => JSX.Element;
 ```
 
 ### `PasskeysController` (type)
@@ -13082,10 +10970,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PasswordStrength` (unknown)
+### `PasswordStrength` (const)
 
 ```ts
-PasswordStrength
+const PasswordStrength: (props: { value: string; }) => JSX.Element;
 ```
 
 ### `PhoneForgotPasswordField` (type)
@@ -13096,10 +10984,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `PhoneSignInCard` (unknown)
+### `PhoneSignInCard` (const)
 
 ```ts
-PhoneSignInCard
+const PhoneSignInCard: () => JSX.Element;
 ```
 
 ### `PhoneSignInField` (type)
@@ -13126,16 +11014,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ProfileCard` (unknown)
+### `ProfileCard` (const)
 
 ```ts
-ProfileCard
+const ProfileCard: (props?: ProfileCardProps) => JSX.Element;
 ```
 
-### `ProfileCardProps` (unknown)
+### `ProfileCardProps` (interface)
 
 ```ts
-ProfileCardProps
+interface ProfileCardProps {
+    defaultImage?: string;
+    defaultName?: string;
+}
 ```
 
 ### `ProfileField` (type)
@@ -13158,26 +11049,28 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResendVerificationCard` (unknown)
+### `ResendVerificationCard` (const)
 
 ```ts
-ResendVerificationCard
+const ResendVerificationCard: () => JSX.Element;
 ```
 
 ### `ResendVerificationField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordCard` (unknown)
+### `ResetPasswordCard` (const)
 
 ```ts
-ResetPasswordCard
+const ResetPasswordCard: (props?: ResetPasswordCardProps) => JSX.Element;
 ```
 
-### `ResetPasswordCardProps` (unknown)
+### `ResetPasswordCardProps` (interface)
 
 ```ts
-ResetPasswordCardProps
+interface ResetPasswordCardProps {
+    token?: string;
+}
 ```
 
 ### `ResetPasswordField` (type)
@@ -13188,10 +11081,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `ResetPasswordOtpCard` (unknown)
+### `ResetPasswordOtpCard` (const)
 
 ```ts
-ResetPasswordOtpCard
+const ResetPasswordOtpCard: () => JSX.Element;
 ```
 
 ### `ResetPasswordOtpField` (type)
@@ -13234,90 +11127,97 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SessionsCard` (unknown)
+### `SessionsCard` (const)
 
 ```ts
-SessionsCard
+const SessionsCard: () => JSX.Element;
 ```
 
 ### `SessionsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SetUsernameCard` (unknown)
+### `SetUsernameCard` (const)
 
 ```ts
-SetUsernameCard
+const SetUsernameCard: () => JSX.Element;
 ```
 
 ### `SetUsernameField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignInCard` (unknown)
+### `SignInCard` (const)
 
 ```ts
-SignInCard
+const SignInCard: (props?: SignInCardProps) => JSX.Element;
 ```
 
-### `SignInCardProps` (unknown)
+### `SignInCardProps` (interface)
 
 ```ts
-SignInCardProps
+interface SignInCardProps {
+    forgotPasswordHref?: string;
+    signUpHref?: string;
+}
 ```
 
 ### `SignInField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SignOutButton` (unknown)
+### `SignOutButton` (const)
 
 ```ts
-SignOutButton
+const SignOutButton: (props?: SignOutButtonProps) => JSX.Element;
 ```
 
-### `SignOutButtonProps` (unknown)
+### `SignOutButtonProps` (interface)
 
 ```ts
-SignOutButtonProps
+interface SignOutButtonProps {
+    children?: string;
+}
 ```
 
-### `SignUpCard` (unknown)
+### `SignUpCard` (const)
 
 ```ts
-SignUpCard
+const SignUpCard: (props?: SignUpCardProps) => JSX.Element;
 ```
 
-### `SignUpCardProps` (unknown)
+### `SignUpCardProps` (interface)
 
 ```ts
-SignUpCardProps
+interface SignUpCardProps {
+    signInHref?: string;
+}
 ```
 
 ### `SignUpField` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `Skeleton` (unknown)
+### `Skeleton` (const)
 
 ```ts
-Skeleton
+const Skeleton: (props: { rows?: number; }) => JSX.Element;
 ```
 
-### `SocialButtons` (unknown)
+### `SocialButtons` (const)
 
 ```ts
-SocialButtons
+const SocialButtons: (props: SocialButtonsProps) => JSX.Element;
 ```
 
 ### `Store` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `SubmitButton` (unknown)
+### `SubmitButton` (const)
 
 ```ts
-SubmitButton
+const SubmitButton: (props: SubmitButtonProps) => JSX.Element;
 ```
 
 ### `THEME_MODES` (const)
@@ -13336,10 +11236,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TeamsCard` (unknown)
+### `TeamsCard` (const)
 
 ```ts
-TeamsCard
+const TeamsCard: () => JSX.Element;
 ```
 
 ### `TeamsController` (type)
@@ -13382,16 +11282,19 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorCard` (unknown)
+### `TwoFactorCard` (const)
 
 ```ts
-TwoFactorCard
+const TwoFactorCard: (props?: TwoFactorCardProps) => JSX.Element;
 ```
 
-### `TwoFactorCardProps` (unknown)
+### `TwoFactorCardProps` (interface)
 
 ```ts
-TwoFactorCardProps
+interface TwoFactorCardProps {
+    method?: "otp" | "totp";
+    trustDevice?: boolean;
+}
 ```
 
 ### `TwoFactorField` (type)
@@ -13402,10 +11305,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `TwoFactorSetupCard` (unknown)
+### `TwoFactorSetupCard` (const)
 
 ```ts
-TwoFactorSetupCard
+const TwoFactorSetupCard: () => JSX.Element;
 ```
 
 ### `TwoFactorSetupController` (type)
@@ -13420,60 +11323,69 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserAvatar` (unknown)
+### `UserAvatar` (const)
 
 ```ts
-UserAvatar
+const UserAvatar: (props: UserAvatarProps) => JSX.Element;
 ```
 
-### `UserAvatarProps` (unknown)
+### `UserAvatarProps` (interface)
 
 ```ts
-UserAvatarProps
+interface UserAvatarProps {
+    size?: number;
+    user?: AuthUser;
+}
 ```
 
-### `UserButton` (unknown)
+### `UserButton` (const)
 
 ```ts
-UserButton
+const UserButton: (props: UserButtonProps) => JSX.Element;
 ```
 
-### `UserButtonProps` (unknown)
+### `UserButtonProps` (interface)
 
 ```ts
-UserButtonProps
+interface UserButtonProps {
+    children?: JSX.Element;
+    hideWhenSignedOut?: boolean;
+}
 ```
 
 ### `UserInvitationsActions` (interface)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserInvitationsCard` (unknown)
+### `UserInvitationsCard` (const)
 
 ```ts
-UserInvitationsCard
+const UserInvitationsCard: () => JSX.Element;
 ```
 
 ### `UserInvitationsController` (type)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UserView` (unknown)
+### `UserView` (const)
 
 ```ts
-UserView
+const UserView: (props: UserViewProps) => JSX.Element;
 ```
 
-### `UserViewProps` (unknown)
+### `UserViewProps` (interface)
 
 ```ts
-UserViewProps
+interface UserViewProps {
+    compact?: boolean;
+    user?: AuthUser;
+}
 ```
 
-### `UsernameAvailability` (unknown)
+### `UsernameAvailability` (const)
 
 ```ts
-UsernameAvailability
+const UsernameAvailability: (props: { status: AvailabilityStatus; }) => JSX.Element;
 ```
 
 ### `UsernameAvailabilityActions` (interface)
@@ -13492,10 +11404,10 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `UsernameSignInCard` (unknown)
+### `UsernameSignInCard` (const)
 
 ```ts
-UsernameSignInCard
+const UsernameSignInCard: () => JSX.Element;
 ```
 
 ### `UsernameSignInField` (type)
@@ -13506,16 +11418,18 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `VerifyEmailCard` (unknown)
+### `VerifyEmailCard` (const)
 
 ```ts
-VerifyEmailCard
+const VerifyEmailCard: (props?: VerifyEmailCardProps) => JSX.Element;
 ```
 
-### `VerifyEmailCardProps` (unknown)
+### `VerifyEmailCardProps` (interface)
 
 ```ts
-VerifyEmailCardProps
+interface VerifyEmailCardProps {
+    token?: string;
+}
 ```
 
 ### `VerifyEmailController` (type)
@@ -13597,24 +11511,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `createController` (const)
 
 ```ts
-const createController = <TState extends object, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>): [
-    TState,
-    TActions
-] => {
-    const context = useAuthUI();
-    const controller = create(context);
-    const [state, setState] = createStore<TState>(controller.getState() as NoFunction<TState>);
-    const unsubscribe = controller.subscribe(() => {
-        setState((draft) => {
-            reconcile(controller.getState())(draft);
-        });
-    });
-    onCleanup(() => {
-        unsubscribe();
-        controller.destroy();
-    });
-    return [state, controller.actions];
-};
+const createController: <TState extends object, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>) => [TState, TActions];
 ```
 
 ### `createDeleteAccountController` (const)
@@ -13925,26 +11822,26 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `themeStyle` (unknown)
+### `themeStyle` (const)
 
 ```ts
-themeStyle
+const themeStyle: () => Record<string, string> | undefined;
 ```
 
 ### `totpSecret` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 
-### `useAuthUI` (unknown)
+### `useAuthUI` (const)
 
 ```ts
-useAuthUI
+const useAuthUI: () => ControllerContext;
 ```
 
-### `useAuthUILink` (unknown)
+### `useAuthUILink` (const)
 
 ```ts
-useAuthUILink
+const useAuthUILink: () => AuthUILink | undefined;
 ```
 
 ### `userInitials` (const)
@@ -14952,21 +12849,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `controllerStore` (const)
 
 ```ts
-const controllerStore = <TState, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>): ControllerStore<TState, TActions> => {
-    const context = useAuthUI();
-    const controller = create(context);
-    const state = readable<TState>(controller.getState(), (set) => {
-        set(controller.getState());
-        const unsubscribe = controller.subscribe(() => {
-            set(controller.getState());
-        });
-        return () => {
-            unsubscribe();
-            controller.destroy();
-        };
-    });
-    return { actions: controller.actions, state };
-};
+const controllerStore: <TState, TActions>(create: (context: ControllerContext) => Controller<TState, TActions>) => ControllerStore<TState, TActions>;
 ```
 
 ### `createAcceptInvitationController` (const)
@@ -15308,10 +13191,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `setAuthUIContext` (const)
 
 ```ts
-const setAuthUIContext = (value: AuthUISvelteContext): AuthUISvelteContext => {
-    setContext(AUTH_UI_CONTEXT_KEY, value);
-    return value;
-};
+const setAuthUIContext: (value: AuthUISvelteContext) => AuthUISvelteContext;
 ```
 
 ### `setCaptchaToken` (const)
@@ -15341,19 +13221,13 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `useAuthUI` (const)
 
 ```ts
-const useAuthUI = (): ControllerContext => {
-    const value = getContext<AuthUISvelteContext | undefined>(AUTH_UI_CONTEXT_KEY);
-    if (!value) {
-        throw new Error("useAuthUI() must be called inside <AuthUIProvider>");
-    }
-    return value.core;
-};
+const useAuthUI: () => ControllerContext;
 ```
 
 ### `useAuthUILink` (const)
 
 ```ts
-const useAuthUILink = (): AuthUILinkComponent | undefined => getContext<AuthUISvelteContext | undefined>(AUTH_UI_CONTEXT_KEY)?.Link;
+const useAuthUILink: () => AuthUILinkComponent | undefined;
 ```
 
 ### `userInitials` (const)
@@ -15389,7 +13263,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `AUTH_UI_INJECTION_KEY` (const)
 
 ```ts
-const AUTH_UI_INJECTION_KEY: InjectionKey<AuthUIVueContext> = Symbol("lunora.auth-ui");
+const AUTH_UI_INJECTION_KEY: InjectionKey<AuthUIVueContext>;
 ```
 
 ### `AcceptInvitationActions` (interface)
@@ -16504,16 +14378,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `createAuthUI` (const)
 
 ```ts
-const createAuthUI = (config: AuthUIProviderProps): {
-    install: (app: App) => void;
-} => {
-    const context = buildContext(config);
-    return {
-        install(app: App): void {
-            app.provide(AUTH_UI_INJECTION_KEY, context);
-        },
-    };
-};
+const createAuthUI: (config: AuthUIProviderProps) => { install: (app: App) => void; };
 ```
 
 ### `createAuthorizedAppsController` (const)
@@ -16767,11 +14632,7 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `provideAuthUI` (const)
 
 ```ts
-const provideAuthUI = (config: AuthUIProviderProps): ShallowRef<ControllerContext> => {
-    const context = buildContext(config);
-    provide(AUTH_UI_INJECTION_KEY, context);
-    return context.core;
-};
+const provideAuthUI: (config: AuthUIProviderProps) => ShallowRef<ControllerContext>;
 ```
 
 ### `providerLabel` (const)
@@ -16869,57 +14730,25 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `useAuthUI` (const)
 
 ```ts
-const useAuthUI = (): ControllerContext => useAuthUIContextRef().value;
+const useAuthUI: () => ControllerContext;
 ```
 
 ### `useAuthUIContextRef` (const)
 
 ```ts
-const useAuthUIContextRef = (): ShallowRef<ControllerContext> => {
-    const value = inject(AUTH_UI_INJECTION_KEY, undefined);
-    if (!value) {
-        throw new Error("useAuthUI(): no auth-UI context provided — use app.use(createAuthUI(config)), <AuthUIProvider>, or provideAuthUI(config) in a parent setup().");
-    }
-    return value.core;
-};
+const useAuthUIContextRef: () => ShallowRef<ControllerContext>;
 ```
 
 ### `useAuthUILink` (const)
 
 ```ts
-const useAuthUILink = (): Component | undefined => inject(AUTH_UI_INJECTION_KEY, undefined)?.Link;
+const useAuthUILink: () => Component | undefined;
 ```
 
 ### `useController` (const)
 
 ```ts
-const useController = <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>): {
-    actions: TActions;
-    state: ShallowRef<TState>;
-} => {
-    const context = useAuthUIContextRef();
-    let controller = factory(context.value);
-    const state = shallowRef(controller.getState()) as ShallowRef<TState>;
-    const listen = (): (() => void) => controller.subscribe(() => {
-        state.value = controller.getState();
-    });
-    let unsubscribe = listen();
-    const release = (): void => {
-        unsubscribe();
-        controller.destroy();
-    };
-    watch(context, (next) => {
-        release();
-        controller = factory(next);
-        state.value = controller.getState();
-        unsubscribe = listen();
-    });
-    onScopeDispose(release);
-    const actions = new Proxy({} as object & TActions, {
-        get: (_target, key) => Reflect.get(controller.actions as object, key) as unknown,
-    }) as TActions;
-    return { actions, state };
-};
+const useController: <TState, TActions>(factory: (context: ControllerContext) => Controller<TState, TActions>) => { actions: TActions; state: ShallowRef<TState>; };
 ```
 
 ### `userInitials` (const)
@@ -16941,3 +14770,139 @@ Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
 ### `withRedirectTo` (const)
 
 Re-exported from `@lunora/auth-ui/core` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminUsersExtra` (interface)
+
+```ts
+interface AdminUsersExtra {
+    search: string;
+    total?: number;
+}
+```
+
+### `AnyAuthClient` (interface)
+
+```ts
+interface AnyAuthClient {
+    getSession: (...args: never[]) => unknown;
+}
+```
+
+### `AuthLinkProps` (interface)
+
+```ts
+interface AuthLinkProps {
+    children: JSX.Element;
+    href: string;
+}
+```
+
+### `AuthLinkProps` (interface)
+
+```ts
+interface AuthLinkProps {
+    children: ReactNode;
+    href: string;
+}
+```
+
+### `AuthUIReactContext` (interface)
+
+```ts
+interface AuthUIReactContext {
+    core: ControllerContext;
+    Link?: ComponentType<{
+        children: ReactNode;
+        className?: string;
+        href: string;
+    }>;
+}
+```
+
+### `AuthUISolidContext` (interface)
+
+```ts
+interface AuthUISolidContext {
+    core: ControllerContext;
+    Link?: AuthUILink;
+}
+```
+
+### `CaptchaGlobal` (interface)
+
+```ts
+interface CaptchaGlobal {
+    render: (element: Element, parameters: {
+        callback: (token: string) => void;
+        "expired-callback"?: () => void;
+        sitekey: string;
+    }) => unknown;
+    reset?: (widgetId?: unknown) => void;
+}
+```
+
+### `CaptchaHeaderOptions` (interface)
+
+```ts
+interface CaptchaHeaderOptions {
+    basePath?: string;
+    endpoints?: ReadonlyArray<string>;
+}
+```
+
+### `ErrorToasterProps` (interface)
+
+```ts
+interface ErrorToasterProps {
+    dismissLabel?: string;
+}
+```
+
+### `FormBannerProps` (interface)
+
+```ts
+interface FormBannerProps {
+    error?: string;
+    success?: string;
+}
+```
+
+### `NoFunction` (type)
+
+```ts
+type NoFunction<T> = T extends Function ? never : T;
+```
+
+### `SocialButtonsProps` (interface)
+
+```ts
+interface SocialButtonsProps {
+    lastUsed?: string;
+    onSelect: (provider: string) => void;
+    providers: ReadonlyArray<string>;
+}
+```
+
+### `SubmitButtonProps` (interface)
+
+```ts
+interface SubmitButtonProps {
+    children: JSX.Element;
+    pending: boolean;
+}
+```
+
+### `SubmitButtonProps` (interface)
+
+```ts
+interface SubmitButtonProps {
+    children: ReactNode;
+    pending: boolean;
+}
+```

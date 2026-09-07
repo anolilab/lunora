@@ -393,3 +393,161 @@ const v: {
     union: typeof union;
 };
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ObjectShape` (type)
+
+```ts
+type ObjectShape = Record<string, Validator>;
+```
+
+### `ObjectShapeType` (type)
+
+```ts
+type ObjectShapeType<S extends ObjectShape> = OptionalizeShape<{
+    [K in keyof S]: Infer<S[K]>;
+}>;
+```
+
+### `OptionalizeShape` (type)
+
+```ts
+type OptionalizeShape<M> = {
+    [K in keyof M as undefined extends M[K] ? K : never]?: M[K];
+} & {
+    [K in keyof M as undefined extends M[K] ? never : K]: M[K];
+};
+```
+
+### `PartialShape` (type)
+
+```ts
+type PartialShape<S extends ObjectShape> = {
+    [K in keyof S]: ColumnValidator<Infer<S[K]> | undefined, Infer<S[K]> | undefined>;
+};
+```
+
+### `any` (const)
+
+```ts
+const any: () => ColumnValidator<unknown, unknown>;
+```
+
+### `array` (const)
+
+```ts
+const array: <V extends Validator>(inner: V) => ArrayColumnValidator<Infer<V>>;
+```
+
+### `bigintValidator` (const)
+
+```ts
+const bigintValidator: () => ColumnValidator<bigint, bigint>;
+```
+
+### `boolean` (const)
+
+```ts
+const boolean: () => ColumnValidator<boolean, boolean>;
+```
+
+### `bytes` (const)
+
+```ts
+const bytes: () => ColumnValidator<ArrayBuffer, ArrayBuffer>;
+```
+
+### `date` (const)
+
+```ts
+const date: () => TimestampColumnValidator;
+```
+
+### `from` (const)
+
+```ts
+const from: <S extends StandardSchemaV1>(schema: S) => ColumnValidator<InferStandardOutput<S>, InferStandardInput<S>>;
+```
+
+### `geoPoint` (const)
+
+```ts
+const geoPoint: () => ColumnValidator<GeoPoint, GeoPoint>;
+```
+
+### `id` (const)
+
+```ts
+const id: <TableName extends string>(tableName: TableName) => ColumnValidator<Id<TableName>, Id<TableName>>;
+```
+
+### `literal` (const)
+
+```ts
+const literal: <T extends bigint | boolean | number | string | null>(literalValue: T) => ColumnValidator<T, T>;
+```
+
+### `nullValidator` (const)
+
+```ts
+const nullValidator: () => ColumnValidator<null, null>;
+```
+
+### `number` (const)
+
+```ts
+const number: () => NumberColumnValidator;
+```
+
+### `objectValidator` (const)
+
+```ts
+const objectValidator: <S extends ObjectShape>(shape: S, stripUnknown?: boolean) => ObjectColumnValidator<ObjectShapeType<S>>;
+```
+
+### `optional` (const)
+
+```ts
+const optional: <V extends Validator>(inner: V) => ColumnValidator<Infer<V> | undefined, Infer<V> | undefined>;
+```
+
+### `partial` (const)
+
+```ts
+const partial: <S extends ObjectShape>(shape: S) => PartialShape<S>;
+```
+
+### `record` (const)
+
+```ts
+const record: <K extends Validator<string>, V extends Validator>(keyValidator: K, valueValidator: V) => ColumnValidator<Record<Infer<K>, Infer<V>>, Record<Infer<K>, Infer<V>>>;
+```
+
+### `storage` (const)
+
+```ts
+const storage: (bucket?: string) => ColumnValidator<string, string>;
+```
+
+### `string` (const)
+
+```ts
+const string: () => StringColumnValidator;
+```
+
+### `timestamp` (const)
+
+```ts
+const timestamp: () => TimestampColumnValidator;
+```
+
+### `union` (const)
+
+```ts
+const union: <Vs extends ReadonlyArray<Validator>>(...members: Vs) => ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>>;
+```

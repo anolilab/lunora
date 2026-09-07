@@ -566,3 +566,293 @@ type OtelFetchLike = (input: string, init: {
 ```ts
 const createContainerTelemetry: (options?: ContainerTelemetryOptions) => ContainerTelemetry;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ArgsOfReference` (type)
+
+```ts
+type ArgsOfReference<Reference> = Reference extends {
+    __lunoraPhantom?: {
+        args: infer Args;
+    };
+} ? Args : never;
+```
+
+### `CancellationOptions` (interface)
+
+```ts
+interface CancellationOptions {
+    abort?: AbortSignal;
+    instanceGetTimeoutMS?: number;
+    portReadyTimeoutMS?: number;
+    waitInterval?: number;
+}
+```
+
+### `Container` (class)
+
+```ts
+class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
+    static get outboundByHost(): Record<string, OutboundHandler> | undefined;
+    static set outboundByHost(handlers: Record<string, OutboundHandler>);
+    static get outboundHandlers(): Record<string, OutboundHandler> | undefined;
+    static set outboundHandlers(handlers: Record<string, OutboundHandler>);
+    static get outbound(): OutboundHandler | undefined;
+    static set outbound(handler: OutboundHandler);
+    static get outboundProxies(): Record<string, OutboundHandler> | undefined;
+    static set outboundProxies(handlers: Record<string, OutboundHandler>);
+    static get outboundProxy(): OutboundHandler | undefined;
+    static set outboundProxy(handler: OutboundHandler);
+    defaultPort?: number;
+    requiredPorts?: number[];
+    sleepAfter: string | number;
+    envVars: ContainerStartOptions['env'];
+    entrypoint: ContainerStartOptions['entrypoint'];
+    enableInternet: ContainerStartOptions['enableInternet'];
+    labels: ContainerStartOptions['labels'];
+    interceptHttps: boolean;
+    allowedHosts?: string[];
+    deniedHosts?: string[];
+    pingEndpoint: string;
+    applyOutboundInterceptionPromise: Promise<void>;
+    usingInterception: boolean;
+    constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions);
+    getState(): Promise<State>;
+    setOutboundHandler<Params = unknown>(methodName: string, ...paramsArg: OutboundParamsArg<Params>): Promise<void>;
+    setOutboundByHost<Params = unknown>(hostname: string, methodName: string, ...paramsArg: OutboundParamsArg<Params>): Promise<void>;
+    removeOutboundByHost(hostname: string): Promise<void>;
+    setOutboundByHosts<Params = unknown>(handlers: OutboundByHostOverrideInput<Params>): Promise<void>;
+    setAllowedHosts(hosts: string[]): Promise<void>;
+    setDeniedHosts(hosts: string[]): Promise<void>;
+    allowHost(hostname: string): Promise<void>;
+    denyHost(hostname: string): Promise<void>;
+    removeAllowedHost(hostname: string): Promise<void>;
+    removeDeniedHost(hostname: string): Promise<void>;
+    start(startOptions?: ContainerStartConfigOptions, waitOptions?: WaitOptions): Promise<void>;
+    startAndWaitForPorts(args: StartAndWaitForPortsOptions): Promise<void>;
+    startAndWaitForPorts(ports?: number | number[], cancellationOptions?: CancellationOptions, startOptions?: ContainerStartConfigOptions): Promise<void>;
+    startAndWaitForPorts(portsOrArgs?: number | number[] | StartAndWaitForPortsOptions, cancellationOptions?: CancellationOptions, startOptions?: ContainerStartConfigOptions): Promise<void>;
+    waitForPort(waitOptions: WaitOptions): Promise<number>;
+    stop(signal?: Signal | SignalInteger): Promise<void>;
+    destroy(): Promise<void>;
+    onStart(): void | Promise<void>;
+    onStop(params: StopParams): void | Promise<void>;
+    onActivityExpired(): Promise<void>;
+    onError(error: unknown): unknown;
+    renewActivityTimeout(): void;
+    schedule<T = string>(when: Date | number, callback: string, payload?: T): Promise<Schedule<T>>;
+    containerFetch(requestOrUrl: Request | string | URL, portOrInit?: number | RequestInit, portParam?: number): Promise<Response>;
+    fetch(request: Request): Promise<Response>;
+    private get effectiveAllowedHosts();
+    private get effectiveDeniedHosts();
+    deleteSchedules(name: string): void;
+    alarm(alarmProps?: AlarmInvocationInfo): Promise<void>;
+    timeout?: ReturnType<typeof setTimeout>;
+    resolve?: () => void;
+    scheduleNextAlarm(ms?: number): Promise<void>;
+    listSchedules<T = string>(name: string): Promise<Schedule<T>[]>;
+    getSchedule<T = string>(id: string): Promise<Schedule<T> | undefined>;
+}
+```
+
+### `ContainerOptions` (interface)
+
+```ts
+interface ContainerOptions {
+    id?: string;
+    defaultPort?: number;
+    sleepAfter?: string | number;
+    envVars?: Record<string, string>;
+    entrypoint?: string[];
+    enableInternet?: boolean;
+}
+```
+
+### `ContainerProxyOptions` (type)
+
+```ts
+type ContainerProxyOptions = {
+    enableInternet?: boolean;
+    containerId: string;
+    className: string;
+    outboundByHostOverrides?: OutboundByHostOverrides;
+    outboundHandlerOverride?: OutboundHandlerOverride;
+    allowedHosts?: string[];
+    deniedHosts?: string[];
+    interceptAll?: boolean;
+};
+```
+
+### `ContainerStartConfigOptions` (interface)
+
+```ts
+interface ContainerStartConfigOptions {
+    envVars?: Record<string, string>;
+    entrypoint?: string[];
+    enableInternet?: boolean;
+    labels?: Record<string, string>;
+}
+```
+
+### `ContainerStartOptions` (type)
+
+```ts
+type ContainerStartOptions = NonNullable<Parameters<NonNullable<DurableObject['ctx']['container']>['start']>[0]>;
+```
+
+### `ContainerStubLike` (interface)
+
+```ts
+interface ContainerStubLike {
+    allowHost?: (hostname: string) => Promise<void>;
+    denyHost?: (hostname: string) => Promise<void>;
+    destroy?: () => Promise<void>;
+    fetch: (input: Request) => Promise<Response>;
+    getState?: () => Promise<ContainerInstanceState>;
+    removeAllowedHost?: (hostname: string) => Promise<void>;
+    removeDeniedHost?: (hostname: string) => Promise<void>;
+    renewActivityTimeout?: () => Promise<void>;
+    setAllowedHosts?: (hosts: string[]) => Promise<void>;
+    setDeniedHosts?: (hosts: string[]) => Promise<void>;
+    start?: (options?: ContainerStartOptions) => Promise<void>;
+    stop?: (signal?: number | string) => Promise<void>;
+}
+```
+
+### `DurableObjectContext` (type)
+
+```ts
+type DurableObjectContext = ConstructorParameters<typeof Container>[0];
+```
+
+### `OutboundByHostOverrideInput` (type)
+
+```ts
+type OutboundByHostOverrideInput<Params = unknown> = Record<string, string | OutboundHandlerOverride<Params>>;
+```
+
+### `OutboundByHostOverrides` (type)
+
+```ts
+type OutboundByHostOverrides = Record<string, OutboundHandlerOverride>;
+```
+
+### `OutboundHandlerOverride` (type)
+
+```ts
+type OutboundHandlerOverride<Params = unknown> = {
+    method: string;
+} & ([
+    Params
+] extends [
+    undefined
+] ? {
+    params?: undefined;
+} : undefined extends Params ? {
+    params?: Params;
+} : {
+    params: Params;
+});
+```
+
+### `OutboundParamsArg` (type)
+
+```ts
+type OutboundParamsArg<Params> = [
+    Params
+] extends [
+    undefined
+] ? [
+] : undefined extends Params ? [
+    params?: Params
+] : [
+    params: Params
+];
+```
+
+### `ResultOfReference` (type)
+
+```ts
+type ResultOfReference<Reference> = Reference extends {
+    __lunoraPhantom?: {
+        returns: infer Result;
+    };
+} ? Result : never;
+```
+
+### `Schedule` (type)
+
+```ts
+type Schedule<T = string> = {
+    taskId: string;
+    callback: string;
+    payload: T;
+} & ({
+    type: 'scheduled';
+    time: number;
+} | {
+    type: 'delayed';
+    time: number;
+    delayInSeconds: number;
+});
+```
+
+### `Signal` (type)
+
+```ts
+type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
+```
+
+### `SignalInteger` (type)
+
+```ts
+type SignalInteger = number;
+```
+
+### `StartAndWaitForPortsOptions` (interface)
+
+```ts
+interface StartAndWaitForPortsOptions {
+    startOptions?: ContainerStartConfigOptions;
+    ports?: number | number[];
+    cancellationOptions?: CancellationOptions;
+}
+```
+
+### `State` (type)
+
+```ts
+type State = {
+    lastChange: number;
+} & ({
+    status: 'running' | 'stopping' | 'stopped' | 'healthy';
+} | {
+    status: 'stopped_with_code';
+    exitCode?: number;
+});
+```
+
+### `StopParams` (type)
+
+```ts
+type StopParams = {
+    exitCode: number;
+    reason: 'exit' | 'runtime_signal';
+};
+```
+
+### `WaitOptions` (interface)
+
+```ts
+interface WaitOptions {
+    portToCheck: number;
+    signal?: AbortSignal;
+    retries?: number;
+    waitInterval?: number;
+}
+```
