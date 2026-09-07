@@ -641,9 +641,18 @@ describe("builder middleware", () => {
      * outcome, including a rejection it deliberately swallowed. Re-awaiting the
      * downstream promise on its behalf would re-throw what it just handled.
      */
-    it("keeps a middleware that catches a downstream rejection and returns a fallback context", async () => {
-        expect.assertions(1);
+    it("refuses to let a middleware swallow a later step's denial", async () => {
+        expect.assertions(2);
 
+        const handler = vi.fn<() => string>(() => "secret");
+
+        // The shape reads like error handling and is an authorization bypass.
+        // This chain's terminal only BUILDS the context and the handler runs
+        // after it resolves, so a rejection arriving here is never a handler
+        // error a middleware could legitimately recover from — it is a later
+        // step refusing (an `rls()` denial, or the no-next() guard one link
+        // down). Catching it and returning a fallback context would run the
+        // handler against exactly the context the denial existed to prevent.
         const fn = c.query
             .use(async ({ ctx, next }) => {
                 try {
@@ -655,9 +664,10 @@ describe("builder middleware", () => {
             .use(() => {
                 throw new LunoraError("FORBIDDEN");
             })
-            .query(({ ctx }) => ((ctx as { fallback?: boolean }).fallback === true ? "fallback" : "ok"));
+            .query(handler);
 
-        await expect(fn.handler({}, {})).resolves.toBe("fallback");
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(LunoraError);
+        expect(handler).not.toHaveBeenCalled();
     });
 
     it("a middleware that throws aborts before the handler runs", async () => {
