@@ -770,75 +770,7 @@ assert_no_registry_lunora() {
 assert_entry_forwards_handlers() {
     local scaffold_dir="$1"
 
-    node -e "
-const fs = require('fs');
-const path = require('path');
-
-const root = process.argv[1];
-const offenders = [];
-
-const walk = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === 'node_modules' || entry.name === '_generated' || entry.name.startsWith('.')) continue;
-
-        const full = path.join(dir, entry.name);
-
-        if (entry.isDirectory()) { walk(full); continue; }
-        if (!/\.(ts|tsx|js|mjs)\$/.test(entry.name)) continue;
-
-        // Strip comments first: this is a text match, so a handler named only in
-        // prose ('forwards app.queue too') would otherwise satisfy it.
-        const source = fs.readFileSync(full, 'utf8').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '').replace(/\\/\\/.*$/gm, '');
-
-        // Only a hand-built default export that delegates to the composed worker.
-        // \`export default app\` forwards everything already. The delegate's name
-        // is whatever the entry chose, so take it from the \`<name>.fetch(\` call
-        // inside the object rather than assuming \`app\`.
-        //
-        // A hand-built object can also be bound first and exported by name
-        // (\`const entry = { … }; export default entry;\`), which is the same
-        // defect wearing different syntax — so resolve that identifier too, and
-        // treat it as hand-built only when the file binds it to an OBJECT
-        // LITERAL. An identifier bound to \`defineApp(…).build()\` or imported is
-        // the composed worker and stays exempt.
-        const exportedName = /export default (\\w+)\\s*;/.exec(source);
-        const bindsObjectLiteral =
-            exportedName !== null && new RegExp('(?:const|let|var)\\\\s+' + exportedName[1] + '\\\\s*(?::[^=]+)?=\\\\s*\\\\{').test(source);
-
-        if (!source.includes('export default {') && !bindsObjectLiteral) continue;
-
-        const delegate = /(\w+)\.fetch\s*\(/.exec(source);
-
-        if (!delegate) continue;
-
-        const binding = delegate[1];
-        const missing = declared.filter((name) => !source.includes(binding + '.' + name));
-
-        if (missing.length > 0) offenders.push(path.relative(root, full) + ' → ' + binding + ' drops ' + missing.join(', '));
-    }
-};
-
-// Which handlers this app composes. \`scheduled\` is always on the built worker,
-// but an entry that omits it only matters once a cron exists to fire into it.
-const declared = [];
-
-if (fs.existsSync(path.join(root, 'lunora', 'crons.ts'))) declared.push('scheduled');
-
-const lunoraDir = path.join(root, 'lunora');
-const schema = fs.existsSync(lunoraDir)
-    ? fs.readdirSync(lunoraDir).filter((n) => n.endsWith('.ts')).map((n) => fs.readFileSync(path.join(lunoraDir, n), 'utf8')).join('\n')
-    : '';
-
-if (schema.includes('defineQueue')) declared.push('queue');
-if (schema.includes('.onEmail(')) declared.push('email');
-
-if (declared.length > 0) walk(root);
-
-if (offenders.length > 0) {
-    console.log(offenders.join('\n'));
-    process.exit(1);
-}
-" "$scaffold_dir" 2>&1
+    node "${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/assert-entry-forwards-handlers.mjs" "$scaffold_dir" 2>&1
 }
 
 # ---------------------------------------------------------------------------
