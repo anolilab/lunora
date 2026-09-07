@@ -39,8 +39,8 @@ from the RPC/WS state).
 
 The worker's env comes from a deterministic `.dev.vars` the harness writes on
 boot (and restores on teardown): `AUTH_SECRET`, `STORAGE_SECRET`,
-`PUBLIC_STORAGE_BASE_URL`/`LUNORA_ORIGIN_URL`/`LUNORA_WORKER_ORIGIN` (all the
-worker origin), and `LUNORA_E2E=true`. The `LUNORA_E2E` flag gates the
+`PUBLIC_STORAGE_BASE_URL`/`LUNORA_ORIGIN_URL` (both the worker origin), and
+`LUNORA_E2E=true`. The `LUNORA_E2E` flag gates the
 `/test/reset`, `/test/sign`, `/test/schedule`, and `/test/job-status` routes the
 suite relies on — see
 [`apps/playground/src/server/index.ts`](../../apps/playground/src/server/index.ts).
