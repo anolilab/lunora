@@ -27,7 +27,10 @@ describe("schemaDeclaresIssuer", () => {
     it("disclaims it for the schema better-auth 1.7.3 actually resolves", () => {
         expect.assertions(2);
 
-        expect(schemaDeclaresIssuer(["id", "providerId", "accountId", "userId", "password"])).toBe(false);
+        // better-auth's account column NAMES, not values.
+        expect(schemaDeclaresIssuer(["id", "providerId", "accountId", "userId", "password"])).toBe(false); // secret-scanner:allow
+
+        // The table does not exist yet — nothing is declared, and nothing is dropped.
         expect(schemaDeclaresIssuer([])).toBe(false);
     });
 });
