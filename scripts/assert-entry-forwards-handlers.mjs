@@ -25,7 +25,7 @@
  */
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** This repo's root, resolved from the script rather than the scaffold under test. */
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,11 +74,29 @@ const sourceFiles = (dir, out = []) => {
  *
  * Quoted strings only: a template literal can hold real code in `${…}`.
  */
-const codeOf = (file) =>
-    readFileSync(file, "utf8")
-        .replaceAll(/\/\*[\S\s]*?\*\//g, "")
+const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
+
+/**
+ * Source with comments removed, so a handler named only in prose cannot satisfy
+ * a text match — with STRINGS BLANKED FIRST, because neither comment form means
+ * anything inside one.
+ *
+ * Order is the whole correctness argument here, and getting it wrong has made
+ * this gate pass vacuously twice:
+ *
+ * - stripping line comments first cut every line at its first `//`, so
+ *   `const docs = "https://…"; const crons = cronJobs();` lost its declaration;
+ * - stripping block comments first let `const a = "/*"` open a comment that ran
+ *   through the next `*` + `/` in a later string, swallowing everything between.
+ *
+ * Blanking quoted strings first removes both openings. Quoted strings only: a
+ * template literal can hold real code in a `${…}` substitution.
+ */
+const stripToCode = (source) =>
+    source
         .replaceAll(/"(?:[^"\\\n]|\\.)*"/g, '""')
         .replaceAll(/'(?:[^'\\\n]|\\.)*'/g, "''")
+        .replaceAll(/\/\*[\S\s]*?\*\//g, "")
         .replaceAll(/\/\/.*$/gm, "");
 
 /** `wrangler.jsonc`'s `main` — the module Cloudflare actually loads. */
@@ -92,107 +110,120 @@ const declaredMain = (root) => {
     return /"main"\s*:\s*"([^"]+)"/u.exec(readFileSync(config, "utf8"))?.[1];
 };
 
-const root = process.argv[2];
+/**
+ * The CLI. Exported and invoked only when this file is the entry point, so the
+ * module can be imported to pin {@link stripToCode} — the ordering below has
+ * been wrong twice and is the whole correctness argument for this gate.
+ */
+const main = (root) => {
+    const files = sourceFiles(root);
+    const allCode = files.map((file) => codeOf(file)).join("\n");
 
-if (root === undefined) {
-    console.error("usage: assert-entry-forwards-handlers.mjs <scaffold-dir>");
-    process.exit(2);
-}
+    // What this app declares, discovered the way codegen discovers it — by the
+    // builder call, anywhere in the scaffold — rather than by a filename convention.
+    const declared = [];
 
-const files = sourceFiles(root);
-const allCode = files.map((file) => codeOf(file)).join("\n");
-
-// What this app declares, discovered the way codegen discovers it — by the
-// builder call, anywhere in the scaffold — rather than by a filename convention.
-const declared = [];
-
-if (/\bcronJobs\s*\(/u.test(allCode)) {
-    declared.push("scheduled");
-}
-
-if (/\bdefineQueue\s*\(/u.test(allCode)) {
-    declared.push("queue");
-}
-
-if (/\.onEmail\s*\(/u.test(allCode)) {
-    declared.push("email");
-}
-
-if (declared.length === 0) {
-    process.exit(0);
-}
-
-const main = declaredMain(root);
-const offences = [];
-
-// A `virtual:` main is emitted by the Vite plugin at build time, and a bare
-// re-export forwards whatever the other module happens to export. Neither can be
-// read here, so neither may pass silently: an app that declares a handler and
-// cannot be shown to forward it is exactly the case this gate exists for.
-if (main !== undefined && main.startsWith("virtual:")) {
-    // Existence alone was too weak a proxy: emptying the file, renaming its
-    // describe, or `.skip`ping it would all keep this green while proving
-    // nothing. Require the suite to still invoke each handler this app declares,
-    // and to not be skipped wholesale.
-    const suitePath = join(REPO_ROOT, CLASS_A_ENTRY_SUITE);
-    const suite = existsSync(suitePath) ? codeOf(suitePath) : undefined;
-    const unproven = suite === undefined ? declared : declared.filter((name) => !new RegExp(String.raw`\.${name}\s*\(`, "u").test(suite));
-
-    if (suite !== undefined && /\b(?:describe|it|test)\.skip\s*\(/u.test(suite)) {
-        offences.push(`${CLASS_A_ENTRY_SUITE} is skipped, so the generated entry's ${declared.join("/")} is proven nowhere.`);
-    } else if (unproven.length > 0) {
-        offences.push(
-            `wrangler main is "${main}", emitted by the Vite plugin, so its handler set cannot be read from the ` +
-                `scaffold — and ${CLASS_A_ENTRY_SUITE}, the suite that invokes the emitted entry, ` +
-                `${suite === undefined ? "is gone" : `no longer invokes ${unproven.join("/")}`}. ` +
-                `Restore it, or this template's forwarding is proven nowhere.`,
-        );
+    if (/\bcronJobs\s*\(/u.test(allCode)) {
+        declared.push("scheduled");
     }
-} else {
-    const entryFile = main === undefined ? undefined : join(root, main);
-    const candidates = entryFile !== undefined && existsSync(entryFile) ? [entryFile] : files;
 
-    for (const file of candidates) {
-        const source = codeOf(file);
+    if (/\bdefineQueue\s*\(/u.test(allCode)) {
+        declared.push("queue");
+    }
 
-        if (/export\s*\{\s*default\s*\}\s*from/u.test(source)) {
+    if (/\.onEmail\s*\(/u.test(allCode)) {
+        declared.push("email");
+    }
+
+    if (declared.length === 0) {
+        process.exit(0);
+    }
+
+    const main = declaredMain(root);
+    const offences = [];
+
+    // A `virtual:` main is emitted by the Vite plugin at build time, and a bare
+    // re-export forwards whatever the other module happens to export. Neither can be
+    // read here, so neither may pass silently: an app that declares a handler and
+    // cannot be shown to forward it is exactly the case this gate exists for.
+    if (main !== undefined && main.startsWith("virtual:")) {
+        // Existence alone was too weak a proxy: emptying the file, renaming its
+        // describe, or `.skip`ping it would all keep this green while proving
+        // nothing. Require the suite to still invoke each handler this app declares,
+        // and to not be skipped wholesale.
+        const suitePath = join(REPO_ROOT, CLASS_A_ENTRY_SUITE);
+        const suite = existsSync(suitePath) ? codeOf(suitePath) : undefined;
+        const unproven = suite === undefined ? declared : declared.filter((name) => !new RegExp(String.raw`\.${name}\s*\(`, "u").test(suite));
+
+        if (suite !== undefined && /\b(?:describe|it|test)\.skip\s*\(/u.test(suite)) {
+            offences.push(`${CLASS_A_ENTRY_SUITE} is skipped, so the generated entry's ${declared.join("/")} is proven nowhere.`);
+        } else if (unproven.length > 0) {
             offences.push(
-                `${relative(root, file)} re-exports another module's default, so it cannot be shown to forward ` +
-                    `${declared.join(", ")} — the re-exported handler set is opaque here.`,
+                `wrangler main is "${main}", emitted by the Vite plugin, so its handler set cannot be read from the ` +
+                    `scaffold — and ${CLASS_A_ENTRY_SUITE}, the suite that invokes the emitted entry, ` +
+                    `${suite === undefined ? "is gone" : `no longer invokes ${unproven.join("/")}`}. ` +
+                    `Restore it, or this template's forwarding is proven nowhere.`,
             );
-            continue;
         }
+    } else {
+        const entryFile = main === undefined ? undefined : join(root, main);
+        const candidates = entryFile !== undefined && existsSync(entryFile) ? [entryFile] : files;
 
-        // Only a hand-built default export delegates; `export default app` forwards
-        // everything already. The delegate's name is whatever the entry chose, so
-        // take it from the `<name>.fetch(` call rather than assuming `app`. A
-        // hand-built object can also be bound first and exported by name, which is
-        // the same defect in different syntax.
-        const exportedName = /export default (\w+)\s*;/u.exec(source);
-        const bindsObjectLiteral =
-            exportedName !== null && new RegExp(String.raw`(?:const|let|var)\s+${exportedName[1]}\s*(?::[^=]+)?=\s*\{`, "u").test(source);
+        for (const file of candidates) {
+            const source = codeOf(file);
 
-        if (!source.includes("export default {") && !bindsObjectLiteral) {
-            continue;
-        }
+            if (/export\s*\{\s*default\s*\}\s*from/u.test(source)) {
+                offences.push(
+                    `${relative(root, file)} re-exports another module's default, so it cannot be shown to forward ` +
+                        `${declared.join(", ")} — the re-exported handler set is opaque here.`,
+                );
+                continue;
+            }
 
-        const delegate = /(\w+)\.fetch\s*\(/u.exec(source);
+            // Only a hand-built default export delegates; `export default app` forwards
+            // everything already. The delegate's name is whatever the entry chose, so
+            // take it from the `<name>.fetch(` call rather than assuming `app`. A
+            // hand-built object can also be bound first and exported by name, which is
+            // the same defect in different syntax.
+            const exportedName = /export default (\w+)\s*;/u.exec(source);
+            const bindsObjectLiteral =
+                exportedName !== null && new RegExp(String.raw`(?:const|let|var)\s+${exportedName[1]}\s*(?::[^=]+)?=\s*\{`, "u").test(source);
 
-        if (!delegate) {
-            continue;
-        }
+            if (!source.includes("export default {") && !bindsObjectLiteral) {
+                continue;
+            }
 
-        const binding = delegate[1];
-        const missing = declared.filter((name) => !source.includes(`${binding}.${name}`));
+            const delegate = /(\w+)\.fetch\s*\(/u.exec(source);
 
-        if (missing.length > 0) {
-            offences.push(`${relative(root, file)} → ${binding} drops ${missing.join(", ")}`);
+            if (!delegate) {
+                continue;
+            }
+
+            const binding = delegate[1];
+            const missing = declared.filter((name) => !source.includes(`${binding}.${name}`));
+
+            if (missing.length > 0) {
+                offences.push(`${relative(root, file)} → ${binding} drops ${missing.join(", ")}`);
+            }
         }
     }
+
+    if (offences.length > 0) {
+        console.log(`declares ${declared.join(", ")} — but:`);
+        console.log(offences.join("\n"));
+        process.exit(1);
+    }
+};
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const target = process.argv[2];
+
+    if (target === undefined) {
+        console.error("usage: assert-entry-forwards-handlers.mjs <scaffold-dir>");
+        process.exit(2);
+    }
+
+    main(target);
 }
 
-if (offences.length > 0) {
-    console.log(`declares ${declared.join(", ")} — but:`);
-    console.log(offences.join("\n"));
-    process.exit(1);
-}
+export { stripToCode };
