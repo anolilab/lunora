@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.42...@lunora/notify@1.0.0-alpha.43) (2026-09-07)
+
+### Bug Fixes
+
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
 ## @lunora/notify [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.41...@lunora/notify@1.0.0-alpha.42) (2026-09-07)
 
 
