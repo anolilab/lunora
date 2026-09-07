@@ -1,5 +1,5 @@
 import type { Finding } from "@lunora/advisor";
-import type { Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { procedureArgumentObjects } from "../procedure-argument-objects";
@@ -40,7 +40,29 @@ const findingFor = (relativePath: string, exportName: string, line: number): Fin
     };
 };
 
-/** The `[exportName, line]` of every procedure in one file whose args are opaque. */
+/**
+ * Whether this registration DECLARES an argument record that could not be read.
+ *
+ * Narrower than `opaque`, deliberately. `opaque` is the conservative tri-state a
+ * security lint gates on, so it also covers "the whole registration is a
+ * variable, and args may or may not exist" — reporting that as a dropped
+ * argument list would be a guess. A bare-factory call only counts when an `args`
+ * property is actually there and unreadable; a builder chain only ever reports
+ * opaque for an `.input()` step it could not read, so it needs no extra gate.
+ */
+const declaresUnreadableArguments = (call: CallExpression, receiver: TsNode | undefined): boolean => {
+    if (receiver === undefined) {
+        const first = call.getArguments()[0];
+
+        if (first === undefined || !Node.isObjectLiteralExpression(first) || first.getProperty("args") === undefined) {
+            return false;
+        }
+    }
+
+    return procedureArgumentObjects(call, receiver).opaque;
+};
+
+/** The `[exportName, line]` of every procedure in one file whose declared args could not be read. */
 const fileFindings = (source: SourceFile, relativePath: string): Finding[] => {
     const findings: Finding[] = [];
 
@@ -53,11 +75,7 @@ const fileFindings = (source: SourceFile, relativePath: string): Finding[] => {
 
         const classified = classifyProcedureCall(initializer);
 
-        if (classified === undefined) {
-            return;
-        }
-
-        if (procedureArgumentObjects(initializer, classified.receiver).opaque) {
+        if (classified !== undefined && declaresUnreadableArguments(initializer, classified.receiver)) {
             findings.push(findingFor(relativePath, exportName, initializer.getStartLineNumber()));
         }
     };
