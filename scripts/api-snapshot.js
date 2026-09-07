@@ -495,7 +495,7 @@ const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
     for (const decl of found.values()) {
         const entry = { kind: kindOfDeclaration(decl), name: decl.name.getText(), text: printDeclaration(decl) };
 
-        printed.set(`${entry.name} ${entry.kind} ${entry.text}`, entry);
+        printed.set(`${entry.name}\u0000${entry.kind}\u0000${entry.text}`, entry);
     }
 
     return [...printed.values()].sort((a, b) => (a.name === b.name ? (a.text < b.text ? -1 : 1) : a.name < b.name ? -1 : 1));
