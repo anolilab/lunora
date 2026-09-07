@@ -55,8 +55,12 @@
  *
  * RLS on a shape is OPT-IN through `use`, exactly as it is on a procedure —
  * policies declared elsewhere in the project do not reach a shape that did not
- * ask for them. Under a `.rls("required")` schema the omission is not silent: a
- * shape over a non-`.public()` table with no `use` replicates nothing.
+ * ask for them. The omission is never silent: under a `.rls("required")` schema a
+ * shape over a non-`.public()` table with no `use` replicates nothing, and
+ * otherwise codegen stamps `assertShapesDeclareReadPolicies` into the generated
+ * DO, which refuses to boot when the shape's table IS governed on read and the
+ * shape named no guard. `use: []` is the acknowledgement that the omission is
+ * deliberate.
  */
 
 import { LunoraError } from "@lunora/errors";
@@ -131,7 +135,10 @@ export interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Conte
      * on `where` alone — the same deal a query with no `.use(rls(...))` gets.
      * Under a `.rls("required")` schema that is a hard denial for any
      * non-`.public()` table (nothing replicates), which is the secure-by-default
-     * answer and the reason `required` exists.
+     * answer and the reason `required` exists. Otherwise it is a boot failure
+     * whenever the table IS governed on read (see
+     * `assertShapesDeclareReadPolicies`); write `use: []` for a shape that is
+     * meant to be ungoverned.
      *
      * Only `rls()` middlewares are read here — their policies, not their bodies.
      * A shape cannot run an authorization middleware, so a procedure-level gate
