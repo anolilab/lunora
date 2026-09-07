@@ -350,10 +350,11 @@ const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape |
 /**
  * Worker-origin `vars` that must resolve to the deployed worker's public URL.
  * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
- * scheduled-job dispatch (SchedulerDO → `LUNORA_ORIGIN_URL`) and auth callbacks
- * (`AUTH_URL`) silently break in production.
+ * scheduled-job dispatch and reverse cross-shard relations (both
+ * `LUNORA_ORIGIN_URL`) and auth callbacks (`AUTH_URL`) silently break in
+ * production.
  */
-const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "LUNORA_WORKER_ORIGIN", "AUTH_URL"] as const;
+const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "AUTH_URL"] as const;
 
 /** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
 const isLocalhostUrl = (value: string): boolean => {
@@ -1243,7 +1244,8 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
 
     const message =
         `${command} blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
-        `address, so this silently breaks scheduled-job dispatch / auth callbacks. Set each to the deployed worker's public URL ` +
+        `address, so this silently breaks scheduled-job dispatch, reverse cross-shard relations, and auth callbacks. ` +
+        `Set each to the deployed worker's public URL ` +
         `(or move it to a secret with \`wrangler secret put\`) before deploying.`;
 
     logger.error(message);

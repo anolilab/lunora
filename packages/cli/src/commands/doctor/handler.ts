@@ -37,6 +37,7 @@ const DOCTOR_CODES = [
     "declared-export-unchecked",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "scheduler-origin-missing",
     "schema-unreadable",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
@@ -134,6 +135,19 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
     }
 
     const report = validateWranglerConfig(parsed);
+
+    // `doctor`'s job is "tell me what is misconfigured", so it reports the
+    // scheduler-origin warning too. Reading only the SHARD error gave a clean
+    // bill of health to an app whose scheduled jobs could not fire at all.
+    for (const warning of report.warnings.filter((entry) => entry.includes("LUNORA_ORIGIN_URL"))) {
+        findings.push({
+            code: "scheduler-origin-missing",
+            fix: "Set LUNORA_ORIGIN_URL in wrangler vars to the worker's public URL (or `wrangler secret put LUNORA_ORIGIN_URL`).",
+            level: "warn",
+            message: warning,
+        });
+    }
+
     const shardError = report.errors.find((error) => error.includes("SHARD"));
 
     if (shardError === undefined) {

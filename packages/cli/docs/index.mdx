@@ -268,6 +268,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.      |
 | `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                |
 | `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                |
+| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.  |
 | `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped. |
 | `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.         |
 | `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                     |
