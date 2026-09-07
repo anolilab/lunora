@@ -539,7 +539,7 @@ describe("rls — read path", () => {
         expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
     });
 
-    it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
+    it("count() throws COUNT_RLS_UNSUPPORTED when a policy narrows the table", async () => {
         expect.hasAssertions();
 
         // We can't observe the underlying LunoraError here without wiring the
@@ -547,10 +547,15 @@ describe("rls — read path", () => {
         // *passes* `restrictsCounts: true` down to the writer — the ORM is
         // responsible for converting that into the thrown LunoraError, and
         // we assert that in the ORM tests below.
+        //
+        // The policy has to NARROW for the flag to be set; an allow-all read
+        // policy leaves the count exactly computable and is asserted separately.
         const policy = definePolicy<TestContext>({
             on: "read",
             table: "documents",
-            when: () => true,
+            when: () => {
+                return { ownerId: "u1" };
+            },
         });
         const database = createFakeDatabase([]);
 
@@ -1651,6 +1656,91 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         const call = database.calls.find((entry) => entry.method === "groupBy");
 
         expect(call?.args).toMatchObject({ baseWhere: { ownerId: "u1" }, by: ["status"] });
+    });
+
+    /**
+     * A read policy that grants unconditionally for this request produces no
+     * `baseWhere`: the caller sees the whole partition, so a count or a rank
+     * over it is exact. Failing those closed on the mere PRESENCE of a policy
+     * made `count()`/`rank()`/`rankPage()` unreachable from the very procedures
+     * the policy admits — including every admin/`can(...)` branch.
+     */
+    const allowAllPolicy = definePolicy<TestContext>({ on: "read", table: "documents", when: () => true });
+
+    it("serves count() under an allow-all read policy without flagging restrictsCounts", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.count("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe(1);
+
+        const call = database.calls.find((entry) => entry.method === "count");
+
+        expect((call?.args as { restrictsCounts?: boolean }).restrictsCounts).toBe(false);
+    });
+
+    it("serves rank() under an allow-all read policy", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ position: 1 });
+
+        expect(database.calls.some((entry) => entry.method === "rank")).toBe(true);
+    });
+
+    it("serves rankPage() under an allow-all read policy", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("documents", "byScore"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ isDone: true });
+    });
+
+    it("forwards the caller's own rank() baseWhere untouched — the guard contributes none", async () => {
+        expect.assertions(1);
+
+        // `assertUnrestrictedReadBase` is a check, not a producer: reaching past it
+        // means the read base is unrestricted, so there is nothing to AND in and the
+        // caller's `options` go through as written.
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { baseWhere: { ownerId: "u1" }, row: "d1" }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.find((entry) => entry.method === "rank")?.args).toStrictEqual({ baseWhere: { ownerId: "u1" }, row: "d1" });
+    });
+
+    it("serves rank() under a read policy whose predicate is an empty (match-everything) WhereInput", async () => {
+        expect.assertions(1);
+
+        // `{}` matches every row and `mergeBaseWhere` already drops it, so the
+        // fail-closed guard has to read it the same way or it blocks a rank it
+        // does not restrict.
+        const emptyPredicate = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return {};
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([emptyPredicate]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ position: 1 });
     });
 
     it("fails rank() closed with COUNT_RLS_UNSUPPORTED under a read policy", async () => {

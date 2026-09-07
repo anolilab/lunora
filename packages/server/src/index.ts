@@ -76,12 +76,14 @@ export type {
     RlsOptions,
     RlsReadRegistry,
     Role,
+    ShapeGuardDeclaration,
     ShapeReadWhereRequest,
     TypedDefinePolicyInput,
     WhereInput,
 } from "./rls/index";
 export {
     allowAll,
+    assertShapesDeclareReadPolicies,
     buildRlsReadRegistry,
     composeShapeReadWhere,
     createPolicyDsl,

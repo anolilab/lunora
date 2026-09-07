@@ -551,14 +551,46 @@ export const sendMessage = defineMutator({
                 // The cross-shard-join guard is imported + called against the compiled predicate.
                 expect(result.generated.shard).toContain("assertShapeShardable");
                 expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
-                // The shape predicate is AND-merged with the table's RLS read base-where:
-                // a module-scope registry is built from the function table, the helper is
-                // imported, and the resolver composes it before the shardability guard.
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));");
-                expect(result.generated.shard).toContain("buildRlsReadRegistry, composeShapeReadWhere");
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY,");
+                // The shape predicate is AND-merged with the read policies the SHAPE
+                // declares (`defineShape({ use })`, pre-indexed by `defineShape` into
+                // `shape.rlsRegistry`), before the shardability guard.
+                expect(result.generated.shard).toContain("composeShapeReadWhere(shape.rlsRegistry,");
+                // NOT a project-wide registry. Folding in every registered function's
+                // read policies unions them, and a single allow-all policy inside an
+                // admin-only procedure then unrestricted every shape on that table.
+                expect(result.generated.shard).not.toContain("buildRlsReadRegistry");
+                // No read policy anywhere in the project ⇒ nothing for a shape to
+                // replicate around, so the boot-time guard is not stamped either.
+                expect(result.generated.shard).not.toContain("assertShapesDeclareReadPolicies");
+            });
+
+            it("stamps the boot-time guard when a shape's table is governed on read but the shape names no use()", () => {
+                expect.assertions(2);
+
+                writeShapes();
+                // A query tenant-scopes `messages` on read. The shape above declares no
+                // `use`, so its registry is empty and it would replicate the channel
+                // filter alone — every tenant's rows, silently. Codegen hands the runtime
+                // the governed tables; `@lunora/server` holds the verdict, because only
+                // the registry knows whether `use` was written.
+                writeFileSync(
+                    join(workdir, "lunora", "guarded.ts"),
+                    `import { query, rls } from "@lunora/server";
+export const listMessages = query
+    .use(rls([{ on: "read", table: "messages", when: ({ auth }) => ({ tenantId: auth.userId }) }]))
+    .query(async () => []);
+`,
+                    "utf8",
+                );
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain(
+                    'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
+                );
+                /* eslint-enable no-secrets/no-secrets */
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {

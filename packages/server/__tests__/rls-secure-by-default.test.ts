@@ -146,9 +146,8 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
         }
     };
 
-    return {
+    const guarded = {
         ...raw,
-        [RLS_UNWRAP_SYMBOL]: raw,
         aggregate: (tableName: string) => {
             deny(tableName);
 
@@ -204,7 +203,14 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.replace(id);
         },
-    } as unknown as RawWriter;
+    };
+
+    // NON-enumerable, mirroring the real `guardWriter`. An enumerable escape
+    // hatch rides the `{ ...ctx.db }` spread the RLS wrapper is built from, which
+    // re-published the unguarded writer off the wrapper.
+    Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw });
+
+    return guarded;
 };
 
 const lunora = initLunora.dataModel<Record<string, never>>().create();
@@ -363,5 +369,129 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         expect.assertions(1);
 
         expect(LunoraError).toBeTypeOf("function");
+    });
+});
+
+/**
+ * Several `.use(rls(...))` steps in one chain must COMPOSE.
+ *
+ * The guarded writer publishes the unwrapped one under `RLS_UNWRAP_SYMBOL`, and
+ * the RLS wrapper is built with `{ ...ctx.db }`. While that property was
+ * enumerable the wrapper re-published it, so a SECOND `rls()` step recovered the
+ * raw writer and wrapped THAT — routing around step one entirely, which turned
+ * `rls([tenantScope])` followed by any other `rls(...)` into a full-table read.
+ * Multiple steps are a shipped shape (`protectPublic({ use })`,
+ * `composePluginMiddleware`, plain chained `.use()`), so the fix is composition,
+ * not merely hiding the symbol.
+ */
+describe("rls — chained rls() steps compose", () => {
+    const protectedTables = new Set(["posts", "secrets"]);
+    const tableOfId = (id: string): string | undefined => (id.startsWith("post_") ? "posts" : undefined);
+
+    const tenantPosts = definePolicy<TestContext>({
+        on: "read",
+        table: "posts",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+
+    /** A second, broader bundle — the kind a feature flag or a plugin contributes. */
+    const allPosts = definePolicy<TestContext>({ on: "read", table: "posts", when: () => true });
+
+    const readSecrets = definePolicy<TestContext>({ on: "read", table: "secrets", when: () => true });
+
+    /** Record what the underlying writer was actually asked for. */
+    const recording = (raw: RawWriter): { args: unknown[]; writer: RawWriter } => {
+        const args: unknown[] = [];
+
+        return {
+            args,
+            writer: {
+                ...raw,
+                findMany: (tableName: string, callArgs?: unknown) => {
+                    args.push(callArgs);
+
+                    return raw.findMany(tableName);
+                },
+            },
+        };
+    };
+
+    it("and-merges both steps' read filters (a later step cannot widen an earlier one)", async () => {
+        expect.assertions(1);
+
+        const { args, writer } = recording(createRawWriter([{ _id: "post_1", table: "posts" }], []));
+        const guarded = guard(writer, protectedTables, tableOfId);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([tenantPosts])))
+            .use(rlsForTest<TestContext>(definePolicies([allPosts])))
+            .query(async ({ ctx }) => ctx.db.findMany("posts"));
+
+        await handler.handler({ auth: { userId: "u1" }, db: guarded }, {});
+
+        // Step two grants unrestricted access, so it adds no predicate — but step
+        // one's tenant scope must survive it.
+        expect(args[0]).toMatchObject({ baseWhere: { ownerId: "u1" } });
+    });
+
+    it("intersects a second step's narrower filter with the first rather than replacing it", async () => {
+        expect.assertions(1);
+
+        const draftsOnly = definePolicy<TestContext>({
+            on: "read",
+            table: "posts",
+            when: () => {
+                return { status: "draft" };
+            },
+        });
+        const { args, writer } = recording(createRawWriter([{ _id: "post_1", table: "posts" }], []));
+        const guarded = guard(writer, protectedTables, tableOfId);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([tenantPosts])))
+            .use(rlsForTest<TestContext>(definePolicies([draftsOnly])))
+            .query(async ({ ctx }) => ctx.db.findMany("posts"));
+
+        await handler.handler({ auth: { userId: "u1" }, db: guarded }, {});
+
+        expect(args[0]).toMatchObject({ baseWhere: { AND: [{ ownerId: "u1" }, { status: "draft" }] } });
+    });
+
+    it("routes a table only the SECOND step gates around the guard", async () => {
+        expect.assertions(1);
+
+        const log: string[] = [];
+        const guarded = guard(createRawWriter([{ _id: "secret_1", table: "secrets" }], log), protectedTables, tableOfId);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([tenantPosts])))
+            .use(rlsForTest<TestContext>(definePolicies([readSecrets])))
+            .query(async ({ ctx }) => ctx.db.findMany("secrets"));
+
+        await handler.handler({ auth: { userId: "u1" }, db: guarded }, {});
+
+        expect(log).toContain("raw.findMany:secrets");
+    });
+
+    it("requires a write to satisfy every step that gates the table", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const permissive = definePolicies([
+            definePolicy<TestContext>({ on: "read", table: "posts", when: () => true }),
+            definePolicy<TestContext>({ on: "update", table: "posts", when: () => true }),
+        ]);
+        const restrictive = definePolicies([
+            definePolicy<TestContext>({ on: "read", table: "posts", when: () => true }),
+            definePolicy<TestContext>({ on: "update", table: "posts", when: () => false }),
+        ]);
+        const guarded = guard(createRawWriter([{ _id: "post_1", table: "posts" }], log), protectedTables, tableOfId);
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(permissive))
+            .use(rlsForTest<TestContext>(restrictive))
+            .mutation(async ({ ctx }) => ctx.db.patch("post_1", { title: "x" }));
+
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(/denied by policy/u);
+
+        expect(log).not.toContain("raw.patch:post_1");
     });
 });

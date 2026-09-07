@@ -600,6 +600,13 @@ const wrapDatabase = <Context>(
      * row and probe the masked tables concurrently. Only masked tables are
      * probed: a row in no masked table needs no masking. The unwrapped `base.*`
      * is used so the probe itself isn't masked.
+     *
+     * A `lookupById` MISS falls through to the probe path instead of answering
+     * "absent": the seam is shard-local, so a `.global()` row always misses it
+     * and only `get`/`findFirst` reach those rows (through the writer's global
+     * fallback). Treating the miss as absent made `ctx.db.get(id)` return `null`
+     * for every global row inside a `mask()` procedure. The fast path still
+     * settles the common case — a shard-local hit — in one round-trip.
      */
     const locate = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.lookupById) {
@@ -608,12 +615,9 @@ const wrapDatabase = <Context>(
             // mask (IDOR).
             const located = await base.lookupById(id, expectedTable);
 
-            if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-                return { row: null, tableName: undefined };
+            if (located) {
+                return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
             }
-
-            return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
         }
 
         const row = await base.get(id, expectedTable);

@@ -1778,6 +1778,7 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
     readonly compileWhere: (context: unknown, rawArgs: Record<string, unknown>, options?: {
         ownerField?: string;
     }) => WhereInput;
+    readonly rlsRegistry: RlsReadRegistry;
 }
 ```
 
@@ -1970,7 +1971,18 @@ interface ShapeDefinition<Args extends ValidatorMap = ValidatorMap, Context = Qu
     readonly columns?: ReadonlyArray<string>;
     readonly owner?: string | true;
     readonly table: string;
+    readonly use?: ReadonlyArray<Middleware<never, unknown>>;
     readonly where?: (context: Context, args: InferValidatorMap<Args>) => WhereInput | boolean;
+}
+```
+
+### `ShapeGuardDeclaration` (interface)
+
+```ts
+interface ShapeGuardDeclaration {
+    readonly rlsRegistry: RlsReadRegistry;
+    readonly table: string;
+    readonly use?: ReadonlyArray<unknown>;
 }
 ```
 
@@ -2853,6 +2865,12 @@ const anyApi: AnyApi;
 const asBucketStorage: (raw: unknown) => unknown;
 ```
 
+### `assertShapesDeclareReadPolicies` (const)
+
+```ts
+const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
+```
+
 ### `beginDeferredSchedules` (const)
 
 ```ts
@@ -2880,7 +2898,7 @@ const buildMaskRegistry: (functions: Iterable<unknown>) => MaskRegistry;
 ### `buildRlsReadRegistry` (const)
 
 ```ts
-const buildRlsReadRegistry: (functions: Iterable<unknown>) => RlsReadRegistry;
+const buildRlsReadRegistry: (guards: Iterable<unknown>) => RlsReadRegistry;
 ```
 
 ### `cacheKeyFor` (const)

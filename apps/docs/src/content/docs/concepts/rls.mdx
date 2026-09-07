@@ -83,13 +83,22 @@ const documentPolicies = definePolicies([
   `insert`, the pre-write row on `update`/`delete`.
 - `ctx`: the full procedure context the middleware closed over.
 
-:::caution[A middleware's roles do not reach live shapes]
-Only the identity claim is read on both paths. `ctx.auth.roles` written by a
-middleware reaches queries, mutations and actions, but a **live shape runs no
-procedure** — so no middleware fires and the role list is empty there. A policy
-that restricts on a role (`!auth.roles.includes("restricted")`) then never takes
-its restricting branch on the shape path, and rows replicate over a subscription
-that the equivalent query withholds.
+:::caution[No policy reaches a live shape unless the shape names it]
+A **live shape runs no procedure**, so no `.use(rls(...))` middleware fires for
+it and none of the policies on this page apply to it by default. A shape declares
+its own guards with
+[`defineShape({ use })`](/docs/concepts/local-first#opting-a-shape-into-rls-use).
+
+1. **A shape that names no guard is filtered by its `where` alone.** Under
+   `.rls("required")` it replicates nothing (fail-closed); otherwise codegen
+   refuses to boot the app when the shape's table is governed on read, naming the
+   shape and the table. `use: []` says the omission is deliberate.
+2. **A middleware's roles do not reach a shape even when it does name the
+   guard.** Only the identity claim is read there: `ctx.auth.roles` written by a
+   middleware reaches queries, mutations and actions, but nothing runs to write it
+   on the shape path, so the role list is empty. A policy that restricts on a role
+   (`!auth.roles.includes("restricted")`) never takes its restricting branch, and
+   rows replicate over a subscription the equivalent query withholds.
 
 Derive roles at the identity, where both paths see them.
 [`createAccessResolver`](/docs/packages/cloudflare-access)'s `roles` option maps

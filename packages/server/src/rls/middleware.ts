@@ -14,8 +14,11 @@
  * and the reduction only sees policy-visible rows. `count` and the rank family
  * (`rank`/`rankBefore`/`rankPage`) are counts-of-partition that can't be safely
  * narrowed, so they fail closed with `COUNT_RLS_UNSUPPORTED` (kitcn's
- * documented constraint). Every method the wrapper doesn't override (e.g.
- * `normalizeId`, `system`) passes through untouched.
+ * documented constraint) — but only when the request's policies actually
+ * NARROW the table. A read policy that resolves to `true` here (an admin
+ * branch, a permission grant, a plain allow-all) yields no `baseWhere`, the
+ * count is exact, and it is served. Every method the wrapper doesn't override
+ * (e.g. `normalizeId`, `system`) passes through untouched.
  *
  * 2. **Writes** — wraps `insert`/`patch`/`replace`/`delete`. For an
  * `update`/`delete` it fetches the pre-write row through the *unwrapped* writer
@@ -28,6 +31,12 @@
  * chain includes this middleware. The `rls()` call site is the boundary;
  * procedures without it see the unwrapped `ctx.db` and ignore every policy in
  * the list. This is by design (PLAN2 §3.2).
+ *
+ * 4. **Composition** — several `rls()` steps in one chain COMPOSE. Reads
+ * AND-merge (each step narrows further; within a step the table's policies
+ * still OR) and a write must be allowed by every step that gates its table.
+ * A later step can therefore only tighten what an earlier one permitted, never
+ * widen it.
  *
  * What it deliberately does **not** touch:
  *
@@ -350,6 +359,52 @@ const FALSE_PREDICATE: WhereInput = deny();
 const RLS_UNWRAP_SYMBOL = Symbol.for("lunora.ctxdb.rls-unwrap");
 
 /**
+ * Key a wrapped writer carries its own accumulated policy chain under, so a
+ * SECOND `.use(rls(...))` step composes with the first instead of replacing it.
+ *
+ * Without it the second step recovered the raw writer and wrapped THAT, routing
+ * around step one entirely — a `rls([tenantScope])` followed by any other
+ * `rls(...)` served the whole table. Multiple steps are a supported shape
+ * (`protectPublic({ use })`, `composePluginMiddleware`, plain chained `.use`),
+ * so the chain has to be visible to the next step. Non-enumerable for the same
+ * reason {@link RLS_UNWRAP_SYMBOL} is: the wrapper is republished by spread.
+ *
+ * A `mask()` step BETWEEN two `rls()` steps ends the chain, on purpose. `mask()`
+ * republishes `ctx.db` by spread, which does not carry a non-enumerable key, so
+ * the second `rls()` wraps the MASK wrapper instead of resuming. That nesting is
+ * the correct one: resuming from the pre-mask writers would route policy tables
+ * around the mask and hand back the columns it redacts. The cost is that under
+ * `.rls("required")` a table only the LATER step gates is then reached through
+ * the earlier wrapper, which does not know it and defers to the guard — so it
+ * denies. Fail-closed, and the remedy is to declare both tables in one bundle.
+ */
+const RLS_CHAIN_SYMBOL = Symbol.for("lunora.rls.wrapped-chain");
+
+/**
+ * One `.use(rls(...))` step: the policies it declared, indexed by table, plus
+ * the request context they evaluate under. Contexts are erased to `unknown`
+ * because a chain's steps are independently typed — the same erasure the policy
+ * tag already applies (see {@link tagRlsMiddleware}).
+ */
+interface RlsStep {
+    readonly context: PolicyContext;
+    readonly perTable: ReadonlyMap<string, ReadonlyArray<Policy>>;
+}
+
+/** The chain a wrapped writer republishes so the next `rls()` step can extend it. */
+interface RlsChain {
+    /** The writer the FIRST step was handed — the guarded one under `.rls("required")`. */
+    readonly base: RlsDatabase;
+    /** The unwrapped writer every step's authorized reads/writes route through. */
+    readonly raw: RlsDatabase;
+    readonly steps: ReadonlyArray<RlsStep>;
+}
+
+/** Read the accumulated chain off a writer a previous `rls()` step wrapped; `undefined` for a bare writer. */
+const readChain = (database: RlsDatabase): RlsChain | undefined =>
+    (database as unknown as Record<PropertyKey, unknown>)[RLS_CHAIN_SYMBOL] as RlsChain | undefined;
+
+/**
  * Collect a per-table map from a flat policy list. Order within each table
  * is preserved so the merge below honors author-declared precedence.
  */
@@ -629,8 +684,27 @@ const intoCountArgs = (argument: CountArgs | undefined | WhereInput): CountArgs 
     return { where: argument as WhereInput };
 };
 
+/**
+ * Whether a computed read base actually narrows the rows a caller sees.
+ * `undefined` is "no policy predicate"; an EMPTY `WhereInput` is a predicate
+ * that matches every row, which {@link mergeBaseWhere} already drops on the
+ * floor — so the two are the same answer, and the count/rank fail-closed guard
+ * has to agree with the merge or a `when: () => ({})` policy would block counts
+ * it does not restrict.
+ */
+const narrowsReads = (baseWhere: undefined | WhereInput): baseWhere is WhereInput => baseWhere !== undefined && Object.keys(baseWhere).length > 0;
+
+/** AND together the per-step read bases of one table; `undefined` when no step contributed a predicate. */
+const intersectBaseWheres = (predicates: WhereInput[]): undefined | WhereInput => {
+    if (predicates.length === 0) {
+        return undefined;
+    }
+
+    return predicates.length === 1 ? predicates[0] : { AND: predicates };
+};
+
 const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | WhereInput): undefined | WhereInput => {
-    if (!injected || Object.keys(injected).length === 0) {
+    if (!narrowsReads(injected)) {
         return caller;
     }
 
@@ -675,8 +749,29 @@ const isFacadeEntry = (value: unknown): value is Record<string, unknown> => {
  * middleware's own policy-filtered reads/writes and membership probes don't
  * trip the guard. For a non-guarded (non-`required`) schema `base === raw`, so
  * the routing is a no-op and behavior is identical to before.
+ *
+ * `steps` is the WHOLE `.use(rls(...))` chain so far, not just this step's
+ * bundle: a second step rebuilds the wrapper over the same `base`/`raw` pair
+ * with its own step appended, so reads AND-compose and a write must satisfy
+ * every step (see `readBase` and `allowsWrite` below). Rebuilding rather than
+ * nesting is what keeps guard routing right — nesting would send a table only
+ * the SECOND step gates back through the first wrapper, which knows nothing
+ * about it and would hand it to the guard.
  */
-const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Map<string, Policy<Context>[]>, context: PolicyContext<Context>): RlsDatabase => {
+const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<RlsStep>): RlsDatabase => {
+    /**
+     * Every table any step in the chain gates. Replaces a single step's
+     * `perTable.has`.
+     *
+     * One step is the overwhelming majority of chains, and its `perTable` is
+     * already a keyed Map — so reuse it rather than copying its keys through an
+     * intermediate array into a fresh Set on every wrapper install (i.e. on every
+     * guarded query). Measured at ~17% of this path before the fast path.
+     */
+    const [onlyStep] = steps;
+    const policyTables: ReadonlyMap<string, unknown> | ReadonlySet<string> =
+        steps.length === 1 && onlyStep !== undefined ? onlyStep.perTable : new Set<string>(steps.flatMap((step) => [...step.perTable.keys()]));
+
     /**
      * Cached effective read `baseWhere` per table. Cached for the lifetime
      * of one wrapped writer — i.e. one request — so a single procedure
@@ -684,6 +779,22 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
      */
     const readBaseCache = new Map<string, { baseWhere: undefined | WhereInput; restricts: boolean }>();
 
+    /**
+     * The effective read filter for a table across the WHOLE chain.
+     *
+     * Within one `rls()` step the table's read policies OR (any matching policy
+     * reveals the row — {@link computeReadBaseWhere}). Across steps they AND:
+     * each `.use(rls(...))` is an additional restriction the request has to
+     * satisfy, exactly like stacking two `WHERE` clauses. A step that grants
+     * unrestricted access (`true`) contributes no predicate, so it narrows
+     * nothing; a step that denies contributes the FALSE sentinel and the AND
+     * denies.
+     *
+     * `restricts` says "some step declares a read policy on this table", which
+     * is what decides guard routing ({@link route}). It is deliberately NOT the
+     * same question as "is the result narrowed" — an allow-all policy on a
+     * protected table restricts nothing yet must still route around the guard.
+     */
     const readBase = (tableName: string): { baseWhere: undefined | WhereInput; restricts: boolean } => {
         const cached = readBaseCache.get(tableName);
 
@@ -691,22 +802,55 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             return cached;
         }
 
-        const policies = perTable.get(tableName);
+        const predicates: WhereInput[] = [];
+        let restricts = false;
 
-        if (!policies || policies.length === 0 || !policies.some((policy) => policy.on === "read")) {
-            const result = { baseWhere: undefined, restricts: false };
+        for (const step of steps) {
+            const policies = step.perTable.get(tableName);
 
-            readBaseCache.set(tableName, result);
+            if (!policies || policies.length === 0 || !policies.some((policy) => policy.on === "read")) {
+                continue;
+            }
 
-            return result;
+            restricts = true;
+
+            const stepBaseWhere = computeReadBaseWhere(policies, step.context);
+
+            if (stepBaseWhere !== undefined) {
+                predicates.push(stepBaseWhere);
+            }
         }
 
-        const baseWhere = computeReadBaseWhere(policies, context);
-        const result = { baseWhere, restricts: true };
+        const result = { baseWhere: intersectBaseWheres(predicates), restricts };
 
         readBaseCache.set(tableName, result);
 
         return result;
+    };
+
+    /**
+     * Run the write policies of every step that gates `tableName` for `op`.
+     * ALL of them must allow — the same "most restrictive wins" rule
+     * {@link evaluateWrite} applies within a step, lifted across the chain, so a
+     * second `.use(rls(...))` can only ever narrow what the first permits.
+     *
+     * A step whose policy bundle never names the table abstains: it neither
+     * grants nor denies. Note the corollary — a step that DOES name the table
+     * but declares no policy for this `op` denies it (`evaluateWrite`'s
+     * default-DENY), so chaining a read-only bundle with a write bundle over the
+     * same table denies the write. Declare the write policy in the same step
+     * that gates the table.
+     */
+    const allowsWrite = (tableName: string, op: Exclude<Policy["on"], "read">, row: Record<string, unknown>, nextRow?: Record<string, unknown>): boolean => {
+        for (const step of steps) {
+            const policies = step.perTable.get(tableName);
+
+            if (policies && !evaluateWrite(policies, op, { ...step.context, row }, nextRow)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     /**
@@ -748,11 +892,35 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
      * single probe, not their sum). The unwrapped `base.*` is intentionally
      * used so policy enforcement on writes doesn't recurse through itself.
      *
+     * A `lookupById` MISS falls through to the probe path rather than reporting
+     * "no such row": the seam is shard-local, so every `.global()` row misses it
+     * (those rows live in D1 and only `get`/`findFirst` reach them through the
+     * writer's global fallback). Reporting the miss as absent is what let
+     * `gateById` classify a global row as "in no policy-gated table" and perform
+     * update/delete with the policy never evaluated. Resolving global rows inside
+     * `lookupById` itself was the alternative; it would have to probe every
+     * global table across the D1 hop for a bare id, whereas falling through here
+     * keeps the common case — a shard-local row that hits — at the ONE round-trip
+     * the seam exists for, and charges the extra probes only to a miss.
+     *
+     * `probeTable` narrows the FALLBACK probe set without pinning the lookup.
+     * `expectedTable` does both, which `deleteAll`/`deleteWhere` cannot use: a
+     * pinned table blocks the writer's global fallback and turns every delete on
+     * a `.global()` table into a silent no-op. Those callers know the table
+     * anyway (their ids came from that table's own filtered read), so they pass
+     * it here instead — one probe per row rather than one per policy-gated
+     * table, which is what put a chunked erase into workerd's 1000-subrequest
+     * ceiling partway through.
+     *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →
      * callers fall through unrestricted).
      */
-    const locateRow = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locateRow = async (
+        id: string,
+        expectedTable?: string,
+        probeTable?: string,
+    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (raw.lookupById) {
             // Pin the lookup to the bound table when the by-id facade forwards
             // one, so a foreign id resolves to "absent" rather than another
@@ -761,13 +929,13 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             // not be denied by the secure-by-default guard.
             const located = await raw.lookupById(id, expectedTable);
 
-            if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-                return { row: null, tableName: undefined };
+            if (located) {
+                // Owned by a table that isn't policy-gated → tableName undefined.
+                return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
             }
 
-            // Owned by a table that isn't policy-gated → tableName undefined.
-            return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
+            // A miss is NOT "absent" — see the docblock: a `.global()` row can
+            // only be reached through the probe path below.
         }
 
         const row = await raw.get(id, expectedTable);
@@ -779,10 +947,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
         // Ids are globally unique, so at most one probe hits; settle all of
         // them in parallel and pick the hit instead of serializing the
-        // round-trips. When the facade pinned a table, only that table's policy
-        // can apply — restrict the probe set to it.
-        const pinnedProbe = expectedTable !== undefined && perTable.has(expectedTable) ? [expectedTable] : [];
-        const probeTables = expectedTable === undefined ? [...perTable.keys()] : pinnedProbe;
+        // round-trips. When the caller named a table — pinned via `expectedTable`
+        // or scoped via `probeTable` — only that table's policy can apply, so the
+        // probe set is that one table (or none, when it carries no policy).
+        const scopedTable = expectedTable ?? probeTable;
+        const probeTables = scopedTable === undefined ? [...policyTables.keys()] : [scopedTable].filter((table) => policyTables.has(table));
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
@@ -799,8 +968,12 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (id: string, expectedTable?: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
-        const located = await locateRow(id, expectedTable);
+    const findRowTable = async (
+        id: string,
+        expectedTable?: string,
+        probeTable?: string,
+    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(id, expectedTable, probeTable);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
@@ -830,8 +1003,9 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         perform: (writer: RlsDatabase) => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
         expectedTable?: string,
+        probeTable?: string,
     ): Promise<R> => {
-        const located = await findRowTable(id, expectedTable);
+        const located = await findRowTable(id, expectedTable, probeTable);
 
         if (!located) {
             // The id is in no policy-gated table (a non-policy table or absent).
@@ -842,21 +1016,16 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             return perform(base);
         }
 
-        const policies = perTable.get(located.tableName);
+        const nextRow = computeNextRow ? computeNextRow(located.row) : undefined;
 
-        if (policies) {
-            const nextRow = computeNextRow ? computeNextRow(located.row) : undefined;
-            const writeOk = evaluateWrite(policies, op, { ...context, row: located.row }, nextRow);
-
-            if (!writeOk) {
-                // Reject the denied write with FORBIDDEN — the intended, tested
-                // contract for an authorized-but-policy-denied mutation. SECURITY:
-                // do NOT interpolate the owning table name into the message (it was
-                // formerly `${op} on "${located.tableName}" denied by policy`) — an
-                // attacker holding a candidate id could otherwise learn which table
-                // a hidden record lives in. The generic message is table-agnostic.
-                throw new LunoraError("FORBIDDEN", `${op} denied by policy`);
-            }
+        if (!allowsWrite(located.tableName, op, located.row, nextRow)) {
+            // Reject the denied write with FORBIDDEN — the intended, tested
+            // contract for an authorized-but-policy-denied mutation. SECURITY:
+            // do NOT interpolate the owning table name into the message (it was
+            // formerly `${op} on "${located.tableName}" denied by policy`) — an
+            // attacker holding a candidate id could otherwise learn which table
+            // a hidden record lives in. The generic message is table-agnostic.
+            throw new LunoraError("FORBIDDEN", `${op} denied by policy`);
         }
 
         // Policy table, write authorized: perform on the UNGUARDED `raw` writer
@@ -866,20 +1035,30 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
     /**
      * Fail a count-of-partition read (`rank`/`rankBefore`/`rankPage`) closed
-     * when the table carries an active read policy. These depend on the full
-     * partition — a position or sorted page computed over rows the policy hides
-     * would either undercount or leak, so under RLS they're unsupported (the
-     * same `COUNT_RLS_UNSUPPORTED` constraint `count()` enforces). Returns the
-     * effective read `baseWhere` for the non-restricted pass-through case.
+     * when the table's read policies NARROW the visible rows. These depend on
+     * the full partition — a position or sorted page computed over rows the
+     * policy hides would either undercount or leak, so under a narrowing policy
+     * they're unsupported (the same `COUNT_RLS_UNSUPPORTED` constraint `count()`
+     * enforces).
+     *
+     * The test is the computed base, not the mere presence of a policy. A read
+     * policy that resolves to `true` for this request (`when: () => true`, an
+     * admin branch, a permission grant) produces NO `baseWhere` — the partition
+     * the caller sees is the whole partition, so the position and the page are
+     * exact and there is nothing to fail closed about. Keying off "a read policy
+     * exists" instead made every rank/count unreachable the moment a table was
+     * governed at all, including from the very procedures the policy admits.
+     *
+     * Returns nothing on purpose: not throwing MEANS the base is unrestricted,
+     * so there is no `baseWhere` for a caller to merge and each one forwards its
+     * own `options` untouched.
      */
-    const requireUnrestrictedReadBase = (tableName: string, method: string): undefined | WhereInput => {
-        const { baseWhere, restricts } = readBase(tableName);
+    const assertUnrestrictedReadBase = (tableName: string, method: string): void => {
+        const { baseWhere } = readBase(tableName);
 
-        if (restricts) {
+        if (narrowsReads(baseWhere)) {
             throw new LunoraError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
         }
-
-        return baseWhere;
     };
 
     // `rankBefore`/`rankPageRows` are the two analytical methods that may be
@@ -891,14 +1070,18 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
     const wrapped: RlsDatabase = {
         ...base,
         async count(tableName, whereOrArgs) {
-            const { baseWhere, restricts } = readBase(tableName);
+            const { baseWhere } = readBase(tableName);
             const args = intoCountArgs(whereOrArgs);
 
             return route(tableName).count(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
-                restrictsCounts: (args.restrictsCounts ?? false) || restricts,
+                // Flagged only when the policies actually NARROW the table — the
+                // writer refuses a count it cannot compute exactly, and an
+                // allow-all policy leaves it exactly computable. Same test as
+                // `assertUnrestrictedReadBase`; see its docblock.
+                restrictsCounts: (args.restrictsCounts ?? false) || narrowsReads(baseWhere),
             });
         },
 
@@ -934,10 +1117,22 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
                     // survive. It costs nothing here: these ids came from this table's
                     // own policy-filtered read, so they are provably its rows, and
                     // `gateById` still resolves each row's real table and applies that
-                    // table's delete policy. Same reasoning as `deleteWhere`, which hands
-                    // its ids to `deleteMany` unpinned.
+                    // table's delete policy. Same reasoning as `deleteWhere`.
+                    //
+                    // `tableName` rides along as the PROBE scope, which pins nothing:
+                    // unpinned, a row that misses the shard-local `lookupById` seam is
+                    // probed against every policy-gated table, so a chunked erase of N
+                    // global rows costs N × (policy tables) subrequests and trips
+                    // workerd's 1000-subrequest ceiling mid-erase.
                     // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                    await gateById(id, "delete", (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }));
+                    await gateById(
+                        id,
+                        "delete",
+                        (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }),
+                        undefined,
+                        undefined,
+                        tableName,
+                    );
                     deleted += 1;
                 }
 
@@ -980,7 +1175,17 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
             assertBatchLimit(ids.length, options?.limit, "deleteWhere");
 
-            return wrapped.deleteMany(ids, options);
+            // Gated per id here rather than through `deleteMany` so `tableName` can
+            // ride along as the probe scope: `expectedTable` must stay unpinned (it
+            // would block the writer's global fallback and make every global delete a
+            // silent no-op), and unpinned means every policy-gated table gets probed
+            // for every row. See `locateRow`.
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
+                await gateById(id, "delete", (writer) => writer.delete(id), undefined, undefined, tableName);
+            }
+
+            return { deleted: ids.length };
         },
 
         async findFirst(tableName, args) {
@@ -1109,12 +1314,8 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         },
 
         async insert(tableName, document) {
-            const policies = perTable.get(tableName);
-
-            if (policies) {
-                const writeOk = evaluateWrite(policies, "insert", { ...context, row: document });
-
-                if (!writeOk) {
+            if (policyTables.has(tableName)) {
+                if (!allowsWrite(tableName, "insert", document)) {
                     throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
                 }
 
@@ -1134,18 +1335,14 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             // the writer's own batch method, which re-checks it today).
             assertBatchLimit(documents.length, options?.limit, "insertMany");
 
-            const policies = perTable.get(tableName);
-
-            if (policies) {
+            if (policyTables.has(tableName)) {
                 // Evaluate the insert policy against each candidate row, then
                 // delegate the whole batch to the UNGUARDED `raw` writer (whose
                 // batch method re-checks the payload cap). A single denial throws;
                 // in a mutation the DO's BEGIN/COMMIT span rolls the whole batch
                 // back, in an action (no span) prior inserts persist.
                 for (const document of documents) {
-                    const writeOk = evaluateWrite(policies, "insert", { ...context, row: document });
-
-                    if (!writeOk) {
+                    if (!allowsWrite(tableName, "insert", document)) {
                         throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
                     }
                 }
@@ -1160,18 +1357,14 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         async insertManyUnsafe(tableName, documents, options) {
             assertBatchLimit(documents.length, options?.limit, "insertManyUnsafe");
 
-            const policies = perTable.get(tableName);
-
-            if (policies) {
+            if (policyTables.has(tableName)) {
                 // "Unsafe" skips per-row validators/triggers at the writer, NOT the
                 // insert policy: each candidate row is still authorized here before
                 // the batch routes to the UNGUARDED `raw` writer. (Overriding this is
                 // mandatory — the `...base` spread would otherwise expose the guard's
                 // version, which checks only the table, skipping the row policy.)
                 for (const document of documents) {
-                    const writeOk = evaluateWrite(policies, "insert", { ...context, row: document });
-
-                    if (!writeOk) {
+                    if (!allowsWrite(tableName, "insert", document)) {
                         throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
                     }
                 }
@@ -1297,7 +1490,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         // `groupBy` are scoped to `where`, so the read `baseWhere` is AND-merged
         // and the reduction only sees policy-visible rows. `rank` / `rankPage`
         // are counts-of-partition that can't be safely narrowed, so they fail
-        // closed under a read policy (see `requireUnrestrictedReadBase`).
+        // closed under a read policy (see `assertUnrestrictedReadBase`).
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
@@ -1319,15 +1512,15 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         },
 
         rank(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rank");
+            assertUnrestrictedReadBase(tableName, "rank");
 
-            return route(tableName).rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return route(tableName).rank(tableName, indexName, options);
         },
 
         rankPage(tableName, indexName, options) {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
+            assertUnrestrictedReadBase(tableName, "rankPage");
 
-            return route(tableName).rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+            return route(tableName).rankPage(tableName, indexName, options);
         },
 
         wipeShard() {
@@ -1353,7 +1546,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
         // closed for the same reason `rankPage` does: its rows carry partition
         // rank keys that cannot be reduced under a row policy.
         ...optionalWriterOverride("rankBefore", baseRankBefore, (rankBefore) => (tableName: string, indexName: string, options: RankBeforeArgs) => {
-            requireUnrestrictedReadBase(tableName, "rankBefore");
+            assertUnrestrictedReadBase(tableName, "rankBefore");
 
             // Route to the policy/non-policy writer; both carry `rankBefore` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
@@ -1361,15 +1554,12 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             return (target.rankBefore ?? rankBefore)(tableName, indexName, options);
         }),
         ...optionalWriterOverride("rankPageRows", baseRankPageRows, (rankPageRows) => (tableName: string, indexName: string, options?: RankPageArgs) => {
-            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPageRows");
+            assertUnrestrictedReadBase(tableName, "rankPageRows");
 
             // Route to the policy/non-policy writer; both carry `rankPageRows` when `base` does (the guard spreads `raw`).
             const target = route(tableName);
 
-            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, {
-                ...options,
-                baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere),
-            });
+            return (target.rankPageRows ?? rankPageRows)(tableName, indexName, options);
         }),
     };
 
@@ -1403,13 +1593,25 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
     // the runtime's own bindings untouched.
     const writableFacade = wrapped as unknown as Record<string, unknown>;
 
-    if (perTable.size > 0) {
+    if (policyTables.size > 0) {
         for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
             if (isFacadeEntry(entry)) {
                 writableFacade[tableName] = bindTableFacade(wrapped, tableName);
             }
         }
     }
+
+    // Publish the chain so a following `.use(rls(...))` extends it rather than
+    // replacing it. Non-enumerable: a wrapper is republished by spread (this
+    // function's own `...base`, and the facade binder's), and a chain that rode
+    // one of those spreads would attach a stale request's policies to a writer
+    // that is not this one.
+    Object.defineProperty(wrapped, RLS_CHAIN_SYMBOL, {
+        configurable: true,
+        enumerable: false,
+        value: { base, raw, steps } satisfies RlsChain,
+        writable: false,
+    });
 
     return wrapped;
 };
@@ -1569,7 +1771,11 @@ const resolvePolicyAuth = async (
 };
 
 const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options: RlsOptions = {}): Middleware<Context, Context> => {
-    const perTable = indexByTable(policies);
+    // Erased once here (rather than at each use) so the per-request step can be
+    // carried alongside steps declared by other `rls()` calls with their own
+    // context types — the same erasure `tagRlsMiddleware` stores.
+    const erased = policies as ReadonlyArray<Policy>;
+    const perTable = indexByTable(erased);
     const rolePermissions = indexRolePermissions(options.roles);
 
     const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
@@ -1580,9 +1786,16 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         // tables it authorizes without tripping the guard. A non-guarded writer
         // doesn't carry the symbol, so `raw` falls back to `ctx.db` and the
         // wrapper behaves exactly as before (`base === raw`).
+        //
+        // When `ctx.db` is itself a wrapper an earlier `.use(rls(...))` built, its
+        // chain supplies the ORIGINAL base/raw pair and the steps so far, and this
+        // step is appended — policies compose instead of the later step routing
+        // around the earlier one.
         const guarded = ctx.db;
-        const raw = ((guarded as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as RlsDatabase | undefined) ?? guarded;
-        const wrapped = wrapDatabase<Context>(guarded, raw, perTable, policyContext);
+        const chain = readChain(guarded);
+        const base = chain?.base ?? guarded;
+        const raw = chain?.raw ?? ((guarded as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as RlsDatabase | undefined) ?? guarded;
+        const wrapped = wrapDatabase(base, raw, [...(chain?.steps ?? []), { context: policyContext, perTable }]);
         // `next({ ctx: extension })` expects an extension shape. We replace
         // `db` (carrying the re-bound per-table facade), and — when present —
         // `orm`: it's a sibling ctx field (codegen's `bindOrm`) bound to the
@@ -1610,7 +1823,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
     // these (see `shape-read-base.ts`). Cast to the erased `Policy<unknown>`
     // the tag stores; the closures are evaluated against a structurally-built
     // PolicyContext, exactly like this middleware does at request time.
-    return tagRlsMiddleware(middleware, [{ policies: policies as ReadonlyArray<Policy>, roles: options.roles ?? [] }]);
+    return tagRlsMiddleware(middleware, [{ policies: erased, roles: options.roles ?? [] }]);
 };
 
 export { rls };
