@@ -535,7 +535,7 @@ export const sendMessage = defineMutator({
             };
 
             it("registers shapes into LUNORA_SHAPES and overrides resolveShape on the DO", () => {
-                expect.assertions(9);
+                expect.assertions(10);
 
                 writeShapes();
 
@@ -559,6 +559,38 @@ export const sendMessage = defineMutator({
                 // read policies unions them, and a single allow-all policy inside an
                 // admin-only procedure then unrestricted every shape on that table.
                 expect(result.generated.shard).not.toContain("buildRlsReadRegistry");
+                // No read policy anywhere in the project ⇒ nothing for a shape to
+                // replicate around, so the boot-time guard is not stamped either.
+                expect(result.generated.shard).not.toContain("assertShapesDeclareReadPolicies");
+            });
+
+            it("stamps the boot-time guard when a shape's table is governed on read but the shape names no use()", () => {
+                expect.assertions(2);
+
+                writeShapes();
+                // A query tenant-scopes `messages` on read. The shape above declares no
+                // `use`, so its registry is empty and it would replicate the channel
+                // filter alone — every tenant's rows, silently. Codegen hands the runtime
+                // the governed tables; `@lunora/server` holds the verdict, because only
+                // the registry knows whether `use` was written.
+                writeFileSync(
+                    join(workdir, "lunora", "guarded.ts"),
+                    `import { query, rls } from "@lunora/server";
+export const listMessages = query
+    .use(rls([{ on: "read", table: "messages", when: ({ auth }) => ({ tenantId: auth.userId }) }]))
+    .query(async () => []);
+`,
+                    "utf8",
+                );
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain(
+                    'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
+                );
+                /* eslint-enable no-secrets/no-secrets */
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {

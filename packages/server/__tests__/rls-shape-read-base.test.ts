@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    assertShapesDeclareReadPolicies,
     buildRlsReadRegistry,
     composeShapeReadWhere,
     definePermission,
@@ -337,5 +338,110 @@ describe("defineShape — RLS scope is the shape's own use() guards", () => {
         });
 
         expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, rlsRequired: true })).toStrictEqual({ OR: [] });
+    });
+});
+
+/**
+ * The OTHER direction of that scoping: a shape that declares no `use` at all.
+ *
+ * Under `.rls("required")` it denies, which is safe. Under the opt-in default it
+ * replicates on its own `where` alone — so an app whose `messages` table is
+ * tenant-scoped on every query, and whose shape only narrows to a channel, went
+ * from `{ AND: [{ channelId }, { tenantId }] }` to `{ channelId }` with no error
+ * and no diagnostic. `assertShapesDeclareReadPolicies` is what makes that loud:
+ * codegen stamps it into the generated shard with the tables the project's
+ * `rls()` chains govern on read, and it refuses to boot.
+ */
+describe("assertShapesDeclareReadPolicies", () => {
+    const tenantMessages = definePolicy({
+        on: "read",
+        table: "messages",
+        when: ({ auth }) => {
+            return { tenantId: (auth.identity as null | { tenantId?: string })?.tenantId };
+        },
+    });
+
+    const channelMessages = defineShape({
+        table: "messages",
+        where: () => {
+            return { channelId: "c1" };
+        },
+    });
+
+    it("a guard-less shape on a governed table replicates unfiltered — and is refused at boot", () => {
+        expect.assertions(3);
+
+        // The fail-open, concretely: the project's tenant policy exists (a query
+        // declares it), the shape declares no `use`, and what replicates is the
+        // channel filter alone — every tenant's messages in that channel.
+        const composed = composeShapeReadWhere(channelMessages.rlsRegistry, {
+            ctx: {},
+            identity: { tenantId: "t1" },
+            rlsRequired: false,
+            shapeWhere: { channelId: "c1" },
+            table: "messages",
+            tablePublic: false,
+            userId: "u1",
+        });
+
+        expect(composed).toStrictEqual({ channelId: "c1" });
+
+        // The equivalent query IS tenant-scoped, which is the asymmetry.
+        const viaQuery = buildRlsReadRegistry([guardedQuery(definePolicies([tenantMessages]))]);
+
+        expect(
+            composeShapeReadWhere(viaQuery, {
+                ctx: {},
+                identity: { tenantId: "t1" },
+                rlsRequired: false,
+                shapeWhere: { channelId: "c1" },
+                table: "messages",
+                tablePublic: false,
+                userId: "u1",
+            }),
+        ).toStrictEqual({ AND: [{ tenantId: "t1" }, { channelId: "c1" }] });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["messages"], false);
+        }).toThrow(/"channelMessages" \(table "messages"\)/u);
+    });
+
+    it("accepts a shape that names its guards, and `use: []` as the explicit acknowledgement", () => {
+        expect.assertions(2);
+
+        const guarded = defineShape({
+            table: "messages",
+            use: [rls(definePolicies([tenantMessages]))],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+        const acknowledged = defineShape({
+            table: "messages",
+            use: [],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ guarded }, ["messages"], false);
+        }).not.toThrow();
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ acknowledged }, ["messages"], false);
+        }).not.toThrow();
+    });
+
+    it("stays quiet for an ungoverned table, and under .rls('required') where the omission already denies", () => {
+        expect.assertions(2);
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["notes"], false);
+        }).not.toThrow();
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["messages"], true);
+        }).not.toThrow();
     });
 });
