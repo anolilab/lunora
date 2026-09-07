@@ -980,6 +980,21 @@ class LunoraClient {
     private readonly hydratedQueryCache = new Map<string, CachedQuery>();
 
     /**
+     * The read-cache entries currently ON DISPLAY in a live subscription, by the
+     * same key — every entry consumed out of `hydratedQueryCache` and not yet
+     * overwritten by a server frame.
+     *
+     * Gating the cache at read time only protects a value not handed over YET.
+     * A credential can change while a cached value is already on screen (the
+     * account-switch shape: an established subject, a token it was never checked
+     * against), and the fingerprint does not move with it — so nothing else
+     * would notice. `revokeCacheSeededValues` takes those values back off
+     * screen and returns the entries to `hydratedQueryCache`, where the ordinary
+     * identity gate decides whether they may ever be shown again.
+     */
+    private readonly cacheSeededQueries = new Map<string, CachedQuery>();
+
+    /**
      * Coalesced read-cache writes: the latest value per key, flushed to
      * the `queryCache` on a short debounce so a burst of deltas persists once.
      */
@@ -1362,6 +1377,7 @@ class LunoraClient {
         // migrating (rather than dropping) the queue safe. An unestablished
         // subject is the first-resolve case and equally safe.
         const subjectWasConfirmed = this.authSubject === undefined || this.subjectToken === this.authToken;
+        const wasAwaitingReconfirm = this.subjectAwaitingReconfirm();
 
         this.authToken = token;
         // Sticky: only an explicit value (incl. `null` = sign-out) changes the
@@ -1436,6 +1452,8 @@ class LunoraClient {
                 }
             }
         }
+
+        this.syncReadCacheToCredential(wasAwaitingReconfirm);
 
         // Notify token listeners only on an actual token change (useAuth refetch).
         if (tokenChanged) {
@@ -3709,6 +3727,10 @@ class LunoraClient {
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
             this.subscriptions.add(state);
+
+            if (cached !== undefined) {
+                this.cacheSeededQueries.set(key, cached);
+            }
         }
 
         state.callbacks.add(subscriptionCallback);
@@ -4101,6 +4123,7 @@ class LunoraClient {
         this.subscriptions.clear();
         this.clientQueryStore.clear();
         this.hydratedQueryCache.clear();
+        this.cacheSeededQueries.clear();
 
         // Stop cross-tab coordination and release the BroadcastChannel.
         this.tabCoordinator?.stop();
@@ -4371,6 +4394,10 @@ class LunoraClient {
                 }
 
                 state.serverBase = data;
+
+                // The leader's frame replaces the cache seed — same bookkeeping
+                // the leader's own `handleDataMessage` does.
+                this.dropCacheSeed(key);
 
                 // `cursor` rides the broadcast only from a CLIENT-01-aware
                 // leader tab. When present, advance this follower's own resume
@@ -4739,7 +4766,68 @@ class LunoraClient {
             state.serverEpoch = entry.serverEpoch;
         }
 
+        this.cacheSeededQueries.set(queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey), entry);
+
         notifySubscription(state, foldOptimistic(entry.value, state.optimisticLayers));
+    }
+
+    /**
+     * Move the durable read cache in or out of view as the CREDENTIAL changes —
+     * which the identity fingerprint does not track: a sticky subject rides
+     * across a token change (the account-switch shape), leaving the label
+     * unmoved, so `setAuthToken`'s identity-change block never runs for it.
+     * Revoke while that pairing is unchecked, and hand the values back once the
+     * next session resolve confirms the credential really is that subject's.
+     */
+    private syncReadCacheToCredential(wasAwaitingReconfirm: boolean): void {
+        if (this.subjectAwaitingReconfirm()) {
+            this.revokeCacheSeededValues();
+        } else if (wasAwaitingReconfirm) {
+            this.reseedFromHydratedCache();
+        }
+    }
+
+    /**
+     * A server frame owns this key now, so the read cache may neither take its
+     * seeded value back ({@link revokeCacheSeededValues}) nor hold an entry for
+     * a later `subscribe()` of the same key to replay a stale session over.
+     */
+    private dropCacheSeed(key: string): void {
+        this.cacheSeededQueries.delete(key);
+        this.hydratedQueryCache.delete(key);
+    }
+
+    /**
+     * Take every value the durable read cache is currently displaying back off
+     * screen, and return its entry to {@link hydratedQueryCache} so the identity
+     * gate — not this call — decides whether it is ever shown again. A
+     * same-credential refresh gets its offline-first value back the moment the
+     * next session resolve re-confirms the subject; a genuine account switch
+     * never does, and {@link clearQueryCacheForIdentityChange} wipes it.
+     *
+     * Only cache-seeded values: a server frame has been delivered under a socket
+     * whose own identity is pinned and checked ({@link persistQueryValue}), and
+     * dropping those would blank a live query on every token refresh.
+     */
+    private revokeCacheSeededValues(): void {
+        if (this.cacheSeededQueries.size === 0) {
+            return;
+        }
+
+        for (const [key, entry] of this.cacheSeededQueries) {
+            const state = this.subscriptions.get(key);
+
+            if (state !== undefined) {
+                state.serverBase = undefined;
+                state.serverCursor = undefined;
+                state.serverEpoch = undefined;
+                notifySubscription(state, foldOptimistic(undefined, state.optimisticLayers));
+            }
+
+            this.hydratedQueryCache.set(key, entry);
+        }
+
+        this.cacheSeededQueries.clear();
     }
 
     /**
@@ -4835,7 +4923,10 @@ class LunoraClient {
             // Only stamp the credential when the delivering identity IS the one
             // this client holds a token for — a frame from a previous user's
             // still-open socket must not be labelled with the current bearer.
-            ...(identity === this.identityFingerprint() ? this.credentialStamp() : {}),
+            // Nor while the subject awaits re-confirmation: the label and the
+            // token in hand are the pairing nothing has checked, so stamping
+            // would file this user's rows under the NEXT user's credential.
+            ...(identity === this.identityFingerprint() && !this.subjectAwaitingReconfirm() ? this.credentialStamp() : {}),
             ...(state.serverEpoch === undefined ? {} : { serverEpoch: state.serverEpoch }),
             ...(this.persistenceVersion === undefined ? {} : { version: this.persistenceVersion }),
         });
@@ -6471,6 +6562,8 @@ class LunoraClient {
         // byte-identical to the historical behaviour.
         state.serverBase = payload;
 
+        this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
+
         // Advance the resume cursor + epoch when the frame carries them
         // (CDC-enabled shard); replayed as `sinceSeq` / `sinceEpoch` on the
         // next reconnect.
@@ -6844,9 +6937,18 @@ class LunoraClient {
      * `setAuthToken(token)` from storage and only learns the subject a
      * `/get-session` round trip later — which offline never completes at all.
      * Without it the durable read cache never seeded for a bearer-token app.
+     *
+     * Case 1 is suspended while the subject awaits re-confirmation
+     * ({@link subjectAwaitingReconfirm}): the fingerprint then labels a
+     * credential nothing has checked it against, which is precisely the
+     * account-switch shape — `setAuthToken(otherAccountsToken)` with no subject,
+     * what every adapter does on a reload, still reading `subj:<previous user>`.
+     * Matching on that label alone hands the new account the previous account's
+     * cached rows. Cases 2 and 3 both PROVE the credential, so the reload this
+     * gate exists for still seeds.
      */
     private cachedQueryMatchesIdentity(entry: CachedQuery): boolean {
-        if (entry.identity === this.identityFingerprint()) {
+        if (!this.subjectAwaitingReconfirm() && entry.identity === this.identityFingerprint()) {
             return true;
         }
 
@@ -7061,6 +7163,10 @@ class LunoraClient {
      * the durable `clear()` is best-effort.
      */
     private clearQueryCacheForIdentityChange(): void {
+        // Values ALREADY handed to a live subscription are part of that cache;
+        // take them back first so the clear below covers them too.
+        this.revokeCacheSeededValues();
+
         if (this.cacheFlushTimer !== undefined) {
             clearTimeout(this.cacheFlushTimer);
             this.cacheFlushTimer = undefined;

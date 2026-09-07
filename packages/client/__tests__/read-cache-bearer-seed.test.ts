@@ -193,6 +193,82 @@ describe("durable read cache on a bearer-token reload", () => {
         client.close();
     });
 
+    /**
+     * The other side of the same relabel: the sticky subject rides onto a token
+     * nothing has checked it against — `setAuthToken(token)` with no subject,
+     * which is what every adapter does on a reload, and what a switched account
+     * looks like from here. The fingerprint still reads `subj:user-1`, so an
+     * entry stamped with it matched on the label alone and handed the NEW
+     * account the previous account's cached rows.
+     */
+    it("refuses an entry stamped with a subject the credential in hand was never checked against", async () => {
+        expect.hasAssertions();
+
+        const queryCache = createInMemoryQueryCache();
+
+        await writeCache(queryCache, "tok-abc");
+
+        sockets.length = 0;
+
+        const client = makeClient(queryCache);
+
+        await client.whenReady();
+        client.setAuthToken("tok-abc", "user-1");
+        client.setAuthToken("tok-second-account");
+
+        let seeded: unknown;
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            seeded = value;
+        });
+
+        expect(seeded).toBeUndefined();
+        expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
+
+        client.close();
+    });
+
+    it("takes an already-seeded value back off screen for as long as the subject is unconfirmed", async () => {
+        expect.hasAssertions();
+
+        const queryCache = createInMemoryQueryCache();
+
+        await writeCache(queryCache, "tok-abc");
+
+        sockets.length = 0;
+
+        const client = makeClient(queryCache);
+
+        await client.whenReady();
+        client.setAuthToken("tok-abc");
+
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            seen.push(value);
+        });
+
+        // Seeded by credential, then relabelled onto the resolved subject.
+        expect(seen.at(-1)).toStrictEqual([{ _id: "t1", text: "cached row" }]);
+
+        client.setAuthToken("tok-abc", "user-1");
+        // The reload/switch: another credential under the same sticky label. The
+        // value on screen came from the cache, so it goes back to the cache.
+        client.setAuthToken("tok-second-account");
+
+        expect(seen.at(-1)).toBeUndefined();
+        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ present: true, value: undefined });
+        expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
+
+        // ...and comes back once the session resolve says the new credential is
+        // that same user's after all (a plain token refresh).
+        client.setAuthToken("tok-second-account", "user-1");
+
+        expect(seen.at(-1)).toStrictEqual([{ _id: "t1", text: "cached row" }]);
+
+        client.close();
+    });
+
     it("still refuses an entry cached by a different credential", async () => {
         expect.hasAssertions();
 
