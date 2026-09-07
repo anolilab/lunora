@@ -1014,21 +1014,21 @@ export type {
     InferredWorkflow,
     WorkerEntry,
 };
-// `COMPOSED_WORKER_ENTRY`, `WORKER_ENTRY_FALLBACKS` and `isTypeOnlyExportEntry`
+// `COMPOSED_WORKER_ENTRY`, `WORKER_ENTRY_FALLBACKS` and `LUNORA_WORKER_VIRTUAL_ID`
 // are shared with the wrangler validator's exported-class check, which answers
 // the same question ("which classes does the entry export as runtime values?")
 // against the same file. The validator keeps its own path resolver because it
 // resolves `main` from the `--env` view relative to the config file, which this
 // one (deliberately projectRoot-relative, and reading the top level) does not.
+//
+// It also keeps its own READER: this side lexes with `es-module-lexer` (it is
+// already lexing the same file's IMPORTS for capability inference), the
+// validator parses with ts-morph. That is a real duplication and the two can
+// disagree — this one PROVISIONS a binding, the other now BLOCKS a deploy on
+// one — so they are worth collapsing onto the ts-morph reader. Not done here:
+// this side feeds `reconcile`, and changing what it provisions is a separate
+// change from fixing what the validator reports.
 // `resolveWorkerEntry` returns a {@link WorkerEntry}, not a path: the class-A
 // composed entry (`main: "virtual:lunora/worker"`) has no file, and reading that
 // as "no worker entry" is what left every container/workflow/agent unprovisioned.
-export {
-    COMPOSED_WORKER_ENTRY,
-    inferLunoraBindings,
-    isTypeOnlyExportEntry,
-    LUNORA_WORKER_VIRTUAL_ID,
-    packageNamesFromBindings,
-    resolveWorkerEntry,
-    WORKER_ENTRY_FALLBACKS,
-};
+export { COMPOSED_WORKER_ENTRY, inferLunoraBindings, LUNORA_WORKER_VIRTUAL_ID, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };

@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.234...@lunora/cli@1.0.0-alpha.235) (2026-09-07)
+
+### Bug Fixes
+
+* **config:** fail validation on a Durable Object class the worker entry does not export ([#653](https://github.com/anolilab/lunora/issues/653)) ([b7ddc20](https://github.com/anolilab/lunora/commit/b7ddc2091e362ee4c592e3113f01e4fe5e89d378))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.202
+
 ## @lunora/cli [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.233...@lunora/cli@1.0.0-alpha.234) (2026-09-07)
 
 
