@@ -19,11 +19,17 @@ import java.util.Locale
 object Json {
     /**
      * Levels of ENVELOPE a wire value can sit under before its own nesting
-     * starts. Every payload arrives wrapped: `{"result": V}` is one, and the two
-     * deepest — a batch response `{"results":[{"result": V}]}` and a poke part
-     * `{"rowsPatch":[{"value": V}]}` — are three.
+     * starts. Every payload arrives wrapped: `{"result": V}` is one, a poke part
+     * `{"rowsPatch":[{"value": V}]}` is three, and the deepest is a batch
+     * response — `{"results":[{"id","status","body":{"result": V}}]}`, per
+     * protocol/README.md §4.3 — which is FOUR. It was written as three against a
+     * `{"results":[{"result": V}]}` that no server sends, so a flush through
+     * `/_lunora/rpc-batch` whose result nested to the wire cap made the whole 200
+     * body unparseable: a successful batch of durable writes read as a transport
+     * failure and retried forever, while the same value on the single-call path
+     * parsed.
      */
-    private const val MAX_ENVELOPE_DEPTH: Int = 3
+    private const val MAX_ENVELOPE_DEPTH: Int = 4
 
     /**
      * The parser's own nesting cap, counted from the DOCUMENT root.

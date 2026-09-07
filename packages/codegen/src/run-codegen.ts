@@ -72,6 +72,7 @@ import discoverStaleMigrationImports from "./discover/stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
@@ -741,14 +742,20 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   wranglerVariables: options.wranglerVariables,
               });
 
-    // A binding whose TYPE is a registered procedure but which never reached
-    // `api.ts` was dropped by the syntactic scan. Reported alongside the
-    // advisor's findings so it travels the same channel to the terminal and the
-    // studio.
+    // Two ways a procedure reaches `api.ts` wrong, both silent until now, both
+    // reported alongside the advisor's findings so they travel the same channel
+    // to the terminal and the studio: a binding whose TYPE is a registered
+    // procedure but which never reached `api.ts` at all (dropped by the
+    // syntactic scan), and one that did reach it carrying fewer arguments than
+    // the runtime enforces (an argument record codegen could not read).
     const advisories =
         advisorContext === undefined
             ? []
-            : [...runAdvisor(advisorContext, { source: "static" }), ...discoverUnregisteredProcedures(project, lunoraDirectory, functions)];
+            : [
+                  ...runAdvisor(advisorContext, { source: "static" }),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, functions),
+                  ...discoverUnreadableArguments(project, lunoraDirectory),
+              ];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically

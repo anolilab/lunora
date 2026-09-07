@@ -298,3 +298,37 @@ const queueDefaultName: (exportName: string) => string;
 ```ts
 const shouldCaptureQueue: (env: QueueEnv) => boolean;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `DispatchOptions` (interface)
+
+```ts
+interface DispatchOptions {
+    capture?: QueueCaptureSink;
+    env: Record<string, unknown>;
+    fetchImpl?: typeof fetch;
+    traceparent?: string;
+}
+```
+
+### `QueueMessageOutcome` (type)
+
+```ts
+type QueueMessageOutcome = "ack" | "error" | "retry";
+```
+
+### `RunContextOptions` (interface)
+
+```ts
+interface RunContextOptions {
+    env: Record<string, unknown>;
+    exportName: string;
+    fetchImpl?: typeof fetch;
+    traceparent?: string;
+}
+```

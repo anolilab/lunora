@@ -926,3 +926,170 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `createUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AgentApprovalReference` (type)
+
+```ts
+type AgentApprovalReference = FunctionReference<"mutation", {
+    decision: "approve" | "reject";
+    instanceId: string;
+    note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentLiveStreamReference` (type)
+
+```ts
+type AgentLiveStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AgentMessagesReference` (type)
+
+```ts
+type AgentMessagesReference = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentMessagesReference$1` (type)
+
+```ts
+type AgentMessagesReference$1 = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentThreadReference` (type)
+
+```ts
+type AgentThreadReference = FunctionReference<"query", {
+    key: string;
+}, Record<string, unknown> | undefined>;
+```
+
+### `AgentTokenStreamReference` (type)
+
+```ts
+type AgentTokenStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AuthGate` (type)
+
+```ts
+type AuthGate = (props: AuthGateProps) => SolidElement;
+```
+
+### `AuthGateProps` (interface)
+
+```ts
+interface AuthGateProps {
+    children: SolidChildren;
+}
+```
+
+### `CreateMicrophone` (type)
+
+```ts
+type CreateMicrophone = (config: MicrophoneConfig) => Promise<VoiceMicrophone>;
+```
+
+### `CreateSocket` (type)
+
+```ts
+type CreateSocket = (url: string) => VoiceSocket;
+```
+
+### `CreateSpeaker` (type)
+
+```ts
+type CreateSpeaker = (config: {
+    audioFormat: VoiceAudioFormat;
+}) => VoiceSpeaker;
+```
+
+### `MaybeAccessor` (type)
+
+```ts
+type MaybeAccessor<T> = Accessor<T> | T;
+```
+
+### `MicrophoneConfig` (interface)
+
+```ts
+interface MicrophoneConfig {
+    interruptChunks: number;
+    interruptThreshold: number;
+    isTurnActive: () => boolean;
+    onAudio: (pcm: Uint8Array) => void;
+    onInterrupt: () => void;
+    onLevel: (rms: number) => void;
+    onSilence: () => void;
+    silenceDurationMs: number;
+    silenceThreshold: number;
+}
+```
+
+### `SolidChildrenArray` (interface)
+
+```ts
+interface SolidChildrenArray extends Array<SolidChildren> {
+}
+```
+
+### `SolidElement` (type)
+
+```ts
+type SolidElement = any;
+```
+
+### `VoiceMicrophone` (interface)
+
+```ts
+interface VoiceMicrophone {
+    setMuted: (muted: boolean) => void;
+    stop: () => void;
+}
+```
+
+### `VoiceSocket` (interface)
+
+```ts
+interface VoiceSocket {
+    binaryType: string;
+    close: () => void;
+    onclose: ((event: unknown) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onmessage: ((event: {
+        data: unknown;
+    }) => void) | null;
+    onopen: ((event: unknown) => void) | null;
+    readonly readyState: number;
+    send: (data: ArrayBufferView | ArrayBufferLike | string) => void;
+}
+```
+
+### `VoiceSpeaker` (interface)
+
+```ts
+interface VoiceSpeaker {
+    enqueue: (audio: Uint8Array) => void;
+    interrupt: () => void;
+    stop: () => void;
+}
+```

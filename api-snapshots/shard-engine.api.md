@@ -3660,6 +3660,12 @@ const decodeBigintSqlKey: (raw: string) => bigint | undefined;
 const decodeCursor: (cursor: string) => unknown[];
 ```
 
+### `decodeFloat64SqlKey` (const)
+
+```ts
+const decodeFloat64SqlKey: (raw: string) => number | undefined;
+```
+
 ### `deleteGlobalShapeSnapshot` (const)
 
 ```ts
@@ -3814,6 +3820,12 @@ const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "erro
     code: string;
     message: string;
 }) => void;
+```
+
+### `float64SqlKey` (const)
+
+```ts
+const float64SqlKey: (value: number) => string;
 ```
 
 ### `foldAggregateTally` (const)
@@ -4910,4 +4922,346 @@ interface EngineVitestApi {
 
 ```ts
 const defineEngineContractSuite: (name: string, factory: EngineHostFactory, vitest: EngineVitestApi) => void;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ApplyOnDeleteOptions` (interface)
+
+```ts
+interface ApplyOnDeleteOptions {
+    deletedId: string;
+    deletedReference: (references: string) => unknown;
+    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    onCascade: (holderTable: string, id: string) => Promise<void>;
+    onRestrict: (message: string) => never;
+    onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
+    schema: {
+        readonly tables: Record<string, TableDefinitionLike>;
+    };
+    tableName: string;
+}
+```
+
+### `DataMigrationContext` (interface)
+
+```ts
+interface DataMigrationContext {
+    db: DataMigrationReader;
+}
+```
+
+### `DataMigrationReader` (type)
+
+```ts
+type DataMigrationReader = Pick<DatabaseWriterLike, "count" | "findFirst" | "findMany" | "get">;
+```
+
+### `DrainableSink` (interface)
+
+```ts
+interface DrainableSink {
+    readonly bufferedAmount?: unknown;
+}
+```
+
+### `DurableStreamChunk` (interface)
+
+```ts
+interface DurableStreamChunk {
+    dataJson: string;
+    seq: number;
+}
+```
+
+### `DurableStreamStatus` (type)
+
+```ts
+type DurableStreamStatus = "complete" | "error" | "running";
+```
+
+### `ExistsPushMode` (type)
+
+```ts
+type ExistsPushMode = "always" | "auto";
+```
+
+### `FanoutAttachmentLike` (interface)
+
+```ts
+interface FanoutAttachmentLike {
+    shapes?: Record<string, {
+        name?: string;
+    }>;
+    whispers?: string[];
+}
+```
+
+### `FieldRefSql` (type)
+
+```ts
+type FieldRefSql<T> = (field: string) => T;
+```
+
+### `FrameSink` (interface)
+
+```ts
+interface FrameSink {
+    send: (data: string) => void;
+}
+```
+
+### `GuardableSchema` (interface)
+
+```ts
+interface GuardableSchema {
+    readonly rlsMode?: "required";
+    readonly tables: Record<string, {
+        readonly isPublic?: boolean;
+        readonly shardMode?: {
+            readonly kind?: string;
+        };
+    }>;
+}
+```
+
+### `IndexUseHook` (type)
+
+```ts
+type IndexUseHook = (table: string, indexName: string, kind: "geo" | "index" | "rank" | "search") => void;
+```
+
+### `REGION_HINTS` (const)
+
+```ts
+const REGION_HINTS: readonly [
+    "wnam",
+    "enam",
+    "sam",
+    "weur",
+    "eeur",
+    "apac",
+    "apac-ne",
+    "apac-se",
+    "oc",
+    "afr",
+    "me"
+];
+```
+
+### `ReadQueueMessagesOptions` (interface)
+
+```ts
+interface ReadQueueMessagesOptions {
+    limit?: number;
+    queue?: string;
+}
+```
+
+### `ReadShapeCdcKeys` (type)
+
+```ts
+type ReadShapeCdcKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number) => CdcChangeKey[];
+```
+
+### `RegionHint` (type)
+
+```ts
+type RegionHint = (typeof REGION_HINTS)[number];
+```
+
+### `RelationMask` (type)
+
+```ts
+type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+```
+
+### `RelayLink` (class)
+
+```ts
+abstract class RelayLink {
+    protected readonly host: RelayHost;
+    protected readonly roleId: {
+        ownerKey: string;
+        relayIndex?: number;
+    };
+    protected constructor(host: RelayHost, roleId: {
+        ownerKey: string;
+        relayIndex?: number;
+    });
+    handleControl(request: Request): Promise<Response>;
+    maxRelays(): number;
+    protected canAddressSiblings(): boolean;
+    protected siblingStub(targetName: string): SiblingStub | undefined;
+    protected bindingName(): string | undefined;
+    protected postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void>;
+    protected requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined>;
+    abstract forwardWhisper(topic: string, frame: string): Promise<void>;
+    abstract onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
+    abstract seedRelayShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, identity: SubscriptionIdentity): Promise<"ok" | undefined | {
+        code: string;
+        message: string;
+    }>;
+    abstract announce(): Promise<void>;
+    abstract announceDrain(closing: ShardSocketLike): Promise<void>;
+    abstract releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
+    abstract relayCount(): number;
+    abstract isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
+    abstract minShapeCursor(): number | undefined;
+    protected abstract onAttach(index: number): void;
+    protected abstract onDetach(index: number): void;
+    protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+    protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
+    protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
+    protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
+}
+```
+
+### `ResolveContext` (interface)
+
+```ts
+interface ResolveContext {
+    canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    existsPushMode: ExistsPushMode;
+    fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
+    maxRelationKeys: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    schema: {
+        readonly tables: Record<string, TableDefinitionLike>;
+    };
+}
+```
+
+### `SchemaVersionRow` (interface)
+
+```ts
+interface SchemaVersionRow {
+    appliedAt: number;
+    hash: string;
+    seq: number;
+    snapshotJson?: string;
+}
+```
+
+### `SearchBackfillState` (interface)
+
+```ts
+interface SearchBackfillState {
+    cursor: string | undefined;
+    done: boolean;
+    profile: string | undefined;
+}
+```
+
+### `SerializeValue` (type)
+
+```ts
+type SerializeValue = (value: unknown, field: string) => unknown;
+```
+
+### `ShardReplica` (class)
+
+```ts
+class ShardReplica {
+    readonly ownerKey: string;
+    readonly region: RegionHint;
+    constructor(host: ReplicaFollowerHost, ownerKey: string, region: RegionHint);
+    ensureFresh(minSeq?: number): Promise<ReplicaReadiness>;
+    appliedSeq(): number;
+    isDivergent(): boolean;
+}
+```
+
+### `SiblingStub` (interface)
+
+```ts
+interface SiblingStub {
+    fetch: (url: string, init?: RequestInit) => Promise<Response>;
+}
+```
+
+### `SocketAttachmentLike` (interface)
+
+```ts
+interface SocketAttachmentLike {
+    admin?: boolean;
+    subs?: Record<string, SubscriptionInfo>;
+}
+```
+
+### `SqlDiagnostic` (interface)
+
+```ts
+interface SqlDiagnostic {
+    length?: number;
+    message: string;
+    offset?: number;
+    severity: "error" | "warning";
+    source: "gate" | "plan" | "syntax";
+}
+```
+
+### `StagedCondition` (interface)
+
+```ts
+interface StagedCondition {
+    comparator: string;
+    field: string;
+    value: unknown;
+}
+```
+
+### `SubscriptionFrameInput` (interface)
+
+```ts
+interface SubscriptionFrameInput {
+    cursorSuffix: string;
+    lastMutationId?: number;
+    nextResult: unknown;
+    pageDeltas?: boolean;
+    previousJson?: string;
+    snapshotJson: string;
+    subId: string;
+    table: string;
+}
+```
+
+### `SystemDocMap` (interface)
+
+```ts
+interface SystemDocMap {
+    _scheduled_functions: ScheduledFunctionDoc;
+    _storage: StorageMetadata;
+}
+```
+
+### `TableOfId` (type)
+
+```ts
+type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
+```
+
+### `TablesOfIds` (type)
+
+```ts
+type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
+```
+
+### `WhereFragments` (interface)
+
+```ts
+interface WhereFragments<T> {
+    binary: (reference: T, comparator: string, value: unknown) => T;
+    connect: (left: T, right: T, connector: "AND" | "OR") => T;
+    constant: (value: boolean) => T;
+    contains: (reference: T, term: T) => T;
+    inList: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget: number) => T;
+    negate: (inner: T) => T;
+    nullCheck: (reference: T, negated: boolean) => T;
+    value: (value: unknown) => T;
+}
 ```

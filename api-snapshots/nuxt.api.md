@@ -101,3 +101,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `serializePreloaded` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `LunoraNuxtModule` (type)
+
+```ts
+type LunoraNuxtModule = typeof defineNuxtModule<ModuleOptions> extends {
+    (definition: infer _Definition): infer Result;
+    (): unknown;
+} ? Result : never;
+```

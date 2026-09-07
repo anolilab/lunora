@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.165...@lunora/codegen@1.0.0-alpha.166) (2026-09-07)
+
+### Bug Fixes
+
+* **codegen:** resolve a spread in an args or column map instead of dropping its fields ([#654](https://github.com/anolilab/lunora/issues/654)) ([6c23d4f](https://github.com/anolilab/lunora/commit/6c23d4f592bb5960b2b1d98442a7ac05b663c998))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+
 ## @lunora/codegen [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.164...@lunora/codegen@1.0.0-alpha.165) (2026-09-07)
 
 ### Bug Fixes

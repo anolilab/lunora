@@ -718,3 +718,216 @@ const serveRelationFanout: (schema: SchemaLike, database: DatabaseWriterLike, fu
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ClientMutationClass` (type)
+
+```ts
+type ClientMutationClass = {
+    expected: number;
+    kind: "already" | "gap" | "next";
+};
+```
+
+### `ContextLogger` (interface)
+
+```ts
+interface ContextLogger {
+    debug: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    event: (name: string, fields?: LogFields) => void;
+    fatal: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    log: (...args: unknown[]) => void;
+    trace: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    with: (fields: LogFields) => ContextLogger;
+}
+```
+
+### `EvaluationInput` (interface)
+
+```ts
+interface EvaluationInput {
+    label?: string;
+    name: string;
+    score: number;
+}
+```
+
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
+### `LogSinkContext` (interface)
+
+```ts
+interface LogSinkContext {
+    resourceAttributes?: () => Record<string, boolean | number | string>;
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `MetricEvent` (interface)
+
+```ts
+interface MetricEvent {
+    attributes?: LogFields;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    shardKey?: string;
+    traceId?: string;
+    ts: number;
+    value: number;
+}
+```
+
+### `MetricKind` (type)
+
+```ts
+type MetricKind = "counter" | "gauge" | "histogram";
+```
+
+### `OtlpSpanKind` (type)
+
+```ts
+type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `QueryAttribution` (interface)
+
+```ts
+interface QueryAttribution {
+    cacheHit?: boolean;
+    readTables?: Set<string>;
+}
+```
+
+### `ReactorRunOutcome` (interface)
+
+```ts
+interface ReactorRunOutcome {
+    digest: string;
+    ran: boolean;
+    tables: ReadonlyArray<string>;
+}
+```
+
+### `RunShardCdcSyncArgs` (interface)
+
+```ts
+interface RunShardCdcSyncArgs {
+    limit?: number;
+    sinceSeq: number;
+}
+```
+
+### `SessionDOState` (interface)
+
+```ts
+interface SessionDOState {
+    storage: {
+        delete: (key: string) => Promise<boolean | number>;
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        getAlarm?: () => Promise<number | null>;
+        list?: <T = unknown>(options?: {
+            prefix?: string;
+        }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+        setAlarm?: (scheduledTime: number | Date) => Promise<void>;
+    };
+}
+```
+
+### `ShardRegistryDOState` (interface)
+
+```ts
+interface ShardRegistryDOState {
+    blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
+    storage: {
+        delete: (key: string) => Promise<boolean>;
+        list: <T = unknown>(options: {
+            prefix: string;
+        }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+    };
+}
+```
+
+### `SpanContextIds` (interface)
+
+```ts
+interface SpanContextIds {
+    sampled?: boolean;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanEvent` (interface)
+
+```ts
+interface SpanEvent {
+    attributes?: LogFields;
+    durationMs: number;
+    events?: SpanEventPoint[];
+    error?: {
+        message: string;
+        type: string;
+    };
+    functionPath: string;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
+    name: string;
+    ok: boolean;
+    parentSpanId: string;
+    dispatch?: boolean;
+    shardKey?: string;
+    spanId: string;
+    startTs: number;
+    traceId: string;
+    userId?: string;
+}
+```
+
+### `SpanEventPoint` (interface)
+
+```ts
+interface SpanEventPoint {
+    attributes?: LogFields;
+    name: string;
+    ts: number;
+}
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: EvaluationInput) => void;
+    recordException: (error: unknown) => void;
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+    spanContext: () => SpanContextIds;
+}
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```

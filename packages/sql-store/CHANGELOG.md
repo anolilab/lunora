@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.112...@lunora/sql-store@1.0.0-alpha.113) (2026-09-07)
+
+### Bug Fixes
+
+* **sql-store:** order an untyped global column's numbers numerically ([#656](https://github.com/anolilab/lunora/issues/656)) ([9acccd6](https://github.com/anolilab/lunora/commit/9acccd69060a2049610a1ed9a3de90fc914ed6fa))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+
 ## @lunora/sql-store [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.111...@lunora/sql-store@1.0.0-alpha.112) (2026-09-07)
 
 ### Bug Fixes

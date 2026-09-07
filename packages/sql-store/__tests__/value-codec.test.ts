@@ -119,6 +119,86 @@ describe("sqliteEncode", () => {
     });
 });
 
+/**
+ * An untyped column (`v.union()`/`v.any()`/`v.from()`) is TEXT on every engine,
+ * so a number written to one has to be stored as text — and the marked JSON that
+ * used to carry it (`$lunora.wire$42`) sorts `"10"` before `"2"`. The key form
+ * below is the same fix `bigintSqlKey` is, applied to the last column kind left
+ * on the lossy form.
+ */
+describe("sqliteEncode — untyped columns store a number as an order-preserving key", () => {
+    /** Text order over the stored forms, which is the order SQLite applies to the column. */
+    const byStorage = (values: ReadonlyArray<number>): number[] =>
+        values.toSorted((left, right) => {
+            const a = String(sqliteEncode(left, "union"));
+            const b = String(sqliteEncode(right, "union"));
+
+            if (a < b) {
+                return -1;
+            }
+
+            return a > b ? 1 : 0;
+        });
+
+    it("orders numbers numerically, across zero and across magnitudes", () => {
+        expect.assertions(1);
+
+        const values = [1.5, 2, 9, 10, 100, 0, -0.5, -7, -1000, 1e300, -1e300, 5e-324, 2 ** 53];
+
+        expect(byStorage(values)).toStrictEqual(values.toSorted((left, right) => left - right));
+    });
+
+    it("round-trips every number through the marker alone, no kind needed on the way out", () => {
+        expect.assertions(1);
+
+        const values = [0, -0, 1.5, -7, 1e300, 5e-324, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER];
+
+        // `-0` normalizes to `0`: SQL compares the two equal, so two distinct
+        // keys would make an `eq` binding miss half the rows it should match.
+        expect(values.map((value) => sqliteDecode(sqliteEncode(value, "union"), "union"))).toStrictEqual([
+            0,
+            0,
+            1.5,
+            -7,
+            1e300,
+            5e-324,
+            Number.MAX_SAFE_INTEGER,
+            Number.MIN_SAFE_INTEGER,
+        ]);
+    });
+
+    it("keeps every number sorting below `false` and `true`, the position they already held", () => {
+        expect.assertions(1);
+
+        // Asserted as already-ascending rather than by sorting: `<` on these
+        // ASCII forms is byte order, which is the order SQLite applies to the
+        // column, and no JS sort comparator reproduces that for arbitrary text.
+        const forms = [Number.MAX_VALUE, false, true].map((value) => String(sqliteEncode(value, "union")));
+
+        expect(forms.every((form, index) => index === 0 || (forms[index - 1] ?? "") < form)).toBe(true);
+    });
+
+    it("still reads back a number written in the marked JSON an earlier build wrote", () => {
+        expect.assertions(2);
+
+        // What makes a table correct between the format change and the rewrite
+        // pass that converts it — the read side accepts both forms.
+        expect(sqliteDecode("$lunora.wire$42", "union")).toBe(42);
+        expect(sqliteDecode("$lunora.wire$-1.5", "any")).toBe(-1.5);
+    });
+
+    it("leaves a string, a bigint and a composite in the form they already had", () => {
+        expect.assertions(3);
+
+        // The WHERE path binds through `sqliteEncode` for these too, and
+        // `contains`/`startsWith` run their substring test against the stored
+        // string — so only the numbers moved.
+        expect(sqliteEncode("42", "union")).toBe("42");
+        expect(sqliteEncode(42n, "union")).toBe(`1${"42".padStart(39, "0")}`);
+        expect(sqliteEncode({ x: 1 }, "union")).toBe('{"x":1}');
+    });
+});
+
 describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
     it("boolean: 1/0 → true/false; other values verbatim", () => {
         expect.assertions(3);
