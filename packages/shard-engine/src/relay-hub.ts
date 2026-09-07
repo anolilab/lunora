@@ -140,6 +140,14 @@ interface RelayHost {
     rlsMetadata: () => RlsPoliciesResult;
     /** The namespace binding name this DO was reached through (learned from `x-lunora-shard-binding`), or `undefined` until known. */
     shardBinding: () => string | undefined;
+
+    /**
+     * The data-residency jurisdiction this DO itself lives in
+     * (`ctx.id.jurisdiction`), or `undefined` when unpinned. Siblings must be
+     * resolved through the SAME subnamespace: the binding name above is the raw
+     * env key, and a jurisdiction subnamespace maps a name to a different DO id.
+     */
+    shardJurisdiction: () => string | undefined;
     /** This DO's SQLite executor — the owner's `__lunora_relays` set table, and a relay's `__lunora_relay_memos` cohort baselines. */
     sql: () => SqlExec;
 }
@@ -309,7 +317,7 @@ abstract class RelayLink {
 
     /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
     protected siblingStub(targetName: string): SiblingStub | undefined {
-        return siblingStub(this.host.env(), this.bindingName(), targetName);
+        return siblingStub(this.host.env(), this.bindingName(), targetName, this.host.shardJurisdiction());
     }
 
     /**

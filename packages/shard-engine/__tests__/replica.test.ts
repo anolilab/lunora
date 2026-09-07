@@ -70,6 +70,7 @@ const createOwner = (): Owner => {
                 },
                 rowCount: () => owner.snapshot.length,
                 shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
                 sql: () => ({}) as SqlExec,
             };
 
@@ -130,6 +131,7 @@ describe("read replicas", () => {
                 return { errors: importErrors };
             },
             shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
             sql: () => sql,
         };
     });
@@ -166,6 +168,57 @@ describe("read replicas", () => {
         // whole log it already contains.
         expect(replica?.appliedSeq()).toBe(4);
         expect(replica?.isDivergent()).toBe(false);
+    });
+
+    it("addresses its owner through its OWN jurisdiction subnamespace, not the raw binding", async () => {
+        expect.assertions(3);
+
+        owner.snapshot = [{ doc: { _id: "a", title: "first" }, table: "posts" }];
+        owner.changes = [change(4, "a")];
+
+        // Cloudflare mints a DIFFERENT `DurableObjectId` for the same name inside
+        // a jurisdiction subnamespace (`ns.idFromName(n) !== ns.jurisdiction("eu")
+        // .idFromName(n)`), and the worker stamps the RAW env key as
+        // `x-lunora-shard-binding` while routing its own traffic through the
+        // pinned namespace. Resolving off that raw binding therefore woke a
+        // stranger DO — empty, and outside the declared residency.
+        let phantomHits = 0;
+        const phantom = {
+            fetch: async () => {
+                phantomHits += 1;
+
+                return new Response("shard has no changelog to replicate", { status: 409 });
+            },
+        };
+        const toOwner = { fetch: async (_url: string, init?: RequestInit) => owner.serve(typeof init?.body === "string" ? init.body : "{}", init?.headers) };
+        const pinned = { get: () => toOwner, getByName: () => toOwner, idFromName: (name: string) => name };
+
+        env["SHARD"] = {
+            get: () => phantom,
+            getByName: () => phantom,
+            idFromName: (name: string) => name,
+            jurisdiction: (jurisdiction: string) =>
+                jurisdiction === "eu" ? pinned : { get: () => phantom, getByName: () => phantom, idFromName: (name: string) => name },
+        };
+
+        const replica = createReplicaLink({ ...host, shardJurisdiction: () => "eu" });
+
+        await expect(gateReplicaDispatch(replica!, replicaRead(), "posts:list")).resolves.toBeUndefined();
+        expect(imported).toStrictEqual(owner.snapshot);
+        expect(phantomHits).toBe(0);
+    });
+
+    it("stays inert rather than reaching an unpinned sibling when the binding cannot express its jurisdiction", async () => {
+        expect.assertions(1);
+
+        owner.snapshot = [{ doc: { _id: "a", title: "first" }, table: "posts" }];
+        owner.changes = [change(4, "a")];
+
+        // The harness namespace has no `jurisdiction()`. Falling back to it would
+        // open a stub outside the compliance boundary the app declared, so the
+        // tier goes inert and the read falls back to the worker-routed owner —
+        // which IS pinned.
+        await expect(createReplicaLink({ ...host, shardJurisdiction: () => "eu" })?.ensureFresh()).resolves.toBe("unavailable");
     });
 
     it("applies the changelog past its cursor and remembers where it got to", async () => {
@@ -487,6 +540,7 @@ describe("read replicas", () => {
             },
             rowCount: () => 0,
             shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
             sql: () => sql,
         };
 
@@ -521,6 +575,7 @@ describe("replica dispatch gate", () => {
                 return { errors: [] };
             },
             shardBinding: () => undefined,
+            shardJurisdiction: () => undefined,
             sql: () => harness.sql,
         };
     };
