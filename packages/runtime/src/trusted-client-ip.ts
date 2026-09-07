@@ -10,8 +10,9 @@ import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
  * `x-forwarded-for` or the raw header: both are client-written there, and an
  * attacker-chosen address is worse than a missing one — it silently defeats
  * every rate limit keyed on it while reading as if the limit were enforced.
- * Callers already handle the absent case (the REST limiter falls into its shared
- * `no-trusted-ip` bucket; `ctx.ip` is documented optional).
+ * Callers already handle the absent case (the REST limiter refuses the request
+ * rather than charge a bucket that identifies nobody; `ctx.ip` is documented
+ * optional).
  *
  * `trustedClientIpHeader` is the operator's opt-out of that default, for the one
  * deployment where the default is wrong rather than merely conservative: an

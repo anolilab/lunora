@@ -215,7 +215,7 @@ describe("createWorker — opt-in public REST surface", () => {
         await expect(response.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
     });
 
-    it("createRestRateLimit keys IP-less callers to their own shared bucket", async () => {
+    it("createRestRateLimit refuses an IP-less caller rather than pooling them", async () => {
         expect.assertions(2);
 
         const { namespace } = echoShard();
@@ -226,13 +226,13 @@ describe("createWorker — opt-in public REST surface", () => {
         };
         const worker = createWorker({ functions, restRateLimit: createRestRateLimit(limiter, { name: "rest" }), shardDO: namespace });
 
-        // No `cf-connecting-ip`: charging the limit with no key at all pools
-        // these callers into the limit's UNKEYED bucket — the same one a
-        // deliberately-global charge of "rest" uses — so one anonymous caller
-        // drains the app-wide limit. They get a named bucket of their own.
-        await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
+        // No `cf-connecting-ip`: there is nobody to charge. Both ways of charging
+        // anyway are worse than refusing — the limit's UNKEYED bucket is the one a
+        // deliberately-global charge of "rest" uses, and a shared named bucket is
+        // the same drain with a nicer name. The operator gets a 500 naming the fix.
+        const response = await worker.fetch(new Request("https://app.example/_lunora/rest/messages/list"), {}, fakeContext);
 
-        expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "no-trusted-ip" });
+        expect(response.status).toBe(500);
 
         // The header identifies a caller only ON Cloudflare, where the edge
         // stamps it over anything the client sent; this suite runs under

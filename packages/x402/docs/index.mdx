@@ -110,6 +110,14 @@ Each paid function bakes its own price and its `functionPath` as the challenge
 `resource`. Internal functions have no `.x402`: they are server-to-server and
 never client-reachable, so there is nothing to charge.
 
+**The worker must carry the function registry.** The `.x402` tags live on
+`createWorker({ functions })` — `defineApp()` supplies it, a hand-rolled
+`createWorker({ shardDO })` or a bare `createLunoraHandler()` does not. Without it
+the origin cannot see that a procedure is paid, so it charges nothing; the shard
+refuses that dispatch with `MISCONFIGURED` rather than serving the paid result
+free. If a paid procedure starts answering `500`, the worker is missing
+`functions`.
+
 **Settlement order:** the procedure gate settles **before** dispatching the
 function (settle-first), because dispatch is what commits a paid mutation's
 writes. A settlement failure therefore means the function never runs at all;

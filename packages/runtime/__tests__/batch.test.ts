@@ -83,4 +83,40 @@ describe("groupBatchCallsByShard", () => {
         expect(() => groupBatchCallsByShard(["not-an-object"], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
         expect(() => groupBatchCallsByShard([[{ functionPath: "docs:x" }]], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
     });
+
+    it("rejects duplicate ids, which make the response un-demuxable", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            groupBatchCallsByShard(
+                [
+                    { functionPath: "docs:x", id: 7 },
+                    { functionPath: "docs:y", id: 7 },
+                ],
+                "__root__",
+            ),
+        ).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
+
+    it("rejects an id that collides with another entry's positional fallback", () => {
+        expect.assertions(1);
+
+        // The second entry has no id and falls back to its index (1), which the
+        // first entry already claimed.
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: 1 }, { functionPath: "docs:y" }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
+
+    it("rejects a non-numeric id rather than silently renumbering it to the index", () => {
+        expect.assertions(2);
+
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: "seven" }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: null }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
 });

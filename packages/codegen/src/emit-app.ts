@@ -1498,7 +1498,13 @@ ${buildWorkerLine}
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },${
-                options.hasQueue
+                // Emitted for a framework-hosted app even with no push queues of its
+                // own: `withFrameworkWorker` hands the FRAMEWORK host's `queue` back
+                // out of the composed worker, and without this key wrangler never sees
+                // it. On workerd a consumer that returns without throwing implicitly
+                // acks, so the host's messages were not merely unprocessed — they were
+                // acked and destroyed.
+                options.hasQueue || options.hasFramework
                     ? `
             queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 worker ??= buildWorker(rawEnv as Env);
@@ -1514,7 +1520,23 @@ ${emailAgentsBlock}        if (this.emailHandler) {
 
             composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);
         }
+${
+    options.hasFramework
+        ? `
+        // A framework host may export its own \`email\` (Nitro's \`cloudflare-module\`
+        // does). Nothing in Lunora serves one, so when the app registered no handler
+        // of its own the host's is the only one there is — forward to it rather than
+        // dropping the entry.
+        if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
+            composed.email = (message, rawEnv, context) => {
+                worker ??= buildWorker(rawEnv as Env);
 
+                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+            };
+        }
+`
+        : ""
+}
         return composed;
     }
 ${buildSchedulerHelper(options)}${buildStorageHelpers(options.hasStorage)}

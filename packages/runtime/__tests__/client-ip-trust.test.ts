@@ -101,21 +101,24 @@ describe("client IP trust", () => {
             };
             const worker = createWorker({ functions, restRateLimit: createRestRateLimit(limiter, { name: "rest" }), shardDO: namespace });
 
-            // Two attacker-chosen values must land in the SAME bucket, or the
-            // limit is one header away from not existing.
-            await worker.fetch(
+            // Two attacker-chosen values must not become two buckets, or the
+            // limit is one header away from not existing. Off the edge they buy no
+            // bucket at all: the limit has nobody to charge, so the request is
+            // refused rather than pooled behind one shared counter every caller
+            // could drain for everybody.
+            const first = await worker.fetch(
                 new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.4" } }),
                 {},
                 fakeContext,
             );
-            await worker.fetch(
+            const second = await worker.fetch(
                 new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": "203.0.113.5" } }),
                 {},
                 fakeContext,
             );
 
-            expect(limiter.limit).toHaveBeenNthCalledWith(1, "rest", { key: "no-trusted-ip" });
-            expect(limiter.limit).toHaveBeenNthCalledWith(2, "rest", { key: "no-trusted-ip" });
+            expect([first.status, second.status]).toStrictEqual([500, 500]);
+            expect(limiter.limit).not.toHaveBeenCalled();
         });
 
         it("still honours an explicit key callback off Cloudflare", async () => {
