@@ -122,16 +122,17 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
         return;
     }
 
-    // Enumerated rather than derived from the default field names — better-auth names an
-    // index after the physical columns, and any index still referencing `issuer` makes the
-    // `DROP COLUMN` fail. `sqlite_master` is readable through the binding; pragma index
-    // functions are not.
-    const { results } = await database
-        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?")
-        .bind(account.modelName)
-        .all<{ name: string; sql?: null | string }>();
-
     try {
+        // Enumerated rather than derived from the default field names — better-auth names an
+        // index after the physical columns, and any index still referencing `issuer` makes
+        // the `DROP COLUMN` fail. `sqlite_master` is readable through the binding; pragma
+        // index functions are not. Inside the `try` because a failed metadata read is just
+        // another reason the cleanup cannot run, not a reason to fail the whole migration.
+        const { results } = await database
+            .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?")
+            .bind(account.modelName)
+            .all<{ name: string; sql?: null | string }>();
+
         // One batch, so the indexes cannot be dropped without the column following: SQLite
         // has no way back to a unique index that is gone while the column it covered stays.
         await database.batch(

@@ -75,6 +75,38 @@ describe("indexesReferencingIssuer", () => {
         ).toStrictEqual([]);
     });
 
+    it("does not fire on a partial index whose WHERE clause merely mentions the word", () => {
+        // `sqlite_master` stores the verbatim CREATE INDEX text. An app's own unique
+        // constraint filtered on `kind = 'issuer'` indexes a different column entirely —
+        // dropping it would silently remove that constraint. Only the indexed expressions
+        // are searched, and the WHERE clause sits outside them.
+        expect.assertions(2);
+
+        expect(
+            indexesReferencingIssuer([
+                {
+                    name: "account_kind_uidx",
+                    sql: `CREATE UNIQUE INDEX "account_kind_uidx" ON "account" ("providerId") WHERE "kind" = 'issuer'`,
+                },
+            ]),
+        ).toStrictEqual([]);
+
+        // …and neither does a comment carried along with the statement.
+        expect(
+            indexesReferencingIssuer([{ name: "account_userId_idx", sql: `-- issuer removed\nCREATE INDEX "account_userId_idx" ON "account" ("userId")` }]),
+        ).toStrictEqual([]);
+    });
+
+    it("still finds an expression index over the column", () => {
+        // `lower(issuer)` is nested parentheses inside the indexed-expression list, and it
+        // does block `DROP COLUMN`, so scanning has to reach it.
+        expect.assertions(1);
+
+        expect(
+            indexesReferencingIssuer([{ name: "account_issuer_lower_idx", sql: `CREATE INDEX "account_issuer_lower_idx" ON "account" (lower("issuer"))` }]),
+        ).toStrictEqual(["account_issuer_lower_idx"]);
+    });
+
     it("skips SQLite's own auto-indexes, which have no DDL to read", () => {
         // `sqlite_autoindex_*` rows carry a null `sql`; they back a UNIQUE/PK constraint and
         // cannot reference a plain column declaration.

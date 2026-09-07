@@ -258,17 +258,18 @@ class LunoraAuthDO {
             return;
         }
 
-        // Enumerated, not derived: better-auth names an index after the physical columns,
-        // so a renamed `accountId` changes the name, and any index left behind makes the
-        // `DROP COLUMN` fail. `pragma_index_list` is a table-valued function — allowed here,
-        // refused on D1, which is why the D1 path reads `sqlite_master` instead.
-        const indexes = [...this.#storage.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`, account.modelName)].map(
-            (row) => {
-                return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
-            },
-        );
-
         try {
+            // Enumerated, not derived: better-auth names an index after the physical
+            // columns, so a renamed `accountId` changes the name, and any index left behind
+            // makes the `DROP COLUMN` fail. Inside the `try` because a failed metadata read
+            // is just another reason the cleanup cannot run — letting it escape would wedge
+            // every route, which is the thing this method is careful not to do.
+            const indexes = [...this.#storage.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`, account.modelName)].map(
+                (row) => {
+                    return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
+                },
+            );
+
             for (const statement of legacyIssuerCleanupStatements(account.modelName, indexesReferencingIssuer(indexes))) {
                 [...this.#storage.sql.exec(statement)];
             }

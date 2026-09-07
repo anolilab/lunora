@@ -63,6 +63,40 @@ const ISSUER_COLUMN = "issuer";
 const ISSUER_WORD = new RegExp(String.raw`\b${ISSUER_COLUMN}\b`, "iu");
 
 /**
+ * The indexed-expression list of a `CREATE INDEX`: everything between the parenthesis that
+ * opens after `ON <table>` and its matching close.
+ *
+ * Scanned rather than regex-matched because the list may itself contain parentheses — an
+ * expression index on `lower(issuer)` is still an index on the column, and must be found.
+ * Returns `""` when the statement has no balanced list, which reads as "no reference".
+ */
+const indexedExpressions = (createIndexSql: string): string => {
+    const open = createIndexSql.indexOf("(");
+
+    if (open === -1) {
+        return "";
+    }
+
+    let depth = 0;
+
+    for (let index = open; index < createIndexSql.length; index += 1) {
+        const character = createIndexSql[index];
+
+        if (character === "(") {
+            depth += 1;
+        } else if (character === ")") {
+            depth -= 1;
+
+            if (depth === 0) {
+                return createIndexSql.slice(open + 1, index);
+            }
+        }
+    }
+
+    return "";
+};
+
+/**
  * Whether better-auth's **current** resolved schema declares an `issuer` column — in which
  * case the column belongs to the app and must never be dropped.
  *
@@ -90,15 +124,21 @@ export const schemaDeclaresIssuer = (accountColumns: Iterable<string>): boolean 
  * index someone added by hand. Either miss is fatal rather than cosmetic: SQLite refuses
  * `DROP COLUMN` while any index still references the column.
  *
- * Matching the name inside *index* DDL is safe in a way that matching it inside *table* DDL
- * is not — this runs only once the column is confirmed present and un-declared, so an index
- * mentioning it is by definition an index on the reverted column. A `null` `sql` is
- * SQLite's own auto-index, which cannot reference it.
- * @param indexes `name` / `sql` rows for the account table's indexes.
+ * Only the **indexed expressions** are searched, never the whole statement. `sqlite_master`
+ * stores the verbatim `CREATE INDEX` text, so a partial index's `WHERE kind = 'issuer'`
+ * literal, or a comment above the statement, would otherwise read as a reference — and
+ * dropping that index would silently remove an application's own unique constraint. The
+ * `WHERE` clause sits outside the column list, so scanning to the matching parenthesis
+ * excludes it while still catching `lower(issuer)`.
+ *
+ * An index whose reference cannot be established is deliberately left alone. If it does
+ * block the drop, the `DROP COLUMN` fails, the caller logs it, and the column stays until
+ * an operator looks — which is the safe direction to fail in.
+ * @param indexes `name` / `sql` rows for the account table's indexes; a `null` `sql` is one of SQLite's own auto-indexes.
  * @returns The names to drop, in the order given.
  */
 export const indexesReferencingIssuer = (indexes: Iterable<{ name: string; sql?: null | string }>): string[] =>
-    [...indexes].filter((index) => ISSUER_WORD.test(index.sql ?? "")).map((index) => index.name);
+    [...indexes].filter((index) => ISSUER_WORD.test(indexedExpressions(index.sql ?? ""))).map((index) => index.name);
 
 /**
  * The cleanup statements, in execution order: every blocking index, then the column.
