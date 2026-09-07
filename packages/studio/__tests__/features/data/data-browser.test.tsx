@@ -431,6 +431,82 @@ describe("dataBrowser", () => {
         expect(mounted.length).toBeLessThan(200);
     });
 
+    /**
+     * Drag-to-reorder, twice.
+     *
+     * What this actually guards is the feature registration. TanStack v9 tables
+     * carry only the APIs their `features` object registers, and a missing one is
+     * not a type error at this call site — it is `undefined` at runtime. Dropping
+     * `columnOrderingFeature` from `gridTableFeatures` fails this test with
+     * "Cannot read properties of undefined", which is how it was verified.
+     *
+     * FOUR columns, not the two the shared `messages` fixture has, so a second drag
+     * has somewhere non-trivial to land.
+     *
+     * Note that reading the current order is deliberately belt-and-braces: the
+     * `getAllLeafColumns()` fallback already returns columns in applied order, so
+     * `atoms.columnOrder.get()` returning nothing would not change the outcome.
+     * Don't read a pass here as covering that accessor.
+     */
+    it("reorders columns by drag-and-drop, and the second drag builds on the first", async () => {
+        expect.assertions(2);
+
+        const COLUMNS = ["__id__", "alpha", "beta", "gamma"];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                const { table } = args as PageArgs;
+
+                if (table !== "messages") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return { columns: COLUMNS, rows: [{ __id__: "m1", alpha: "a", beta: "b", gamma: "g" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Header order, read off the DOM in render order.
+        const headerIds = (): string[] => screen.getAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        const drag = (from: string, to: string): void => {
+            fireEvent.dragStart(screen.getByTestId(`db-head-${from}`));
+            fireEvent.drop(screen.getByTestId(`db-head-${to}`));
+        };
+
+        const expectOrder = async (order: string[]): Promise<void> => {
+            await waitFor(() => {
+                if (headerIds().join("|") !== order.join("|")) {
+                    throw new Error(`expected ${order.join(",")}, saw ${headerIds().join(",")}`);
+                }
+            });
+        };
+
+        await expectOrder(COLUMNS);
+
+        // Drop `gamma` before `__id__`: it takes the first slot.
+        drag("gamma", "__id__");
+        await expectOrder(["gamma", "__id__", "alpha", "beta"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "__id__", "alpha", "beta"]);
+
+        // Drop `beta` before `__id__`. Read against the STORED order this lands
+        // `["gamma", "beta", "__id__", "alpha"]`; re-seeded from the declared order it
+        // would land `["beta", "__id__", "alpha", "gamma"]` instead.
+        drag("beta", "__id__");
+        await expectOrder(["gamma", "beta", "__id__", "alpha"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "beta", "__id__", "alpha"]);
+    });
+
     it("clears the sort on the third click", async () => {
         expect.assertions(2);
 
