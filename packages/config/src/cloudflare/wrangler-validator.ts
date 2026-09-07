@@ -12,7 +12,10 @@
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
+
+import type { SourceFile } from "ts-morph";
+import { Node, Project } from "ts-morph";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
 import { COMPOSED_WORKER_ENTRY, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
@@ -1518,171 +1521,110 @@ const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, w
 };
 
 /**
- * Blank out comments and string/template literals, preserving offsets.
- *
- * Without this, a commented-out export or a class named in prose reads as a real
- * export — and a worker entry that discusses its Durable Objects in comments is
- * the normal case, so the check would silently pass on exactly the tree it
- * exists to catch. Replacing with spaces rather than deleting keeps every offset
- * and line intact.
- *
- * Deliberately coarse on escapes (`"a\"b"` blanks only up to the inner quote):
- * the goal is that quoted text cannot pass for code, and blanking slightly less
- * of a string never turns a real export into a missing one.
+ * Every name a binding pattern binds — `{ ShardDO }`, `{ a: b }`, `[x]`, and
+ * nests of those. `export const { ShardDO } = app;` is the generated app
+ * builder's own pattern, so this is not an exotic form.
  */
-const COMMENT_OR_STRING_RE = /\/\/[^\n]*|\/\*.*?\*\/|"[^"\n]*"|'[^'\n]*'|`[^`]*`/gsu;
+const collectBindingNames = (nameNode: Node, names: Set<string>): void => {
+    if (Node.isIdentifier(nameNode)) {
+        names.add(nameNode.getText());
 
-const blankCommentsAndStrings = (code: string): string =>
-    // The alternation is scanned positionally, so a `//` inside a string literal
-    // is consumed as part of that string rather than starting a comment.
-    code.replaceAll(COMMENT_OR_STRING_RE, (match) => match.replaceAll(/[^\n]/gu, " "));
+        return;
+    }
 
-/**
- * A star re-export (`export * from "./lunora/_generated/workflows"`) forwards
- * names no per-name scan can see. When the entry has one, absence of a class
- * name proves nothing, so the check is skipped entirely — a false error on a
- * correctly-wired project is worse than a missed one, because it blocks a deploy
- * that would have worked.
- */
-const STAR_REEXPORT_RE = /\bexport\s*\*\s*(?:as\s+\w+\s*)?from\b/u;
+    if (Node.isObjectBindingPattern(nameNode) || Node.isArrayBindingPattern(nameNode)) {
+        for (const element of nameNode.getElements()) {
+            if (Node.isBindingElement(element)) {
+                collectBindingNames(element.getNameNode(), names);
+            }
+        }
+    }
+};
 
-/** Every `export` keyword position in the blanked source. */
-const EXPORT_KEYWORD_RE = /\bexport\b/gu;
+/** The names an `export { … }` / `export … from "…"` clause binds as values. */
+const collectClauseExports = (sourceFile: SourceFile, names: Set<string>): boolean => {
+    let opaque = false;
 
-/** Modifiers that may sit between `export` and the declaration keyword. */
-const EXPORT_MODIFIERS_RE = /^\s*(?:(?:abstract|async|declare|default)\s+)*/u;
+    for (const declaration of sourceFile.getExportDeclarations()) {
+        if (declaration.isTypeOnly()) {
+            continue;
+        }
 
-/** A declaration-form export, once its modifiers are stripped (`class X`, `const X`, `function X`). */
-const EXPORT_DECLARATION_RE = /^(?:class|const|function|let|var)\s+(?<name>[$A-Z_a-z][\w$]*)/u;
+        const namespaceExport = declaration.getNamespaceExport();
 
-/**
- * A destructuring export — `export const { ShardDO, SessionDO } = app;`.
- *
- * This is the generated app builder's OWN pattern, so it is not an exotic form:
- * `apps/playground/src/server/index.ts` ships exactly this. A scanner that only
- * understood `export const <identifier>` reported the repo's own playground as
- * missing `ShardDO`.
- */
-const EXPORT_DESTRUCTURE_RE = /^\s*(?:const|let|var)\s*\{/u;
+        if (namespaceExport !== undefined) {
+            // `export * as ns from "…"` binds only `ns`, so it forwards nothing
+            // a class name could hide behind.
+            names.add(namespaceExport.getName());
 
-/**
- * The names the worker entry exports as runtime VALUES.
- *
- * Deliberately a small scanner over export CLAUSES rather than a proximity
- * regex. The proximity form (`export…[^\n;]*Name`) gets two realistic cases
- * wrong, and both fail CLOSED — reporting a correctly-wired project as broken,
- * which blocks a deploy that would have worked:
- *
- * A brace clause wrapped across lines — how prettier formats three or more
- * exports — cannot be matched by a bound that stops at the newline. And a
- * type-only export ANYWHERE in the file suppressed the real value export of the
- * same name (`export type { ShardDO as T }` beside `export { ShardDO }`),
- * because the type check was whole-file rather than per clause.
- *
- * `es-module-lexer` would be the right tool and is a dependency, but its WASM
- * entry needs an awaited `init` (this validator is synchronous) and its pure-JS
- * entry emits a V8 asm.js warning to stderr on load, which would appear on every
- * `prepare` / `verify` / `deploy`.
- *
- * For `export { Local as Exported }` the EXPORTED name is what wrangler binds,
- * so that is what is collected.
- */
-/** The leading identifier of a binding, after any `:` rename. */
-const LEADING_IDENTIFIER_RE = /^[$A-Z_a-z][\w$]*/u;
+            continue;
+        }
 
-/** `export type …` — the whole clause compiles away. */
-const TYPE_CLAUSE_RE = /^type\b/u;
+        const named = declaration.getNamedExports();
 
-/** Split one export specifier into its words, so `X as Y` and `type X` are separable. */
-const SPECIFIER_WORDS_RE = /\s+/u;
+        if (named.length === 0) {
+            // A bare `export * from "./x"` forwards names that live in another
+            // module, so the ABSENCE of a class name proves nothing here.
+            opaque = true;
 
-/**
- * Names bound by a named-export clause body (`A, B as C, type D`).
- *
- * For `A as B` the EXPORTED name is `B`, which is what wrangler binds. A leading
- * `type` marks that one specifier type-only — scoped per specifier, because a
- * whole-file check let an unrelated `export type { X as … }` suppress a real
- * `export { X }`.
- */
-const namedClauseExports = (clauseBody: string): string[] => {
-    const names: string[] = [];
+            continue;
+        }
 
-    for (const specifier of clauseBody.split(",")) {
-        const words = specifier.trim().split(SPECIFIER_WORDS_RE).filter(Boolean);
-        const last = words.at(-1);
-
-        if (last !== undefined && words[0] !== "type") {
-            names.push(last);
+        for (const specifier of named) {
+            // For `export { Local as Bound }` the EXPORTED name is what wrangler
+            // binds. A leading `type` is scoped per specifier — a whole-file
+            // check let an unrelated `export type { X as … }` suppress a real
+            // `export { X }`.
+            if (!specifier.isTypeOnly()) {
+                names.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
+            }
         }
     }
 
-    return names;
+    return opaque;
 };
 
-/**
- * Names bound by a destructuring export body (`A, B: C`).
- *
- * `export const { ShardDO } = app;` is the generated app builder's own pattern,
- * so this is not an exotic form — the repo's playground ships exactly it.
- */
-const destructuredExports = (patternBody: string): string[] => {
-    const names: string[] = [];
-
-    for (const binding of patternBody.split(",")) {
-        const bound = binding.includes(":") ? binding.slice(binding.indexOf(":") + 1) : binding;
-        const identifier = LEADING_IDENTIFIER_RE.exec(bound.trim());
-
-        if (identifier) {
-            names.push(identifier[0]);
+/** The names declaration-form exports bind (`export class X`, `export const { X } = app`). */
+const collectDeclarationExports = (sourceFile: SourceFile, names: Set<string>): void => {
+    for (const statement of sourceFile.getVariableStatements().filter((candidate) => candidate.isExported())) {
+        for (const declaration of statement.getDeclarations()) {
+            collectBindingNames(declaration.getNameNode(), names);
         }
     }
 
-    return names;
-};
+    for (const declaration of [...sourceFile.getClasses(), ...sourceFile.getFunctions(), ...sourceFile.getEnums()]) {
+        // `export default class X` binds `default`, not `X`, so a default
+        // export never satisfies a `class_name`.
+        const name = declaration.isExported() && !declaration.isDefaultExport() ? declaration.getName() : undefined;
 
-/** The body of the first `{…}` at the start of `source`, or `undefined`. */
-const braceBody = (source: string): string | undefined => {
-    const open = source.indexOf("{");
-    const close = source.indexOf("}", open);
-
-    return open === -1 || close === -1 ? undefined : source.slice(open + 1, close);
-};
-
-/** Names one `export` keyword contributes as runtime values. */
-const exportNamesAt = (after: string): string[] => {
-    const trimmed = after.trimStart();
-
-    if (TYPE_CLAUSE_RE.test(trimmed)) {
-        return [];
-    }
-
-    if (trimmed.startsWith("{")) {
-        const body = braceBody(trimmed);
-
-        return body === undefined ? [] : namedClauseExports(body);
-    }
-
-    if (EXPORT_DESTRUCTURE_RE.test(after)) {
-        const body = braceBody(after);
-
-        return body === undefined ? [] : destructuredExports(body);
-    }
-
-    const declaration = EXPORT_DECLARATION_RE.exec(after.replace(EXPORT_MODIFIERS_RE, ""));
-
-    return declaration?.groups?.["name"] === undefined ? [] : [declaration.groups["name"]];
-};
-
-const collectValueExportNames = (code: string): Set<string> => {
-    const names = new Set<string>();
-
-    for (const match of code.matchAll(EXPORT_KEYWORD_RE)) {
-        for (const name of exportNamesAt(code.slice(match.index + "export".length))) {
+        if (name !== undefined) {
             names.add(name);
         }
     }
+};
 
-    return names;
+/**
+ * The runtime VALUE exports of a worker entry, and whether the file forwards
+ * names this scan cannot see (`opaque`).
+ *
+ * Parsed with ts-morph rather than scanned with regexes. The scanner this
+ * replaces had to stay advisory precisely because every export form it did not
+ * know failed CLOSED — reporting a correctly-wired project as broken — and two
+ * such forms (a prettier-wrapped clause, and the app builder's own
+ * `export const { ShardDO } = app`) turned up in a single review pass. A real
+ * parser knows them all, which is what lets the check block. ts-morph is already
+ * loaded on this path: `discoverSchemaInfo` parses the schema with it a few
+ * lines below.
+ */
+const collectValueExports = (fileName: string, source: string): { names: Set<string>; opaque: boolean } => {
+    const project = new Project({ compilerOptions: { allowJs: true }, skipFileDependencyResolution: true, useInMemoryFileSystem: true });
+    const sourceFile = project.createSourceFile(fileName, source, { overwrite: true });
+    const names = new Set<string>();
+    const opaque = collectClauseExports(sourceFile, names);
+
+    collectDeclarationExports(sourceFile, names);
+
+    return { names, opaque };
 };
 
 /**
@@ -1701,7 +1643,7 @@ const collectValueExportNames = (code: string): Set<string> => {
  * own description is "validate wrangler.jsonc + codegen dry-run + tsc" — the
  * thing that is invalid IS the relationship between `wrangler.jsonc` and the
  * entry. Only `lunora build`, which shells out to `wrangler deploy --dry-run`,
- * caught it.
+ * caught it — so `verify` in a PR check went green and the deploy job failed.
  *
  * Both files are already parsed here, so this is a string-set comparison.
  */
@@ -1720,11 +1662,9 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         return [];
     }
 
-    // Comments and strings are blanked first, so a commented-out export or a
-    // class name mentioned in prose cannot pass for a real one.
-    const code = blankCommentsAndStrings(source);
+    const { names: exported, opaque } = collectValueExports(basename(entryPath), source);
 
-    if (STAR_REEXPORT_RE.test(code)) {
+    if (opaque) {
         return [];
     }
 
@@ -1747,7 +1687,6 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         }
     }
 
-    const exported = collectValueExportNames(code);
     const missing = declared.filter((entry) => !exported.has(entry.className));
 
     return missing.map(
@@ -1820,23 +1759,22 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // references are left to wrangler — pure shape checks already ran above.
     const configDirectory = dirname(wranglerPath);
 
-    report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
-
     // FS-aware: every declared Durable Object / Workflow class must be exported
     // by the worker entry, or wrangler refuses to bundle.
     //
-    // A WARNING, not an error, and deliberately so. `collectValueExportNames` is
-    // a scanner, not a parser, and every form it does not know fails CLOSED —
-    // reporting a correctly-wired project as broken, which blocks `prepare` /
-    // `deploy` and stops `lunora dev` from starting. Two such forms (a
-    // prettier-wrapped clause, and the generated app builder's own
-    // `export const { ShardDO } = app`) were found in a single review pass, which
-    // is enough evidence that more exist.
-    //
-    // Warning still closes the reported gap: `verify` and `doctor` used to print
-    // a clean bill of health on a tree that cannot deploy, and now they say so.
-    // The authoritative check remains wrangler's own, which `lunora build` runs.
-    report.warnings.push(...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath));
+    // An ERROR. This was a warning for as long as the export names came from a
+    // regex scanner, because every form the scanner did not know failed CLOSED —
+    // reporting a correctly-wired project as broken, which would block `prepare`
+    // / `deploy` and stop `lunora dev` from starting. `collectValueExports`
+    // parses instead, so the only case it cannot decide (a bare `export *`) is
+    // reported as opaque and skipped, and what is left is a fact: this entry
+    // does not export that class and wrangler will refuse to bundle it.
+    // Warning-level meant `verify` exited 0 on a tree `lunora build` rejects,
+    // which is the whole point of running `verify` in a PR check.
+    report.errors.push(
+        ...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath),
+        ...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath),
+    );
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*
