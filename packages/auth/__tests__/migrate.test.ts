@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +20,76 @@ const makeMigrations = (runMigrations = vi.fn<() => Promise<void>>(async () => {
 const customAdapter = (): { id: string } => {
     return { id: "lunora" };
 };
+
+/**
+ * A D1 binding backed by a real `node:sqlite` database.
+ *
+ * It executes, rather than recording strings. A stub that only collects the SQL handed to
+ * `prepare` passes whether or not the cleanup actually works: it cannot tell a `DROP
+ * COLUMN` that succeeds from one that fails on a leftover index, cannot show the probe
+ * distinguishing a present column from an absent one, and cannot catch a batch that leaves
+ * the table half-migrated. Those are exactly the failures this path has.
+ *
+ * `run` / `all` prepare lazily so a bad statement throws at execution, as it does on D1,
+ * rather than at `prepare`.
+ */
+const fakeD1 = (setup: (database: DatabaseSync) => void = () => {}) => {
+    const database = new DatabaseSync(":memory:");
+
+    setup(database);
+
+    const statement = (query: string, values: unknown[] = []) => {
+        return {
+            all: async (): Promise<{ results: unknown[] }> => {
+                return { results: database.prepare(query).all(...(values as never[])) };
+            },
+            bind: (...bound: unknown[]) => statement(query, bound),
+            query,
+            run: async (): Promise<void> => {
+                database.prepare(query).run(...(values as never[]));
+            },
+        };
+    };
+
+    return {
+        batch: async (statements: { query: string }[]): Promise<void> => {
+            database.exec("BEGIN");
+
+            try {
+                for (const { query } of statements) {
+                    database.prepare(query).run();
+                }
+
+                database.exec("COMMIT");
+            } catch (error) {
+                database.exec("ROLLBACK");
+
+                throw error;
+            }
+        },
+        columns: (table: string): string[] =>
+            database
+                .prepare(`SELECT name FROM pragma_table_info(?)`)
+                .all(table)
+                .map((row) => String((row as { name: unknown }).name)),
+        indexNames: (): string[] =>
+            database
+                .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'`)
+                .all()
+                .map((row) => String((row as { name: unknown }).name)),
+        prepare: (query: string) => statement(query),
+    };
+};
+
+/** The `account` table as better-auth 1.7.0-1.7.2 created it: `issuer` NOT NULL plus its unique index. */
+const seedLegacyAccount =
+    (indexColumns = `"issuer", "accountId"`, indexName = "account_issuer_accountId_uidx") =>
+    (database: DatabaseSync): void => {
+        database.exec(
+            `CREATE TABLE "account" ("id" text NOT NULL PRIMARY KEY, "providerId" text NOT NULL, "issuer" text NOT NULL, "accountId" text NOT NULL, "userId" text NOT NULL)`,
+        );
+        database.exec(`CREATE UNIQUE INDEX "${indexName}" ON "account" (${indexColumns})`);
+    };
 
 describe("ensureMigrated", () => {
     it("single-flights concurrent callers onto one migration run", async () => {
@@ -101,6 +173,123 @@ describe("ensureMigrated", () => {
         await expect(ensureMigrated({ options: {} })).rejects.toThrow(/no `database`/u);
 
         expect(mockGetMigrations).not.toHaveBeenCalled();
+    });
+
+    it("drops the reverted `account.issuer` column, and its index, on a D1 database", async () => {
+        // better-auth 1.7.0 required this column and 1.7.3 reverted it, and upstream's
+        // migrator does not remove it — so without this step `runMigrations()` reports
+        // success and every later sign-up dies on `NOT NULL constraint failed`.
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(seedLegacyAccount());
+
+        await ensureMigrated({ options: { database } });
+
+        expect(database.columns("account")).not.toContain("issuer");
+        expect(database.indexNames()).toStrictEqual([]);
+    });
+
+    it("finds the index under the name a renamed field gave it", async () => {
+        // better-auth names an index after the PHYSICAL columns, so `account.fields.accountId`
+        // changes it. A name reconstructed from the default fields misses this index, and the
+        // `DROP COLUMN` then fails because SQLite refuses to drop an indexed column.
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(seedLegacyAccount(`"issuer", "accountId"`, "account_issuer_provider_account_id_uidx"));
+
+        await ensureMigrated({ options: { database } });
+
+        expect(database.columns("account")).not.toContain("issuer");
+    });
+
+    it("drops a second index on the column that one guessed name would leave behind", async () => {
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            seedLegacyAccount()(sqlite);
+            sqlite.exec(`CREATE INDEX "account_issuer_idx" ON "account" ("issuer")`);
+        });
+
+        await ensureMigrated({ options: { database } });
+
+        expect(database.columns("account")).not.toContain("issuer");
+        expect(database.indexNames()).toStrictEqual([]);
+    });
+
+    it("never drops an `issuer` column the app declared itself", async () => {
+        // `account.additionalFields.issuer` is the app's column, not the reverted one.
+        // Dropping it destroys their data — and on the DO path the additive step re-adds it
+        // every cold start, so the two would fight forever.
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(seedLegacyAccount());
+
+        await ensureMigrated({
+            options: { account: { additionalFields: { issuer: { required: true, type: "string" } } }, database },
+        });
+
+        expect(database.columns("account")).toContain("issuer");
+    });
+
+    it("leaves a table alone whose DDL merely mentions the word", async () => {
+        // `sqlite_master.sql` is the verbatim CREATE TABLE text, so a comment, a CHECK
+        // literal or a `REFERENCES issuer(...)` clause all contain "issuer" without there
+        // being such a column. Matching those would run a DROP COLUMN that fails forever,
+        // because the text never changes. The probe asks the database instead.
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            sqlite.exec(`CREATE TABLE "issuer" ("id" text NOT NULL PRIMARY KEY)`);
+            sqlite.exec(
+                `CREATE TABLE "account" ( -- issuer removed in 1.7.3\n "id" text NOT NULL PRIMARY KEY, "issuerRef" text REFERENCES "issuer"("id"), "providerId" text CHECK ("providerId" <> 'issuer'))`,
+            );
+        });
+
+        await expect(ensureMigrated({ options: { database } })).resolves.toBeUndefined();
+
+        expect(database.columns("account")).toStrictEqual(["id", "issuerRef", "providerId"]);
+    });
+
+    it("does nothing when the account table does not exist yet", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1();
+
+        await expect(ensureMigrated({ options: { database } })).resolves.toBeUndefined();
+    });
+
+    it("leaves a non-D1 database alone, since the remedy there is to relax the constraint", async () => {
+        // Postgres/MySQL keep the column and drop only the NOT NULL; dropping it is the
+        // SQLite-specific answer, and D1 is the only SQLite `database` shape here.
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+
+        const runMigrations = vi.fn<() => Promise<void>>(async () => {});
+
+        mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
+
+        await ensureMigrated({ options: { database: { db: {} } } });
+
+        expect(runMigrations).toHaveBeenCalledTimes(1);
     });
 
     it("carries a non-internal code, so the guidance survives the wire", async () => {

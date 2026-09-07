@@ -217,8 +217,15 @@ export const withD1IndexIntrospection = <T extends D1Like>(database: T): T =>
         },
     });
 
-/** True when `value` looks like a D1 binding (rather than a kysely dialect or an adapter). */
-export const isD1Database = (value: unknown): value is D1Like =>
+/**
+ * True when `value` looks like a D1 binding (rather than a kysely dialect or an adapter).
+ *
+ * Narrows to `D1Database`, not to the minimal {@link D1Like} this module happens to touch:
+ * every caller that passes the guard goes on to use the real binding, and answering with
+ * the narrower type only moves the assertion to them. `D1Database` satisfies `D1Like`
+ * structurally, so the internals below are unaffected.
+ */
+export const isD1Database = (value: unknown): value is D1Database =>
     typeof value === "object" &&
     value !== null &&
     typeof (value as { prepare?: unknown }).prepare === "function" &&
