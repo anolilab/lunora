@@ -479,7 +479,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 {
                     amount: input.amount ? Number(input.amount.minorUnits) : undefined,
                     payment_intent: input.sessionId,
-                    reason: input.reason as Stripe.RefundCreateParams.Reason | undefined,
+                    reason: input.reason,
                 },
                 { idempotencyKey: input.idempotencyKey },
             );

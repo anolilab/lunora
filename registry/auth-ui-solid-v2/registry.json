@@ -10,7 +10,7 @@
         "@lunora/auth": "workspace:*",
         "@lunora/errors": "workspace:*",
         "@solidjs/web": "^2.0.0-rc.0",
-        "better-auth": "1.7.1"
+        "better-auth": "1.7.3"
     },
     "files": [
         { "from": "client.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/client.ts" },

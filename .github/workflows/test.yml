@@ -51,7 +51,12 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 45, not 30. The 22.15 leg runs `test:affected:coverage`, and a change to
+        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
+        # this leg runs the whole suite under v8 coverage. That is ~25 min for
+        # @lunora/codegen alone, which left no room for the studio step after it and
+        # cancelled the job at 30 min with every test passing.
+        "timeout-minutes": 45
         "strategy":
             "fail-fast": false
             "matrix":
