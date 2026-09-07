@@ -19,6 +19,34 @@ const customAdapter = (): { id: string } => {
     return { id: "lunora" };
 };
 
+/**
+ * A D1 binding stub recording every statement, with `sqlite_master` answering the
+ * account table's DDL. `batch` exists only so `isD1Database` recognises the shape.
+ */
+const fakeD1 = (accountDdl: null | string) => {
+    const statements: string[] = [];
+
+    const first = async (): Promise<{ sql: null | string } | null> => (accountDdl === null ? null : { sql: accountDdl });
+
+    return {
+        // Never called — it exists only because `isD1Database` checks for it.
+        batch: (): void => {},
+        prepare: (query: string) => {
+            statements.push(query);
+
+            return {
+                bind: () => {
+                    return { first };
+                },
+                run: async (): Promise<void> => {},
+            };
+        },
+        statements,
+    };
+};
+
+const LEGACY_ACCOUNT_DDL = `CREATE TABLE "account" ("id" text NOT NULL, "issuer" text NOT NULL, "accountId" text NOT NULL)`;
+
 describe("ensureMigrated", () => {
     it("single-flights concurrent callers onto one migration run", async () => {
         expect.assertions(2);
@@ -101,6 +129,70 @@ describe("ensureMigrated", () => {
         await expect(ensureMigrated({ options: {} })).rejects.toThrow(/no `database`/u);
 
         expect(mockGetMigrations).not.toHaveBeenCalled();
+    });
+
+    it("drops the reverted `account.issuer` column on a D1 database that still has it", async () => {
+        // better-auth 1.7.0 required this column and 1.7.3 reverted it, and upstream's
+        // migrator does not remove it — so without this step `runMigrations()` reports
+        // success and every later sign-up dies on `NOT NULL constraint failed`.
+        expect.assertions(3);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(LEGACY_ACCOUNT_DDL);
+
+        await ensureMigrated({ options: { database } });
+
+        // Read through `sqlite_master`, never `pragma_table_info` — D1's authorizer
+        // refuses pragma table-valued functions through the Worker binding.
+        expect(database.statements[0]).toMatch(/sqlite_master/u);
+        expect(database.statements).toContain(`DROP INDEX IF EXISTS "account_issuer_accountId_uidx"`);
+        expect(database.statements).toContain(`ALTER TABLE "account" DROP COLUMN "issuer"`);
+    });
+
+    it("issues no DDL when the account table never had the column", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(`CREATE TABLE "account" ("id" text NOT NULL, "accountId" text NOT NULL)`);
+
+        await ensureMigrated({ options: { database } });
+
+        expect(database.statements.filter((statement) => /DROP|ALTER/u.test(statement))).toStrictEqual([]);
+    });
+
+    it("issues no DDL when the account table does not exist yet", async () => {
+        // A first-ever migration: better-auth just created the table without `issuer`,
+        // and `sqlite_master` returning no row must not be read as "drop it".
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1(null);
+
+        await ensureMigrated({ options: { database } });
+
+        expect(database.statements.filter((statement) => /DROP|ALTER/u.test(statement))).toStrictEqual([]);
+    });
+
+    it("leaves a non-D1 database alone, since the remedy there is to relax the constraint", async () => {
+        // Postgres/MySQL keep the column and drop only the NOT NULL; dropping it is the
+        // SQLite-specific answer, and D1 is the only SQLite `database` shape here.
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+
+        const runMigrations = vi.fn<() => Promise<void>>(async () => {});
+
+        mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
+
+        await ensureMigrated({ options: { database: { db: {} } } });
+
+        expect(runMigrations).toHaveBeenCalledTimes(1);
     });
 
     it("carries a non-internal code, so the guidance survives the wire", async () => {

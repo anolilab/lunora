@@ -37,6 +37,7 @@ import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import { hasLegacyIssuerColumn, legacyIssuerCleanupStatements } from "./legacy-issuer";
 
 /**
  * The Durable Object state slice this class needs — structural so unit tests can
@@ -197,6 +198,19 @@ class LunoraAuthDO {
             // columns are added rather than left to fail on the next write.
             for (const statement of authDoColumnAdditions(resolved, (table) => this.#columnNames(table))) {
                 [...this.#storage.sql.exec(statement)];
+            }
+
+            // The mirror image, and the only column this ever removes: better-auth 1.7.0
+            // added a required `account.issuer` and 1.7.3 reverted it, leaving databases
+            // provisioned in between with a NOT NULL column nothing writes any more — so
+            // every sign-up fails until it is gone. Additive migration cannot fix that.
+            // See `legacy-issuer.ts`; this becomes a no-op once each DO has run it.
+            const accountTable = resolved.account?.modelName ?? "account";
+
+            if (hasLegacyIssuerColumn(this.#columnNames(accountTable))) {
+                for (const statement of legacyIssuerCleanupStatements(accountTable)) {
+                    [...this.#storage.sql.exec(statement)];
+                }
             }
 
             this.#schemaApplied = true;

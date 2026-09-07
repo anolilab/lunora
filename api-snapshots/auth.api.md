@@ -993,6 +993,10 @@ const eventForPath: (path: string) => AuthAuditEvent | undefined;
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
+### `legacyIssuerCleanupStatements` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `listSignUpInvitations` (const)
 
 ```ts

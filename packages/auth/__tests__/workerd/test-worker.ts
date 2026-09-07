@@ -106,4 +106,5 @@ export default testWorker;
 // Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO` is named
 // by wrangler.jsonc's DO binding; `SCIM_TOKEN` is shared with the suite so the
 // credential is declared once.
+export type { TestEnv };
 export { AuthStorageDO, INTERNAL_SECRET, SCIM_TOKEN };
