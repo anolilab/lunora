@@ -350,10 +350,11 @@ const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape |
 /**
  * Worker-origin `vars` that must resolve to the deployed worker's public URL.
  * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
- * scheduled-job dispatch (SchedulerDO → `LUNORA_ORIGIN_URL`) and auth callbacks
- * (`AUTH_URL`) silently break in production.
+ * scheduled-job dispatch and reverse cross-shard relations (both
+ * `LUNORA_ORIGIN_URL`) and auth callbacks (`AUTH_URL`) silently break in
+ * production.
  */
-const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "LUNORA_WORKER_ORIGIN", "AUTH_URL"] as const;
+const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "AUTH_URL"] as const;
 
 /** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
 const isLocalhostUrl = (value: string): boolean => {
