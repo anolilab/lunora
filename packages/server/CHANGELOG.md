@@ -1,3 +1,17 @@
+## @lunora/server [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.107...@lunora/server@1.0.0-alpha.108) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.58
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/observability:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/server [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.106...@lunora/server@1.0.0-alpha.107) (2026-09-06)
 
 
