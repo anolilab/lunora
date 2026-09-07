@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.111...@lunora/payment@1.0.0-alpha.112) (2026-09-07)
+
+### Bug Fixes
+
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
 ## @lunora/payment [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.110...@lunora/payment@1.0.0-alpha.111) (2026-09-07)
 
 
