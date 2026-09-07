@@ -15,12 +15,17 @@
  * proves dispatch A (the slow one) is STILL metered against its own tracker
  * after dispatch B has completed and cleared the shared field out from under
  * it — the failure mode this fix exists to close.
+ *
+ * The outbound D1 bookmark is the same shape of bug on the write side, so its
+ * regression lives here too: an action reports its `.global()` write's bookmark,
+ * parks on outbound I/O, and a sibling dispatch runs start to finish inside that
+ * window. The bookmark is threaded the same way for the same reason.
  */
 import type { SchemaLike, SqlExec, TransactionHeadroomTracker } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do";
+import type { DispatchBookmark, QueryReadScope, ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -91,6 +96,42 @@ class RaceShard extends ShardDO {
     }
 }
 
+/**
+ * The same interleaving, one field over: the outbound D1 bookmark.
+ *
+ * `"slow"` is an ACTION — it reports its `.global()` write's bookmark through
+ * the sink `handleRpc` hands it (exactly what the generated `buildCtx` binds
+ * into the global database's `onBookmark`), then parks on outbound I/O. Nothing
+ * gates an action, so `"fast"` runs a complete dispatch inside that window and
+ * its `beginDispatch`/`endDispatch` clear every shared per-request field.
+ */
+class BookmarkRaceShard extends ShardDO {
+    public started = deferred();
+
+    public gate = deferred();
+
+    public override async handleRpc(
+        functionPath: string,
+        _args: Record<string, unknown>,
+        _headroom?: TransactionHeadroomTracker,
+        _scope?: QueryReadScope,
+        bookmarks?: DispatchBookmark,
+    ): Promise<unknown> {
+        if (functionPath === "slow") {
+            this.setOutboundBookmark("bm-slow", bookmarks);
+            this.started.resolve();
+
+            // The third-party round trip an action awaits. A sibling dispatch
+            // runs to completion right here.
+            await this.gate.promise;
+
+            return { ok: true };
+        }
+
+        return { ok: true };
+    }
+}
+
 const rpcRequest = (functionPath: string, args: Record<string, unknown> = {}): Request =>
     new Request("https://shard.internal/rpc", {
         body: JSON.stringify({ args, functionPath }),
@@ -98,7 +139,7 @@ const rpcRequest = (functionPath: string, args: Record<string, unknown> = {}): R
         method: "POST",
     });
 
-describe("dispatch-race: value-threaded transaction headroom (plan 207 step 3)", () => {
+describe("dispatch-race: value-threaded per-dispatch state (plan 207 step 3)", () => {
     let harness: ReturnType<typeof createSqliteExec>;
     let shard: RaceShard;
 
@@ -146,5 +187,39 @@ describe("dispatch-race: value-threaded transaction headroom (plan 207 step 3)",
         const body = await slowResponse.json<{ error: { code: string } }>();
 
         expect(body.error.code).toBe("TRANSACTION_LIMIT_EXCEEDED");
+    });
+
+    it("an action's outbound bookmark survives a sibling dispatch that completes inside its await", async () => {
+        expect.assertions(3);
+
+        const state: ShardDOState = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+        const bookmarkShard = new BookmarkRaceShard(state, {});
+
+        const slow = bookmarkShard.fetch(rpcRequest("slow"));
+
+        await bookmarkShard.started.promise;
+
+        // A complete sibling dispatch, start to finish, while the action is
+        // parked past its global write.
+        const fast = await bookmarkShard.fetch(rpcRequest("fast"));
+
+        expect(fast.status).toBe(200);
+        // The sibling wrote nothing global, so it reports no bookmark of its own.
+        expect(fast.headers.get("x-d1-bookmark")).toBeNull();
+
+        bookmarkShard.gate.resolve();
+
+        const slowResponse = await slow;
+
+        // The action's own write is still the one its response pins. Read off a
+        // shared field this came back `null`, and the client's next global read
+        // was free to land on a replica that had never seen the write.
+        expect(slowResponse.headers.get("x-d1-bookmark")).toBe("bm-slow");
     });
 });

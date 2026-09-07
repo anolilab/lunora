@@ -11,6 +11,7 @@ export { serveRelationFanout } from "./relation-fanout";
 export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
+    DispatchBookmark,
     HibernatableWebSocket,
     QueryReadScope,
     RunShardApplyCdcArgs,

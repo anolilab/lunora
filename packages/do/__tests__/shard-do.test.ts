@@ -1,11 +1,11 @@
 import { serialize } from "node:v8";
 
-import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
+import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { encodeWire } from "../../../shared/wire-codec";
-import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
+import type { DispatchBookmark, QueryReadScope, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
 
 /**
@@ -101,14 +101,20 @@ class TestShard extends ShardDO {
     /** Identity envelope observed by `handleRpc` on the most recent request. */
     public observedIdentity: Record<string, unknown> | undefined;
 
-    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+    public override async handleRpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        _headroom?: TransactionHeadroomTracker,
+        _scope?: QueryReadScope,
+        bookmarks?: DispatchBookmark,
+    ): Promise<unknown> {
         this.rpcCalls.push({ args, functionPath });
         this.observedInboundBookmark = this.getInboundBookmark();
         this.observedUserId = this.getCurrentUserId();
         this.observedIdentity = this.getCurrentIdentity();
 
         if (this.bookmarkToEmit !== undefined) {
-            this.setOutboundBookmark(this.bookmarkToEmit);
+            this.setOutboundBookmark(this.bookmarkToEmit, bookmarks);
         }
 
         return this.rpcResult;
