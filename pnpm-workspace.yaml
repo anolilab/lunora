@@ -53,6 +53,22 @@ overrides:
   # severity, no fixed release), failing the dependency-review gate. Bump this in
   # lockstep with `catalogs.expo`.
   react-native: 0.86.2
+  # `satori` (transitive, via the docs OG-image stack) pins `fflate` at exactly
+  # 0.7.3, which carries GHSA-px8p-9vwx-vf98 -- `unzipSync` can spin forever on a
+  # malformed ZIP64 archive -- and fails the dependency-review gate. 0.7.5 is the
+  # patched release on that line, so this is a patch bump inside satori's own minor,
+  # not a version it was never tested against. The range also covers 0.7.4, which is
+  # vulnerable to the same advisory.
+  fflate@>=0.7.0 <0.7.5: 0.7.5
+  # Force a single `jose`. `@lunora/cloudflare-access` takes it from the `auth`
+  # catalog while better-auth's own dependency range resolves its own copy; two
+  # copies split `@better-auth/core` into two peer instances, and its
+  # `BetterAuthOptions` is then nominally incompatible with itself
+  # ("Argument of type BetterAuthOptions is not assignable to parameter of type
+  # BetterAuthOptions", pointing at two .pnpm paths). Keep this in lockstep with
+  # `catalogs.auth.jose`; better-auth peers `^6.1.0`, so a 6.x catalog bump is safe
+  # to mirror here.
+  jose: 6.2.12
   # h3 stays on v1. v2 is a different framework (srvx/rou3 core, `event.req` instead
   # of `toWebRequest`), Nuxt 4 / Nitro 2 run v1, and @lunora/nuxt peers `h3: ^1.15.0`.
   # 2.0.0 is deprecated upstream and 2.0.1 is rc-only, so there is nothing stable to
@@ -230,7 +246,13 @@ catalogs:
     # consistent-boolean-name, name-replacements, prefer-await, …) that report
     # 8,194 errors across the repo, most of them renames no autofix can do.
     # Adopting them is its own migration — bump this and the `web` copy together.
-    "@anolilab/eslint-config": 30.0.1
+    # Held at 28.0.1. 30.x turns on a large batch of new rules (unicorn's
+    # consistent-boolean-name / prefer-global-number-constants /
+    # consistent-conditional-object-spread, no-restricted-types, ...) that the
+    # existing source has never been written against: 58 of 104 packages fail, with
+    # thousands of findings, none of them in code this change touches. Adopting it is
+    # its own sweep, not a dep bump.
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.3
     "@typescript-eslint/parser": 8.69.0
     "@eslint-react/eslint-plugin": 5.18.10
@@ -288,21 +310,32 @@ catalogs:
     "@visulima/error": 6.1.0
   test:
     "@codspeed/vitest-plugin": 5.7.1
-    "@vitest/coverage-v8": 5.0.0
-    "@vitest/ui": 5.0.0
+    # Held at 4.x. Vitest 5 moved benchmarks off the top-level `bench` export onto
+    # the test context (`test("...", async ({ bench }) => ...)`), which is a
+    # mechanical rewrite of the 70 `__bench__/*.bench.ts` files -- but the blocker
+    # is `@codspeed/vitest-plugin`. Its instrumented runner imports `vitest/runners`
+    # and `vitest/suite`, both of which vitest 5 removed from its exports map
+    # (ERR_PACKAGE_PATH_NOT_EXPORTED), and no published version peers on vitest 5 --
+    # 5.7.1 and the 6.0.0 betas all declare `vitest: ^3.2 || ^4`. Locally the plugin
+    # is a pass-through so this fails only in CodSpeed CI. Move all four together
+    # once the plugin ships vitest 5 support.
+    "@vitest/coverage-v8": 4.1.10
+    "@vitest/ui": 4.1.10
     fake-indexeddb: 6.2.5
-    vitest: 5.0.0
+    vitest: 4.1.10
   tsc:
     # Pinned to 6.0.3 — see the `typescript` override above. Bumping this to 7.x
     # installs nothing (the override wins) and only makes the catalog lie.
-    typescript: 7.0.2
+    typescript: 6.0.3
   types:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
     "@types/node": 26.4.1
     "@types/semver": ^7.8.0
   cloudflare:
-    "@cloudflare/containers": ^0.3.7
+    # Exact-pinned for the same reason as @cloudflare/workers-types below: the patch
+    # in `patchedDependencies` is version-pinned, so a caret would break the install.
+    "@cloudflare/containers": 0.3.7
     # Exact-pinned: `@lunora/browser` tracks a verified-good Playwright-on-Workers
     # release, and bumps are vetted against a live worker.
     #
@@ -313,14 +346,16 @@ catalogs:
     "@cloudflare/playwright": 1.3.6
     "@cloudflare/vitest-plugin": ^1.1.4
     # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
-    # is version-pinned in `patchedDependencies` — regenerate it when bumping this.
+    # is version-pinned in `patchedDependencies` — so this range must be exact, not a
+    # caret: upstream publishes daily, and any drift makes the patch unused, which is
+    # a hard install failure (ERR_PNPM_UNUSED_PATCH). Regenerate the patch when bumping.
     # Upstream declares `declare const Buffer: any` / `declare const process: any`,
     # which win over @types/node's `BufferConstructor` / `NodeJS.Process` in every
     # package that loads both type sets (33 of them here; none load workers-types
     # alone). That makes every `process.*` and `Buffer.*` read an untyped `any`,
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
-    "@cloudflare/workers-types": ^5.20260907.1
+    "@cloudflare/workers-types": 5.20260811.1
     miniflare: ^4.20260730.0
     wrangler: ^4.129.0
   e2e:
@@ -400,7 +435,18 @@ catalogs:
     tw-animate-css: ^1.4.0
     vite: ^8.2.2
   data:
-    "@faker-js/faker": ^10.6.0
+    # EXACT-pinned, and not because of a patch. `@lunora/seed`'s public contract is
+    # that `copycat.email("alice")` yields the same string forever -- re-seeding a
+    # database has to reproduce the rows it produced last time -- and `copycat` draws
+    # straight from faker (`faker.internet.email(...)` in src/copycat/index.ts). Faker
+    # revises its data tables in ordinary minors, so a caret silently rewrites every
+    # seeded value: 10.6.0 alone moved `copycat.email("alice")` from
+    # `eusebio18@example.com` to `eugene18@example.com`.
+    #
+    # Bumping this is a deliberate, documented mapping change: rebaseline the pinned
+    # constants in packages/seed/__tests__/copycat.test.ts and plan.test.ts, and say so
+    # in the commit.
+    "@faker-js/faker": 10.5.0
   content:
     # Frontmatter parsing for markdown-authored agent skills
     # (`@lunora/agent/skill-markdown`, a subpath so only apps that use it pay).
@@ -435,17 +481,44 @@ catalogs:
     motion: ^13.2.0
     recharts: ^3.10.1
     "@solidjs/testing-library": ^0.8.10
-    "@tanstack/db": ^0.8.7
-    "@tanstack/offline-transactions": ^1.0.53
-    "@tanstack/react-db": ^0.3.7
-    "@tanstack/react-query": ^5.102.8
+    # Held as a set. `@tanstack/db` and `@tanstack/react-db` are pre-1.0, so their
+    # minors are breaking: 0.6 -> 0.8 and 0.1 -> 0.3 are four breaking bumps between
+    # them, and they carry the playground's optimistic-mutation and durable-outbox
+    # layer. On the newer set an offline `Send` stops rendering its optimistic row
+    # from the second message onward, which tests/e2e/offline-replay.spec.ts catches
+    # in both chromium and firefox and nothing else does.
+    #
+    # Exact, not carets: `offline-transactions` tracks `db`'s pre-1.0 line, so
+    # `^1.0.42` happily resolves 1.0.53 against db 0.6 and the playground dies at
+    # boot with a `QueryBuilderError`. All three versions have to move as one set.
+    #
+    # Move them together, then re-run `pnpm run e2e` -- the unit suites do not cover
+    # this path.
+    "@tanstack/db": 0.6.17
+    "@tanstack/offline-transactions": 1.0.42
+    "@tanstack/react-db": 0.1.95
+    # Held at 5.101.4: 5.102.x deprecates the `prefetchQuery` / `fetchQuery`
+    # overloads `@lunora/react` calls, and `sonarjs/deprecation` fails the build on
+    # them. Bumping means moving those call sites to the replacement signatures.
+    # Exact, not a caret: 5.102.8 satisfies `^5.101.4`, so only an exact pin holds.
+    "@tanstack/react-query": 5.101.4
     "@tanstack/react-router": ^1.170.32
     "@tanstack/react-start": ^1.168.49
     # Held at v8: v9 rewrote the row-model API (`getCoreRowModel()` /
     # `getSortedRowModel()` as options are gone, replaced by table-core 9 +
     # @tanstack/react-store features). @lunora/studio's data browser is built on
     # the v8 shape, so moving is a migration, not a dep bump.
-    "@tanstack/react-table": ^9.2.4
+    # Held at 8.x. v9 is a ground-up rewrite: `useReactTable` becomes `useTable`,
+    # row models become opt-in features (`createCoreRowModel` + `rowSortingFeature`),
+    # and every type takes the feature set as its first parameter. v9 does ship a
+    # `@tanstack/react-table/legacy` entry point that restores the v8 API, but every
+    # symbol in it is marked `@deprecated`, so `sonarjs/deprecation` rejects the whole
+    # import -- it is not a usable migration path here.
+    #
+    # Moving to v9 therefore means porting packages/studio's data browser (the grid,
+    # its feature bar, and the `use-data-browser` hook) onto the feature-registration
+    # API. That is a studio change with its own tests, not a dep bump.
+    "@tanstack/react-table": ^8.21.3
     "@tanstack/react-virtual": ^3.14.10
     "@sveltejs/vite-plugin-svelte": ^7.3.0
     svelte-check: ^4.7.6
@@ -575,7 +648,13 @@ catalogs:
   # never perturbs the framework packages' version pins.
   web:
     # Held at 28.0.1 — see the `lint` catalog above.
-    "@anolilab/eslint-config": 30.0.1
+    # Held at 28.0.1. 30.x turns on a large batch of new rules (unicorn's
+    # consistent-boolean-name / prefer-global-number-constants /
+    # consistent-conditional-object-spread, no-restricted-types, ...) that the
+    # existing source has never been written against: 58 of 104 packages fail, with
+    # thousands of findings, none of them in code this change touches. Adopting it is
+    # its own sweep, not a dep bump.
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.3
     "@babel/core": 8.0.1
     "@c15t/react": 2.2.1
@@ -608,7 +687,7 @@ catalogs:
     "@unpic/react": 1.0.2
     "@vidstack/react": 1.12.13
     "@vitejs/plugin-react": 6.1.1
-    "@vitest/ui": 5.0.0
+    "@vitest/ui": 4.1.10
     babel-plugin-react-compiler: 1.0.0
     class-variance-authority: 0.7.1
     clsx: 2.1.1
@@ -627,11 +706,27 @@ catalogs:
     eslint-plugin-validate-jsx-nesting: ^0.1.1
     eslint-plugin-zod: 4.12.0
     fast-glob: ^3.3.3
-    fumadocs-core: 17.0.0
+    # 17.0.0 exists on npm for `fumadocs-core` and `fumadocs-ui` but is deprecated
+    # upstream -- "accidentally published due to a bug in Changesets CLI, do not use
+    # it" -- and `latest` is still 16.15.8. It is not a real major: `fumadocs-mdx`
+    # (15.4.0, itself `latest`) peers `fumadocs-core: ^16.15.3` and `fumadocs-ui`
+    # peers it exactly, so 17 splits the tree and `fumadocs-mdx` fails to resolve
+    # `fumadocs-core/dist/content/md/frontmatter.js` at codegen time.
+    #
+    # `fumadocs-twoslash` 4.0.0 is a genuine release (`latest`, not deprecated) and
+    # peers `fumadocs-core: ^16.15.7`, so it belongs on the 16.x line too.
+    #
+    # 16.15.7 rather than `latest` (16.15.8): 16.15.8 landed today and is still inside
+    # the `minimumReleaseAge` window. That window is also why a `--latest` sweep lands
+    # on the deprecated 17.0.0 in the first place -- 17.0.0 is old enough to pass the
+    # gate while the real latest is not.
+    fumadocs-core: 16.15.7
     fumadocs-mdx: 15.4.0
     fumadocs-twoslash: 4.0.0
-    fumadocs-ui: 17.0.0
-    gray-matter: ^4.0.3
+    fumadocs-ui: 16.15.7
+    # Exact-pinned: patches/gray-matter@4.0.3.patch is version-pinned, so a caret
+    # would make the patch unused and fail the install.
+    gray-matter: 4.0.3
     happy-dom: 20.14.0
     lucide-react: 1.41.0
     lucide-static: 1.41.0
@@ -660,13 +755,13 @@ catalogs:
     tailwindcss-animate: 1.0.7
     three: 0.185.1
     # Pinned to 6.0.3 — see the `typescript` override at the top of this file.
-    typescript: 7.0.2
+    typescript: 6.0.3
     unplugin-fonts: 2.0.0
     use-count-up: 3.0.1
     vite: 8.2.2
     vite-imagetools: 12.0.1
     vite-plugin-svgr: 5.2.0
-    vitest: 5.0.0
+    vitest: 4.1.10
     zod: 4.5.4
   auth:
     # EXACT-pinned (no caret). The whole better-auth family versions in lockstep —

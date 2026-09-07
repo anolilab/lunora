@@ -1,4 +1,3 @@
-import { createLocalAccountIssuer } from "@better-auth/core/db";
 import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
@@ -1054,14 +1053,11 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     const hashed = await context_.password.hash(password);
 
                     await context_.internalAdapter.linkAccount({
-                        // 1.7 made `issuer` required and scoped an account by
-                        // `(issuer, accountId)` rather than `accountId` alone; for a local
-                        // password account the issuer is derived from the provider id
-                        // rather than being a remote IdP. (1.7.0's prereleases also
-                        // renamed the column to `providerAccountId`; GA reverted that, so
-                        // `accountId` is the field name again.)
+                        // An account is scoped by `accountId` alone. 1.7.0 briefly added a
+                        // required `issuer` and scoped by `(issuer, accountId)`, and its
+                        // prereleases briefly renamed this field to `providerAccountId`;
+                        // 1.7.3 reverted both, so neither appears here.
                         accountId: user.id,
-                        issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
                         providerId: "credential",
                         userId: user.id,
@@ -1303,11 +1299,10 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await context_.internalAdapter.updatePassword(userId, hashed);
                 } else {
                     await context_.internalAdapter.linkAccount({
-                        // `accountId`, not the `providerAccountId` 1.7.0's prereleases
-                        // briefly used — GA reverted that rename. Same shape as the
-                        // create-user path above.
+                        // Same shape as the create-user path above: `accountId`, no
+                        // `issuer`, and not the `providerAccountId` 1.7.0's prereleases
+                        // briefly used.
                         accountId: userId,
-                        issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
                         providerId: "credential",
                         userId,

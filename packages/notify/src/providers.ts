@@ -3,9 +3,9 @@ import type { Middleware, Notification, NotificationProviders, NotificationResul
 import { createNotification } from "@visulima/notification";
 import { retryMiddleware } from "@visulima/notification/middleware";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
-import { fcmProvider } from "@visulima/notification/providers/fcm";
+import { createFcmProvider } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
-import { webPushProvider } from "@visulima/notification/providers/web-push";
+import { createWebPushProvider } from "@visulima/notification/providers/web-push";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
@@ -433,8 +433,8 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
  * from the edge facade by construction.
  */
 export const buildEngine = (resolved: ResolvedProviders): Notification => {
-    const webPush = resolved.webPush === undefined ? undefined : webPushProvider(resolved.webPush);
-    const fcm = resolved.fcm === undefined ? undefined : fcmProvider(resolved.fcm);
+    const webPush = resolved.webPush === undefined ? undefined : createWebPushProvider(resolved.webPush);
+    const fcm = resolved.fcm === undefined ? undefined : createFcmProvider(resolved.fcm);
 
     const providers: NotificationProviders = {};
 
