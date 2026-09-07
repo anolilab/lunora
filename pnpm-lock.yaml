@@ -180,7 +180,7 @@ catalogs:
       specifier: ^7.1.0
       version: 7.1.0
     conventional-changelog-conventionalcommits:
-      specifier: 9.3.1
+      specifier: ^9.3.1
       version: 9.3.1
     cross-env:
       specifier: ^10.1.0
