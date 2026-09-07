@@ -147,8 +147,33 @@ class ChangeFeedGlobalShard extends GlobalShapeShard {
     }
 }
 
+/**
+ * A {@link GlobalShapeShard} that also reports an external-source next-due time,
+ * so a tick can leave the SHARED poll alarm armed far out (a `.source()` with a
+ * long `refresh.everyMs`) while no global shape is subscribed.
+ */
+class SourcedGlobalShapeShard extends GlobalShapeShard {
+    /** What `pollExternalSources` reports as its next-due timestamp. */
+    public sourceDueAt: number | undefined = undefined;
+
+    protected override pollExternalSources(): Promise<number | undefined> {
+        return Promise.resolve(this.sourceDueAt);
+    }
+}
+
 let harness: ReturnType<typeof createSqliteExec>;
-const alarmBox: { scheduled: null | number } = { scheduled: null };
+
+/**
+ * `scheduled` is the last target the host accepted. `failAt` makes the arm for
+ * exactly that target HANG until `releaseFailure()` rejects it — the window in
+ * which another `scheduleGlobalPoll` interleaves (DO fetches and alarm handlers
+ * both reach it across the same `await`).
+ */
+const alarmBox: { failAt: null | number; releaseFailure: (() => void) | null; scheduled: null | number } = {
+    failAt: null,
+    releaseFailure: null,
+    scheduled: null,
+};
 
 const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
     return {
@@ -160,7 +185,17 @@ const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
         },
         storage: {
             setAlarm(scheduledTime) {
-                alarmBox.scheduled = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();
+                const at = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();
+
+                if (at === alarmBox.failAt) {
+                    return new Promise<void>((_resolve, reject) => {
+                        alarmBox.releaseFailure = () => {
+                            reject(new Error("alarm host unavailable"));
+                        };
+                    });
+                }
+
+                alarmBox.scheduled = at;
 
                 return Promise.resolve();
             },
@@ -193,6 +228,8 @@ describe("shardDO global-shape poll tier", () => {
     beforeEach(() => {
         harness = createSqliteExec();
         alarmBox.scheduled = null;
+        alarmBox.failAt = null;
+        alarmBox.releaseFailure = null;
     });
 
     it("seeds the current global membership as an insert-poke and arms the alarm", async () => {
@@ -646,5 +683,64 @@ describe("shardDO global-shape poll tier", () => {
         expect(ws.sent).toStrictEqual([]);
         // ...but the shape stays counted, so the alarm re-arms and retries next tick.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("pulls a far-off pending alarm in when a fresh global-shape seed needs the poll floor", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new SourcedGlobalShapeShard(makeState(sockets), {});
+        const startedAt = Date.now();
+
+        // A tick with no global subscribers: only the external-source tier has
+        // pending work, and it is not due for an hour, so the shared alarm is
+        // re-armed way out there.
+        shard.sourceDueAt = startedAt + 3_600_000;
+        await shard.alarm();
+
+        expect(alarmBox.scheduled).toBeGreaterThan(startedAt + 3_500_000);
+
+        // A client now subscribes a global shape. Its membership can only be
+        // polled, so the seed must pull the shared alarm back to the 2 s floor —
+        // a pending-but-distant alarm is not "already scheduled" for this caller.
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+
+        await subscribeShape(shard, ws);
+
+        expect(alarmBox.scheduled).toBeLessThanOrEqual(Date.now() + 2000);
+    });
+
+    it("leaves a concurrently armed earlier target alone when its own arm fails", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const poll = (shard as unknown as { scheduleGlobalPoll: (atMs?: number) => Promise<void> }).scheduleGlobalPoll.bind(shard);
+        const startedAt = Date.now();
+
+        await poll(startedAt + 60_000);
+
+        expect(alarmBox.scheduled).toBe(startedAt + 60_000);
+
+        // This arm hangs mid-`await`. While it does, a global-shape seed arms an
+        // EARLIER wake, which succeeds — the host now really is set to +2 s.
+        alarmBox.failAt = startedAt + 30_000;
+
+        const failing = poll(startedAt + 30_000);
+
+        await poll(startedAt + 2000);
+        alarmBox.releaseFailure?.();
+        await failing;
+        alarmBox.failAt = null;
+
+        // The failed arm must not restore its own pending time over that: doing
+        // so leaves the bookkeeping claiming +60 s, so this request looks like an
+        // improvement and pushes the real wake out by 28 seconds.
+        await poll(startedAt + 30_000);
+
+        expect(alarmBox.scheduled).toBe(startedAt + 2000);
     });
 });

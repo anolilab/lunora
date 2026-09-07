@@ -236,6 +236,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
@@ -336,6 +337,33 @@ import { generateChart, generateFilter, generateSql } from "./sql-assistant";
  * identity on pure-JSON payloads, so nothing else changes shape.
  */
 const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
+
+/**
+ * Wire-encode a dispatch's return value, turning the codec's refusal into a
+ * coded, non-redacted `WIRE_ENCODE_FAILED` so the handler author sees WHICH
+ * value it choked on.
+ *
+ * `encodeWire` rejects any non-plain object (a `Decimal`, an ORM entity, a
+ * `Temporal.*`, `RegExp`, `Headers`) and anything nested past its depth cap. Left
+ * as the bare `TypeError`/`RangeError` it raises, the dispatch mapper classes it
+ * as an unrecognized throw and answers a redacted `RPC_FAILED` 500 — the message
+ * naming the offending constructor reaching nobody.
+ *
+ * A mutation calls this from INSIDE its transaction (see
+ * {@link ShardDO.commitMutationBookkeeping}), which is the load-bearing part. The
+ * encode used to happen only in the dedup write, wrapped in that method's
+ * best-effort `catch`, and then again on the response AFTER the transaction had
+ * committed — so an unencodable return committed its writes, wrote no dedup row,
+ * and answered 500. `RPC_FAILED` is not a transient code, so the client dropped
+ * the write as failed while the effect stood, and a retry re-applied it.
+ */
+const encodeDispatchResult = (result: unknown): unknown => {
+    try {
+        return encodeWire(result);
+    } catch (error: unknown) {
+        throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+    }
+};
 
 /**
  * The ingress half of {@link adminResponse}, so a payload this shard exported
@@ -573,8 +601,17 @@ interface ShardDOState {
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
-    /** Optional pointer to the DO instance id so we can detect `__root__`. */
-    id?: { name?: string };
+
+    /**
+     * Optional pointer to the DO instance id so we can detect `__root__`.
+     *
+     * `jurisdiction` is the Cloudflare data-residency the id was minted under
+     * (`env.SHARD.jurisdiction("eu").idFromName(...)`), preserved on the id
+     * itself. It is the ONLY place a DO can learn its own residency, and the
+     * DO→DO tiers need it: a sibling resolved off the raw namespace binding is
+     * a different object entirely.
+     */
+    id?: { jurisdiction?: string; name?: string };
 
     /**
      * Register a constant ping/pong auto-response so the runtime answers a
@@ -798,6 +835,30 @@ interface QueryReadScope {
     footprint: ReadFootprint;
     /** Dependency tracker for this dispatch — the `onRead` channel. */
     tracker: DependencyTracker;
+}
+
+/**
+ * The outbound D1 Sessions bookmark ONE dispatch's `.global()` writes produced —
+ * the value echoed back as `x-d1-bookmark` so the caller's next global read pins
+ * a replica that has seen them.
+ *
+ * Threaded BY VALUE exactly like {@link QueryReadScope}: minted per dispatch by
+ * `beginDispatch`, handed to `handleRpc`'s fifth parameter, and bound into the
+ * generated `buildCtx`'s `onBookmark` callback. A shared instance field cannot
+ * carry it. A MUTATION is input-gated, so nothing interleaves, but an ACTION is
+ * not — it writes a global row, `await`s a third party, and every other dispatch
+ * on the DO runs inside that window. A sibling's `beginDispatch`/`endDispatch`
+ * cleared the field, so the action answered with no `x-d1-bookmark` at all and
+ * the client's next global read went unpinned: read-your-writes silently lost on
+ * a replica, which is the one thing the bookmark exists to prevent.
+ *
+ * `undefined` where there is no HTTP response to carry it (an alarm tick, a
+ * lifecycle dispatch, `runAs`); the bookmark is then simply dropped, which is
+ * what those paths did before.
+ */
+interface DispatchBookmark {
+    /** The bookmark this dispatch's last global write reported. */
+    value: string | undefined;
 }
 
 /**
@@ -1403,9 +1464,14 @@ abstract class ShardDO {
     private currentRequestBookmark: string | undefined;
 
     /**
-     * Per-request D1 bookmark to echo on the outbound response. Handlers
-     * call `setOutboundBookmark` after a global-table write so the
-     * client can pin subsequent reads on the same replica.
+     * The D1 bookmark to echo on the outbound response, so the client can pin
+     * subsequent reads on a replica that has seen its own write.
+     *
+     * Assigned ONLY by the dispatch tail, from that dispatch's own
+     * {@link DispatchBookmark} sink, at a point where nothing else can be
+     * mid-handler on this instance. Handlers write `sink.value`, never this
+     * field: an action holds its bookmark across `await`s a sibling dispatch runs
+     * inside, and a shared field loses it there.
      */
     private currentResponseBookmark: string | undefined;
 
@@ -1705,11 +1771,21 @@ abstract class ShardDO {
     private durableSnapshotStoreAvailable = false;
 
     /**
-     * Whether a global-shape poll alarm is currently armed. Guards
-     * {@link ShardDO.scheduleGlobalPoll} from re-arming on every seed; reset in
-     * {@link ShardDO.alarm} before the poll so a still-subscribed shape re-arms.
+     * When the currently armed poll alarm is due, or `undefined` when none is.
+     * Guards {@link ShardDO.scheduleGlobalPoll} from re-arming on every seed;
+     * cleared in {@link ShardDO.alarm} before the poll so a still-subscribed shape
+     * re-arms.
+     *
+     * The TIME, not a bare boolean. The alarm is shared by three tiers, and the
+     * one an alarm tick re-arms is the EARLIEST due across them — with no global
+     * subscribers that is a `.source()` refresh which can be hours out. A bare
+     * flag made every later caller a no-op, so a fresh `.global()` shape seed
+     * (which wants the 2 s floor) waited out that pending alarm on every warm
+     * instance until eviction. Comparing targets re-arms whenever an EARLIER wake
+     * is asked for, and stays a no-op otherwise — a DO has one alarm, and
+     * `setAlarm` replaces it.
      */
-    private globalPollScheduled = false;
+    private globalPollArmedAt: number | undefined;
 
     /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
     private pokeSequence = 0;
@@ -1996,6 +2072,12 @@ abstract class ShardDO {
             doName: () => this.runner.shardKey,
             env: () => this.env,
             shardBinding: () => this.shardBinding,
+            // Read off THIS DO's own id, not off config or a request header: the
+            // id carries the jurisdiction it was minted under, so a shard always
+            // resolves siblings through the same subnamespace it lives in — with
+            // nothing to configure, nothing to transport, and no way for a
+            // request to claim a different one.
+            shardJurisdiction: () => this.state.id?.jurisdiction,
             sql: () => this.sql as SqlExec,
         };
 
@@ -2289,12 +2371,19 @@ abstract class ShardDO {
      * `getCtxDbReadRangeHook(scope)` on the `createShardCtxDb(...)` call that
      * builds the ctx; both factories return unbound (tracker-less) hooks when it
      * is omitted, which is what every non-cached dispatch passes.
+     *
+     * `bookmarks` is the third such thread — see {@link DispatchBookmark}.
+     * Implementations must record the bookmark on it from the global database's
+     * `onBookmark` callback so the bookmark a `.global()` write produced reaches
+     * THIS dispatch's response rather than a shared field a concurrent action can
+     * clear.
      */
     public abstract handleRpc(
         functionPath: string,
         args: Record<string, unknown>,
         headroom?: TransactionHeadroomTracker,
         scope?: QueryReadScope,
+        bookmarks?: DispatchBookmark,
     ): Promise<unknown>;
 
     /**
@@ -2760,16 +2849,6 @@ abstract class ShardDO {
      */
     protected getInboundBookmark(): string | undefined {
         return this.currentRequestBookmark;
-    }
-
-    /**
-     * Record the post-write D1 bookmark that should be echoed back to the
-     * client on the outbound `x-d1-bookmark` header. Safe to call multiple
-     * times — the last value wins; only the most recent write's bookmark
-     * is meaningful for downstream read pinning.
-     */
-    protected setOutboundBookmark(bookmark: string | undefined): void {
-        this.currentResponseBookmark = bookmark;
     }
 
     /**
@@ -3623,8 +3702,17 @@ abstract class ShardDO {
      * `this.sql` handle. `INSERT OR IGNORE` keeps a concurrent double-dispatch (or
      * the now-skipped post-dispatch call) of the same id idempotent. Also runs the
      * throttled dedup-table GC.
+     *
+     * `encodedResult` has ALREADY been through {@link encodeDispatchResult}, so
+     * the cache holds JSON-safe wire bytes (a raw `bigint` result would otherwise
+     * throw `JSON.stringify`) and a replay answers byte-identical wire form
+     * without a second `encodeWire`. Encoding is the caller's job precisely so it
+     * happens OUTSIDE the swallow below: that `catch` is for a missing dedup table
+     * (pre-migration shard / test stub), not for a return value the codec refuses,
+     * and swallowing the latter is what let an unencodable mutation commit its
+     * writes with no replay guard.
      */
-    protected persistIdempotentResult(result: unknown): void {
+    protected persistIdempotentResult(encodedResult: unknown): void {
         const namespace = this.idempotencyNamespace();
 
         if (this.currentRequestMutationId === undefined || namespace === undefined) {
@@ -3632,16 +3720,15 @@ abstract class ShardDO {
         }
 
         const now = Date.now();
+        // Stringified outside the try for the same reason: this can only fail on a
+        // value `encodeDispatchResult` already vouched for, so a throw here is a
+        // codec bug worth surfacing, not bookkeeping to swallow. `encodeWire` maps
+        // a void mutation's `undefined` to a tagged array, so the result is always
+        // a real string.
+        const resultJson = JSON.stringify(encodedResult);
 
         try {
-            // Store the WIRE-encoded result so the cache holds JSON-safe bytes (a
-            // raw `bigint` result would otherwise throw here) and a later replay
-            // returns byte-identical wire form without a second `encodeWire`.
-            // `encodeWire` maps a void mutation's `undefined` to a tagged array, so
-            // `JSON.stringify` always yields a string for real data — the old
-            // `?? "null"` floor is now dead (a non-data result would throw and the
-            // catch below swallows it, since this bookkeeping is best-effort).
-            writeIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId, JSON.stringify(encodeWire(result)), now);
+            writeIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId, resultJson, now);
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
@@ -3881,9 +3968,16 @@ abstract class ShardDO {
      * without the replay guard (which a re-dispatch would otherwise re-run) nor
      * without the watermark. Records {@link ShardDO.mutationBookkeeping} under this
      * dispatch's mutation id so `fetch` skips the redundant post-dispatch persist.
+     *
+     * The wire encode of `result` happens HERE, first, so a return value the codec
+     * refuses (a class instance, nesting past its depth cap) throws while the
+     * transaction is still open and rolls the whole mutation back. It runs
+     * unconditionally — a request carrying no `x-lunora-mutation-id` writes no
+     * dedup row but must still not commit writes behind a response that cannot be
+     * serialized.
      */
     protected commitMutationBookkeeping(result: unknown): void {
-        this.persistIdempotentResult(result);
+        this.persistIdempotentResult(encodeDispatchResult(result));
 
         // Strict: a watermark write that throws here rolls the whole mutation back
         // rather than committing writes whose watermark was never advanced.
@@ -3922,7 +4016,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.persistIdempotentResult(result);
+        this.persistIdempotentResult(encodeDispatchResult(result));
 
         if (mutatorClass?.kind === "next") {
             this.advanceClientMutationWatermark();
@@ -3979,6 +4073,10 @@ abstract class ShardDO {
      * poke a paid query itself, or it is served free. The base class has no
      * function registry, so the default is `false`; the codegen-generated
      * subclass overrides it with the real `LUNORA_FUNCTIONS` lookup.
+     *
+     * Also backs the `/rpc` backstop: an origin built without a `functions`
+     * registry cannot read the tag at all, so it charges nothing and marks
+     * nothing — and this is the only place left that still knows the call is paid.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
     protected isPaidFunction(_functionPath: string): boolean {
@@ -5737,26 +5835,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Stamp everything one RPC dispatch needs off its request, and reset every
-     * per-request capture the handler will fill.
-     *
-     * Split from {@link ShardDO.handleFetchCloudflare} together with
-     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
-     * the same set of fields, and the whole correctness story for them is that
-     * every field one sets, the other clears. Spread across a 479-line method
-     * the two ends were 350 lines apart, so a newly-added per-request field
-     * stamped here and forgotten there leaks into the NEXT request on the same
-     * DO instance — a cross-request identity bleed with no local symptom.
-     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
-     *
-     * Returns the two values the caller must hold in locals rather than read
-     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
-     * shared fields, and the `finally` would then file this dispatch's telemetry
-     * under another request's trace (see the comments inside).
-     * @returns this dispatch's trace anchor and its transaction-headroom tracker
-     */
-
-    /**
      * Cloudflare-specific fetch implementation — WebSocket upgrades and the RPC
      * routes. Injected into {@link ShardRunner} as the host-specific handler while
      * the engine is progressively extracted.
@@ -5812,20 +5890,16 @@ abstract class ShardDO {
             }
         }
 
-        // Reserved admin-introspection RPCs are intercepted before user
-        // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate. Run under
-        // their own request scope: this branch returns before `beginDispatch`, so
-        // without it the admin plane inherits whatever a concurrent `/rpc` left on
-        // `this`. See {@link ShardDO.withAdminRequestScope}.
-        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return await this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
+        const answered = this.preDispatchAnswer(request, payload);
+
+        if (answered !== undefined) {
+            return await answered;
         }
 
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        const { dispatchAttribution, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
+        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
 
         // Outcome of the dispatch, for the synthetic root span recorded in the
         // `finally` below. A sentinel rather than a boolean so the `catch` can
@@ -5925,15 +5999,7 @@ abstract class ShardDO {
             // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
             // the request log/metrics below (JSON-safe — a raw `bigint` there
             // would throw `JSON.stringify`).
-            // The outbound bookmark this dispatch's own writes produced, snapshotted
-            // at the last instant the handler owns the shared field. `buildDispatchResponse`
-            // reads `currentResponseBookmark` after the gate has released, and the
-            // handler can still `await` past its final `.global()` write — so a
-            // sibling's prologue could clear the field, or replace it with its own,
-            // between the write and the response. A local closes that window.
-            let outboundBookmark: string | undefined;
-
-            const runHandler = async (): Promise<unknown> => {
+            const runHandler = (): Promise<unknown> => {
                 const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
 
                 // A registered `query` goes through the reactive cache when one
@@ -5943,21 +6009,17 @@ abstract class ShardDO {
                 // encoding still share an entry. `runCachedQuery` is a pass-through
                 // when `reactiveCache` is undefined, but the kind lookup is skipped
                 // in that case so a cache-less shard pays nothing.
-                const handlerResult = await (this.reactiveCache !== undefined && this.isQueryFunction(payload.functionPath)
+                return this.reactiveCache !== undefined && this.isQueryFunction(payload.functionPath)
                     ? this.runCachedQuery(
                           payload.functionPath,
                           handlerArgs,
                           // The scope is threaded BY VALUE into the handler's ctx
                           // (see `handleRpc`), so this dispatch's reads stamp its
                           // own tracker even while a sibling is mid-await.
-                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope),
+                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark),
                           dispatchAttribution,
                       )
-                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom));
-
-                outboundBookmark = this.currentResponseBookmark;
-
-                return handlerResult;
+                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark);
             };
 
             const dedupMutationId = requestScope.mutationId;
@@ -5992,10 +6054,13 @@ abstract class ShardDO {
             // dispatch's identity.
             this.restoreRequestScope(requestScope);
 
-            // AFTER the restore, which clears the field on purpose. A cached
-            // outcome never ran a handler, so `undefined` is the right answer
-            // there: it performed no `.global()` write to report.
-            this.currentResponseBookmark = outboundBookmark;
+            // AFTER the restore, which clears the field on purpose. The value
+            // comes from THIS dispatch's own sink (see {@link DispatchBookmark}),
+            // so a sibling that ran inside the handler's awaits cannot have
+            // cleared or replaced it. A cached outcome never ran a handler, so
+            // its sink is still `undefined` — the right answer: it performed no
+            // `.global()` write to report.
+            this.currentResponseBookmark = dispatchBookmark.value;
 
             if (dispatchOutcome.kind === "cached") {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
@@ -6056,7 +6121,14 @@ abstract class ShardDO {
             // idempotency cache also stores the encoded form (see
             // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
             // `buildDispatchResponse` never re-encode — no double-encoding.
-            const response = this.buildDispatchResponse(mutatorClass, encodeWire(result));
+            //
+            // A MUTATION has already encoded this exact value inside its
+            // transaction (`commitMutationBookkeeping`), so this pass is a pure
+            // re-derivation that cannot fail: an unencodable return rolled back
+            // and never reached here. An action/query encodes for the first time
+            // here, which is fine — it committed nothing transactionally, and the
+            // coded error names the value either way.
+            const response = this.buildDispatchResponse(mutatorClass, encodeDispatchResult(result));
 
             await this.flushChangedTables();
 
@@ -6186,7 +6258,7 @@ abstract class ShardDO {
         // in a test), which simply leaves these log lines uncorrelated.
         const trace = this.currentTriggerTrace;
 
-        this.globalPollScheduled = false;
+        this.globalPollArmedAt = undefined;
 
         let globalShapesRemaining: number;
 
@@ -10665,22 +10737,40 @@ abstract class ShardDO {
      * (a fresh global-shape seed, {@link ShardDO.scheduleSourcePoll}'s initial
      * kick) omits it and gets the original `GLOBAL_SHAPE_POLL_INTERVAL_MS`
      * default, since neither knows a more precise due time yet.
+     *
+     * "Already pending" is decided against {@link ShardDO.globalPollArmedAt}'s
+     * TIME: an alarm due later than the requested target is replaced, one due at
+     * or before it is left alone. Only ever moves the wake EARLIER, so repeated
+     * seeds cannot walk the alarm out.
      */
     private async scheduleGlobalPoll(atMs?: number): Promise<void> {
-        if (this.globalPollScheduled) {
+        const target = atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        const pendingAt = this.globalPollArmedAt;
+
+        if (pendingAt !== undefined && pendingAt <= target) {
             return;
         }
 
-        this.globalPollScheduled = true;
+        this.globalPollArmedAt = target;
 
         try {
             // `ShardHost.alarms` owns the "host cannot arm" case: it resolves
             // silently rather than throwing, which is the same outcome the
             // previous `if (!setAlarm) return` produced — no alarm, no crash.
-            await this.shardHost.alarms.set(atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+            await this.shardHost.alarms.set(target);
         } catch {
-            // A failed arm clears the flag so a later seed/tick retries.
-            this.globalPollScheduled = false;
+            // A failed arm restores the previous pending time (not `undefined`)
+            // so a later seed/tick retries without forgetting an alarm that is
+            // still armed at the older, later target — but only while this call
+            // still owns the field. Fetches and alarm ticks interleave across
+            // the `await`, so another `scheduleGlobalPoll` may have armed an
+            // EARLIER target meanwhile (or the alarm may have fired and cleared
+            // it); writing the older `pendingAt` back over that makes every
+            // later caller compare against an alarm that is not the one armed,
+            // and delays the next poll.
+            if (this.globalPollArmedAt === target) {
+                this.globalPollArmedAt = pendingAt;
+            }
         }
     }
 
@@ -10804,8 +10894,84 @@ abstract class ShardDO {
         return Promise.resolve(undefined);
     }
 
+    /**
+     * The two answers a `/rpc` can earn between the replica gate and
+     * `beginDispatch`: a reserved admin RPC (served under its own scope and
+     * bearer gate) and the paid-procedure backstop.
+     *
+     * Split out of {@link ShardDO.handleFetchCloudflare} because both are the same
+     * shape — request in, response out, no dispatch bookkeeping in scope — while
+     * everything after them shares eight dispatch locals. `undefined` means
+     * "nothing answered it here; go dispatch".
+     *
+     * Deliberately NOT `async`: the admin branch is the only one that awaits, and
+     * an `async` wrapper would spend a microtask on the common path where this
+     * returns `undefined` — which is enough to move `beginDispatch` after a
+     * concurrent admin request that overlaps it (see
+     * `__tests__/shard-do.system-dispatch.test.ts`).
+     * @param request The inbound `/rpc` request.
+     * @param payload Its parsed body.
+     * @returns The response to return, or `undefined` to continue into dispatch.
+     */
+    private preDispatchAnswer(request: Request, payload: RpcRequest): Promise<Response> | Response | undefined {
+        // Reserved admin-introspection RPCs are intercepted before user
+        // dispatch — they read raw SQLite directly rather than running a
+        // registered function, and carry their own bearer-token gate. Run under
+        // their own request scope: this branch returns before `beginDispatch`, so
+        // without it the admin plane inherits whatever a concurrent `/rpc` left on
+        // `this`. See {@link ShardDO.withAdminRequestScope}.
+        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
+        }
+
+        // Paid (`.x402`) backstop. The paywall itself lives at the origin worker,
+        // which reads the price off the `functions` registry it was built with — so
+        // a worker built WITHOUT one (`createLunoraHandler()`, a hand-rolled
+        // `createWorker({ shardDO })`) cannot see the tag and would dispatch every
+        // paid procedure free. The shard always knows: the generated subclass
+        // overrides `isPaidFunction` from `LUNORA_FUNCTIONS`. So an unmarked paid
+        // dispatch is refused here rather than served.
+        //
+        // Placed after the admin branch and before `beginDispatch` so a refusal
+        // costs no dispatch bookkeeping. The batch transport replays each entry
+        // through this same `/rpc` path, so it is covered by this one guard.
+        if (request.headers.get(ORIGIN_PAYWALL_HEADER) !== ORIGIN_PAYWALL_APPLIED && this.isPaidFunction(payload.functionPath)) {
+            return jsonResponse(
+                {
+                    error: {
+                        code: "MISCONFIGURED",
+                        message: `paid (\`.x402\`) function "${payload.functionPath}" reached the shard without passing the origin paywall, so nothing charged for it; an origin worker must be built with \`defineApp()\` (or passed \`functions\`) to read the \`.x402\` tag, and a server-side \`createShardClient\` caller must keep its default system privilege`,
+                    },
+                },
+                500,
+            );
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Stamp everything one RPC dispatch needs off its request, and reset every
+     * per-request capture the handler will fill.
+     *
+     * Split from {@link ShardDO.handleFetchCloudflare} together with
+     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
+     * the same set of fields, and the whole correctness story for them is that
+     * every field one sets, the other clears. Spread across a 479-line method
+     * the two ends were 350 lines apart, so a newly-added per-request field
+     * stamped here and forgotten there leaks into the NEXT request on the same
+     * DO instance — a cross-request identity bleed with no local symptom.
+     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
+     *
+     * Returns the two values the caller must hold in locals rather than read
+     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
+     * shared fields, and the `finally` would then file this dispatch's telemetry
+     * under another request's trace (see the comments inside).
+     * @returns this dispatch's trace anchor and its transaction-headroom tracker
+     */
     private beginDispatch(request: Request): {
         dispatchAttribution: QueryAttribution;
+        dispatchBookmark: DispatchBookmark;
         dispatchHeadroom: TransactionHeadroomTracker;
         dispatchStartedAt: number;
         dispatchTrace: { rootSpanId: string; traceId: string };
@@ -10891,7 +11057,10 @@ abstract class ShardDO {
         // it is written and read on both sides of the handler's awaits, so a
         // shared field would attribute it to whichever concurrent dispatch
         // happened to resolve last. See {@link QueryAttribution}.
-        return { dispatchAttribution: {}, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
+        //
+        // `dispatchBookmark` is the same story on the write side, and for the
+        // same reason: see {@link DispatchBookmark}.
+        return { dispatchAttribution: {}, dispatchBookmark: { value: undefined }, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
     }
 
     /** Clear every per-request field {@link ShardDO.beginDispatch} stamped. */
@@ -11990,4 +12159,4 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };
+export type { DispatchBookmark, HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };

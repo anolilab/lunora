@@ -12,6 +12,7 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
 import { regionHintFromRequest } from "../../../shared/region-hint";
@@ -1452,11 +1453,10 @@ interface WorkerOptions {
      * stamps over anything the client sent, and this option is ignored. Anywhere
      * else (`target: "node"`, a container, a bare process) nothing overwrites
      * that header, so the runtime resolves no IP at all: `ctx.ip` is `undefined`
-     * and the REST limiter's default key pools every caller into one
-     * `no-trusted-ip` bucket. That is correct for a directly-exposed host, and
-     * wrong for an origin sitting BEHIND a proxy that does stamp a client address
-     * — there a real per-IP limit collapses into one bucket a single client can
-     * exhaust for everybody. Naming the header restores per-IP limiting:
+     * and the REST limiter's default key resolves to nothing, so every request it
+     * gates is refused with a `500` rather than pooled behind one bucket a single
+     * caller could drain for everybody. Naming the header restores per-IP
+     * limiting:
      *
      * ```ts
      * trustedClientIpHeader: "cf-connecting-ip"   // origin behind Cloudflare
@@ -2146,14 +2146,20 @@ const logRpcDebug = (env: unknown, envelope: RpcEnvelope): void => {
  * Resolve (and validate) the x402 charge tag for a single RPC: returns the paid
  * function's `.x402({ price })` tag, or `undefined` when the function is free.
  *
- * Fail-closed by construction — a paid function that is fanned out, or one with
- * no `x402Charge` gate configured on the worker, throws here rather than being
- * dispatched free. Extracted from `handleRpc` so the paid-procedure guard
- * doesn't inflate that hot path's cognitive complexity.
+ * Fail-closed for everything this function can see — a paid function that is
+ * fanned out, or one with no `x402Charge` gate configured on the worker, throws
+ * here rather than being dispatched free. Extracted from `handleRpc` so the
+ * paid-procedure guard doesn't inflate that hot path's cognitive complexity.
  *
- * A worker configured with `x402Charge` but no `functions` never reaches this —
- * {@link assertX402Configurable} refuses to build it (see there for why the
- * refusal belongs at construction).
+ * With NO `functions` registry it can see nothing: the `.x402` tags live on that
+ * registry, so there is no tag to read and every call looks free. That is not a
+ * state this function can refuse (it would have to refuse every dispatch), and
+ * {@link assertX402Configurable} catches only the converse — a gate configured
+ * without a registry. The shard closes it instead: the origin marks each dispatch
+ * whose paywall decision it could actually make (`ORIGIN_PAYWALL_HEADER`, stamped
+ * by `forwardContext`), and the shard's `isPaidFunction` backstop refuses a paid
+ * procedure that arrives unmarked. So a registry-less worker cannot serve a paid
+ * procedure free; it fails the call.
  */
 const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): FunctionRegistryEntry["x402"] => {
     if (options.functions === undefined) {
@@ -2336,17 +2342,29 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
 const shardRpcRequest = (functionPath: string, args: Record<string, unknown>, headers: Record<string, string>): Request =>
     new Request("https://shard.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers, method: "POST" });
 
-/** The server-minted identity trio the DOs trust verbatim on an upgrade. */
-const IDENTITY_HEADER_NAMES = ["x-lunora-userid", "x-lunora-identity", "x-lunora-identity-exp"] as const;
+/**
+ * The server-minted `x-lunora-*` values the DOs trust verbatim on an upgrade: the
+ * identity trio, plus the resolved client address.
+ *
+ * `x-lunora-client-ip` belongs here for the same reason the trio does — it is
+ * stamped by `resolveForwardContext`, only where an address can be believed, and
+ * never copied off the caller. Leaving it out did not merely drop the client's
+ * forgery (correct) but the SERVER's own resolved value (not), so `ctx.ip` read
+ * `undefined` for every subscription and stream query while the same procedure
+ * over `/_lunora/rpc` saw a real address — silently pooling every socket into one
+ * bucket under `rateLimit(…, { key: (ctx) => ctx.ip ?? "anonymous" })`.
+ */
+const SERVER_MINTED_HEADER_NAMES = ["x-lunora-userid", "x-lunora-identity", "x-lunora-identity-exp", "x-lunora-client-ip"] as const;
 
 /**
- * SECURITY: strip any client-supplied copy of the identity trio from an upgrade
- * clone, then re-set the server-minted values off `resolveForwardContext`'s
- * headers — an absent resolved value stays stripped, so an anonymous caller can
- * never smuggle a forged `x-lunora-userid` through to the DO.
+ * SECURITY: strip any client-supplied copy of the server-minted headers from an
+ * upgrade clone, then re-set the server's own values off
+ * `resolveForwardContext`'s headers — an absent resolved value stays stripped, so
+ * an anonymous caller can never smuggle a forged `x-lunora-userid` (or a chosen
+ * `x-lunora-client-ip`) through to the DO.
  */
 const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, string>): void => {
-    for (const name of IDENTITY_HEADER_NAMES) {
+    for (const name of SERVER_MINTED_HEADER_NAMES) {
         headers.delete(name);
 
         const value = forwardedHeaders[name];
@@ -2475,6 +2493,12 @@ const checkAdminWsToken = async (request: Request, expected: string | undefined,
  * auth semantics identical to the HTTP path.
  */
 interface LunoraWorker {
+    /**
+     * Cloudflare Email Routing entry. Lunora never serves one itself — it is here
+     * so {@link withFrameworkWorker} can hand a framework host's own `email` back
+     * out of the composed worker instead of dropping it.
+     */
+    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
 
     /**
@@ -2557,6 +2581,34 @@ const detectBindingProbe = (key: string, value: unknown): HealthProbe | undefine
     }
 
     return undefined;
+};
+
+/**
+ * Refuse to build a worker whose app routes shadow the reserved `/_lunora/*`
+ * plane.
+ *
+ * The request handler consults `routes` BEFORE the internal table, and the admin
+ * gate runs only on the internal branch — so a key like
+ * `"/_lunora/admin/functions"` answers on the admin plane with no bearer check
+ * and no `adminGate` evaluation, on every method (keys are pathname-only). That
+ * is operator-authored rather than a remote attack, but it is the one way to wire
+ * a handler onto the admin plane gate-free, and nothing about it reads as
+ * dangerous at the call site. Accepts both key forms — `"/path"` and
+ * `"METHOD /path"` — because both reach the same lookup.
+ */
+const assertNoReservedRoutes = (routes: Readonly<Record<string, unknown>> | undefined): void => {
+    for (const key of Object.keys(routes ?? {})) {
+        // `"METHOD /path"` keys carry the pathname after the first space; a bare
+        // key IS the pathname.
+        const pathname = key.slice(key.indexOf(" ") + 1);
+
+        if (pathname.startsWith(RESERVED_PATH_PREFIX)) {
+            throw new LunoraError(
+                `route "${key}" is under the reserved ${RESERVED_PATH_PREFIX} prefix, which the framework owns. App routes registered there shadow the internal endpoint AND its admin gate — pick a path outside the prefix.`,
+                { code: "MISCONFIGURED", status: 500 },
+            );
+        }
+    }
 };
 
 /**
@@ -2762,6 +2814,38 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * Every forwarded header set this worker sends a shard, with the x402 paywall
+     * marker stamped on.
+     *
+     * The marker says "this origin was able to decide whether the call is paid",
+     * which is true exactly when it holds a `functions` registry to read the
+     * `.x402({ price })` tag off. A worker built without one — `createLunoraHandler()`,
+     * a hand-rolled `createWorker({ shardDO })` — cannot see the tag and would
+     * dispatch every paid procedure FREE, under a paywall documented as fail-closed
+     * by construction; unmarked, the shard refuses it instead (see
+     * {@link resolveX402Charge} and the shard's `isPaidFunction` backstop).
+     *
+     * Stamped HERE rather than at each dispatch so no path can be added that
+     * forgets it, and set on a record the origin builds from a fixed whitelist —
+     * never copied off the caller — so it cannot be forged into a registry-less
+     * worker.
+     */
+    const forwardContext = async (
+        request: Request,
+        env: unknown,
+        resolveIdentity: WorkerOptions["resolveIdentity"],
+        executionContext?: ExecutionContextLike,
+    ): Promise<ForwardContext> => {
+        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, executionContext);
+
+        if (options.functions !== undefined) {
+            resolved.headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
+        }
+
+        return resolved;
+    };
+
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
     // forwarding the inbound `Authorization` bearer, which an Access-authorized
@@ -2774,7 +2858,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the orchestrated calls. No static token configured → nothing to mint, and
     // the operation fails closed downstream exactly as before.
     const resolveAdminForwardContext = async (request: Request, env: unknown): Promise<ForwardContext> => {
-        const context = await resolveForwardContext(request, env, options.resolveIdentity, options.trustedClientIpHeader);
+        const context = await forwardContext(request, env, options.resolveIdentity);
 
         if (accessAdminGrants.has(request) && context.headers["authorization"] === undefined) {
             const token = effectiveAdminToken();
@@ -2915,7 +2999,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // shard may run `internal` functions (scheduled/cron jobs are typically
         // internal). Authorization was already enforced above; this header is set
         // only here, never on the client RPC path.
-        const headers: Record<string, string> = { "content-type": "application/json", "x-lunora-system": "1" };
+        //
+        // The paywall marker rides along for the same reason: a scheduler/cron fire
+        // has no HTTP caller to charge, so running a `.x402`-tagged target unpaid is
+        // the deliberate answer, not an origin that failed to look. Without it the
+        // shard's paid backstop would refuse every cron-scheduled paid procedure.
+        // This path is already admin/HMAC-gated and may call any `internal`
+        // function, so it is strictly more privileged than the paywall it passes.
+        const headers: Record<string, string> = {
+            "content-type": "application/json",
+            [ORIGIN_PAYWALL_HEADER]: ORIGIN_PAYWALL_APPLIED,
+            "x-lunora-system": "1",
+        };
 
         // A trusted server dispatch may ALSO carry a verified caller identity (e.g.
         // a voice session attributing its thread writes to the socket's user). The
@@ -3770,7 +3865,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { claims, headers, userId } = await forwardContext(request, env, publicResolveIdentity);
 
         const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
@@ -3943,7 +4038,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
         await assertShardAuthorized(identity, shardKey);
 
@@ -4049,7 +4144,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Resolve the caller's identity once and forward it to the voice DO so the
         // session's `agents:*` thread writes are attributed to the caller (RLS /
         // ownership). Same shape/authorization ordering as the RPC/WS paths.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
         // Deliberately NOT `assertShardAuthorized`, and the difference is the
         // `else`: that helper default-denies only a NON-default shard, because its
@@ -4424,7 +4519,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -4548,7 +4643,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Use `publicResolveIdentity` (the contract-wrapped resolver) so this public
         // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
         // resolver would let contract-violating claims through to the shard verbatim.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);
@@ -4756,7 +4851,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * EXACT same security steps as {@link handleRpc}, in the same order, off the
      * SAME inbound `request`:
      *
-     * 1. `resolveForwardContext(request, env, publicResolveIdentity)` — the
+     * 1. `forwardContext(request, env, publicResolveIdentity)` — the
      * identical identity resolution (`resolveIdentity` behind the same
      * contract-validation gate as the HTTP path, cookie / authorization /
      * `x-d1-bookmark` forwarding, `x-lunora-userid` / `x-lunora-identity` header
@@ -4823,13 +4918,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // byte-identical to `handleRpc`'s. The context is passed explicitly
             // because this path has no `fetch` funnel to have recorded it, and an
             // SSR host may well hand us a rebuilt `Request` object.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(
-                request,
-                env,
-                publicResolveIdentity,
-                options.trustedClientIpHeader,
-                callOptions.context,
-            );
+            const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity, callOptions.context);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -5067,7 +5156,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertArgsObject(args, "REST");
 
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, options.trustedClientIpHeader);
+        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -5107,6 +5196,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the narrowed map (not just a boolean) lets the handler index it without a non-null
     // assertion.
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
+
+    assertNoReservedRoutes(customRoutes);
 
     const internalRoutes: Record<string, InternalRoute> = {
         [STATUS_PATH]: (request) => {
@@ -5302,6 +5393,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return handleVoiceUpgrade(request, env, url);
         }
 
+        // The reserved prefix is reserved even where nothing matched. The internal
+        // table is keyed on the EXACT pathname, so `/_lunora/rpc/` and
+        // `/_lunora/%61dmin/functions` both miss it — and without this they fell
+        // through to the app's own router, which is how a framework path becomes an
+        // app path by adding a slash. A miss here is a 404, never the app.
+        if (url.pathname.startsWith(RESERVED_PATH_PREFIX)) {
+            return new Response("Not found", { status: 404 });
+        }
+
         // HTTP actions are the lowest-priority matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing — its 404 is the terminal 404.
@@ -5416,14 +5516,34 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 const composeWorker = (options: WorkerOptions): LunoraWorker => createWorker(options);
 
 /**
+ * The three Cloudflare dispatches a module worker can export beside `fetch`,
+ * named once because {@link FrameworkHostHandler} and {@link hostTriggers} both
+ * have to agree on the exact member list — a copy that drifts is a trigger
+ * {@link withFrameworkWorker} silently drops.
+ *
+ * `Promise<void> | void` because these describe what a framework adapter emits,
+ * not what Lunora returns (see {@link LunoraWorker}, whose own entries always
+ * hand back a promise).
+ */
+interface FrameworkTriggers {
+    email: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    queue: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+}
+
+/**
  * A meta-framework's emitted Cloudflare handler: either a bare `fetch` function
- * or a `{ fetch }` module object (optionally carrying its own `scheduled`). Every
- * class-B adapter output (`@sveltejs/adapter-cloudflare`, Nitro's
+ * or a `{ fetch }` module object, optionally carrying its own trigger entries.
+ * Every class-B adapter output (`@sveltejs/adapter-cloudflare`, Nitro's
  * `cloudflare-module`, `@astrojs/cloudflare`) is structurally one of these.
+ *
+ * The trigger entries are all three Cloudflare dispatches a module worker can
+ * export beside `fetch`, not just `scheduled`: Nitro's `cloudflare-module` preset
+ * emits `queue` and `email` too, and a shape that models only `scheduled` lets
+ * {@link withFrameworkWorker} drop them with the type checker's blessing.
  */
 type FrameworkHostHandler =
-    | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
-    | (HttpRouterLike & { scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void });
+    ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
 
 /** Lunora worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
 type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
@@ -5452,6 +5572,27 @@ const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
     Boolean(options.backupCron) || Object.keys(options.crons ?? {}).length > 0 || Object.keys(options.cronJobs ?? {}).length > 0;
 
 /**
+ * The framework host's own trigger entries, if it is a module object.
+ *
+ * Bound once outside the per-request build so the factory form reads them off the
+ * host rather than off whatever `composeWorker` happened to return. Each entry is
+ * checked to actually BE a function: the host is an adapter-emitted `_worker.js`,
+ * so the declared type is a description of what those adapters emit, not a
+ * guarantee the value satisfies it.
+ */
+const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> => {
+    if (typeof host !== "object") {
+        return {};
+    }
+
+    return {
+        ...(typeof host.email === "function" ? { email: host.email } : {}),
+        ...(typeof host.queue === "function" ? { queue: host.queue } : {}),
+        ...(typeof host.scheduled === "function" ? { scheduled: host.scheduled } : {}),
+    };
+};
+
+/**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
  * (own-CF-adapter, hook-injection) composer behind `@lunora/astro`'s
@@ -5465,34 +5606,49 @@ const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean =>
  * Owns the three behaviors the adapters otherwise each re-implemented (and
  * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
  * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
- * request so per-request bindings wire in; (3) **`scheduled` preservation** — when
- * Lunora configures no cron surface, the framework host's own `scheduled` (if any)
- * is preserved rather than silently dropped; otherwise Lunora owns it (crons /
- * backup).
+ * request so per-request bindings wire in; (3) **trigger preservation** — a
+ * dispatch Lunora does not own goes to the framework host rather than being
+ * silently dropped. `scheduled` is Lunora's only when it configures a cron
+ * surface; `queue` only when the app declares a push consumer; `email` never.
+ *
+ * The queue case is the one that loses data rather than work: on workerd a
+ * consumer that returns without throwing IMPLICITLY ACKS the batch, so Lunora's
+ * own `queue` — which calls `options.queue?.()`, gets `undefined` and returns
+ * cleanly — acknowledged and destroyed every message a host consumer was meant to
+ * process, with no error anywhere.
  * @param host The framework's emitted Cloudflare handler.
  * @param optionsInput Lunora options minus `httpRouter`, or an `(env) => options` factory.
  */
 const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: FrameworkWorkerOptionsInput): LunoraWorker => {
     const httpRouter = toHttpRouter(host);
-    const hostScheduled = typeof host === "object" && typeof host.scheduled === "function" ? host.scheduled : undefined;
+    const { email: hostEmail, queue: hostQueue, scheduled: hostScheduled } = hostTriggers(host);
 
     const build = (options: FrameworkWorkerOptions): LunoraWorker => {
         const lunora = composeWorker({ ...options, httpRouter });
 
-        // Preserve the framework host's own `scheduled` when Lunora configures no
-        // cron surface (so a host with cron tasks isn't silently dropped). Spread
-        // `lunora` so `fetch`/`serverQuery` are kept and only `scheduled` is
-        // overridden.
+        // Spread `lunora` so `fetch`/`serverQuery` are kept and only the triggers
+        // it does not own are handed back to the host.
+        const composed: LunoraWorker = { ...lunora };
+
         if (hostScheduled !== undefined && !hasLunoraCrons(options)) {
-            return {
-                ...lunora,
-                scheduled: async (controller, env, context): Promise<void> => {
-                    await hostScheduled(controller, env, context);
-                },
+            composed.scheduled = async (controller, env, context): Promise<void> => {
+                await hostScheduled(controller, env, context);
             };
         }
 
-        return lunora;
+        if (hostQueue !== undefined && options.queue === undefined) {
+            composed.queue = async (batch, env, context): Promise<void> => {
+                await hostQueue(batch, env, context);
+            };
+        }
+
+        if (hostEmail !== undefined) {
+            composed.email = async (message, env, context): Promise<void> => {
+                await hostEmail(message, env, context);
+            };
+        }
+
+        return composed;
     };
 
     if (typeof optionsInput !== "function") {
@@ -5507,6 +5663,19 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
         scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
         serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
+        // `email` is the only trigger declared conditionally, and the asymmetry
+        // with `queue` above is deliberate: Lunora always exports a `queue`
+        // (`createWorker`'s consumer, a no-op when the app declares no push
+        // queues), so that export always resolves to something that can serve a
+        // batch. Lunora has no `email` implementation at all, so without a host
+        // entry the export would be a module shape wrangler reads as a capability
+        // the deployment cannot actually serve.
+        ...(hostEmail === undefined
+            ? {}
+            : {
+                  email: (message: unknown, env: unknown, context: ExecutionContextLike) =>
+                      build(optionsFactory(env)).email?.(message, env, context) ?? Promise.resolve(),
+              }),
     };
 };
 

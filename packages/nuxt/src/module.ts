@@ -139,8 +139,24 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
     };
 };
 
-/** Wrapper snippet shown in every `worker.ts` warning — kept as one constant so the three messages below stay byte-identical. */
-const WORKER_TS_SNIPPET = 'export { default } from "./.output/server/index.mjs"; export { ShardDO } from "./lunora/server";';
+/**
+ * Wrapper snippet shown in every `worker.ts` warning — kept as one constant so
+ * the messages below stay byte-identical.
+ *
+ * It COMPOSES Nitro's handler rather than re-exporting its `default`. Nitro's
+ * handler does export `scheduled` / `queue` / `email`, but each only fires the
+ * matching `cloudflare:*` Nitro hook, which nothing here listens on — so a
+ * re-export produces a worker where Cloudflare finds those entrypoints, calls
+ * them successfully, and Lunora's own never run.
+ */
+// All three event entrypoints, not just `scheduled`. Nitro exports `scheduled`,
+// `queue` and `email`, and each only fires an empty `cloudflare:*` hook, so a
+// bare `export { default } from` swallows every one of them. Handing the user a
+// snippet that fixes one and warns about the other two invites exactly the
+// silent loss the warning describes — a queue consumer that returns without
+// throwing ACKS its batch. Mirrors `templates/nuxt/worker.ts`.
+const WORKER_TS_SNIPPET =
+    'import nitro from "./.output/server/index.mjs"; import app, { ShardDO } from "./lunora/server"; export { ShardDO }; export default { ...nitro, email: (m, e, x) => app.email?.(m, e, x), queue: (b, e, x) => app.queue?.(b, e, x), scheduled: (c, e, x) => app.scheduled(c, e, x) };';
 
 /** Whether the source has an `export` keyword anywhere at all. */
 const EXPORT_KEYWORD_PATTERN = /\bexport\b/u;
@@ -150,6 +166,9 @@ const SHARD_DO_IDENTIFIER_PATTERN = /\bShardDO\b/u;
 
 /** `export * from` a specifier containing "lunora" — re-exports everything (including `ShardDO`) from a barrel without naming it, the common case being `export * from "./lunora/server"`. */
 const LUNORA_STAR_EXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*lunora[^"']*["']/u;
+
+/** Whether the entry mentions `scheduled` at all — the cron entrypoint a Nitro re-export silently swallows. */
+const SCHEDULED_IDENTIFIER_PATTERN = /\bscheduled\b/u;
 
 /**
  * Whether `source` looks like it exports `ShardDO` — the file has an `export`
@@ -223,6 +242,19 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     if (!looksLikeShardDoExport(source)) {
         warn(
             `worker.ts at the project root does not appear to export \`ShardDO\` — add \`export { ShardDO } from "./lunora/server";\` (e.g. \`${WORKER_TS_SNIPPET}\`) and point wrangler's \`main\` at it, so the SHARD Durable Object is exported from the deployed worker.`,
+        );
+    }
+
+    // The silent half of the same wiring. `export { default } from` Nitro's
+    // output ships a worker whose `scheduled` / `queue` / `email` only fire an
+    // empty `cloudflare:*` Nitro hook, so Lunora's never run — while
+    // `lunora deploy` writes the matching `triggers.crons` (and queue consumer)
+    // from the same codegen discovery. The trigger exists, Cloudflare fires it,
+    // the invocation succeeds, and the cron does nothing. Nothing else in the
+    // build says a word about it, which is why it is worth a warning.
+    if (!SCHEDULED_IDENTIFIER_PATTERN.test(source)) {
+        warn(
+            `worker.ts at the project root does not forward \`scheduled\` — re-exporting Nitro's \`default\` gives Cloudflare a \`scheduled\` entrypoint that only fires an empty \`cloudflare:scheduled\` hook, so a cron declared in \`lunora/crons.ts\` is provisioned and then runs nothing. Compose the two instead (\`${WORKER_TS_SNIPPET}\`), which forwards \`queue\` and \`email\` too — Nitro's exports for those fire empty hooks the same way, and a queue consumer that returns without throwing ACKS its batch.`,
         );
     }
 };

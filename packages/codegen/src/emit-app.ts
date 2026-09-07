@@ -381,6 +381,9 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
     `    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;`,
+    `    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];`,
+    `    private observabilitySink?: ShardConfig["observability"];`,
+    `    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];`,
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
     ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
     ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
@@ -440,6 +443,28 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
      */
     public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
         this.reactiveCacheConfig = config;
+
+        return this;
+    }`,
+    `    /** Ceiling on the join keys ONE relation-crossing \`where\` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }`,
+    `    /**
+     * Route the shard's \`ctx.log\` lines, \`ctx.trace\` spans and \`ctx.metrics\` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one \`onRpc\` event per dispatched RPC — is a \`createWorker\` option; pass the SAME sink to both via \`.extend((env) => ({ observability: sink(env) }))\` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }`,
+    `    /** Resolution policy for a relation-crossing \`where\` whose child is co-located in this shard: \`"auto"\` (cost-based, the engine default), \`"always"\` (inline correlated EXISTS) or \`"never"\` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }`,
@@ -574,6 +599,15 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
         // `ShardDOConfig`, so without this line `.reactiveCache()` would set a
         // field the generated shard never reads.
         `            reactiveCache: this.reactiveCacheConfig,`,
+        // The three DO-side knobs that `ShardDOConfig` declares, the shard reads,
+        // and the docs tell you to pass — but that had no route here. `createShardDO`
+        // is called from this file and nowhere else in a `defineApp()` project, so
+        // `observability` in particular meant every in-handler `ctx.log` / span /
+        // metric stayed in the shard's local ring buffer whatever the app configured.
+        // Spread rather than assigned so an unset knob keeps the shard's own default.
+        `            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),`,
+        `            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),`,
+        `            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),`,
         ...(options.hasGlobal
             ? [
                   `            ...(this.globalDeclaration
@@ -1110,8 +1144,8 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * Opens a D1 Sessions API session pinned to \`bookmark\` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. \`onBookmark\`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * \`setOutboundBookmark\` and echo \`x-d1-bookmark\` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo \`x-d1-bookmark\` on the response.
  *
  * Wrapped in \`retryingExec\` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -1146,8 +1180,8 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // read could pin a replica that has not seen them: read-your-writes
             // lost on the exact path the bookmark exists for. Reporting it after
             // a plain \`SELECT\` too is harmless and correct — the session's
-            // bookmark only ever moves forward, and \`setOutboundBookmark\` takes
-            // the last value.
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
 
             return result.results;
@@ -1445,7 +1479,10 @@ ${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agen
 
 /** Read a value off the per-request \`env\`. Returns \`undefined\` to leave the capability unconfigured (its \`ctx.*\`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
-${hasAnyLongTail(options) ? `\n/** The generated \`createShardDO\` config — the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */\ntype ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;\n` : ""}
+
+/** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
 ${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
 interface ComposedApp extends LunoraWorker {
     /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */
@@ -1498,7 +1535,13 @@ ${buildWorkerLine}
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },${
-                options.hasQueue
+                // Emitted for a framework-hosted app even with no push queues of its
+                // own: `withFrameworkWorker` hands the FRAMEWORK host's `queue` back
+                // out of the composed worker, and without this key wrangler never sees
+                // it. On workerd a consumer that returns without throwing implicitly
+                // acks, so the host's messages were not merely unprocessed — they were
+                // acked and destroyed.
+                options.hasQueue || options.hasFramework
                     ? `
             queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 worker ??= buildWorker(rawEnv as Env);
@@ -1514,7 +1557,23 @@ ${emailAgentsBlock}        if (this.emailHandler) {
 
             composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);
         }
+${
+    options.hasFramework
+        ? `
+        // A framework host may export its own \`email\` (Nitro's \`cloudflare-module\`
+        // does). Nothing in Lunora serves one, so when the app registered no handler
+        // of its own the host's is the only one there is — forward to it rather than
+        // dropping the entry.
+        if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
+            composed.email = (message, rawEnv, context) => {
+                worker ??= buildWorker(rawEnv as Env);
 
+                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+            };
+        }
+`
+        : ""
+}
         return composed;
     }
 ${buildSchedulerHelper(options)}${buildStorageHelpers(options.hasStorage)}

@@ -81,10 +81,30 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         : (client.peekHydratedQuery(function_.__lunoraRef, argsRecord, shardKey) as ReturnOf<F> | undefined);
 
     // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `client` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the push counter and the cache entry under it, which is exactly the key it already belongs to. The rule only stopped seeing through this call because the body became a block with statements.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped && hydrated,
         initialData: cachedData,
-        queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
+        queryFn: async () => {
+            // The one-shot HTTP snapshot races the subscription that feeds this
+            // same key. TanStack applies a resolved `queryFn` result
+            // unconditionally — a `setQueryData` while the fetch is in flight
+            // does NOT cancel it — so a push that lands first would be reverted
+            // to pre-push data, and with `staleTime: Infinity` and push-driven
+            // freshness it stays reverted until the next write (and bypasses the
+            // optimistic layer engine, since the TanStack cache was written
+            // raw). Sample the key's push counter either side of the fetch and
+            // yield to anything newer.
+            const registry = getSubscriptionRegistry(client);
+            const sample = registry.openSnapshotSample(queryKey);
+            const snapshot = await client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey });
+
+            if (registry.closeSnapshotSample(sample)) {
+                return snapshot;
+            }
+
+            return queryClient.getQueryData<ReturnOf<F>>(queryKey) ?? snapshot;
+        },
         queryKey,
         // Lunora is push-driven: once the initial fetch resolves, the WS owns
         // freshness, so the value never goes stale on a timer.

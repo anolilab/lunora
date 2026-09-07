@@ -310,6 +310,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         hasVectors: vectorStoreSupported,
         scheduler: featureUsage.scheduler || crons.length > 0,
         storage: featureUsage.storage || storageRulesMetadata.rules.length > 0 || Object.keys(buildStorageColumns(schema)).length > 0,
+        // The POST-gate usage, the same record the emitters read: a bare
+        // `ctx.kv` / `ctx.ai` read pulls that capability's package into
+        // `_generated/` with nothing else declaring it, and a target that rates
+        // the capability unsupported withholds the surface and must not be told
+        // to install a package for it.
+        usage: featureUsage,
     });
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));

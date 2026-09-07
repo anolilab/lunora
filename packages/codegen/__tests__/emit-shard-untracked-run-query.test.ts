@@ -34,7 +34,7 @@ describe("emitShard — untracked ctx.runQuery", () => {
         // The whole point: no `onRead`/`onReadRange` on the sub-context, so the
         // sub-query's reads never reach the subscription's footprint.
         expect(branch).not.toContain("onRead");
-        expect(branch).toContain("this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom");
+        expect(branch).toContain("this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom");
     });
 
     it("pins the identity by value on the untracked sub-context", () => {

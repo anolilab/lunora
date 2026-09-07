@@ -246,32 +246,48 @@ interface RateLimiterLike {
 }
 
 /**
- * The bucket every caller whose IP could not be resolved shares.
+ * What a caller is told when the limit has nobody to charge.
  *
- * Charging the limit with no `key` at all would put them in its UNKEYED bucket —
- * the one a deliberately-global charge of the same limit uses — so a single
- * IP-less caller could drain an app-wide limit for everybody. A named bucket
- * keeps that blast radius to the IP-less callers themselves, and makes the
- * pooling visible in storage. Pass `options.key` to key them properly.
+ * A per-caller limit whose key cannot be resolved has exactly two shapes, and
+ * both are worse than a refusal. Charging with no `key` uses the limiter's
+ * UNKEYED bucket — the one a deliberately-global charge uses — so one caller
+ * drains an app-wide limit for everybody. Charging a shared named bucket bounds
+ * that blast radius to the keyless callers, which off the Cloudflare edge means
+ * EVERY caller: the limit inverts into a one-request-per-period lever anyone can
+ * pull for the whole deployment. `@lunora/ratelimit`'s middleware already
+ * treats the identical state as a configuration bug and throws `INTERNAL`; this
+ * gate now agrees, so the two cannot be read as sanctioning opposite postures on
+ * the same facts.
  */
-const UNRESOLVED_IP_BUCKET = "no-trusted-ip";
+const unresolvedCallerKeyRefusal = (): Response =>
+    Response.json(
+        {
+            error: {
+                code: "INTERNAL",
+                message:
+                    "REST rate limit: no caller key could be resolved. Declare `trustedClientIpHeader` (a header your proxy stamps and callers cannot write), or pass `key` to identify callers by something unforgeable.",
+            },
+        },
+        { headers: { "content-type": "application/json" }, status: 500 },
+    );
 
 /**
  * Adapt a `@lunora/ratelimit` limiter into a {@link RestRateLimit} gate for the
  * public REST surface (plan 167). Pass the limiter and the rate name to charge;
  * `key` isolates the limit per caller (IP / user / API key — defaults to
- * {@link trustedClientIp}, else {@link UNRESOLVED_IP_BUCKET}).
+ * {@link trustedClientIp}).
  *
  * That default resolves an IP only ON Cloudflare, where the edge stamps
  * `cf-connecting-ip` over anything the client sent. On any other host it is a
  * header the caller types, so trusting it would give an attacker a fresh bucket
  * per request and the limit would stop applying to exactly the traffic it exists
- * to stop; those deployments pool into {@link UNRESOLVED_IP_BUCKET} instead, and
- * should pass `key` to identify callers by something they cannot forge.
+ * to stop. Those deployments resolve no key at all and every request is refused
+ * with a `500` naming the fix — see {@link unresolvedCallerKeyRefusal} for why a
+ * shared bucket is not the safer answer it looks like.
  *
- * An origin fronted by a proxy that stamps a client address can instead declare
- * that header as `trustedClientIpHeader` and get per-IP buckets back, at the cost
- * of asserting the header is unwritable by callers — the same assertion, and the
+ * An origin fronted by a proxy that stamps a client address can declare that
+ * header as `trustedClientIpHeader` and get per-IP buckets, at the cost of
+ * asserting the header is unwritable by callers — the same assertion, and the
  * same consequence for getting it wrong, as `WorkerOptions.trustedClientIpHeader`
  * (which governs `ctx.ip`). Declare it in both places or the two disagree about
  * who a request came from.
@@ -291,8 +307,14 @@ const createRestRateLimit =
         options: { key?: (request: Request, functionPath: string) => string | undefined; name: string; trustedClientIpHeader?: string },
     ): RestRateLimit =>
     async (request, functionPath) => {
-        const key =
-            (options.key ? options.key(request, functionPath) : trustedClientIp(request.headers, options.trustedClientIpHeader)) ?? UNRESOLVED_IP_BUCKET;
+        const key = options.key ? options.key(request, functionPath) : trustedClientIp(request.headers, options.trustedClientIpHeader);
+
+        // `""` is refused alongside `undefined`: an empty key is a bucket name every
+        // caller shares, which is the state this refusal exists to prevent.
+        if (key === undefined || key === "") {
+            return unresolvedCallerKeyRefusal();
+        }
+
         const status = await limiter.limit(options.name, { key });
 
         if (status.ok) {

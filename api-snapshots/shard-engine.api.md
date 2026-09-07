@@ -330,7 +330,7 @@ const COMMIT_SEQ_TABLE = "__commit_seq";
 ### `CURSOR_PREFIX` (const)
 
 ```ts
-const CURSOR_PREFIX = "~3";
+const CURSOR_PREFIX = "~4";
 ```
 
 ### `CacheEntry` (interface)
@@ -1449,6 +1449,15 @@ interface OrderKey {
 }
 ```
 
+### `OrderKeyConstraints` (interface)
+
+```ts
+interface OrderKeyConstraints {
+    pinned?: ReadonlySet<string>;
+    uniqueBy?: ReadonlyArray<ReadonlyArray<string>>;
+}
+```
+
 ### `OwnerRelay` (class)
 
 ```ts
@@ -2034,6 +2043,7 @@ interface RelayHost {
     resolveShape: (name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity) => ResolvedShape | undefined;
     rlsMetadata: () => RlsPoliciesResult;
     shardBinding: () => string | undefined;
+    shardJurisdiction: () => string | undefined;
     sql: () => SqlExec;
 }
 ```
@@ -2601,6 +2611,7 @@ interface ShardSiblingHost {
     doName: () => string | undefined;
     env: () => unknown;
     shardBinding: () => string | undefined;
+    shardJurisdiction: () => string | undefined;
     sql: () => SqlExec;
 }
 ```
@@ -3766,6 +3777,12 @@ const envOptionalPositiveInt: (env: unknown, key: string) => number | undefined;
 const envPositiveInt: (env: unknown, key: string, fallback: number) => number;
 ```
 
+### `equalityPinnedFields` (const)
+
+```ts
+const equalityPinnedFields: (where: undefined | WhereInput) => ReadonlySet<string>;
+```
+
 ### `exportShardRows` (const)
 
 ```ts
@@ -4115,7 +4132,7 @@ const normalizeIdStructurally: (schema: SchemaLike, tableName: string, id: strin
 ### `normalizeOrderKeys` (const)
 
 ```ts
-const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>) => OrderKey[];
+const normalizeOrderKeys: (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>, constraints?: OrderKeyConstraints) => OrderKey[];
 ```
 
 ### `normalizeSourceDocument` (const)
@@ -4785,6 +4802,15 @@ const trySendFrame: (ws: FrameSink, frame: string) => boolean;
 
 ```ts
 const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
+```
+
+### `uniqueIndexFields` (const)
+
+```ts
+const uniqueIndexFields: (indexes: ReadonlyArray<{
+    fields: ReadonlyArray<string>;
+    unique?: boolean;
+}> | undefined, shape: Record<string, ValidatorLike> | undefined) => ReadonlyArray<ReadonlyArray<string>>;
 ```
 
 ### `validateImportRow` (const)

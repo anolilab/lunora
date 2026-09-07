@@ -290,4 +290,23 @@ describe("httpStream", () => {
 
         expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_TRANSPORT");
     });
+
+    // The server pump wire-encodes each data frame (`@lunora/server`'s
+    // `sseFrame`); this is the one decode on the path. Without it a `Date`
+    // arrived as an ISO string and a `bigint` never arrived at all.
+    it("decodes wire-tagged chunks back into the values the handler yielded", async () => {
+        expect.assertions(3);
+
+        const richRef: HttpStreamRef<{ at: Date; balance: bigint; ratio: number }, Record<string, never>> = { method: "GET", path: "/api/rich" };
+        const { fetchImpl } = fetchReturning([
+            'data: {"at":["$lunora.wire$","date",1700000000000],"balance":["$lunora.wire$","bigint","9007199254740993"],"ratio":["$lunora.wire$","nan"]}\n\n',
+            "event: complete\ndata: {}\n\n",
+        ]);
+
+        const chunks = await collect(httpStream(richRef, {}, { fetch: fetchImpl }));
+
+        expect(chunks[0]?.at).toStrictEqual(new Date(1_700_000_000_000));
+        expect(chunks[0]?.balance).toBe(9_007_199_254_740_993n);
+        expect(chunks[0]?.ratio).toBeNaN();
+    });
 });

@@ -236,6 +236,21 @@ export interface OutboxSink {
  */
 export interface CachedQuery {
     /**
+     * Token-hash fingerprint of the bearer the value was cached under, when the
+     * entry was written by the identity the client currently advertises.
+     *
+     * The second half of the identity gate, and the half that makes the cache
+     * usable at all for a bearer-token app. `identity` settles on the resolved
+     * subject (`subj:<id>`) once the session resolves, but on the NEXT reload
+     * every adapter can only offer the stored token first — the subject arrives
+     * a round trip later, and offline it never arrives at all. Matching the
+     * credential the entry was written under is what lets the seed happen before
+     * (or without) that round trip. Absent when signed out, or when the value
+     * arrived over a socket authenticated as someone else.
+     */
+    credential?: string;
+
+    /**
      * Issuing identity fingerprint (same shape the offline queue stamps). A
      * cached value only hydrates when it matches the current identity, so a
      * signed-out cache never leaks into a new session. `null` = cached while

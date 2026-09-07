@@ -32,15 +32,39 @@ import { getRetryAfterMs, TransportError } from "./errors";
 const TRANSIENT_REPLAY_ERROR_CODES = new Set(["RATE_LIMITED", "SHARD_ERROR", "SHARD_UNAVAILABLE", "TOO_MANY_REQUESTS"]);
 
 /**
+ * Coded errors that refuse the CREDENTIAL rather than the write.
+ *
+ * A write queued while offline replays with whatever bearer the client held
+ * when it went offline, and that token has very often expired by the time the
+ * socket comes back: the flush rides the shard's `open` handler, before
+ * anything has had the chance to refresh it. Settling those terminally destroys
+ * the queuing user's own durable write over a credential problem one round trip
+ * fixes — and a write hydrated after a reload has no live awaiter, so nothing
+ * ever tells the app it happened.
+ *
+ * So they HOLD instead: the write stays queued and persisted, the
+ * `onTokenExpired` hook fires so the app can refresh, and `setAuthToken`
+ * re-flushes the queue once a fresh credential lands. Unlike
+ * {@link TRANSIENT_REPLAY_ERROR_CODES} they schedule no timed retry — nothing
+ * changes until the credential does, and re-sending the same stale bearer on a
+ * backoff can only earn the same 401.
+ */
+const AUTH_REPLAY_ERROR_CODES = new Set(["TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"]);
+
+/** Whether a replay failure refused the credential rather than the write (see {@link AUTH_REPLAY_ERROR_CODES}). */
+const isAuthReplayFailure = (error: unknown): boolean => AUTH_REPLAY_ERROR_CODES.has((error as { code?: string } | null | undefined)?.code ?? "");
+
+/**
  * Whether a single-call replay failure leaves the durable write eligible for
  * another attempt rather than settling it terminally.
  *
  * ONE rule shared with the batch path, because a queued write must not live or
  * die by how many siblings happened to be queued alongside it: a codeless
  * failure is a transport error (`fetch` rejected), a {@link
- * TRANSIENT_REPLAY_ERROR_CODES} code means the server reached no verdict, and a
- * {@link TransportError} is a transport failure wearing an `INTERNAL` code —
- * which is what an edge 502 HTML page arrives as.
+ * TRANSIENT_REPLAY_ERROR_CODES} code means the server reached no verdict, an
+ * {@link AUTH_REPLAY_ERROR_CODES} code means the credential was refused (not
+ * the write), and a {@link TransportError} is a transport failure wearing an
+ * `INTERNAL` code — which is what an edge 502 HTML page arrives as.
  */
 const isTransientReplayFailure = (error: unknown): boolean => {
     if (error instanceof TransportError) {
@@ -49,7 +73,7 @@ const isTransientReplayFailure = (error: unknown): boolean => {
 
     const code = (error as { code?: string } | null | undefined)?.code;
 
-    return code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code);
+    return code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code) || AUTH_REPLAY_ERROR_CODES.has(code);
 };
 
 /** Longest delay a `Retry-After` hint can push the next outbox flush out by — a server (or a proxy) asking for an hour must not strand the queue for one. */
@@ -247,6 +271,8 @@ const MAX_BATCH_BODY_BYTES = 1_048_576 - 65_536;
 const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefined" ? text.length : new TextEncoder().encode(text).length);
 
 export {
+    AUTH_REPLAY_ERROR_CODES,
+    isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
     MAX_REPLAY_RETRY_DELAY_MS,

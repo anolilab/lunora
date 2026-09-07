@@ -2261,6 +2261,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DispatchBookmark` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
