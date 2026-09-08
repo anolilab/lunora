@@ -1200,7 +1200,7 @@ export const schema = defineSchema({
 });
 `;
 
-            const writeHyperdriveProject = (entry: string): void => {
+            const writeHyperdriveProject = (entry: string, { binding = true }: { binding?: boolean } = {}): void => {
                 writeSchema(HYPERDRIVE_SCHEMA);
                 writeFileSync(
                     join(workdir, "wrangler.jsonc"),
@@ -1209,7 +1209,7 @@ export const schema = defineSchema({
     "main": "src/index.ts",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]${binding ? ',\n    "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "hd_123" }]' : ""}
 }
 `,
                     "utf8",
@@ -1253,6 +1253,80 @@ export const schema = defineSchema({
                 const result = validateWranglerProject({ projectRoot: workdir });
 
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("demands SOME hyperdrive binding, without naming which", () => {
+                expect.assertions(3);
+
+                // Dropping the `DB` demand for these tables left them with no
+                // wrangler-level check at all: the chain is present, every gate
+                // passes, and `env.<BINDING>` is `undefined` at the first global
+                // read — inside the user's own `exec`, where nothing here can say
+                // what went wrong.
+                //
+                // Unlike D1 the name is not fixed: `.hyperdriveGlobal({ exec })`
+                // builds the driver from the user's selector, so naming one would
+                // false-error a project that called its binding something else.
+                const CHAIN = `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(env.PG) });\nexport const { ShardDO } = app;\nexport default app;\n`;
+
+                writeHyperdriveProject(CHAIN, { binding: false });
+
+                const missing = validateWranglerProject({ projectRoot: workdir });
+
+                expect(missing.report.valid).toBe(false);
+                expect(missing.report.errors.join("\n")).toContain("wrangler must declare a hyperdrive binding");
+
+                // A differently-named binding satisfies it; only absence is the defect.
+                writeHyperdriveProject(CHAIN);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "hyperdrive": [{ "binding": "PG", "id": "hd_123" }]
+}
+`,
+                    "utf8",
+                );
+
+                const named = validateWranglerProject({ projectRoot: workdir });
+
+                expect(named.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
+            });
+
+            it("says nothing about a hyperdrive binding for a D1-backed global schema", () => {
+                expect.assertions(1);
+
+                // The mirror of the D1 check's own scoping: a `.global()` table on
+                // D1 needs no Hyperdrive binding, and demanding one would block the
+                // common case.
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(
+                    join(workdir, "src", "index.ts"),
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).global({ d1: (env) => env.DB });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
             });
         });
 

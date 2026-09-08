@@ -905,6 +905,39 @@ const REQUIRED_FIELD_BINDING_RULES = [
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
 /**
+ * The binding each `.global()` backend needs in order to exist at all — the
+ * config half of the chain requirement the unchained-capability check below
+ * reads out of the source.
+ *
+ * The two halves are asymmetric because the builders are. `.global({ d1 })` is
+ * reconciled by the dev server onto a fixed `DB`, so the exact name is checkable.
+ * `.hyperdriveGlobal({ exec })` builds the driver from whatever the user's own
+ * selector reads — `env.HYPERDRIVE` in the docs, but the name is theirs — so the
+ * only static fact is that SOME Hyperdrive binding has to exist. Naming one would
+ * false-error a project that called it something else; demanding none left these
+ * tables with no config check at all, and `env.<BINDING>` is then `undefined` at
+ * the first global read, throwing inside the user's `exec` where nothing here can
+ * say what went wrong.
+ *
+ * A schema may declare both flavours, so these are independent, not exclusive.
+ */
+const validateGlobalBackendBindings = (wrangler: WranglerConfig, schema: SchemaInfo | undefined, errors: string[]): void => {
+    if (schema?.hasD1GlobalTable && !objectBindingEntries(wrangler.d1_databases).some((binding) => binding.binding === "DB")) {
+        errors.push(
+            'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
+        );
+    }
+
+    if (schema?.hasHyperdriveGlobalTable && objectBindingEntries(wrangler.hyperdrive).length === 0) {
+        errors.push(
+            'schema declares .global({ backend: "hyperdrive" }) tables; wrangler must declare a hyperdrive binding for `.hyperdriveGlobal({ exec })` to read — ' +
+                "run `wrangler hyperdrive create <name> --connection-string=...` and add " +
+                '`"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<id>" }]` (any binding name works; your `exec` selector picks it)',
+        );
+    }
+};
+
+/**
  * Structural check for every `d1_databases[]` entry: a non-empty `binding`,
  * plus a `database_id` or a `database_name` identifying which database it
  * binds. Both are remote-ish (created via `wrangler d1 create`, which prints
@@ -1383,20 +1416,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // the `>= REQUIRED_COMPATIBILITY_DATE` error above, so a separate flag error
     // adds no signal. We therefore neither require nor reject the flag here.
 
-    // D1-backed globals only: a `.global({ backend: "hyperdrive" })` table lives on
-    // Postgres/MySQL behind a Hyperdrive binding and needs no D1 database at all,
-    // so counting it here demanded a `DB` binding of a project that has none.
-    if (schema?.hasD1GlobalTable) {
-        const d1Bindings = objectBindingEntries(wrangler.d1_databases);
-        const databaseBinding = d1Bindings.find((binding) => binding.binding === "DB");
-
-        if (!databaseBinding) {
-            errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
-            );
-        }
-    }
-
+    validateGlobalBackendBindings(wrangler, schema, errors);
     validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
