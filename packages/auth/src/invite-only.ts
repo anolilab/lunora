@@ -287,20 +287,31 @@ const emailOf = (user: { email?: unknown }): string | undefined => {
     return normalized === "" ? undefined : normalized;
 };
 
+/** better-auth's own id for the `anonymous()` plugin — the only thing that puts an `isAnonymous` field on `user`. */
+const ANONYMOUS_PLUGIN_ID = "anonymous";
+
+/** Whether `anonymous()` is installed. Both uses of the flag below are unsafe without it — see {@link isAnonymousUser}. */
+const hasAnonymousPlugin = (options: BetterAuthOptions): boolean => (options.plugins ?? []).some((plugin) => plugin.id === ANONYMOUS_PLUGIN_ID);
+
 /**
- * Whether the row being created is better-auth's `anonymous()` user.
+ * Whether the row being created is better-auth's `anonymous()` user — the one
+ * carve-out in the gate below, because anonymous sign-in is not registration.
  *
- * The gate below rejects on "no usable invitation was found", which a row with no
- * email at all also fails — and `anonymous()` mints its users through the same
- * `createUser` path with a generated address (`temp-<id>@…`) no invitation will
- * ever match. So installing both plugins turned anonymous sign-in off, with a
- * `SIGN_UP_INVITE_REQUIRED` that names neither plugin.
+ * Converting an anonymous user to a real account stays gated: better-auth creates
+ * a SECOND, non-anonymous row and links the anonymous one afterwards, so that row
+ * reaches this hook without the flag.
  *
- * Anonymous sign-in is not registration: it hands out a throwaway identity that
- * cannot sign in twice, and the `isAnonymous` flag `anonymous()` puts in the
- * payload draws exactly that line. Converting an anonymous user to a real account
- * STAYS gated — better-auth creates a second, non-anonymous user row and links the
- * anonymous one afterwards, so that row reaches this hook without the flag.
+ * **Only trusted when `anonymous()` is installed**, which is what makes the flag
+ * unreachable from a request body: the plugin declares `isAnonymous` as
+ * `input: false`, so better-auth strips it from every payload it parses. An app
+ * that declares the same column through `user.additionalFields` — a leftover, or
+ * a hand-rolled guest mode — makes it body-settable, and a bare
+ * `{ isAnonymous: true }` would then walk straight through the invitation gate.
+ *
+ * Typed as an index signature rather than `{ isAnonymous?: unknown }` like its
+ * neighbour {@link emailOf}: the hook payload is `User & Record<string, unknown>`,
+ * which has no property in common with an all-optional type, so the weak-type
+ * check rejects it.
  */
 const isAnonymousUser = (user: Readonly<Record<string, unknown>>): boolean => user["isAnonymous"] === true;
 
@@ -362,13 +373,33 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
     // ever use it.
     let mayBootstrap = options.allowFirstUser ?? false;
 
+    // Set from `init`, which better-auth runs at instance construction — before any
+    // request reaches either hook. `false` until then fails SAFE: the window closes
+    // early rather than staying open.
+    let anonymousInstalled = false;
+
     /** Whether this request falls inside the one-account bootstrap window. Closes it for good on the first miss. */
     const inBootstrapWindow = async (adapter: AuthAdapter): Promise<boolean> => {
         if (!mayBootstrap) {
             return false;
         }
 
-        if ((await adapter.count({ model: "user" })) === 0) {
+        const users = await adapter.count({ model: "user" });
+
+        // An anonymous row is not an account. `anonymous()` mints one on first page
+        // load, which is the whole point of it — so counting those burns the single
+        // bootstrap seat before the owner ever opens /sign-up, and the window never
+        // reopens. The deployment is then un-bootstrappable, which is the exact
+        // outcome `allowFirstUser` exists to prevent.
+        //
+        // Subtracted rather than filtered with `ne`: a row written before the plugin
+        // was installed has `isAnonymous` NULL, and `NULL <> 1` is NULL, so an
+        // `ne`-filtered count would omit real accounts and hold the window OPEN on a
+        // populated deployment. Counting the anonymous rows and subtracting treats
+        // every NULL as an account, which errs toward closing.
+        const anonymous = anonymousInstalled && users > 0 ? await adapter.count({ model: "user", where: [{ field: "isAnonymous", value: true }] }) : 0;
+
+        if (users - anonymous <= 0) {
             return true;
         }
 
@@ -447,8 +478,10 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
 
             const { adapter } = context;
 
+            anonymousInstalled = hasAnonymousPlugin(context.options);
+
             const before: UserCreateBefore = async (user) => {
-                if (isAnonymousUser(user)) {
+                if (anonymousInstalled && isAnonymousUser(user)) {
                     return;
                 }
 
@@ -473,10 +506,9 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             const after: UserCreateAfter = async (user) => {
                 const email = emailOf(user);
 
-                // An anonymous user's generated address matches no invitation, so
-                // the update is pointless at best; skipped for the same reason the
-                // gate is.
-                if (email === undefined || isAnonymousUser(user)) {
+                // An anonymous user's generated address marks no invitation spent,
+                // so the write is a wasted round trip.
+                if (email === undefined || (anonymousInstalled && isAnonymousUser(user))) {
                     return;
                 }
 

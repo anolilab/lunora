@@ -91,25 +91,60 @@ describe("inviteOnly", () => {
         expect(database["user"]).toHaveLength(1);
     });
 
+    /** An instance carrying both plugins, which is the combination that used to break. */
+    const buildAnonymousAuth = (pluginOptions: Parameters<typeof inviteOnly>[0] = {}): any =>
+        createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(database),
+            emailAndPassword: { enabled: true },
+            plugins: [anonymous(), inviteOnly(pluginOptions)],
+            secret: SECRET,
+        });
+
     it("leaves anonymous sign-in working when `anonymous()` is installed alongside it", async () => {
         expect.assertions(2);
 
         // `anonymous()` mints its user through the same `createUser` path with a
         // generated address, so the gate used to reject it — turning anonymous
         // sign-in off with a `SIGN_UP_INVITE_REQUIRED` that named neither plugin.
-        auth = createAuth({
-            baseURL: "http://localhost",
-            database: memoryAdapter(database),
-            emailAndPassword: { enabled: true },
-            plugins: [anonymous(), inviteOnly()],
-            secret: SECRET,
-        });
+        auth = buildAnonymousAuth();
 
         await expect(auth.api.signInAnonymous()).resolves.toBeDefined();
 
         // Password sign-up is still gated: the carve-out is the `isAnonymous` flag,
         // not "the anonymous plugin is installed".
         await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
+    });
+
+    it("does not let an anonymous row burn the allowFirstUser bootstrap seat", async () => {
+        expect.assertions(3);
+
+        // An SPA calls signIn.anonymous() on first page load — that is what the
+        // plugin is for. If that row counts as "the user table is no longer empty",
+        // the owner can never claim the one bootstrap account and the deployment is
+        // un-bootstrappable, which is the opposite of what allowFirstUser promises.
+        auth = buildAnonymousAuth({ allowFirstUser: true });
+
+        await expect(auth.api.signInAnonymous()).resolves.toBeDefined();
+        await expect(signUp("owner@example.com")).resolves.toBeDefined();
+
+        // …and the seat is spent once a real account exists.
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
+    });
+
+    it("still gates a sign-up body that claims isAnonymous itself", async () => {
+        expect.assertions(2);
+
+        auth = buildAnonymousAuth();
+
+        // `anonymous()` declares `isAnonymous` as `input: false`, so better-auth
+        // strips it from the parsed payload and the row reaches the hook without it.
+        // This pins that: the carve-out must never be reachable from a request body.
+        await expect(
+            auth.api.signUpEmail({ body: { email: "stranger@example.com", isAnonymous: true, name: "Ada", password: STRONG_PASSWORD } }),
+        ).rejects.toThrow(/not valid/);
+
+        expect(database["user"]).toHaveLength(0);
     });
 
     it("admits an invited address and marks the invitation spent", async () => {
