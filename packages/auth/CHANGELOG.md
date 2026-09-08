@@ -1,3 +1,32 @@
+## @lunora/auth [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.124...@lunora/auth@1.0.0-alpha.125) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/auth [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.123...@lunora/auth@1.0.0-alpha.124) (2026-09-07)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** the `@better-auth/core`, `better-auth` and `@better-auth/sso` peer
+ranges narrow from `>=1.7.1` to `>=1.7.3`. Now that no `issuer` is written, installing
+against 1.7.1 or 1.7.2 resolves cleanly and then fails at runtime, because those
+versions declare the column required.
+
+Verified in a real Durable Object: workerd accepts `ALTER TABLE ... DROP COLUMN`, and
+the test fails without the fix rather than passing either way.
+
+### Bug Fixes
+
+* **auth:** remove the reverted account.issuer column on migrate ([#661](https://github.com/anolilab/lunora/issues/661)) ([7d5cda9](https://github.com/anolilab/lunora/commit/7d5cda9a91ea873e8c62ac40930202ce20a0d4ab)), closes [#659](https://github.com/anolilab/lunora/issues/659)
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
 ## @lunora/auth [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.122...@lunora/auth@1.0.0-alpha.123) (2026-09-07)
 
 

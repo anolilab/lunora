@@ -74,3 +74,25 @@ const getDispatchMessageId: (error: unknown) => string | undefined;
 ```ts
 const isDeterministicDispatchFailure: (error: unknown) => error is LunoraError;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `DispatchRunnerOptions` (interface)
+
+```ts
+interface DispatchRunnerOptions {
+    argsAlreadyEncoded?: boolean;
+    env: Record<string, unknown>;
+    fetchImpl?: typeof fetch;
+    identity?: {
+        claims?: Record<string, unknown>;
+        userId?: string;
+    };
+    label: string;
+    traceparent?: string;
+}
+```

@@ -1,9 +1,12 @@
+import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 
 /**
  * Reject a `database` better-auth's migrator cannot drive, *before* handing it
@@ -49,6 +52,97 @@ const assertMigratableDatabase = (options: LunoraAuthOptions): void => {
  */
 const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =>
     isD1Database(options.database) ? { ...options, database: withD1IndexIntrospection(options.database) } : options;
+
+/**
+ * Whether the account table physically carries the column.
+ *
+ * Probed with a zero-row `SELECT` rather than introspected. D1's authorizer refuses the
+ * pragma table-valued functions a column list would come from (the reason
+ * `d1-index-introspection.ts` exists), and the remaining option — pattern-matching
+ * `sqlite_master.sql` — is not safe enough to gate an irreversible `DROP COLUMN`: SQLite
+ * stores the verbatim `CREATE TABLE` text, so the name also appears in a comment, a
+ * `CHECK (… <> 'issuer')` literal, or a `REFERENCES issuer(id)` clause. Matching any of
+ * those would run a `DROP COLUMN` that fails with `no such column`, and because the DDL
+ * text never changes the retry fails identically — wedging `ensureMigrated` forever on a
+ * database that was never broken. The probe answers the question exactly instead.
+ */
+const hasIssuerColumn = async (database: D1Database, accountTable: string): Promise<boolean> => {
+    try {
+        await database.prepare(`SELECT ${quoteIdentifier("issuer")} FROM ${quoteIdentifier(accountTable)} LIMIT 0`).run();
+
+        return true;
+    } catch {
+        // Either the column or the table is absent; both mean there is nothing to clean up.
+        return false;
+    }
+};
+
+/**
+ * Remove the `account.issuer` column better-auth 1.7.0 required and 1.7.3 reverted.
+ *
+ * Runs after `runMigrations()` because better-auth's migrator is additive and upstream
+ * states plainly that `auth migrate` does not touch this column — so on a database
+ * provisioned under 1.7.0-1.7.2 the migration "succeeds" and every subsequent sign-up
+ * still fails on `NOT NULL constraint failed: account.issuer`. See `legacy-issuer.ts`.
+ *
+ * Only D1 bindings are cleaned up automatically. Any other `database` shape is left alone
+ * and told about instead: `getMigrations` accepts dialects for engines where the remedy is
+ * to relax the constraint rather than drop the column, and this package cannot execute raw
+ * DDL through them anyway.
+ *
+ * **Best-effort**, like the Durable Object path: a database that still carries the column
+ * is no worse off than before the attempt, so a throw here — which would reject
+ * `ensureMigrated` and fail the whole migration — is strictly worse than not trying. That
+ * also covers the concurrent case, where two isolates both see the column and the loser's
+ * `DROP COLUMN` finds it already gone.
+ */
+const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void> => {
+    // Widened to `unknown` for the same reason `assertMigratableDatabase` does it:
+    // better-auth's `database` union has an adapter arm the linter reads as an error
+    // type, so destructuring it as-is trips `no-unsafe-assignment`.
+    const { database } = options as { database?: unknown };
+    const { tables } = getAuthTablesWithResolvedIndexes(options);
+    const { account } = tables;
+
+    if (account === undefined) {
+        return;
+    }
+
+    // The app's own column, added through `account.additionalFields`, is not the reverted
+    // one and must survive.
+    if (schemaDeclaresIssuer(Object.entries(account.fields).map(([key, field]) => field.fieldName ?? key))) {
+        return;
+    }
+
+    if (!isD1Database(database)) {
+        return;
+    }
+
+    if (!(await hasIssuerColumn(database, account.modelName))) {
+        return;
+    }
+
+    try {
+        // Enumerated rather than derived from the default field names — better-auth names an
+        // index after the physical columns, and any index still referencing `issuer` makes
+        // the `DROP COLUMN` fail. `sqlite_master` is readable through the binding; pragma
+        // index functions are not. Inside the `try` because a failed metadata read is just
+        // another reason the cleanup cannot run, not a reason to fail the whole migration.
+        const { results } = await database
+            .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?")
+            .bind(account.modelName)
+            .all<{ name: string; sql?: null | string }>();
+
+        // One batch, so the indexes cannot be dropped without the column following: SQLite
+        // has no way back to a unique index that is gone while the column it covered stays.
+        await database.batch(
+            legacyIssuerCleanupStatements(account.modelName, indexesReferencingIssuer(results)).map((statement) => database.prepare(statement)),
+        );
+    } catch (error) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
+    }
+};
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
@@ -97,6 +191,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
         const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
 
         await runMigrations();
+        await dropLegacyIssuerColumn(options);
     })();
 
     // Record the promise synchronously (before the first await above resolves)
@@ -123,6 +218,13 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * `rateLimit` table the worker's default-on durable limiter writes to. Compiling
  * from the raw options would omit it, and the running worker would then write to
  * a table the migration never created.
+ *
+ * **Upgrading a database created by an older `@lunora/auth`.** This compiles DDL without
+ * reading the database, so it cannot know whether the `account.issuer` column better-auth
+ * 1.7.0 required and 1.7.3 reverted is present — and SQLite has no `DROP COLUMN IF EXISTS`
+ * to make that moot. `ensureMigrated` handles it automatically; on this path, run
+ * `legacyIssuerCleanupStatements()` once against a database that still has the column.
+ * Leaving it in place fails every sign-up with `NOT NULL constraint failed: account.issuer`.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);

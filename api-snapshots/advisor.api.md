@@ -1755,3 +1755,44 @@ const workflowUnknownTarget: Lint;
 ```ts
 const workflowUnused: Lint;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdvisorExternalSource` (interface)
+
+```ts
+interface AdvisorExternalSource {
+    hasReconcile?: boolean;
+    hasSoftDelete?: boolean;
+    hasTenantBy: boolean;
+    mode?: string;
+    unanalyzable?: boolean;
+}
+```
+
+### `AdvisorUnrestrictedWhereBranch` (interface)
+
+```ts
+interface AdvisorUnrestrictedWhereBranch {
+    exportName: string;
+    file: string;
+    form: "empty-object" | "undefined";
+    key: string;
+    line: number;
+    owner: string;
+}
+```
+
+### `AdvisorWorkflowStep` (interface)
+
+```ts
+interface AdvisorWorkflowStep {
+    line: number;
+    method: string;
+    name: string;
+}
+```

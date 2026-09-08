@@ -605,3 +605,40 @@ const toDocsSearchHits: (results: ReadonlyArray<unknown>) => DocsSearchHit[];
 ```ts
 const toDocsUri: (url: string) => string;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ToolAnnotations` (interface)
+
+```ts
+interface ToolAnnotations {
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+    readOnlyHint?: boolean;
+    title?: string;
+}
+```
+
+### `X402ChargeSettings` (interface)
+
+```ts
+interface X402ChargeSettings {
+    readonly network: string;
+    readonly [key: string]: unknown;
+    readonly recipient: {
+        readonly evm?: string;
+        readonly svm?: string;
+    };
+}
+```
+
+### `X402Price` (type)
+
+```ts
+type X402Price = number | string;
+```

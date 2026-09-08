@@ -21,11 +21,15 @@ import java.util.Map;
 public final class Json {
     /**
      * Levels of ENVELOPE a wire value can sit under before its own nesting starts. Every payload
-     * arrives wrapped: {@code {"result": V}} is one, and the two deepest — a batch response {@code
-     * {"results":[{"result": V}]}} and a poke part {@code {"rowsPatch":[{"value": V}]}} — are
-     * three.
+     * arrives wrapped: {@code {"result": V}} is one, a poke part {@code {"rowsPatch":[{"value":
+     * V}]}} is three, and the deepest is a batch response — {@code {"results":[{"id","status",
+     * "body":{"result": V}}]}}, per protocol/README.md §4.3 — which is FOUR. It was written as
+     * three against a {@code {"results":[{"result": V}]}} that no server sends, so a flush through
+     * {@code /_lunora/rpc-batch} whose result nested to the wire cap made the whole 200 body
+     * unparseable: a successful batch of durable writes read as a transport failure and retried
+     * forever, while the same value on the single-call path parsed.
      */
-    private static final int MAX_ENVELOPE_DEPTH = 3;
+    private static final int MAX_ENVELOPE_DEPTH = 4;
 
     /**
      * The parser's own nesting cap, counted from the DOCUMENT root.
