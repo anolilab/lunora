@@ -19,6 +19,7 @@ const makeWriter = () => {
     const insertMany = vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>();
     const deleteOne = vi.fn<FacadeWriterLike["delete"]>();
     const patchOne = vi.fn<FacadeWriterLike["patch"]>();
+    const findMany = vi.fn<FacadeWriterLike["findMany"]>();
 
     const writer = {
         aggregate: vi.fn<FacadeWriterLike["aggregate"]>(),
@@ -28,7 +29,7 @@ const makeWriter = () => {
         deleteWhere,
         findFirst: vi.fn<FacadeWriterLike["findFirst"]>(),
         findFirstOrThrow: vi.fn<FacadeWriterLike["findFirstOrThrow"]>(),
-        findMany: vi.fn<FacadeWriterLike["findMany"]>(),
+        findMany,
         get: vi.fn<FacadeWriterLike["get"]>(),
         groupBy: vi.fn<FacadeWriterLike["groupBy"]>(),
         insert: vi.fn<FacadeWriterLike["insert"]>(),
@@ -42,7 +43,17 @@ const makeWriter = () => {
         replace: vi.fn<FacadeWriterLike["replace"]>(),
     } as unknown as FacadeWriterLike;
 
-    return { deleteMany, deleteOne, deleteWhere, entry: bindTableFacade(writer, "messages"), insertMany, patchMany, patchOne, patchWhere };
+    return {
+        deleteMany,
+        deleteOne,
+        deleteWhere,
+        entry: bindTableFacade(writer, "messages"),
+        findMany,
+        insertMany,
+        patchMany,
+        patchOne,
+        patchWhere,
+    };
 };
 
 describe("bindTableFacade — per-table batch forms", () => {
@@ -317,5 +328,43 @@ describe("bindTableFacade — upsert / upsertMany", () => {
         patch.mockRejectedValue(new Error('update on "users" denied by policy'));
 
         await expect(entry.upsert({ create: { email: "a@b.c", name: "x" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
+});
+
+describe("bindTableFacade — findUnique", () => {
+    it("reads one row past the expected one, whatever limit the caller passed", async () => {
+        expect.assertions(1);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [] });
+
+        await entry.findUnique({ limit: 50, where: { slug: "s" } });
+
+        expect(findMany).toHaveBeenCalledWith("messages", { limit: 2, where: { slug: "s" } });
+    });
+
+    it("returns the single match, and null when nothing matched", async () => {
+        expect.assertions(2);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [{ _id: "m1" }] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).resolves.toStrictEqual({ _id: "m1" });
+
+        findMany.mockResolvedValue({ page: [] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).resolves.toBeNull();
+    });
+
+    it("refuses a second match instead of silently answering with the first", async () => {
+        expect.assertions(1);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [{ _id: "m1" }, { _id: "m2" }] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).rejects.toThrow(LunoraError);
     });
 });
