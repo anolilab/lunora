@@ -754,7 +754,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             ? []
             : [
                   ...runAdvisor(advisorContext, { source: "static" }),
-                  ...discoverUnregisteredProcedures(project, lunoraDirectory, functions),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
               ];
 
@@ -847,7 +853,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
     const shardContent = emitShard({
-        advisories,
+        // `_generated/shard.ts` is committed, and this finding is a fact about
+        // the machine codegen ran on rather than about the app — regenerating
+        // against a stale `dist/` would write it into a tracked file, so the
+        // diff would differ per developer. It still reaches the terminal through
+        // `CodegenResult.advisories`, which is where a fact about this run
+        // belongs. (`procedure_not_registered` is embedded like every other
+        // finding, and it is resolution-dependent too — a cold `dist/` drops it
+        // from the emitted list. That is the pre-existing cost of embedding
+        // advisories at all, not something this filter can fix.)
+        advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
