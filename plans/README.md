@@ -1799,6 +1799,22 @@ originally reported.
 | 450  | Remove the `workflow_duplicate_step_name` lint — its premise is false       | P2  | bug       | TODO   |
 | 451  | Make private packages use `workspace:*` for intra-repo deps, and enforce it | P2  | release   | TODO   |
 
+## SaaS Kit (2026-09-08)
+
+A competitive audit of the SaaS starter-kit market (Zero To Shipped, supastarter,
+ShipFast, `LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`, boxyhq,
+ixartz, open-saas, `nextjs/saas-starter`, `Kiranism/next-shadcn-dashboard-starter`)
+against what this repo already ships. Finding: every ingredient exists as a
+registry item or package and **none of them are composed** — the richest template
+is `templates/expo` at 26 files. Realtime is an empty column across every
+competitor surveyed, and six payment providers is a headline nobody else can
+print; the genuine gaps are an app-level admin, an in-app marketing/CMS surface,
+and i18n.
+
+| Plan | Title                                                                | Pri | Cat     | Status |
+| ---- | -------------------------------------------------------------------- | --- | ------- | ------ |
+| 454  | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry | P2  | product | TODO   |
+
 ## Reference — Convex primitives gap analysis (2026-08-21)
 
 `convex-primitives-gap-analysis.md` — verifies, against `get-convex/convex-backend`
