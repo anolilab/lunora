@@ -1,3 +1,5 @@
+## @lunora/observability [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.65...@lunora/observability@1.0.0-alpha.66) (2026-09-08)
+
 ## @lunora/observability [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.64...@lunora/observability@1.0.0-alpha.65) (2026-09-08)
 
 
