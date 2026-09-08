@@ -1,4 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
+import { anonymous } from "better-auth/plugins";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
@@ -88,6 +89,27 @@ describe("inviteOnly", () => {
         await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
 
         expect(database["user"]).toHaveLength(1);
+    });
+
+    it("leaves anonymous sign-in working when `anonymous()` is installed alongside it", async () => {
+        expect.assertions(2);
+
+        // `anonymous()` mints its user through the same `createUser` path with a
+        // generated address, so the gate used to reject it — turning anonymous
+        // sign-in off with a `SIGN_UP_INVITE_REQUIRED` that named neither plugin.
+        auth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(database),
+            emailAndPassword: { enabled: true },
+            plugins: [anonymous(), inviteOnly()],
+            secret: SECRET,
+        });
+
+        await expect(auth.api.signInAnonymous()).resolves.toBeDefined();
+
+        // Password sign-up is still gated: the carve-out is the `isAnonymous` flag,
+        // not "the anonymous plugin is installed".
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
     });
 
     it("admits an invited address and marks the invitation spent", async () => {

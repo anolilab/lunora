@@ -80,13 +80,17 @@
  * # What it refuses that you may not expect
  *
  * Plugins that mint an account from something other than a real mailbox still
- * synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
- * `<wallet>@<domain>`, `phoneNumber`'s sign-up-on-verification writes a temp
- * address of its own. None of them can match an invitation, so the gate **rejects**
- * them — but only once the first account exists. With
- * {@link InviteOnlyOptions.allowFirstUser} on, the bootstrap runs before the
- * address is ever compared, so the first anonymous session or wallet sign-in is
- * what claims it. Do not combine those plugins with this one.
+ * synthesize an address — `siwe` writes `<wallet>@<domain>`, `phoneNumber`'s
+ * sign-up-on-verification writes a temp address of its own. Neither can match an
+ * invitation, so the gate **rejects** them — but only once the first account
+ * exists. With {@link InviteOnlyOptions.allowFirstUser} on, the bootstrap runs
+ * before the address is ever compared, so the first wallet sign-in is what claims
+ * it. Do not combine those plugins with this one.
+ *
+ * `anonymous()` is the one carve-out, because anonymous sign-in is not
+ * registration — see {@link isAnonymousUser}. Installing both gives you "browse
+ * anonymously, invitation required to keep an account": the throwaway identity is
+ * admitted, and converting it into a real account is gated like any other sign-up.
  *
  * `AuthAdmin.createUser` (`./admin.ts`) mints through the same internal adapter, so
  * the studio's create-user action is gated too. Issue an invitation first, or call
@@ -283,6 +287,23 @@ const emailOf = (user: { email?: unknown }): string | undefined => {
     return normalized === "" ? undefined : normalized;
 };
 
+/**
+ * Whether the row being created is better-auth's `anonymous()` user.
+ *
+ * The gate below rejects on "no usable invitation was found", which a row with no
+ * email at all also fails — and `anonymous()` mints its users through the same
+ * `createUser` path with a generated address (`temp-<id>@…`) no invitation will
+ * ever match. So installing both plugins turned anonymous sign-in off, with a
+ * `SIGN_UP_INVITE_REQUIRED` that names neither plugin.
+ *
+ * Anonymous sign-in is not registration: it hands out a throwaway identity that
+ * cannot sign in twice, and the `isAnonymous` flag `anonymous()` puts in the
+ * payload draws exactly that line. Converting an anonymous user to a real account
+ * STAYS gated — better-auth creates a second, non-anonymous user row and links the
+ * anonymous one afterwards, so that row reaches this hook without the flag.
+ */
+const isAnonymousUser = (user: Readonly<Record<string, unknown>>): boolean => user["isAnonymous"] === true;
+
 /** Whether `email` has an invitation that is present, unspent, and unexpired. */
 const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> => {
     const row = await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] });
@@ -427,6 +448,10 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             const { adapter } = context;
 
             const before: UserCreateBefore = async (user) => {
+                if (isAnonymousUser(user)) {
+                    return;
+                }
+
                 const email = emailOf(user);
 
                 if (email !== undefined && (await hasUsableInvitation(adapter, email))) {
@@ -448,7 +473,10 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             const after: UserCreateAfter = async (user) => {
                 const email = emailOf(user);
 
-                if (email === undefined) {
+                // An anonymous user's generated address matches no invitation, so
+                // the update is pointless at best; skipped for the same reason the
+                // gate is.
+                if (email === undefined || isAnonymousUser(user)) {
                     return;
                 }
 
