@@ -19,7 +19,7 @@ import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
 import type { WorkerEntry } from "./worker-entry-checks";
-import { projectChainsVectors, readWorkerEntry } from "./worker-entry-checks";
+import { readWorkerEntry, scanAppComposition } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -1508,21 +1508,32 @@ const collectContainerImageErrors = (
  * Same relationship the unexported-class check validates, which is why it lives
  * here rather than in the runtime.
  *
- * Blocking, so both halves fail open. The entry must call `defineApp(...)` itself
- * (a framework adapter's re-export is out of reach and must not be judged), and
- * {@link projectChainsVectors} clears it on a `.vectors(` anywhere in the project —
- * the builder returns `this`, so chaining it from a neighbouring module is a
- * supported wiring, and hard-erroring that would tell an author to add a call they
- * already wrote.
+ * Blocking, so both halves fail open. The project must name `defineApp` somewhere
+ * in its own sources (a worker composed in another package is out of reach and
+ * must not be judged), and a `.vectors(` anywhere in them clears it — the builder
+ * returns `this`, so chaining it from a neighbouring module is a supported wiring,
+ * and hard-erroring that would tell an author to add a call they already wrote.
+ *
+ * Both facts come from {@link scanAppComposition}, i.e. from the project rather
+ * than from the worker entry. Keying "does this project compose an app" on the
+ * ENTRY is what silently disabled the check for the two commonest Vite-first
+ * layouts: `main: "virtual:lunora/worker"` names no file at all, and a generated
+ * `src/worker.ts` only re-exports the app composed in `src/server.ts`.
  */
-const collectUnchainedVectorsError = (entry: WorkerEntry, vectorIndexNames: ReadonlyArray<string>, projectRoot: string): string[] => {
-    if (vectorIndexNames.length === 0 || !entry.composesApp || projectChainsVectors(projectRoot)) {
+const collectUnchainedVectorsError = (vectorIndexNames: ReadonlyArray<string>, projectRoot: string): string[] => {
+    if (vectorIndexNames.length === 0) {
+        return [];
+    }
+
+    const { chainsVectors, composedIn } = scanAppComposition(projectRoot);
+
+    if (chainsVectors || composedIn === undefined) {
         return [];
     }
 
     return [
         `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
-            `(entry: ${entry.path}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+            `(composed in: ${composedIn}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
             `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
     ];
 };
@@ -1656,20 +1667,20 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // rather than a warning because `collectValueExports` reports nothing unless
     // it is certain, so what reaches here is a fact, and a warning meant `verify`
     // exited 0 on a tree `lunora build` rejects.
-    // Resolved, read and parsed ONCE for both entry-derived checks — each used to
-    // do its own, so a `lunora dev` restart paid for two full ts-morph parses of
-    // the same file. `undefined` means the entry cannot be decided, and both checks
-    // then report nothing.
+    // `undefined` means the entry cannot be decided (no resolvable file, or one
+    // that does not parse), and the export check then reports nothing.
     const workerEntry = readWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
 
     report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
 
     if (workerEntry !== undefined) {
-        report.errors.push(
-            ...collectUnexportedClassErrors(resolvedWrangler, workerEntry),
-            ...collectUnchainedVectorsError(workerEntry, schemaInfo?.vectorIndexNames ?? [], options.projectRoot),
-        );
+        report.errors.push(...collectUnexportedClassErrors(resolvedWrangler, workerEntry));
     }
+
+    // Outside the guard above on purpose: this one reads the project, not the
+    // entry, and an unresolvable entry (class-A's virtual `main`) says nothing
+    // about whether the app binds its vector indexes.
+    report.errors.push(...collectUnchainedVectorsError(schemaInfo?.vectorIndexNames ?? [], options.projectRoot));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*

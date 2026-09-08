@@ -906,13 +906,15 @@ describe("wrangler-validator", () => {
             // The generated builder throws for this from `buildWorkerOptions` — on
             // the first REQUEST. codegen, build, verify, tsc and the test suite all
             // pass on a tree where every request 500s, `/_lunora/health` included.
-            const writeVectorProject = (entry: string): void => {
+            const writeVectorProject = (entry: string, options: { entryFile?: string; main?: string } = {}): void => {
+                const entryFile = options.entryFile ?? "index.ts";
+
                 writeSchema(SCHEMA_WITH_VECTOR);
                 writeFileSync(
                     join(workdir, "wrangler.jsonc"),
                     `{
     "name": "x",
-    "main": "src/index.ts",
+    "main": "${options.main ?? `src/${entryFile}`}",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -922,7 +924,7 @@ describe("wrangler-validator", () => {
                     "utf8",
                 );
                 mkdirSync(join(workdir, "src"), { recursive: true });
-                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+                writeFileSync(join(workdir, "src", entryFile), entry, "utf8");
             };
 
             it("errors, naming the index and the chain that binds it", () => {
@@ -985,16 +987,48 @@ describe("wrangler-validator", () => {
                 expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
             });
 
-            it("says nothing about an entry that does not compose the app itself", () => {
+            it("says nothing about a project that composes its worker elsewhere", () => {
                 expect.assertions(1);
 
-                // A framework adapter's entry re-exports a worker built elsewhere.
-                // The check must not block what it cannot see.
-                writeVectorProject(`export { default } from "./server";\n`);
+                // The worker is built in another package and re-exported here, so
+                // nothing in this project's own sources names `defineApp`. The
+                // check must not block what it cannot see.
+                writeVectorProject(`export { default } from "@acme/worker";\n`);
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("fires for a class-A project, whose `main` names no file at all", () => {
+                expect.assertions(1);
+
+                // `main: "virtual:lunora/worker"` resolves to no entry, so a check
+                // keyed on the entry reported nothing for every Vite-first app —
+                // which is most of them.
+                writeVectorProject(`import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`, {
+                    entryFile: "server.ts",
+                    main: "virtual:lunora/worker",
+                });
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("fires when the generated `src/worker.ts` only re-exports the composed app", () => {
+                expect.assertions(1);
+
+                // The class-B composed entry wins over `main`, and it composes
+                // nothing itself — the app is built in `src/server.ts` next to it.
+                writeVectorProject(`import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`, {
+                    entryFile: "server.ts",
+                });
+                writeFileSync(join(workdir, "src", "worker.ts"), `export { default } from "./server";\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
             });
         });
 

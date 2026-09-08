@@ -1,16 +1,17 @@
 /**
- * What a Lunora project's **worker entry** says about itself, read once.
+ * What a Lunora project says about itself, for the two wrangler validations that
+ * have to read source rather than config.
  *
- * Two wrangler validations depend on facts that only the entry file can answer —
- * which Durable Object / Workflow classes it exports, and whether it chains
- * `.vectors(...)` onto `defineApp()`. Both used to resolve the path, read the
- * file, spin up their own ts-morph `Project` and run their own fail-open
- * diagnostics gate, which meant two full parses of the same file on every
- * `lunora verify` and every `lunora dev` restart, and two copies of a fail-open
- * policy that had to stay in sync by hand.
+ * {@link readWorkerEntry} answers the one question only the ENTRY can answer —
+ * which Durable Object / Workflow classes it exports — with a real parse, since
+ * wrangler binds exactly what that file exports.
  *
- * {@link readWorkerEntry} does it once and hands back both answers. The checks
- * that consume them stay next to the wrangler config types they also read.
+ * {@link scanAppComposition} answers the two questions the entry is the wrong
+ * place to ask: whether the project composes an app at all, and whether anything
+ * binds its vector indexes. Both are project-wide facts, and reading them off the
+ * entry silently disabled the vectors check for every Vite-first layout.
+ *
+ * The checks that consume them stay next to the wrangler config types they also read.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname } from "node:path";
@@ -155,53 +156,8 @@ const collectDeclarationExports = (sourceFile: SourceFile, names: Set<string>): 
     }
 };
 
-/** The generated app-composition entry point, whatever the entry chose to call it locally. */
-const APP_FACTORY = "defineApp";
-
-/**
- * The local names `defineApp` is bound to in this file — plural because
- * `import { defineApp as createApp }` is an ordinary import style, and matching
- * the callee text alone turned the whole check into a silent no-op for anyone
- * who used it.
- */
-const localNamesFor = (sourceFile: SourceFile, imported: string): Set<string> => {
-    const names = new Set<string>();
-
-    for (const declaration of sourceFile.getImportDeclarations()) {
-        for (const specifier of declaration.getNamedImports()) {
-            if (!specifier.isTypeOnly() && specifier.getName() === imported) {
-                names.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
-            }
-        }
-    }
-
-    return names;
-};
-
-/** Whether the file calls any of `names` as a plain function. */
-const callsAnyOf = (sourceFile: SourceFile, names: ReadonlySet<string>): boolean => {
-    let found = false;
-
-    sourceFile.forEachDescendant((descendant, traversal) => {
-        if (!TsNode.isCallExpression(descendant)) {
-            return;
-        }
-
-        const callee = descendant.getExpression();
-
-        if (TsNode.isIdentifier(callee) && names.has(callee.getText())) {
-            found = true;
-            traversal.stop();
-        }
-    });
-
-    return found;
-};
-
 /** What the entry told us. `exports` is `undefined` when the file forwards names this scan cannot see. */
 interface WorkerEntry {
-    /** Whether the entry calls `defineApp(...)` itself — alias-aware. `false` for an entry that re-exports a worker built elsewhere. */
-    composesApp: boolean;
     /** Runtime VALUE exports, or `undefined` when a bare `export *` makes the absence of a name prove nothing. */
     exports: Set<string> | undefined;
     /** The resolved entry path, for error messages. */
@@ -263,19 +219,19 @@ const readWorkerEntry = (main: string | undefined, projectRoot: string, wrangler
         collectDeclarationExports(sourceFile, names);
     }
 
-    return { composesApp: callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY)), exports: opaque ? undefined : names, path };
+    return { exports: opaque ? undefined : names, path };
 };
 
-/** Directories a project's own sources never live in, skipped by {@link projectChainsVectors}. */
+/** Directories a project's own sources never live in, skipped by {@link scanAppComposition}. */
 const NON_SOURCE_DIRECTORIES = new Set(["_generated", "build", "coverage", "dist", "node_modules", "out", "target"]);
 
 /** Extensions worth reading when looking for a chained capability call. */
 const SOURCE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
 
 /**
- * Ceiling on files read while looking for a `.vectors(...)` call. Past it the
- * scan gives up and answers "chained" — the fail-open direction, because the
- * caller BLOCKS a deploy on a negative.
+ * Ceiling on files read while looking for the two markers. Past it the scan
+ * gives up and answers "chained" — the fail-open direction, because the caller
+ * BLOCKS a deploy on a negative.
  */
 const MAX_SCANNED_FILES = 2000;
 
@@ -283,19 +239,12 @@ const MAX_SCANNED_FILES = 2000;
 const VECTORS_CHAIN = ".vectors(";
 
 /**
- * Whether anything in the project's own sources chains `.vectors(...)`.
- *
- * Not limited to the entry file, and that is the whole point: the generated
- * builder returns `this`, so `configureVectors(app)` in a neighbouring module is
- * a supported wiring. A check that only read the entry would hard-error a
- * correct tree and tell the author to add a call they had already written.
- *
- * A literal text match, not an AST walk, because the direction of error matters:
- * anything that looks like the call CLEARS the check. A comment mentioning
- * `.vectors(` therefore also clears it — a false negative that leaves the app
- * exactly where it was before this check existed, which is the trade a blocking
- * gate should take.
+ * The generated app factory. Matched as a bare identifier, so
+ * `import { defineApp as createApp }` — an ordinary import style — is seen too:
+ * the import specifier carries the original name whatever the local alias is.
  */
+const APP_FACTORY = "defineApp";
+
 /** The source files directly in `directory`, and the subdirectories worth descending into. Unreadable directories read as empty. */
 const readSourceDirectory = (directory: string): { files: string[]; subdirectories: string[] } => {
     const files: string[] = [];
@@ -322,18 +271,37 @@ const readSourceDirectory = (directory: string): { files: string[]; subdirectori
     return { files, subdirectories };
 };
 
-/** Whether one file mentions the chained call. Unreadable files read as "no". */
-const mentionsVectorsChain = (file: string): boolean => {
-    try {
-        return readFileSync(file, "utf8").includes(VECTORS_CHAIN);
-    } catch {
-        return false;
-    }
-};
+/** What the project's own sources say about app composition and vector wiring. */
+interface AppComposition {
+    /** Whether anything chains `.vectors(...)`. `true` also when the scan gave up — the fail-open answer. */
+    chainsVectors: boolean;
+    /** The first file that names `defineApp`, or `undefined` when the project composes its worker elsewhere. */
+    composedIn: string | undefined;
+}
 
-const projectChainsVectors = (projectRoot: string): boolean => {
+/**
+ * What the project's own sources say about `defineApp()` and `.vectors(...)`.
+ *
+ * Read from the whole project rather than from the worker entry, and that is the
+ * whole point in BOTH directions. The builder returns `this`, so
+ * `configureVectors(app)` in a neighbouring module is a supported wiring, and a
+ * check that only read the entry would hard-error a correct tree. And the entry
+ * frequently is not where the app is composed at all: a class-A project points
+ * `main` at a virtual specifier that names no file, and a class-B one at a
+ * generated `src/worker.ts` that re-exports the app built in `src/server.ts`. Both
+ * read as "composes nothing" from the entry alone, which turned this check off for
+ * exactly the Vite-first projects it exists to protect.
+ *
+ * A literal text match, not an AST walk, because the direction of error matters:
+ * anything that looks like either marker CLEARS the check. A comment mentioning
+ * `.vectors(` therefore also clears it — a false negative that leaves the app
+ * exactly where it was before this check existed, which is the trade a blocking
+ * gate should take.
+ */
+const scanAppComposition = (projectRoot: string): AppComposition => {
     const pending: string[] = [projectRoot];
     let budget = MAX_SCANNED_FILES;
+    let composedIn: string | undefined;
 
     while (pending.length > 0) {
         const directory = pending.pop() as string;
@@ -346,14 +314,28 @@ const projectChainsVectors = (projectRoot: string): boolean => {
 
             // Out of budget: answer "chained", the fail-open direction, because the
             // caller BLOCKS a deploy on a negative.
-            if (budget < 0 || mentionsVectorsChain(file)) {
-                return true;
+            if (budget < 0) {
+                return { chainsVectors: true, composedIn };
             }
+
+            let source: string;
+
+            try {
+                source = readFileSync(file, "utf8");
+            } catch {
+                continue;
+            }
+
+            if (source.includes(VECTORS_CHAIN)) {
+                return { chainsVectors: true, composedIn };
+            }
+
+            composedIn ??= source.includes(APP_FACTORY) ? file : undefined;
         }
     }
 
-    return false;
+    return { chainsVectors: false, composedIn };
 };
 
-export type { WorkerEntry };
-export { projectChainsVectors, readWorkerEntry };
+export type { AppComposition, WorkerEntry };
+export { readWorkerEntry, scanAppComposition };
