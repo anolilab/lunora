@@ -127,35 +127,39 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
-    // `vis release` runs BESIDE multi-semantic-release, not instead of it. A package
-    // is vis's only once it opts in with `"vis-release": { "managed": true }`, and the
-    // release workflow passes that same package to msr as `--ignore-packages`, so
-    // exactly one tool owns each package. Keep the two lists in lockstep: a package in
-    // neither never releases, a package in both releases twice.
+    // `vis release` replaces multi-semantic-release + @anolilab/semantic-release-preset.
+    // Every publishable package is released from here; there is no per-package release
+    // config any more (the 52 `.releaserc.json` files are gone). `.github/workflows/
+    // semantic-release.yml` is still named that because npm's trusted publishers are
+    // registered against that filename — the file drives `vis release` now.
     release: {
         // The subsystem prints an unstable warning (RFC §21.2) on every invocation.
-        // Acknowledged deliberately, not silenced by accident — see the migration notes
-        // in the PR that added this block.
+        // Acknowledged deliberately, not silenced by accident.
         acknowledgeUnstable: true,
-        changelog: "github",
         // `alpha` is the development branch here, not `main` — same reason as `defaultBase`
         // above. This is what `vis release generate` merge-bases against on a PR branch.
         baseBranch: "alpha",
-        // Mirrors the branch/channel table of @anolilab/semantic-release-preset, so a
-        // migrated package keeps publishing to the same dist-tags it does today.
+        // Neither built-in formatter matches what the first ~4,900 releases wrote, and
+        // `apps/docs` renders the public changelog feed by parsing that format — see the
+        // header of the formatter for the three things it needs. Keeping the format also
+        // means every CHANGELOG.md stays one document instead of two stacked styles.
+        changelog: "./scripts/vis-changelog-format.js",
+        // Mirrors the branch table of @anolilab/semantic-release-preset, so every package
+        // keeps publishing to the dist-tag it publishes to today.
         channels: {
             alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
             beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
             main: { mode: "auto-publish", tag: "latest" },
             next: { mode: "auto-publish", tag: "next" },
         },
-        // Git tags are semantic-release's source of truth too, so a package that moves
-        // over continues its existing version stream instead of restarting from whatever
-        // `package.json` happens to hold. All 4,925 existing tags parse under the default
+        // Git tags were semantic-release's source of truth too, so every package continues
+        // its existing version stream instead of restarting from whatever `package.json`
+        // happens to hold. All 4,925 existing tags parse under the default
         // `{name}@{version}` pattern, so nothing needs backfilling.
         currentVersionResolver: "git-tag",
-        // Opt-in only. Flipping this to `true` hands every package to vis at once.
-        defaultManaged: false,
+        // Every publishable package. Private ones (apps, examples, tests) are excluded by
+        // default and stay excluded — `privatePackages` is left off.
+        defaultManaged: true,
         // The version step rewrites package.json, which Prettier does check
         // (CHANGELOG.md is in .prettierignore, so only the manifest matters).
         formatChangedFiles: true,
@@ -171,6 +175,14 @@ export default defineConfig({
             publishArgs: ["--provenance"],
             publishStrategy: "npm-publish-tarball",
         },
+        // This is `.multi-releaserc.json`'s `deps.bump: "satisfy"`, under vis's name, and
+        // scripts/check-sibling-peer-ranges.js asserts it stays that way. Sibling
+        // peerDependencies are promotion-safe RANGES (`>=1.0.0-alpha.24 <2.0.0-0`) that a
+        // new alpha still satisfies, so they are left alone; exact-pinned sibling
+        // `dependencies` never satisfy the next version, so they keep their lockstep
+        // rewrite. Switching this to a mode that rewrites unconditionally re-breaks every
+        // published consumer at the 1.0.0 promotion.
+        updateInternalDependencies: "out-of-range",
     },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from

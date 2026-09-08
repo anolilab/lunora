@@ -81,5 +81,5 @@ Concise roles below — read the package's `src/` and `docs/` for detail. Flags:
 
 Every package is `src/index.ts` + `__tests__/` (Vitest, `.test.ts` / `.spec.ts`) with its own `vitest.config.ts`, `tsconfig.json` (extends `../../tsconfig.base.json`), and `project.json` (vis tags `type:package`, `category:<slug>`). Manifests are ESM (`"type": "module"`), `"sideEffects": false`, conditional exports.
 
-`.releaserc.json` (extends `@anolilab/semantic-release-preset/pnpm`) is present only on the 52 publishable packages — the three `"private": true` ones (`auth-ui`, `dispatch`, `search-core`) have none, and adding one would try to publish them. Copy an existing sibling rather than assembling this by hand; `vis generate lunora-package` does it for you.
+There is no per-package release config: `vis release` releases every non-private package from the `release` block in `vis.config.ts`. Publishability is `"private": true` and nothing else — the three private ones (`auth-ui`, `dispatch`, `search-core`) are excluded by that alone, and dropping the flag publishes the package. Copy an existing sibling rather than assembling a manifest by hand; `vis generate lunora-package` does it for you.
 

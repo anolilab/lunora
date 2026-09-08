@@ -1,17 +1,24 @@
-"name": "Semantic Release"
+# Releases every publishable package with `vis release` — the `release` block in
+# vis.config.ts is the whole configuration.
+#
+# The FILENAME is load-bearing and must not change: npm's trusted publishers are
+# registered per package against `semantic-release.yml` (see
+# scripts/publish-name-placeholder.mjs), so renaming this file breaks publishing for
+# every package until all 52 trusted-publisher entries are updated.
+
+"name": "Release"
 
 "on": # yamllint disable-line rule:truthy
     "push":
-        # main → stable releases; alpha/next/beta → prereleases (per the
-        # @anolilab/semantic-release-preset branches config).
+        # main → stable releases; alpha/next/beta → prereleases, per the channel
+        # table in `release.channels`.
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
 # Never cancel an in-progress release (GitHub may still replace a run that is only
-# pending). Each package gets a git tag AND a channel note
-# (refs/notes/semantic-release-<tag>); a run cancelled between those two pushes leaves
-# a tag with no note, which the next run reads as "never released" — it then recomputes
-# an existing version and dies on `git tag`.
+# pending). A wave versions, commits, tags and publishes in sequence; a run cancelled
+# between the tag push and the publish leaves a tag whose version was never published,
+# and the next run refuses that tag as a collision rather than republishing over it.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
     "cancel-in-progress": false
@@ -20,8 +27,8 @@
     "contents": "read" # for checkout
 
 "jobs":
-    "semantic-release":
-        "name": "Semantic Release"
+    "release":
+        "name": "Release"
         "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -45,7 +52,7 @@
               "with":
                   "egress-policy": "audit"
 
-            # Persist credentials so multi-semantic-release can push tags/release commits.
+            # Persist credentials so the release can push tags and release commits.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
@@ -55,14 +62,6 @@
                   "GIT_COMMITTER_NAME": "GitHub Actions Shell"
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
-
-            # Deliberate redundancy: semantic-release fetches notes itself, but a run
-            # cancelled mid-push can leave a tag without its channel note. Fetching every
-            # notes ref keeps each @lunora/*@<ver> tag mappable to its channel, so an
-            # already-published version is never released twice.
-            - "name": "Fetch semantic-release notes"
-              "shell": "bash"
-              "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
 
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
@@ -119,21 +118,15 @@
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
-            # ---------------------------------------------------------------------
-            # vis release — owns the packages that carry `"vis-release": { "managed":
-            # true }`. Everything else stays with multi-semantic-release below, which
-            # is handed the same list as `--ignore-packages` so no package is released
-            # twice. Moving a package is therefore two edits that must land together:
-            # the `vis-release` block in its package.json, and the `--ignore-packages`
-            # argument on the msr step below.
+            # `vis release` is change-file driven (changesets-style) and `ci release` does
+            # NOT derive them, so a commit-driven release has to write one first.
             #
-            # `vis release` is change-file driven (changesets-style), so a commit-driven
-            # release needs the change file derived first. `github.event.before` is the
-            # branch tip this push replaced, which is exactly "the commits this push
-            # added" — and it excludes the previous run's own `chore(release):` commits,
-            # which `generate` would otherwise transcribe into the changelog. A dispatch
-            # has no `before`, so fall back to the last commit.
-            - "name": "Derive vis change files from this push"
+            # `github.event.before` is the branch tip this push replaced, so the range is
+            # exactly "the commits this push added". That also excludes the previous run's
+            # own `chore(release):` commits — `generate` transcribes commit subjects
+            # verbatim, so a wider range copies old changelog headers into the new entry.
+            # A dispatch carries no `before`, so fall back to the last commit.
+            - "name": "Derive change files from this push"
               "shell": "bash"
               "env":
                   "BEFORE": "${{ github.event.before }}"
@@ -158,12 +151,15 @@
                           add -- .vis/release
                       git -c "user.name=github-actions-shell" \
                           -c "user.email=github-actions[bot]@users.noreply.github.com" \
-                          commit --message "chore(release): record pending vis change file [skip ci]"
+                          commit --message "chore(release): record pending change file [skip ci]"
                   else
-                      echo "No change file written — nothing for vis to release."
+                      echo "No change file written — nothing to release."
                   fi
 
-            - "name": "vis release"
+            # Versions, writes changelogs, commits, tags, publishes and pushes — the whole
+            # wave. Exits 0 with "Nothing to release" when the push carried no releasable
+            # commit, so it is safe on every push to a release branch.
+            - "name": "Release"
               "env":
                   "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
                   "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
@@ -171,22 +167,9 @@
                   "VIS_GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
               "run": "pnpm exec vis release ci release --auto-publish"
 
-            - "name": "Multi semantic release"
-              "env":
-                  "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
-                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
-                  "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
-                  "GIT_AUTHOR_NAME": "github-actions-shell"
-                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
-                  "GIT_COMMITTER_NAME": "github-actions-shell"
-                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
-              # --ignore-packages takes workspace path globs, not package names, and
-              # negates them against the workspace patterns.
-              "run": "pnpm exec multi-semantic-release --ignore-packages packages/browser"
-
-            # The release bumps every package.json, but @semantic-release/git stages only
-            # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile
-            # fails `--frozen-lockfile`, blocking every later push to the branch.
+            # The release bumps every package.json, but the release commit stages only the
+            # per-package files it wrote — the root pnpm-lock.yaml drifts, and a drifted
+            # lockfile fails `--frozen-lockfile`, blocking every later push to the branch.
             #
             # Retried against a re-fetched tip because the branch moves underneath the job:
             # a release takes ~15 minutes, and a PR merged in that window makes a single

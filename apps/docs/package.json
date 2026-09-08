@@ -121,7 +121,6 @@
         "prettier": "catalog:web",
         "rimraf": "catalog:web",
         "secretlint": "catalog:web",
-        "semantic-release": "catalog:web",
         "tailwind-csstree": "catalog:web",
         "vitest": "catalog:web"
     },

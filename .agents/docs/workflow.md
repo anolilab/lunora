@@ -17,15 +17,22 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 ## Release
 
-Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+Independent per-package versioning via `vis release` — the `release` block in `vis.config.ts` is the whole configuration; there is no per-package release file. Conventional Commits drive bumps; `.github/workflows/semantic-release.yml` publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
 
-### Two release tools, one owner per package
+The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 52 entries are updated.
 
-`vis release` (the `release` block in `vis.config.ts`) is being trialled alongside msr. A package belongs to vis only when its `package.json` carries `"vis-release": { "managed": true }`; the same package is passed to msr as `--ignore-packages <path>` in `semantic-release.yml`, so exactly one tool releases it. **Those two edits land together** — a package in neither list never releases, a package in both releases twice. `@lunora/browser` is the only one on vis today.
+### What the release does on a push
 
-Same branch → dist-tag table, same `{name}@{version}` tags, same prerelease counter (`1.0.0-alpha.44 → .45`), so a migrated package continues its version stream. Two visible differences: its CHANGELOG gains vis-style sections (`## 1.0.0-alpha.45`) above the older semantic-release ones, and entries are a flat list rather than grouped under Features / Bug Fixes.
+1. `vis release generate --from ${{ github.event.before }}` derives a change file from the commits this push added (vis is changesets-style and `ci release` does not derive them itself), and commits it — `ci release` refuses a dirty tree.
+2. `vis release ci release --auto-publish` versions, writes changelogs, commits, tags, publishes to npm and pushes. It exits 0 with "Nothing to release" when the push carried nothing releasable.
+3. The lockfile is re-synced and pushed, and a CodSpeed baseline run is dispatched, exactly as before.
 
-Because vis is change-file driven, the workflow derives one from the pushed commits (`vis release generate --from ${{ github.event.before }}`) and commits it before publishing. Locally, `vis release status` prints the pending plan and `vis release doctor` checks the setup.
+Locally: `vis release status --channel alpha` prints the pending plan, `vis release version --dry-run` shows what it would write, and `vis release doctor` checks the setup.
+
+### Two rules the release depends on
+
+- **`release.updateInternalDependencies: "out-of-range"`.** Sibling `peerDependencies` are promotion-safe ranges that a new alpha still satisfies, so they are left alone; sibling `dependencies` are rewritten to `^<new version>` when the release moves past them. `scripts/check-sibling-peer-ranges.js` fails the install if that setting disappears — under an unconditional rewrite every published consumer breaks at the 1.0.0 promotion.
+- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` renders the public changelog feed by parsing `packages/*/CHANGELOG.md`, and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections. Neither built-in formatter emits those, so the feed would silently go quiet. The formatter also drops the machine `chore(release):` commits that `generate` transcribes verbatim.
 
 ## Internal scaffolding (`vis generate`)
 

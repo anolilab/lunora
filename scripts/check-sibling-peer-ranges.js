@@ -11,20 +11,22 @@
  *
  * Two mechanisms interact here:
  *
- * 1. multi-semantic-release rewrites local sibling specifiers on every release.
- *    Its default `deps.bump: "override"` replaces ANY specifier — ranges
- *    included — with the exact new version (that is how @lunora/replica's
- *    original `>=1.0.0-alpha.17 <2.0.0` peer got clobbered to `1.0.0-alpha.24`).
- *    The root `.multi-releaserc.json` therefore sets `deps.bump: "satisfy"`,
- *    which leaves a specifier alone while the new version still satisfies it
- *    (exact-pinned regular dependencies keep their lockstep bumps — an exact pin
- *    never satisfies the next version, so "satisfy" falls back to override).
+ * 1. The release tool rewrites local sibling specifiers on every release. A mode
+ *    that rewrites unconditionally replaces ANY specifier — ranges included —
+ *    with the exact new version (that is how @lunora/replica's original
+ *    `>=1.0.0-alpha.17 <2.0.0` peer got clobbered to `1.0.0-alpha.24`).
+ *    `vis.config.ts` therefore sets `release.updateInternalDependencies:
+ *    "out-of-range"`, which leaves a specifier alone while the new version still
+ *    satisfies it (exact-pinned regular dependencies keep their lockstep bumps —
+ *    an exact pin never satisfies the next version, so it is always rewritten).
+ *    This was `.multi-releaserc.json`'s `deps.bump: "satisfy"` before the repo
+ *    moved off multi-semantic-release; same rule, different spelling.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
- *    train continues past `1.0.0`, "satisfy" falls back to an exact pin again —
- *    this guard then fails the next install so a maintainer widens the range
- *    floor instead of shipping a fresh time bomb.
+ *    train continues past `1.0.0`, an in-range specifier becomes out-of-range and
+ *    is pinned exactly again — this guard then fails the next install so a
+ *    maintainer widens the range floor instead of shipping a fresh time bomb.
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
@@ -44,6 +46,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { satisfies } from "semver";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
@@ -91,9 +95,14 @@ for (const { dir, manifest } of manifests) {
     }
 }
 
-// Report-only: exact sibling `dependencies` pins that have drifted behind the
-// dependency's current published version. Never fails the install — see the
-// doc comment above for why this is a report, not a gate.
+// Report-only: sibling `dependencies` specifiers that no longer admit the
+// dependency's current version. Never fails the install — see the doc comment
+// above for why this is a report, not a gate.
+//
+// Satisfaction, not string equality: `vis release` rewrites an out-of-range
+// sibling specifier to `^<new version>`, which keeps admitting the next alpha in
+// the same tuple. Comparing strings would report every one of those as drifted
+// on every install, for as long as they stay correct.
 let dependencyWarnings = 0;
 
 for (const { dir, manifest } of manifests) {
@@ -104,7 +113,7 @@ for (const { dir, manifest } of manifests) {
 
         const current = versions[name];
 
-        if (!current || specifier === current) {
+        if (!current || satisfies(current, specifier, { includePrerelease: false })) {
             continue;
         }
 
@@ -118,27 +127,32 @@ if (dependencyWarnings > 0) {
     console.warn(`⚠️  ${dependencyWarnings} sibling dependency pin(s) are behind the current published version (report-only, does not fail install).`);
 }
 
-// The range fix only holds while multi-semantic-release runs with
-// `deps.bump: "satisfy"` — under the default "override" the next release
-// rewrites every sibling range back to an exact pin. Fail if that config drifts.
+// The range fix only holds while the release tool leaves a satisfied specifier
+// alone. In `vis release` that is `updateInternalDependencies: "out-of-range"` —
+// the mode that rewrites a sibling specifier only when the new version no longer
+// satisfies it. Under an unconditional mode the next release rewrites every
+// sibling range back to an exact pin. Fail if that config drifts.
+//
+// Read as text, not imported: vis.config.ts is TypeScript, and this runs from
+// `postinstall` where a failure turns every CI job red in its setup step.
 try {
-    const msrConfig = JSON.parse(readFileSync(join(rootDir, ".multi-releaserc.json"), "utf8"));
+    const visConfig = readFileSync(join(rootDir, "vis.config.ts"), "utf8");
 
-    if (msrConfig?.deps?.bump !== "satisfy") {
+    if (!/updateInternalDependencies:\s*"out-of-range"/.test(visConfig)) {
         hasFailure = true;
 
-        console.error('❌ .multi-releaserc.json no longer sets "deps.bump": "satisfy".');
-        console.error("   Without it, multi-semantic-release overrides sibling peer RANGES back to exact pins on the next release.");
+        console.error('❌ vis.config.ts no longer sets release.updateInternalDependencies: "out-of-range".');
+        console.error("   Without it, the release rewrites sibling peer RANGES back to exact pins on the next publish.");
     }
 } catch {
     hasFailure = true;
 
-    console.error("❌ .multi-releaserc.json is missing or unparsable.");
-    console.error('   It must set "deps.bump": "satisfy" so sibling peer ranges survive releases.');
+    console.error("❌ vis.config.ts is missing or unreadable.");
+    console.error('   Its release block must set updateInternalDependencies: "out-of-range" so sibling peer ranges survive releases.');
 }
 
 if (hasFailure) {
     process.exit(1);
 }
 
-console.log("✅ No exact @lunora/* or lunorash peerDependency pins; multi-semantic-release keeps ranges (deps.bump: satisfy).");
+console.log('✅ No exact @lunora/* or lunorash peerDependency pins; vis release keeps ranges (updateInternalDependencies: "out-of-range").');

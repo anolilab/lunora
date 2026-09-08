@@ -11,12 +11,11 @@
  * `cron-parser` / `better-sqlite3` runtime deps (plan 327) are exactly this
  * failure mode, caught only by a one-off audit.
  *
- * `@lunora/*` / `lunorash` sibling packages are excluded: this repo pins
- * those exact-version-per-package deliberately (see
- * `scripts/check-sibling-peer-ranges.js`'s doc comment) so
- * multi-semantic-release can bump each consumer in lockstep with its
- * dependency's release — that is a different, already-guarded mechanism, not
- * catalog drift.
+ * `@lunora/*` / `lunorash` sibling packages are excluded: their specifiers are
+ * owned by the release (see `scripts/check-sibling-peer-ranges.js`'s doc
+ * comment), which rewrites each consumer in lockstep with its dependency's
+ * release — that is a different, already-guarded mechanism, not catalog
+ * drift.
  *
  * Run by the `dependency-manifests` job in `.github/workflows/lint.yml`, and by
  * hand as `pnpm run lint:catalog-drift`. (The header used to say it was unwired

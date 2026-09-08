@@ -91,7 +91,8 @@ vis generate lunora-package --name=search --description='Typed full-text search 
 This creates `packages/search/` following the repo's package shape: `src/index.ts`,
 `__tests__/`, `vitest.config.ts`, `tsconfig.json` (extends `../../tsconfig.base.json`),
 `project.json` (vis tags `type:package` + `category:<slug>`), `package.json` (ESM,
-`"sideEffects": false`, conditional exports), and `.releaserc.json`.
+`"sideEffects": false`, conditional exports). No release config is scaffolded —
+`vis release` releases every non-private package from the root `vis.config.ts`.
 
 ### Repo conventions to honor
 
