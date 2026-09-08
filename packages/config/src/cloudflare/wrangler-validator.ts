@@ -1684,6 +1684,104 @@ const collectValueExports = (fileName: string, source: string): Set<string> | un
 };
 
 /**
+ * Every called function/method name in a file — `foo()` and `x.foo()` alike.
+ *
+ * `undefined` when the file does not parse, which is the same fail-open the
+ * export scan takes: ts-morph error-RECOVERS rather than throwing, and a recovered
+ * parse silently drops statements, so a half-typed entry would otherwise report a
+ * correctly-wired chain as missing and stop `lunora dev` mid-keystroke.
+ */
+const parseCalls = (fileName: string, source: string): Set<string> | undefined => {
+    // Same `skipLoadingLibFiles` reasoning as `collectValueExports`: nothing here
+    // type-checks, and asking for the program otherwise pulls in the full lib set.
+    const project = new Project({
+        compilerOptions: { allowJs: true },
+        skipFileDependencyResolution: true,
+        skipLoadingLibFiles: true,
+        useInMemoryFileSystem: true,
+    });
+    const sourceFile = project.createSourceFile(fileName, source, { overwrite: true });
+
+    if (project.getProgram().compilerObject.getSyntacticDiagnostics(sourceFile.compilerNode).length > 0) {
+        return undefined;
+    }
+
+    const names = new Set<string>();
+
+    for (const descendant of sourceFile.getDescendants()) {
+        if (!Node.isCallExpression(descendant)) {
+            continue;
+        }
+
+        const callee = descendant.getExpression();
+
+        if (Node.isIdentifier(callee)) {
+            names.add(callee.getText());
+        } else if (Node.isPropertyAccessExpression(callee)) {
+            names.add(callee.getName());
+        }
+    }
+
+    return names;
+};
+
+/**
+ * Report a schema that declares vector indexes while the worker entry composes an
+ * app and never chains `.vectors(...)`.
+ *
+ * The generated builder throws for exactly this — but from `buildWorkerOptions`,
+ * which runs on the first REQUEST. So `lunora codegen`, `build`, `verify`, `tsc`
+ * and the test suite all pass on a tree where every HTTP request 500s,
+ * `/_lunora/health` included, and the app ships in that state. The requirement is
+ * static: the schema states the indexes, and whether the chain binds them is
+ * readable from the entry. Same reasoning as the unexported-class check above —
+ * what is invalid is the relationship between the schema and the entry.
+ *
+ * Conservative in both directions, because it blocks: it says nothing unless the
+ * entry itself calls `defineApp(...)` (a project that composes elsewhere is out of
+ * reach), and any `.vectors(...)` call anywhere in the file clears it rather than
+ * insisting the call sit on that one chain.
+ */
+const collectUnchainedVectorsError = (
+    wrangler: WranglerConfig,
+    vectorIndexNames: ReadonlyArray<string>,
+    projectRoot: string,
+    wranglerPath: string,
+): string[] => {
+    if (vectorIndexNames.length === 0) {
+        return [];
+    }
+
+    const entryPath = resolveWorkerEntryPath(wrangler.main, projectRoot, wranglerPath);
+
+    if (entryPath === undefined) {
+        return [];
+    }
+
+    let source: string;
+
+    try {
+        source = readFileSync(entryPath, "utf8");
+    } catch {
+        return [];
+    }
+
+    const calls = parseCalls(basename(entryPath), source);
+
+    if (calls === undefined || !calls.has("defineApp") || calls.has("vectors")) {
+        return [];
+    }
+
+    const [first] = vectorIndexNames;
+
+    return [
+        `schema declares vector index "${String(first)}" but the worker entry (${entryPath}) never chains .vectors(...) onto defineApp() — ` +
+            `\`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+            `Add \`.vectors((env) => ({ ${String(first)}: env.<BINDING> }))\` to the chain.`,
+    ];
+};
+
+/**
  * Report every `durable_objects.bindings[].class_name` and
  * `workflows[].class_name` the worker entry does not export.
  *
@@ -1829,6 +1927,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     report.errors.push(
         ...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath),
         ...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath),
+        ...collectUnchainedVectorsError(resolvedWrangler, schemaInfo?.vectorIndexNames ?? [], options.projectRoot, wranglerPath),
     );
 
     // FS-aware: `assets.directory` is created by the client build, so it may

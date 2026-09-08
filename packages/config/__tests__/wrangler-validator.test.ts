@@ -902,6 +902,68 @@ describe("wrangler-validator", () => {
             });
         });
 
+        describe("a schema with vector indexes whose entry never chains .vectors()", () => {
+            // The generated builder throws for this from `buildWorkerOptions` — on
+            // the first REQUEST. codegen, build, verify, tsc and the test suite all
+            // pass on a tree where every request 500s, `/_lunora/health` included.
+            const writeVectorProject = (entry: string): void => {
+                writeSchema(SCHEMA_WITH_VECTOR);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+            };
+
+            it("errors, naming the index and the chain that binds it", () => {
+                expect.assertions(3);
+
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.report.errors.join("\n")).toContain("docs-body");
+                expect(result.report.errors.join("\n")).toContain("never chains .vectors(...)");
+            });
+
+            it("passes once the chain binds them", () => {
+                expect.assertions(1);
+
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).vectors((env) => ({ "docs-body": env.DOCS_BODY }));\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("never chains"))).toEqual([]);
+            });
+
+            it("says nothing about an entry that does not compose the app itself", () => {
+                expect.assertions(1);
+
+                // A framework adapter's entry re-exports a worker built elsewhere.
+                // The check must not block what it cannot see.
+                writeVectorProject(`export { default } from "./server";\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("never chains"))).toEqual([]);
+            });
+        });
+
         describe("durable object / workflow classes the entry does not export", () => {
             // `.scheduler()` / `.workflow()` write the binding and the migration
             // entry but cannot add the `export { SchedulerDO }` the entry needs,
