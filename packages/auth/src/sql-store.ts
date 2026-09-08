@@ -8,6 +8,12 @@ interface SqlFragment {
     sql: string;
 }
 
+/** The framework column `defineTable` puts on every Lunora table, and better-auth knows nothing about. */
+const CREATION_TIME_COLUMN = "_creationTime";
+
+/** {@link CREATION_TIME_COLUMN} in a `CREATE TABLE` statement, whatever quoting the dialect emitted it with. */
+const CREATION_TIME_DDL = /(?<![$\w])_creationTime(?![$\w])/u;
+
 /** A fragment that never matches — mirrors the in-memory evaluator returning `false`. */
 const NEVER: SqlFragment = { params: [], sql: "0" };
 
@@ -202,6 +208,44 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         return executor.all(`SELECT * FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
     };
 
+    // better-auth builds an INSERT from its OWN column list, so it can never
+    // supply `_creationTime` — the `REAL NOT NULL` framework column `defineTable`
+    // puts on every Lunora table. Every insert into a `defineTable`-backed auth
+    // table then breaches that constraint, and because better-auth's durable rate
+    // limiter writes a row before every handler, the first request of a session
+    // 500s whatever it asked for: the whole of `/api/auth/*` is down while the
+    // tables sit at zero rows. A read does not reveal it — its rate-limit row
+    // already exists, so that write is an UPDATE.
+    //
+    // Filled in per table rather than unconditionally: `lunoraDoAdapter`'s tables
+    // come from better-auth's own resolved schema (`./do-schema.ts`) and have no
+    // such column, and inventing one there would fail every insert the other way.
+    const creationTimeProbes = new Map<string, Promise<boolean>>();
+
+    const hasCreationTimeColumn = (model: string): Promise<boolean> => {
+        let probe = creationTimeProbes.get(model);
+
+        if (probe === undefined) {
+            // `sqlite_master` is what the rest of this package introspects through
+            // (`./migrate.ts`, `./auth-do.ts`, `./d1-index-introspection.ts`), and
+            // its `CREATE TABLE` text answers this outright. A backend that cannot
+            // serve the read keeps the previous behaviour rather than failing the
+            // write.
+            probe = executor
+                .all("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", [model])
+                .then((rows) => {
+                    const ddl = rows[0]?.["sql"];
+
+                    return typeof ddl === "string" && CREATION_TIME_DDL.test(ddl);
+                })
+                .catch(() => false);
+
+            creationTimeProbes.set(model, probe);
+        }
+
+        return probe;
+    };
+
     return {
         consumeOne: async (model, where) => {
             const fragment = compileWhere(where);
@@ -227,15 +271,19 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
             return Number(row?.["__count"] ?? 0);
         },
         create: async (model, data) => {
-            const columns = Object.keys(data);
+            // Spread `data` last so a caller that supplied its own `_creationTime` wins.
+            const row: AuthRow = CREATION_TIME_COLUMN in data || !(await hasCreationTimeColumn(model)) ? data : { [CREATION_TIME_COLUMN]: Date.now(), ...data };
+            const columns = Object.keys(row);
             const placeholders = columns.map(() => "?").join(", ");
             const sql = `INSERT INTO ${quoteId(model)} (${columns.map((column) => quoteId(column)).join(", ")}) VALUES (${placeholders})`;
 
             await executor.run(
                 sql,
-                columns.map((column) => data[column]),
+                columns.map((column) => row[column]),
             );
 
+            // better-auth's own column set, not the row written: `_creationTime` is
+            // Lunora's bookkeeping and has no field in the model it would map back to.
             return { ...data };
         },
         incrementOne: async (model, where, increment, set) => {
