@@ -18,8 +18,8 @@ import { isEnvEnabled } from "../../../../shared/env-flag";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
-import type { WorkerEntry } from "./worker-entry-checks";
-import { findUnchainedVectorsSite, readWorkerEntry } from "./worker-entry-checks";
+import type { CapabilityMethod, WorkerEntry } from "./worker-entry-checks";
+import { readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -905,6 +905,39 @@ const REQUIRED_FIELD_BINDING_RULES = [
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
 /**
+ * The binding each `.global()` backend needs in order to exist at all — the
+ * config half of the chain requirement the unchained-capability check below
+ * reads out of the source.
+ *
+ * The two halves are asymmetric because the builders are. `.global({ d1 })` is
+ * reconciled by the dev server onto a fixed `DB`, so the exact name is checkable.
+ * `.hyperdriveGlobal({ exec })` builds the driver from whatever the user's own
+ * selector reads — `env.HYPERDRIVE` in the docs, but the name is theirs — so the
+ * only static fact is that SOME Hyperdrive binding has to exist. Naming one would
+ * false-error a project that called it something else; demanding none left these
+ * tables with no config check at all, and `env.<BINDING>` is then `undefined` at
+ * the first global read, throwing inside the user's `exec` where nothing here can
+ * say what went wrong.
+ *
+ * A schema may declare both flavours, so these are independent, not exclusive.
+ */
+const validateGlobalBackendBindings = (wrangler: WranglerConfig, schema: SchemaInfo | undefined, errors: string[]): void => {
+    if (schema?.hasD1GlobalTable && !objectBindingEntries(wrangler.d1_databases).some((binding) => binding.binding === "DB")) {
+        errors.push(
+            'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
+        );
+    }
+
+    if (schema?.hasHyperdriveGlobalTable && objectBindingEntries(wrangler.hyperdrive).length === 0) {
+        errors.push(
+            'schema declares .global({ backend: "hyperdrive" }) tables; wrangler must declare a hyperdrive binding for `.hyperdriveGlobal({ exec })` to read — ' +
+                "run `wrangler hyperdrive create <name> --connection-string=...` and add " +
+                '`"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<id>" }]` (any binding name works; your `exec` selector picks it)',
+        );
+    }
+};
+
+/**
  * Structural check for every `d1_databases[]` entry: a non-empty `binding`,
  * plus a `database_id` or a `database_name` identifying which database it
  * binds. Both are remote-ish (created via `wrangler d1 create`, which prints
@@ -1383,17 +1416,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // the `>= REQUIRED_COMPATIBILITY_DATE` error above, so a separate flag error
     // adds no signal. We therefore neither require nor reject the flag here.
 
-    if (schema?.hasGlobalTable) {
-        const d1Bindings = objectBindingEntries(wrangler.d1_databases);
-        const databaseBinding = d1Bindings.find((binding) => binding.binding === "DB");
-
-        if (!databaseBinding) {
-            errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
-            );
-        }
-    }
-
+    validateGlobalBackendBindings(wrangler, schema, errors);
     validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
@@ -1497,40 +1520,93 @@ const collectContainerImageErrors = (
 };
 
 /**
- * Report a schema that declares vector indexes while nothing in the project ever
- * chains `.vectors(...)`.
+ * Report a schema declaration whose matching `defineApp()` chain is missing.
  *
- * The generated builder already throws for this — from `buildWorkerOptions`, which
- * runs on the first REQUEST. So `lunora codegen`, `build`, `verify`, `tsc` and the
- * test suite all pass on a tree where every HTTP request 500s, `/_lunora/health`
- * included, and the app ships in that state. The requirement is static: the schema
- * states the indexes, and whether anything binds them is readable from the source.
- * Same relationship the unexported-class check validates, which is why it lives
- * here rather than in the runtime.
+ * The generated builder already fails for these — but from the first REQUEST. So
+ * `lunora codegen`, `build`, `verify`, `tsc` and the test suite all pass on a tree
+ * where the app cannot answer, and it ships in that state.
  *
- * Blocking, so it fails open both ways — see {@link findUnchainedVectorsSite},
- * which reads the PROJECT rather than the worker entry. Keying "does this project
- * compose an app" on the entry is what silently disabled the check for the two
- * commonest Vite-first layouts: `main: "virtual:lunora/worker"` names no file at
- * all, and a generated `src/worker.ts` only re-exports the app composed in
- * `src/server.ts`.
+ * Without `.vectors()`, `ctx.vectors` is a throwing stub and `buildWorkerOptions`
+ * rejects EVERY request, `/_lunora/health` included. Without `.global()` (or
+ * `.hyperdriveGlobal()`), the shard gets no global writer, so every read or write
+ * of a global table throws `INTERNAL` ("requires a globalDb writer") — and nothing
+ * else says a word, because the wrangler check next to this one proves the `DB`
+ * BINDING exists, which is the half a project usually gets right.
+ *
+ * Both requirements are static: the schema states them, and whether the app chains
+ * the matching call is readable from the source. Same relationship the
+ * unexported-class check validates, which is why it lives here rather than in the
+ * runtime.
+ *
+ * Blocking — and not only at deploy: `@lunora/vite`'s wrangler-validator plugin
+ * throws on any reported problem at `configResolved`, so this also refuses to
+ * start `lunora dev`. Vector indexes are rare, but `.global()` tables are the
+ * common case, and unlike the `DB` binding validated next to it, Lunora cannot
+ * write the `.global(...)` chain into the user's `src/server.ts` for them. That
+ * is the intended trade — the alternative is a dev server whose every global read
+ * throws INTERNAL — but it is why every give-up route below reports nothing.
+ *
+ * It fails open both ways — see {@link scanAppChains}, which reads the
+ * PROJECT rather than the worker entry. Keying "does this project compose an app"
+ * on the entry is what silently disabled the check for the two commonest Vite-first
+ * layouts: `main: "virtual:lunora/worker"` names no file at all, and a generated
+ * `src/worker.ts` only re-exports the app composed in `src/server.ts`.
  */
-const collectUnchainedVectorsError = (vectorIndexNames: ReadonlyArray<string>, projectRoot: string): string[] => {
-    if (vectorIndexNames.length === 0) {
+const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projectRoot: string): string[] => {
+    const vectorIndexNames = schema?.vectorIndexNames ?? [];
+    const required: { message: (site: string) => string; method: CapabilityMethod }[] = [];
+
+    if (vectorIndexNames.length > 0) {
+        required.push({
+            message: (site) =>
+                `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
+                `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+                `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
+            method: "vectors",
+        });
+    }
+
+    if (schema?.hasD1GlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global() table(s) but nothing chains .global(...) onto defineApp() (composed in: ${site}) — the shard then has no global writer, ` +
+                `so every read or write of a global table throws INTERNAL ("requires a globalDb writer"). ` +
+                `Add \`.global({ d1: (env) => env.DB })\` to the chain.`,
+            method: "global",
+        });
+    }
+
+    // The Hyperdrive flavour of the same requirement: a different builder
+    // method, the same missing `globalDb` and the same INTERNAL throw.
+    //
+    // The remediation is the shape `HyperdriveGlobalDeclaration` actually takes
+    // (`@lunora/codegen`'s `emit-app.ts`): `engine` plus an `exec` built from the
+    // binding, NOT a `hyperdrive: (env) => env.HYPERDRIVE` selector like the D1
+    // line above. A blocking error whose suggested fix does not compile costs the
+    // user the same round trip the error was meant to save.
+    if (schema?.hasHyperdriveGlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
+                `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
+                `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(postgres(` +
+                `env.HYPERDRIVE.connectionString))) })\` to the chain ` +
+                `(\`buildPgExec\` from \`@lunora/hyperdrive/global\`, \`fromPostgresJs\` from \`@lunora/hyperdrive\`).`,
+            method: "hyperdriveGlobal",
+        });
+    }
+
+    if (required.length === 0) {
         return [];
     }
 
-    const site = findUnchainedVectorsSite(projectRoot);
+    const scan = scanAppChains(projectRoot, new Set(required.map((entry) => entry.method)));
 
-    if (site === undefined) {
+    if (scan === undefined) {
         return [];
     }
 
-    return [
-        `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
-            `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
-            `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
-    ];
+    return required.filter((entry) => !scan.chained.has(entry.method)).map((entry) => entry.message(scan.site));
 };
 
 /**
@@ -1674,7 +1750,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
 
     // Deliberately outside that guard: it reads the project, and an unresolvable
     // entry (class-A's virtual `main`) says nothing about the vector bindings.
-    report.errors.push(...collectUnchainedVectorsError(schemaInfo?.vectorIndexNames ?? [], options.projectRoot));
+    report.errors.push(...collectUnchainedCapabilityErrors(schemaInfo, options.projectRoot));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*
