@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.208...@lunora/config@1.0.0-alpha.209) (2026-09-08)
+
+### Bug Fixes
+
+* **config:** decide the unchained .vectors() check from the project, not the entry ([#673](https://github.com/anolilab/lunora/issues/673)) ([0dbc943](https://github.com/anolilab/lunora/commit/0dbc94391b61a3a1493be5daeaa40cadca3c3cb6)), closes [#666](https://github.com/anolilab/lunora/issues/666)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.172
+* **@lunora/seed:** upgraded to 1.0.0-alpha.120
+* **@lunora/studio:** upgraded to 1.0.0-alpha.170
+
 ## @lunora/config [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.207...@lunora/config@1.0.0-alpha.208) (2026-09-08)
 
 
