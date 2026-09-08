@@ -28,8 +28,15 @@ interface VectorMetadataDeclaration {
 }
 
 interface SchemaInfo {
-    /** Whether the lunora schema declares any `.global()` table. */
-    hasGlobalTable: boolean;
+    /**
+     * Whether the schema declares a **D1-backed** `.global()` table — the only
+     * flavour that needs the `DB` binding and the app's `.global({ d1 })` chain.
+     * A `.global({ backend: "hyperdrive" })` table needs neither, and counting it
+     * here demanded a D1 database of a project that has none.
+     */
+    hasD1GlobalTable: boolean;
+    /** Whether the schema declares a `.global({ backend: "hyperdrive" })` table — needs the app's `.hyperdriveGlobal(...)` chain instead. */
+    hasHyperdriveGlobalTable?: boolean;
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 
@@ -72,7 +79,8 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
 
         return {
             info: {
-                hasGlobalTable: schema.tables.some((table) => table.shardMode === "global"),
+                hasD1GlobalTable: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
+                hasHyperdriveGlobalTable: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
                 vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
                 vectorMetadata: schema.vectorIndexes.flatMap((index) =>
                     (index.metadata ?? []).map((property) => {

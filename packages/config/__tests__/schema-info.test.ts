@@ -121,7 +121,7 @@ describe("schema info", () => {
     });
     `);
 
-            expect(discoverSchemaInfo(workdir, "lunora").info?.hasGlobalTable).toBe(false);
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(false);
 
             seedSchema(`${SCHEMA_HEADER}
     export const schema = defineSchema({
@@ -129,7 +129,7 @@ describe("schema info", () => {
     });
     `);
 
-            expect(discoverSchemaInfo(workdir, "lunora").info?.hasGlobalTable).toBe(true);
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(true);
         });
 
         it("degrades to empty information on a schema it cannot make sense of, rather than throwing", () => {
@@ -145,7 +145,7 @@ describe("schema info", () => {
             // `lint:types`' and codegen's to report, not this one's.
             expect(result.error).toBeUndefined();
             expect(result.info?.vectorMetadata).toStrictEqual([]);
-            expect(result.info?.hasGlobalTable).toBe(false);
+            expect(result.info?.hasD1GlobalTable).toBe(false);
         });
     });
 });
