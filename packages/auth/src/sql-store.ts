@@ -219,13 +219,23 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
     // `@lunora/d1`), while tables better-auth's own migrator created do not, and
     // writing the column into those fails every insert the other way.
     //
-    // A zero-row SELECT rather than a `sqlite_master` DDL match, because the DDL
-    // TEXT is not the column list — `CHECK (kind <> '_creationTime')` matches a
-    // substring test on a table with no such column. SQLite resolves column names
-    // when it prepares the statement, so `LIMIT 0` costs nothing and answers
-    // exactly. Not `pragma_table_info(?)`: D1's authorizer refuses pragma
-    // table-valued functions through the Worker binding (see
-    // `./d1-index-introspection.ts`).
+    // A read that names the column, rather than a `sqlite_master` DDL match: the
+    // DDL TEXT is not a column list, so `CHECK (kind <> '_creationTime')` satisfies
+    // a substring test on a table with no such column. Not `pragma_table_info(?)`
+    // either — D1's authorizer refuses pragma table-valued functions through the
+    // Worker binding (see `./d1-index-introspection.ts`).
+    //
+    // The column reference is TABLE-QUALIFIED, and that is load-bearing on workerd:
+    // a bare `"col"` that resolves to no column is reinterpreted as a STRING
+    // LITERAL under SQLite's double-quoted-string misfeature, which workerd's build
+    // leaves enabled. The probe then succeeded on every table that lacks the column
+    // — selecting the constant `'_creationTime'` — and every Durable Object insert
+    // failed. `t."col"` cannot be a string, so an absent column raises, which is
+    // the answer being asked for.
+    //
+    // `node:sqlite` builds with `SQLITE_DQS=0` and errors either way, so the node
+    // suite was green while the DO adapter was broken; the regression lives in
+    // `__tests__/workerd/creation-time-probe.workerd.test.ts` for that reason.
     const creationTimeColumns = new Map<string, boolean>();
 
     const hasCreationTimeColumn = async (model: string): Promise<boolean> => {
@@ -236,7 +246,7 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         }
 
         try {
-            await executor.all(`SELECT ${quoteId(CREATION_TIME_COLUMN)} FROM ${quoteId(model)} LIMIT 0`, []);
+            await executor.all(`SELECT ${quoteId(model)}.${quoteId(CREATION_TIME_COLUMN)} FROM ${quoteId(model)} LIMIT 0`, []);
         } catch (error) {
             // Only "no such column" is an ANSWER. A missing table (not migrated
             // yet) or a transient backend error is not, and caching it would pin

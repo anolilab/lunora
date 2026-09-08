@@ -47,7 +47,7 @@ value.
 An index names columns of the row, not paths inside them — `"user.settings.theme"`
 is not accepted. A `v.object()` column is stored as one JSON value, so indexing
 inside it would mean an expression index over `json_extract(...)` on every engine
-*plus* a `where` DSL that can route a dotted key to it. Half of that is worse than
+_plus_ a `where` DSL that can route a dotted key to it. Half of that is worse than
 none: a predicate that missed the route would read as a silent full table scan
 rather than an error, which is the exact problem the index was declared to avoid.
 
