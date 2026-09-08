@@ -220,8 +220,8 @@ class AppBuilder<Env extends object> {
     }
 
     /** Wire the Vectorize index map backing `ctx.vectors`. */
-    public vectors(factory: NonNullable<ShardConfig["vectors"]>): this {
-        this.shardExtras.vectors = factory;
+    public vectors(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["vectors"]>>): this {
+        this.shardExtras.vectors = factory as NonNullable<ShardConfig["vectors"]>;
 
         return this;
     }

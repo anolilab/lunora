@@ -2048,7 +2048,8 @@ export const cached = query.input({ key: v.string() }).query(async ({ args, ctx 
             const result = runCodegen({ projectRoot: workdir });
 
             // The method, the config-type alias, and the pass-through state are all emitted…
-            expect(result.generated.app).toContain('public kv(factory: NonNullable<ShardConfig["kv"]>): this');
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted type signature, not a credential
+            expect(result.generated.app).toContain('public kv(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["kv"]>>): this');
             expect(result.generated.app).toContain("type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;");
             expect(result.generated.app).toContain("private readonly shardExtras: Partial<ShardConfig> = {};");
             expect(result.generated.app).toContain("...this.shardExtras,");
@@ -2074,7 +2075,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             // The fluent builder method + its config-type pass-through are emitted…
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
-            expect(result.generated.app).toContain('public x402(factory: NonNullable<ShardConfig["x402"]>): this');
+            expect(result.generated.app).toContain('public x402(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["x402"]>>): this');
             // …the typed rail rides the ActionCtx…
             expect(result.generated.server).toContain("readonly x402: X402Pay;");
             // …and the value is attached only inside the action-only `if (isAction)` block.

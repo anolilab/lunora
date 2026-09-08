@@ -395,12 +395,24 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
 ];
 
-/** Long-tail capability methods — thin pass-throughs into the generated `createShardDO` config. */
+/**
+ * Long-tail capability methods — thin pass-throughs into the generated
+ * `createShardDO` config.
+ *
+ * The parameter is a `(env: Env) => …` selector rather than the config field's own
+ * type, for the same reason every other builder method takes a `Selector<Env, T>`:
+ * `ShardConfig` types each binding factory over `Record<string, unknown>` (the DO
+ * is handed a raw env), so passing it straight through left the callback's `env`
+ * untyped and `env.MY_BINDING` was `unknown` — an app then annotated the parameter
+ * itself and hit `strictFunctionTypes` contravariance, so a cast at the call site
+ * was unavoidable. The cast belongs here, once, where the widening is provably
+ * sound: the runtime value is the same function either way.
+ */
 const buildLongTailMethods = (options: EmitAppOptions): string[] =>
     LONG_TAIL.filter(([flag]) => options[flag]).map(
         ([, name, key, document_]) => `    /** ${document_} */
-    public ${name}(factory: NonNullable<ShardConfig["${key}"]>): this {
-        this.shardExtras.${key} = factory;
+    public ${name}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${key}"]>>): this {
+        this.shardExtras.${key} = factory as NonNullable<ShardConfig["${key}"]>;
 
         return this;
     }`,
