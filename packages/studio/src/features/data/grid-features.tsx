@@ -17,6 +17,7 @@ import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, fireAndForget, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
 import { CONTROL_BTN } from "./control-button";
+import type { GridTableFeatures } from "./grid-table-features";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
@@ -221,7 +222,7 @@ const ExportMenu = ({
  * One column row in the Columns menu. Extracted so each binds its toggle through
  * a stable `useCallback` closing over its column rather than a fresh inline arrow.
  */
-const ColumnToggle = ({ column }: { readonly column: Column<GridRow> }): ReactElement => {
+const ColumnToggle = ({ column }: { readonly column: Column<GridTableFeatures, GridRow> }): ReactElement => {
     const onCheckedChange = (): void => {
         column.toggleVisibility();
     };
@@ -256,7 +257,7 @@ const ColumnsMenu = ({
     readonly backRelations?: ReadonlyArray<{ column: string; table: string }>;
     readonly enabledBackRelations?: ReadonlySet<string>;
     readonly onToggleBackRelation?: (key: string) => void;
-    readonly table: Table<GridRow>;
+    readonly table: Table<GridTableFeatures, GridRow>;
 }): ReactElement => {
     const t = useT();
     const allVisible = table.getIsAllColumnsVisible();
@@ -522,7 +523,7 @@ const GridActionsBar = ({
     readonly onToggleBackRelation?: (key: string) => void;
     readonly onToggleTranspose: () => void;
     readonly rows: ReadonlyArray<GridRow>;
-    readonly table: Table<GridRow>;
+    readonly table: Table<GridTableFeatures, GridRow>;
     readonly transposed: boolean;
 }): ReactElement => {
     const t = useT();

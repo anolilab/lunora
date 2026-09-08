@@ -526,17 +526,7 @@ catalogs:
     # `getSortedRowModel()` as options are gone, replaced by table-core 9 +
     # @tanstack/react-store features). @lunora/studio's data browser is built on
     # the v8 shape, so moving is a migration, not a dep bump.
-    # Held at 8.x. v9 is a ground-up rewrite: `useReactTable` becomes `useTable`,
-    # row models become opt-in features (`createCoreRowModel` + `rowSortingFeature`),
-    # and every type takes the feature set as its first parameter. v9 does ship a
-    # `@tanstack/react-table/legacy` entry point that restores the v8 API, but every
-    # symbol in it is marked `@deprecated`, so `sonarjs/deprecation` rejects the whole
-    # import -- it is not a usable migration path here.
-    #
-    # Moving to v9 therefore means porting packages/studio's data browser (the grid,
-    # its feature bar, and the `use-data-browser` hook) onto the feature-registration
-    # API. That is a studio change with its own tests, not a dep bump.
-    "@tanstack/react-table": ^8.21.3
+    "@tanstack/react-table": ^9.2.4
     "@tanstack/react-virtual": ^3.14.10
     "@sveltejs/vite-plugin-svelte": ^7.3.0
     svelte-check: ^4.7.6
