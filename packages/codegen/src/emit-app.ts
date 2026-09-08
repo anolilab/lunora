@@ -399,14 +399,12 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
  * Long-tail capability methods — thin pass-throughs into the generated
  * `createShardDO` config.
  *
- * The parameter is a `(env: Env) => …` selector rather than the config field's own
- * type, for the same reason every other builder method takes a `Selector<Env, T>`:
+ * The parameter is an `Env`-typed selector, like every other builder method:
  * `ShardConfig` types each binding factory over `Record<string, unknown>` (the DO
- * is handed a raw env), so passing it straight through left the callback's `env`
- * untyped and `env.MY_BINDING` was `unknown` — an app then annotated the parameter
- * itself and hit `strictFunctionTypes` contravariance, so a cast at the call site
- * was unavoidable. The cast belongs here, once, where the widening is provably
- * sound: the runtime value is the same function either way.
+ * is handed a raw env), so passing that type straight through left `env.MY_BINDING`
+ * as `unknown` and no annotation could fix it at the call site under
+ * `strictFunctionTypes`. Spelled out rather than reusing `Selector<Env, T>` because
+ * `Selector` returns `T | undefined` and these factories do not.
  */
 const buildLongTailMethods = (options: EmitAppOptions): string[] =>
     LONG_TAIL.filter(([flag]) => options[flag]).map(
