@@ -40,11 +40,16 @@ export declare const query: {
 export declare const action: {
     input<A>(validators: A): { action<R>(handler: (options: { args: A }) => R): RegisteredAction<A, Awaited<R>> };
 };
+export type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+export type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+export type RegisteredReactor = RegisteredFunction<Record<string, never>, { digest: string }, "mutation"> & { readonly lifecycle: "reactor" };
+export declare const onConnect: (handler: () => Promise<void>) => RegisteredLifecycleHook;
+export declare const onQueryChange: (config: { handler: () => Promise<void>; select: () => Promise<unknown> }) => RegisteredReactor;
 `;
 
 /** Two procedures assigned directly (registered) and three produced by a factory (dropped). */
 const PROCS = `
-import { action, query } from "./srv";
+import { action, onConnect, onQueryChange, query } from "./srv";
 
 export const listed = query.input({}).query(async () => "x");
 export const streamed = query.input({}).stream(async function* () { yield 1; });
@@ -57,6 +62,12 @@ export const viaFactoryAction = makeAction();
 
 const makeStream = () => query.input({}).stream(async function* () { yield 1; });
 export const viaFactoryStream = makeStream();
+
+const makeHook = () => onConnect(async () => {});
+export const viaFactoryHook = makeHook();
+
+const makeReactor = () => onQueryChange({ select: async () => 1, handler: async () => {} });
+export const viaFactoryReactor = makeReactor();
 `;
 
 const ir = (exportName: string, kind: FunctionIR["kind"]): FunctionIR => {
@@ -115,7 +126,7 @@ describe("discoverUnregisteredProcedures", () => {
             .filter((finding) => finding.name === "procedure_not_registered")
             .map((finding) => finding.metadata["exportName"]);
 
-        expect(dropped).toStrictEqual(["viaFactoryAction", "viaFactoryQuery", "viaFactoryStream"]);
+        expect(dropped).toStrictEqual(["viaFactoryAction", "viaFactoryHook", "viaFactoryQuery", "viaFactoryReactor", "viaFactoryStream"]);
         // `listed` and `streamed` are in `api.ts`; reporting them would be the
         // inverse defect.
         expect(dropped).not.toContain("listed");
@@ -137,6 +148,27 @@ describe("discoverUnregisteredProcedures", () => {
         expect(remediation("viaFactoryQuery")).toContain("query.input({ … }).query(handler)");
         expect(remediation("viaFactoryAction")).toContain("action.input({ … }).action(handler)");
         expect(remediation("viaFactoryStream")).toContain("query.input({ … }).stream(handler)");
+    });
+
+    it("reports a dropped lifecycle hook and reactor, which have no caller to fail instead", () => {
+        expect.assertions(4);
+
+        write("srv.d.ts", SERVER);
+        write("procs.ts", PROCS);
+        load("srv.d.ts", "procs.ts");
+
+        const finding = (exportName: string) => run().find((entry) => entry.metadata["exportName"] === exportName);
+
+        // These were dropped in total silence, and they are the worst of the
+        // family: a dropped query eventually surfaces as `Property 'x' does not
+        // exist` at a call site, while a dropped `onConnect` has no caller at
+        // all — the hook simply never fires, forever, with no error anywhere.
+        expect(finding("viaFactoryHook")?.remediation).toContain("onConnect(handler)");
+        // `onConnect`, `onDisconnect` and `onShardInit` share one type, so the
+        // finding must not claim to know which was written.
+        expect(finding("viaFactoryHook")?.remediation).toContain("Substitute the hook you called");
+        expect(finding("viaFactoryReactor")?.remediation).toContain("onQueryChange({ select, handler })");
+        expect(finding("viaFactoryReactor")?.remediation).toContain("never runs");
     });
 
     it("says nothing about type resolution when types resolve", () => {

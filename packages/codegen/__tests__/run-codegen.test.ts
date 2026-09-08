@@ -2826,7 +2826,7 @@ export const getUserSettings = makeGetter();
 
             expect(finding).toBeDefined();
             expect(finding?.detail).toContain("`getUserSettings`");
-            expect(finding?.remediation).toContain("Assign the builder chain directly");
+            expect(finding?.remediation).toContain("query.input({ … }).query(handler)");
         });
 
         it("says so when it cannot type-check `lunora/` at all, rather than reporting a clean bill of health", () => {

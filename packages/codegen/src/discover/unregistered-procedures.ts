@@ -6,26 +6,50 @@ import type { FunctionIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
- * The types `@lunora/server`'s builder chains terminate in, each mapped to the
- * chain that produces it. A binding whose TYPE is one of these is a registered
- * procedure no matter how the value was produced — which is the whole point:
- * the syntactic scan can be fooled by a factory, a resolved type cannot.
+ * Every type a `lunora/` registration terminates in, mapped to the call that
+ * produces it. A binding whose TYPE is one of these is a registered procedure
+ * no matter how the value was produced — which is the whole point: the
+ * syntactic scan can be fooled by a factory, a resolved type cannot.
  *
- * The chain is stored whole rather than assembled from a kind because the two
- * halves do not always match: `.stream()` hangs off the QUERY builder
+ * This must stay exhaustive over `@lunora/server`'s `Registered*` types (the
+ * base `RegisteredFunction` aside, which is never a terminal on its own), and
+ * `__tests__/discover/registration-types-parity.test.ts` locks that: a type
+ * missing from here is a shape this pass drops in silence, which is the whole
+ * defect. `RegisteredStream` was missing exactly that way.
+ *
+ * Nothing else may be added. The `registered` set this pass diffs against comes
+ * from `functions`, so a registration kind discovery records elsewhere — an
+ * http route, a mutator, a workflow, a queue, a migration — would match no key
+ * and be reported as dropped on every healthy project.
+ *
+ * The call is stored whole rather than assembled from a kind because the halves
+ * do not always match: `.stream()` hangs off the QUERY builder
  * (`QueryBuilder.stream`), so a dropped stream needs `query.….stream(handler)`.
  * Assembling `${kind}.input(…).${kind}(…)` printed `query.….query(…)` for every
  * kind, which handed an action author a query to paste.
  */
-const CHAIN_BY_TYPE_NAME = new Map([
-    ["RegisteredAction", "action.input({ … }).action(handler)"],
-    ["RegisteredMutation", "mutation.input({ … }).mutation(handler)"],
-    ["RegisteredQuery", "query.input({ … }).query(handler)"],
-    ["RegisteredStream", "query.input({ … }).stream(handler)"],
+const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; note?: string }>([
+    ["RegisteredAction", { call: "action.input({ … }).action(handler)" }],
+    [
+        "RegisteredLifecycleHook",
+        {
+            call: "onConnect(handler)",
+            // `lifecycle` is typed as the whole `LifecycleEventKind` union rather
+            // than a literal, so — unlike the reactor below — there is nothing to
+            // read that says which of the three factories produced this. Naming
+            // one and being wrong twice out of three times is the papercut this
+            // map exists to avoid, so the finding says so instead.
+            note: "Substitute the hook you called: `onConnect`, `onDisconnect` and `onShardInit` share one type, so codegen cannot tell which you wrote. A dropped hook has no caller to fail — it silently never fires.",
+        },
+    ],
+    ["RegisteredMutation", { call: "mutation.input({ … }).mutation(handler)" }],
+    ["RegisteredQuery", { call: "query.input({ … }).query(handler)" }],
+    ["RegisteredReactor", { call: "onQueryChange({ select, handler })", note: "A dropped reactor has no caller to fail — it silently never runs." }],
+    ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
 ]);
 
 /** A binding the type checker says is a registered procedure. */
-type Registration = { chain: string; typeName: string };
+type Registration = { call: string; note?: string; typeName: string };
 
 /** A registered procedure used to probe whether the checker resolves anything at all. */
 type Witness = { declaration: VariableDeclaration; exportName: string; relativePath: string };
@@ -62,9 +86,9 @@ const registrationOf = (node: Node): Registration | undefined => {
     }
 
     const typeName = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
-    const chain = typeName === undefined ? undefined : CHAIN_BY_TYPE_NAME.get(typeName);
+    const registration = typeName === undefined ? undefined : REGISTRATION_BY_TYPE_NAME.get(typeName);
 
-    return chain === undefined || typeName === undefined ? undefined : { chain, typeName };
+    return registration === undefined || typeName === undefined ? undefined : { ...registration, typeName };
 };
 
 /**
@@ -91,8 +115,8 @@ const mayHideRegistration = (declaration: VariableDeclaration): boolean => {
 type MissedRegistration = { cause: string; remediation: string };
 
 const INDIRECT_INITIALIZER: MissedRegistration = {
-    cause: "codegen recognises a procedure only when the initializer is a builder chain, and this one is produced by a call or an alias",
-    remediation: "A factory that returns a procedure cannot be read statically — inline it, or export the chain the factory builds.",
+    cause: "codegen recognises a registration only when the initializer is the registering call itself, and this one comes from a factory or an alias",
+    remediation: "A factory that returns a registration cannot be read statically — inline it, or export what the factory builds.",
 };
 
 const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
@@ -101,19 +125,19 @@ const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
 };
 
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, missed: MissedRegistration): Finding => {
-    const { chain, typeName } = registration;
+    const { call, note, typeName } = registration;
 
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
         description:
-            "Codegen registers an export only when the declaration carries `export` and its initializer is literally a builder chain. A procedure written any other way exists at runtime but never reaches `_generated/api.ts`, so no caller can address it.",
+            "Codegen registers an export only when the declaration carries `export` and its initializer is literally the registering call. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: "WARN",
         metadata: { exportName, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: `Assign the builder chain directly: \`export const ${exportName} = ${chain};\`. ${missed.remediation}`,
+        remediation: `Assign the registration directly: \`export const ${exportName} = ${call};\`. ${note === undefined ? "" : `${note} `}${missed.remediation}`,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
