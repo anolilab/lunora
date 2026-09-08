@@ -263,8 +263,11 @@ const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts"
  */
 const MAX_SCANNED_FILES = 2000;
 
-/** The literal a project's source must contain somewhere for the vector indexes to count as bound. */
+/** Cheap prefilter for the binding marker — only a file whose text contains this is worth parsing. */
 const VECTORS_CHAIN = ".vectors(";
+
+/** The builder method that binds the schema's vector indexes. */
+const VECTORS_METHOD = "vectors";
 
 /** The generated app-composition factory, whatever a file chose to call it locally. */
 const APP_FACTORY = "defineApp";
@@ -342,26 +345,49 @@ const callsAnyOf = (sourceFile: SourceFile, names: ReadonlySet<string>): boolean
     return found;
 };
 
+/** Whether the file CALLS `.vectors(...)` on something — parsed, so a comment or a string naming it is not a call site. */
+const chainsVectors = (sourceFile: SourceFile): boolean => {
+    let found = false;
+
+    sourceFile.forEachDescendant((descendant, traversal) => {
+        if (!TsNode.isCallExpression(descendant)) {
+            return;
+        }
+
+        const callee = descendant.getExpression();
+
+        if (TsNode.isPropertyAccessExpression(callee) && callee.getName() === VECTORS_METHOD) {
+            found = true;
+            traversal.stop();
+        }
+    });
+
+    return found;
+};
+
 /**
- * Whether this file CALLS the imported `defineApp` — parsed, not text-matched.
+ * What one file contributes: it `binds` the vector indexes, `composes` the app,
+ * or neither. An unreadable file contributes nothing.
  *
- * The precision is the point, because this is the half of the vectors check that
- * fails CLOSED: what it finds ARMS a deploy-blocking error. A substring match
- * armed it on Nuxt's unrelated `defineAppConfig`, on a doc comment naming
+ * Both markers are PARSED rather than text-matched, for opposite reasons.
+ *
+ * `defineApp` ARMS the deploy-blocking error, so a substring is too coarse: it
+ * armed on Nuxt's unrelated `defineAppConfig`, on a doc comment naming
  * `defineApp()` (which two of this repo's own templates carry), and on a type-only
  * import — none of which a project can edit its way out of. Keying on the IMPORT
  * also means the generated `app.ts` that declares the factory cannot arm anything.
  *
- * The parse costs a `Project` per file, but only files whose text mentions the
- * factory at all are ever handed here, which in a real project is one or two.
+ * `.vectors(` CLEARS it, and a substring was too coarse there too, in the way that
+ * matters most: the file that chains `.vectors()` is the likeliest file to also
+ * carry a comment saying the chain is load-bearing, so deleting the call and
+ * keeping the warning about deleting it disarmed the check — precisely the path
+ * back to the outage it exists to prevent.
+ *
+ * A parse costs a `Project` per file, but only files whose text mentions a marker
+ * at all get one, which in a real project is one or two. A file that mentions the
+ * chain and does not parse still counts as binding: unparseable is not evidence
+ * the call is gone, and this half fails open.
  */
-const composesApp = (file: string, source: string): boolean => {
-    const sourceFile = parseSource(basename(file), source);
-
-    return sourceFile !== undefined && callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY));
-};
-
-/** What one file contributes: it `binds` the vector indexes, `composes` the app, or neither. An unreadable file contributes nothing. */
 const readMarker = (file: string): "binds" | "composes" | undefined => {
     let source: string;
 
@@ -371,11 +397,23 @@ const readMarker = (file: string): "binds" | "composes" | undefined => {
         return undefined;
     }
 
-    if (source.includes(VECTORS_CHAIN)) {
+    const mentionsChain = source.includes(VECTORS_CHAIN);
+
+    if (!mentionsChain && !source.includes(APP_FACTORY)) {
+        return undefined;
+    }
+
+    const sourceFile = parseSource(basename(file), source);
+
+    if (sourceFile === undefined) {
+        return mentionsChain ? "binds" : undefined;
+    }
+
+    if (mentionsChain && chainsVectors(sourceFile)) {
         return "binds";
     }
 
-    return source.includes(APP_FACTORY) && composesApp(file, source) ? "composes" : undefined;
+    return callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY)) ? "composes" : undefined;
 };
 
 /**
@@ -392,12 +430,9 @@ const readMarker = (file: string): "binds" | "composes" | undefined => {
  * read as "composes nothing" from the entry alone, which turned this check off for
  * exactly the Vite-first projects it exists to protect.
  *
- * The two markers are deliberately asymmetric, because the caller BLOCKS a deploy.
- * `.vectors(` CLEARS the check and is a literal text match, so a comment mentioning
- * it clears too — a false negative that leaves the app exactly where it was before
- * this check existed, which is the trade a blocking gate should take. `defineApp`
- * ARMS it, so it is a parsed call ({@link composesApp}); a worker composed in
- * another package leaves no call here and is not judged.
+ * Both markers are parsed calls ({@link readMarker}) — a comment or a string
+ * naming either one decides nothing. A worker composed in another package leaves
+ * no `defineApp` call here and is not judged.
  *
  * Both give-up routes — the file budget and an unparseable file — report nothing.
  */

@@ -1045,6 +1045,28 @@ describe("wrangler-validator", () => {
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
             });
 
+            it("still fires when only a comment or a string mentions the chain", () => {
+                expect.assertions(1);
+
+                // The file that chains `.vectors()` is the likeliest one to carry a
+                // comment saying so, so "delete the call, keep the warning about
+                // deleting the call" is the realistic path back to the outage — and
+                // a substring match cleared the gate on exactly that tree.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n` +
+                        `\n` +
+                        `// Load-bearing: without .vectors((env) => ({ "docs-body": env.DOCS_BODY }))\n` +
+                        `// every request 500s.\n` +
+                        `const hint = "add .vectors(...) to the chain";\n` +
+                        `const app = defineApp().shard((env) => env.SHARD);\n` +
+                        `export const { ShardDO } = app;\nexport default app;\nexport { hint };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
             it("says nothing when the chain lives in a .server directory or a .mjs module", () => {
                 expect.assertions(2);
 
