@@ -238,33 +238,60 @@ export type KvNamespaceListResult<Metadata = unknown> =
     | { cacheStatus?: string | null; keys: KvListKey<Metadata>[]; list_complete: true };
 
 /**
- * Minimal structural projection of `VectorizeIndex` so unit tests can pass a
+ * Minimal structural projection of `Vectorize` so unit tests can pass a
  * plain-object double and the real Cloudflare binding satisfies the same shape.
  * Mirrors the surface documented at
  * https://developers.cloudflare.com/vectorize/reference/client-api/.
+ *
+ * Declared with **method** syntax, not arrow properties, and that is the whole
+ * point of the eslint exemption: `ReadonlyArray` is the correct parameter type
+ * here — it is the wider one — but under `strictFunctionTypes` an arrow property
+ * makes parameters strictly contravariant, and Cloudflare's own `Vectorize`
+ * declares `deleteByIds(ids: string[])`. So the real binding did not satisfy the
+ * framework's own interface for it, and every app wiring one needed a cast.
+ * Method syntax is checked bivariantly, which admits both the binding and a
+ * `readonly`-clean double. `__tests__/vectors/binding-assignability.test-d.ts`
+ * in `@lunora/bindings` pins it against the published types.
  */
+/* eslint-disable @typescript-eslint/method-signature-style -- bivariant params: Cloudflare's own `Vectorize` declares these with mutable arrays and must stay assignable */
 export interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    describe?(this: void): Promise<VectorizeIndexDetails>;
+    getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
+/* eslint-enable @typescript-eslint/method-signature-style */
 
 export type VectorMetric = "cosine" | "euclidean" | "dot-product";
+
+/**
+ * An embedding, as either a plain array or one of the typed arrays Vectorize
+ * accepts. The typed-array arms are not a convenience: Cloudflare's own
+ * `VectorizeVector.values` is `VectorFloatArray | number[]`, so a projection
+ * limited to `ReadonlyArray<number>` excluded every vector the real binding
+ * returns. Read one with `Array.from(...)` rather than an array method.
+ */
+export type VectorValues = Float32Array | Float64Array | ReadonlyArray<number>;
 
 export interface VectorizeVector {
     id: string;
     metadata?: Record<string, unknown>;
     namespace?: string;
-    values: ReadonlyArray<number>;
+    values: VectorValues;
 }
 
+/**
+ * Query options, kept a superset of Cloudflare's own `VectorizeQueryOptions` so
+ * the real binding satisfies {@link VectorizeIndexLike}. `returnMetadata` carries
+ * the legacy `boolean` arm for that reason - pass one of the three levels; the
+ * boolean is what Cloudflare still accepts, not what callers should write.
+ */
 export interface VectorizeQueryOptions {
     filter?: Record<string, unknown>;
     namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
+    returnMetadata?: "none" | "indexed" | "all" | boolean;
     returnValues?: boolean;
     topK?: number;
 }
@@ -274,7 +301,7 @@ export interface VectorizeMatch {
     metadata?: Record<string, unknown>;
     namespace?: string;
     score: number;
-    values?: ReadonlyArray<number>;
+    values?: VectorValues;
 }
 
 export interface VectorizeMatches {
@@ -291,11 +318,24 @@ export interface VectorizeDeleteMutation {
     mutationId: string;
 }
 
+/**
+ * What `describe()` reports. Both spellings of the row count are optional because
+ * Cloudflare renamed it between API generations — the beta `VectorizeIndex`
+ * returns `vectorsCount`, the current `Vectorize` returns `vectorCount` — and a
+ * projection that required either one excluded a real binding. Read them as
+ * `vectorCount ?? vectorsCount`.
+ *
+ * `processedUpTo*` are typed loosely for the same reason: documented as ISO 8601
+ * strings, typed as `number` in `@cloudflare/workers-types`.
+ */
 export interface VectorizeIndexDetails {
     dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
+    processedUpToDatetime?: number | string;
+    processedUpToMutation?: number | string;
+    /** The current `Vectorize.describe()` spelling. */
+    vectorCount?: number;
+    /** The beta `VectorizeIndex.describe()` spelling. */
+    vectorsCount?: number;
 }
 
 /**
