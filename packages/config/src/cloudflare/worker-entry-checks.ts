@@ -1,16 +1,17 @@
 /**
- * What a Lunora project's **worker entry** says about itself, read once.
+ * What a Lunora project says about itself, for the two wrangler validations that
+ * have to read source rather than config. Both block a deploy, so both fail open.
  *
- * Two wrangler validations depend on facts that only the entry file can answer —
- * which Durable Object / Workflow classes it exports, and whether it chains
- * `.vectors(...)` onto `defineApp()`. Both used to resolve the path, read the
- * file, spin up their own ts-morph `Project` and run their own fail-open
- * diagnostics gate, which meant two full parses of the same file on every
- * `lunora verify` and every `lunora dev` restart, and two copies of a fail-open
- * policy that had to stay in sync by hand.
+ * {@link readWorkerEntry} answers the one question only the ENTRY can answer —
+ * which Durable Object / Workflow classes it exports — since wrangler binds
+ * exactly what that file exports.
  *
- * {@link readWorkerEntry} does it once and hands back both answers. The checks
- * that consume them stay next to the wrangler config types they also read.
+ * {@link findUnchainedVectorsSite} answers the question the entry is the wrong
+ * place to ask: does anything in the project bind the vector indexes its schema
+ * declares. That is a project-wide fact, and reading it off the entry silently
+ * disabled the check for every Vite-first layout.
+ *
+ * The checks that consume them stay next to the wrangler config types they also read.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname } from "node:path";
@@ -155,14 +156,157 @@ const collectDeclarationExports = (sourceFile: SourceFile, names: Set<string>): 
     }
 };
 
-/** The generated app-composition entry point, whatever the entry chose to call it locally. */
+/** What the entry told us. `exports` is `undefined` when the file forwards names this scan cannot see. */
+interface WorkerEntry {
+    /** Runtime VALUE exports, or `undefined` when a bare `export *` makes the absence of a name prove nothing. */
+    exports: Set<string> | undefined;
+    /** The resolved entry path, for error messages. */
+    path: string;
+}
+
+/**
+ * Parse one source in memory, or `undefined` when it does not parse.
+ *
+ * Parsed with ts-morph rather than scanned with regexes, because both callers
+ * BLOCK a deploy on what they find. The scanner this replaces had to stay
+ * advisory precisely because every form it did not know failed CLOSED —
+ * reporting a correctly-wired project as broken — and two such forms (a
+ * prettier-wrapped export clause, and the app builder's own
+ * `export const { ShardDO } = app`) turned up in a single review pass.
+ *
+ * A file that does not parse FAILS OPEN: ts-morph error-RECOVERS rather than
+ * throwing, and a recovered parse silently drops statements, so a half-typed
+ * file would otherwise read as exporting nothing and composing nothing and stop
+ * `lunora dev` mid-keystroke.
+ *
+ * The name is passed through because the extension selects the parser — `.tsx`
+ * and `.jsx` mean JSX, `.cts`/`.mts` mean TypeScript.
+ */
+const parseSource = (name: string, source: string): SourceFile | undefined => {
+    // `skipLoadingLibFiles` is load-bearing, not a micro-optimisation: asking for
+    // the program pulls in the full `lib.d.ts` set otherwise, which measured
+    // 571ms per call against 1.07ms without. Nothing here type-checks — the
+    // diagnostics read is SYNTACTIC, which is per-file parse errors and
+    // independent of the lib files.
+    const project = new Project({
+        compilerOptions: { allowJs: true },
+        skipFileDependencyResolution: true,
+        skipLoadingLibFiles: true,
+        useInMemoryFileSystem: true,
+    });
+    const sourceFile = project.createSourceFile(name, source, { overwrite: true });
+
+    return project.getProgram().compilerObject.getSyntacticDiagnostics(sourceFile.compilerNode).length > 0 ? undefined : sourceFile;
+};
+
+/**
+ * Resolve, read and parse the worker entry once.
+ *
+ * `undefined` means "cannot be decided" and every caller must report nothing.
+ * Both routes there fail open: no resolvable entry, and a file that does not
+ * parse ({@link parseSource}).
+ */
+const readWorkerEntry = (main: string | undefined, projectRoot: string, wranglerPath: string): WorkerEntry | undefined => {
+    const path = resolveWorkerEntryPath(main, projectRoot, wranglerPath);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    let source: string;
+
+    try {
+        source = readFileSync(path, "utf8");
+    } catch {
+        return undefined;
+    }
+
+    const sourceFile = parseSource(basename(path), source);
+
+    if (sourceFile === undefined) {
+        return undefined;
+    }
+
+    const names = new Set<string>();
+    const opaque = collectClauseExports(sourceFile, names);
+
+    if (!opaque) {
+        collectDeclarationExports(sourceFile, names);
+    }
+
+    return { exports: opaque ? undefined : names, path };
+};
+
+/** Directories a project's own sources never live in — generated or build output. */
+const NON_SOURCE_DIRECTORIES = new Set(["_generated", "build", "coverage", "dist", "node_modules", "out", "target"]);
+
+/**
+ * Dot-directories that ARE authored sources. Everything else starting with a dot
+ * is tool state (`.git`, `.wrangler`, `.svelte-kit`, `.vercel`, …) and skipping
+ * the lot by prefix keeps that list from having to be maintained. `.server` /
+ * `.client` are the React Router v7 / Remix convention for server-only and
+ * client-only modules, so a `.vectors(...)` chain genuinely lives there — and a
+ * missed chain HARD-ERRORS a correctly wired project.
+ */
+const SOURCE_DOT_DIRECTORIES = new Set([".client", ".server"]);
+
+/**
+ * Extensions worth reading. JS is included for the same reason `parseSource`
+ * sets `allowJs`: a JS-authored project chains `.vectors(...)` in a `.mjs` like
+ * any other, and missing that file would hard-error it.
+ */
+const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
+
+/**
+ * Ceiling on files read. Past it the scan gives up and reports nothing — the
+ * fail-open direction, because the caller BLOCKS a deploy on what it finds.
+ */
+const MAX_SCANNED_FILES = 2000;
+
+/** The literal a project's source must contain somewhere for the vector indexes to count as bound. */
+const VECTORS_CHAIN = ".vectors(";
+
+/** The generated app-composition factory, whatever a file chose to call it locally. */
 const APP_FACTORY = "defineApp";
 
 /**
+ * The source files directly in `directory`, and the subdirectories worth
+ * descending into. Unreadable directories read as empty.
+ *
+ * Deliberately not `infer-bindings`' `collectSourceFiles`, which walks two known
+ * directories (`lunora/`, `src/`) and so can skip build output by name. This walk
+ * starts at the project ROOT, where the framework output directories it must not
+ * descend (`.svelte-kit`, `.next`, `.vercel`, …) are open-ended.
+ */
+const readSourceDirectory = (directory: string): { files: string[]; subdirectories: string[] } => {
+    const files: string[] = [];
+    const subdirectories: string[] = [];
+    let entries;
+
+    try {
+        entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+        return { files, subdirectories };
+    }
+
+    for (const entry of entries) {
+        if (entry.isDirectory()) {
+            const skipped = (entry.name.startsWith(".") && !SOURCE_DOT_DIRECTORIES.has(entry.name)) || NON_SOURCE_DIRECTORIES.has(entry.name);
+
+            if (!skipped) {
+                subdirectories.push(join(directory, entry.name));
+            }
+        } else if (SOURCE_EXTENSIONS.has(extname(entry.name))) {
+            files.push(join(directory, entry.name));
+        }
+    }
+
+    return { files, subdirectories };
+};
+
+/**
  * The local names `defineApp` is bound to in this file — plural because
- * `import { defineApp as createApp }` is an ordinary import style, and matching
- * the callee text alone turned the whole check into a silent no-op for anyone
- * who used it.
+ * `import { defineApp as createApp }` is an ordinary import style.
  */
 const localNamesFor = (sourceFile: SourceFile, imported: string): Set<string> => {
     const names = new Set<string>();
@@ -198,142 +342,69 @@ const callsAnyOf = (sourceFile: SourceFile, names: ReadonlySet<string>): boolean
     return found;
 };
 
-/** What the entry told us. `exports` is `undefined` when the file forwards names this scan cannot see. */
-interface WorkerEntry {
-    /** Whether the entry calls `defineApp(...)` itself — alias-aware. `false` for an entry that re-exports a worker built elsewhere. */
-    composesApp: boolean;
-    /** Runtime VALUE exports, or `undefined` when a bare `export *` makes the absence of a name prove nothing. */
-    exports: Set<string> | undefined;
-    /** The resolved entry path, for error messages. */
-    path: string;
-}
-
 /**
- * Resolve, read and parse the worker entry once.
+ * Whether this file CALLS the imported `defineApp` — parsed, not text-matched.
  *
- * Parsed with ts-morph rather than scanned with regexes. The scanner this
- * replaces had to stay advisory precisely because every export form it did not
- * know failed CLOSED — reporting a correctly-wired project as broken — and two
- * such forms (a prettier-wrapped clause, and the app builder's own
- * `export const { ShardDO } = app`) turned up in a single review pass. A real
- * parser knows them all, which is what lets the checks block.
+ * The precision is the point, because this is the half of the vectors check that
+ * fails CLOSED: what it finds ARMS a deploy-blocking error. A substring match
+ * armed it on Nuxt's unrelated `defineAppConfig`, on a doc comment naming
+ * `defineApp()` (which two of this repo's own templates carry), and on a type-only
+ * import — none of which a project can edit its way out of. Keying on the IMPORT
+ * also means the generated `app.ts` that declares the factory cannot arm anything.
  *
- * `undefined` means "cannot be decided" and every caller must report nothing.
- * Both routes there FAIL OPEN by design: no resolvable entry, and a file that
- * does not parse. ts-morph error-RECOVERS rather than throwing, and a recovered
- * parse silently drops statements — so a half-typed entry would otherwise report
- * every class as unexported and stop `lunora dev` mid-keystroke.
+ * The parse costs a `Project` per file, but only files whose text mentions the
+ * factory at all are ever handed here, which in a real project is one or two.
  */
-const readWorkerEntry = (main: string | undefined, projectRoot: string, wranglerPath: string): WorkerEntry | undefined => {
-    const path = resolveWorkerEntryPath(main, projectRoot, wranglerPath);
+const composesApp = (file: string, source: string): boolean => {
+    const sourceFile = parseSource(basename(file), source);
 
-    if (path === undefined) {
-        return undefined;
-    }
+    return sourceFile !== undefined && callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY));
+};
 
+/** What one file contributes: it `binds` the vector indexes, `composes` the app, or neither. An unreadable file contributes nothing. */
+const readMarker = (file: string): "binds" | "composes" | undefined => {
     let source: string;
 
     try {
-        source = readFileSync(path, "utf8");
+        source = readFileSync(file, "utf8");
     } catch {
         return undefined;
     }
 
-    // `skipLoadingLibFiles` is load-bearing, not a micro-optimisation: asking for
-    // the program pulls in the full `lib.d.ts` set otherwise, which measured
-    // 571ms per call against 1.07ms without. Nothing here type-checks — the
-    // diagnostics read is SYNTACTIC, which is per-file parse errors and
-    // independent of the lib files.
-    const project = new Project({
-        compilerOptions: { allowJs: true },
-        skipFileDependencyResolution: true,
-        skipLoadingLibFiles: true,
-        useInMemoryFileSystem: true,
-    });
-    const sourceFile = project.createSourceFile(basename(path), source, { overwrite: true });
-
-    if (project.getProgram().compilerObject.getSyntacticDiagnostics(sourceFile.compilerNode).length > 0) {
-        return undefined;
+    if (source.includes(VECTORS_CHAIN)) {
+        return "binds";
     }
 
-    const names = new Set<string>();
-    const opaque = collectClauseExports(sourceFile, names);
-
-    if (!opaque) {
-        collectDeclarationExports(sourceFile, names);
-    }
-
-    return { composesApp: callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY)), exports: opaque ? undefined : names, path };
+    return source.includes(APP_FACTORY) && composesApp(file, source) ? "composes" : undefined;
 };
-
-/** Directories a project's own sources never live in, skipped by {@link projectChainsVectors}. */
-const NON_SOURCE_DIRECTORIES = new Set(["_generated", "build", "coverage", "dist", "node_modules", "out", "target"]);
-
-/** Extensions worth reading when looking for a chained capability call. */
-const SOURCE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
 
 /**
- * Ceiling on files read while looking for a `.vectors(...)` call. Past it the
- * scan gives up and answers "chained" — the fail-open direction, because the
- * caller BLOCKS a deploy on a negative.
- */
-const MAX_SCANNED_FILES = 2000;
-
-/** The literal a project's source must contain somewhere for the capability to be considered bound. */
-const VECTORS_CHAIN = ".vectors(";
-
-/**
- * Whether anything in the project's own sources chains `.vectors(...)`.
+ * The file composing this project's app, when nothing in the project chains
+ * `.vectors(...)` — otherwise `undefined`, meaning "nothing to report".
  *
- * Not limited to the entry file, and that is the whole point: the generated
- * builder returns `this`, so `configureVectors(app)` in a neighbouring module is
- * a supported wiring. A check that only read the entry would hard-error a
- * correct tree and tell the author to add a call they had already written.
+ * Read from the whole project rather than from the worker entry, and that is the
+ * whole point in both directions. The builder returns `this`, so
+ * `configureVectors(app)` in a neighbouring module is a supported wiring, and a
+ * check that only read the entry would hard-error a correct tree. And the entry
+ * frequently is not where the app is composed at all: a class-A project points
+ * `main` at a virtual specifier that names no file, and a class-B one at a
+ * generated `src/worker.ts` that re-exports the app built in `src/server.ts`. Both
+ * read as "composes nothing" from the entry alone, which turned this check off for
+ * exactly the Vite-first projects it exists to protect.
  *
- * A literal text match, not an AST walk, because the direction of error matters:
- * anything that looks like the call CLEARS the check. A comment mentioning
- * `.vectors(` therefore also clears it — a false negative that leaves the app
- * exactly where it was before this check existed, which is the trade a blocking
- * gate should take.
+ * The two markers are deliberately asymmetric, because the caller BLOCKS a deploy.
+ * `.vectors(` CLEARS the check and is a literal text match, so a comment mentioning
+ * it clears too — a false negative that leaves the app exactly where it was before
+ * this check existed, which is the trade a blocking gate should take. `defineApp`
+ * ARMS it, so it is a parsed call ({@link composesApp}); a worker composed in
+ * another package leaves no call here and is not judged.
+ *
+ * Both give-up routes — the file budget and an unparseable file — report nothing.
  */
-/** The source files directly in `directory`, and the subdirectories worth descending into. Unreadable directories read as empty. */
-const readSourceDirectory = (directory: string): { files: string[]; subdirectories: string[] } => {
-    const files: string[] = [];
-    const subdirectories: string[] = [];
-    let entries;
-
-    try {
-        entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-        return { files, subdirectories };
-    }
-
-    for (const entry of entries) {
-        if (entry.isDirectory()) {
-            // Dot-directories are tool state, never authored sources.
-            if (!entry.name.startsWith(".") && !NON_SOURCE_DIRECTORIES.has(entry.name)) {
-                subdirectories.push(join(directory, entry.name));
-            }
-        } else if (SOURCE_EXTENSIONS.has(extname(entry.name))) {
-            files.push(join(directory, entry.name));
-        }
-    }
-
-    return { files, subdirectories };
-};
-
-/** Whether one file mentions the chained call. Unreadable files read as "no". */
-const mentionsVectorsChain = (file: string): boolean => {
-    try {
-        return readFileSync(file, "utf8").includes(VECTORS_CHAIN);
-    } catch {
-        return false;
-    }
-};
-
-const projectChainsVectors = (projectRoot: string): boolean => {
+const findUnchainedVectorsSite = (projectRoot: string): string | undefined => {
     const pending: string[] = [projectRoot];
-    let budget = MAX_SCANNED_FILES;
+    let scanned = 0;
+    let site: string | undefined;
 
     while (pending.length > 0) {
         const directory = pending.pop() as string;
@@ -342,18 +413,26 @@ const projectChainsVectors = (projectRoot: string): boolean => {
         pending.push(...subdirectories);
 
         for (const file of files) {
-            budget -= 1;
+            scanned += 1;
 
-            // Out of budget: answer "chained", the fail-open direction, because the
-            // caller BLOCKS a deploy on a negative.
-            if (budget < 0 || mentionsVectorsChain(file)) {
-                return true;
+            if (scanned > MAX_SCANNED_FILES) {
+                return undefined;
+            }
+
+            const marker = readMarker(file);
+
+            if (marker === "binds") {
+                return undefined;
+            }
+
+            if (marker === "composes") {
+                site ??= file;
             }
         }
     }
 
-    return false;
+    return site;
 };
 
 export type { WorkerEntry };
-export { projectChainsVectors, readWorkerEntry };
+export { findUnchainedVectorsSite, readWorkerEntry };
