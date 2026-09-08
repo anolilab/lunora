@@ -753,7 +753,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             ? []
             : [
                   ...runAdvisor(advisorContext, { source: "static" }),
-                  ...discoverUnregisteredProcedures(project, lunoraDirectory, functions),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
               ];
 

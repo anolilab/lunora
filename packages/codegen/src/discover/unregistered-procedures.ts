@@ -2,25 +2,30 @@ import type { Finding } from "@lunora/advisor";
 import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { FunctionIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Every type a `lunora/` registration terminates in, mapped to the call that
- * produces it. A binding whose TYPE is one of these is a registered procedure
- * no matter how the value was produced — which is the whole point: the
- * syntactic scan can be fooled by a factory, a resolved type cannot.
+ * produces it. A binding whose TYPE is one of these is a registration no matter
+ * how the value was produced — which is the whole point: the syntactic scan can
+ * be fooled by a factory, a resolved type cannot.
  *
- * This must stay exhaustive over `@lunora/server`'s `Registered*` types (the
- * base `RegisteredFunction` aside, which is never a terminal on its own), and
- * `__tests__/discover/registration-types-parity.test.ts` locks that: a type
- * missing from here is a shape this pass drops in silence, which is the whole
- * defect. `RegisteredStream` was missing exactly that way.
+ * Every kind here is discovered the same way and drops the same way: each
+ * discoverer walks exported variable declarations and `continue`s past anything
+ * whose initializer is not literally its own `define*` call, so a factory, an
+ * alias, or a separate `export { … }` is skipped in silence
+ * (`mutators.ts:153`, `shapes.ts:146`, `workflows.ts:208`, `queues.ts:131`,
+ * `agents.ts:144`, `containers.ts:281`, `migrations.ts:132`). #651 reported it
+ * for procedures; it was never only procedures.
  *
- * Nothing else may be added. The `registered` set this pass diffs against comes
- * from `functions`, so a registration kind discovery records elsewhere — an
- * http route, a mutator, a workflow, a queue, a migration — would match no key
- * and be reported as dropped on every healthy project.
+ * A row may be added ONLY once the kind's identity reaches
+ * {@link Registrations}, or every healthy export of it is reported as dropped.
+ * That is why crons are absent: `CronJobIR` records a per-job `name` and no
+ * exporting binding, so there is nothing to match a `cronJobs()` export
+ * against. Deliberately absent too: `RegisteredFunction` (the base interface,
+ * never a terminal on its own), `RegisteredDataMigration` and
+ * `RegisteredLunoraFunction` (codegen's own emit metadata, not user
+ * registrations), and `@lunora/mcp`'s internal `RegisteredTool`.
  *
  * The call is stored whole rather than assembled from a kind because the halves
  * do not always match: `.stream()` hangs off the QUERY builder
@@ -28,7 +33,10 @@ import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
  * Assembling `${kind}.input(…).${kind}(…)` printed `query.….query(…)` for every
  * kind, which handed an action author a query to paste.
  */
-const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; note?: string }>([
+const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string; note?: string }>([
+    ["AgentDefinition", { call: "defineAgent({ … })", file: "agents" }],
+    ["ContainerDefinition", { call: "defineContainer({ … })", file: "containers" }],
+    ["QueueDefinition", { call: "defineQueue({ … })", file: "queues", note: "A dropped queue has no caller to fail — its consumer is simply never wired." }],
     ["RegisteredAction", { call: "action.input({ … }).action(handler)" }],
     [
         "RegisteredLifecycleHook",
@@ -42,14 +50,38 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; note?: string 
             note: "Substitute the hook you called: `onConnect`, `onDisconnect` and `onShardInit` share one type, so codegen cannot tell which you wrote. A dropped hook has no caller to fail — it silently never fires.",
         },
     ],
+    ["RegisteredMigration", { call: "defineMigration({ … })", note: "A dropped migration never runs, so `lunora migrate up` reports nothing to do." }],
     ["RegisteredMutation", { call: "mutation.input({ … }).mutation(handler)" }],
+    ["RegisteredMutator", { call: "defineMutator({ … })", file: "mutators" }],
     ["RegisteredQuery", { call: "query.input({ … }).query(handler)" }],
     ["RegisteredReactor", { call: "onQueryChange(select, handler)", note: "A dropped reactor has no caller to fail — it silently never runs." }],
+    ["RegisteredShape", { call: "defineShape({ … })", file: "shapes" }],
     ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
+    ["WorkflowDefinition", { call: "defineWorkflow({ … })", file: "workflows" }],
 ]);
 
+/**
+ * The identities of everything discovery DID register, which is what a dropped
+ * export is diffed against.
+ *
+ * Two sets because the IRs disagree about what they record: procedures,
+ * mutators, shapes and migrations carry a `filePath`, so they key precisely.
+ * Workflows, queues, agents and containers record only an `exportName` (their
+ * `name` is the addressable identity, not a file), so they key on the bare name
+ * — which can only ever hide a dropped export that shares a name with a
+ * registered one, never invent one.
+ */
+type Registrations = {
+    byName: ReadonlySet<string>;
+    byPath: ReadonlySet<string>;
+};
+
+/** Whether discovery already registered this export under either keying. */
+const isRegistered = ({ byName, byPath }: Registrations, relativePath: string, exportName: string): boolean =>
+    byPath.has(`${relativePath}:${exportName}`) || byName.has(exportName);
+
 /** A binding the type checker says is a registered procedure. */
-type Registration = { call: string; note?: string; typeName: string };
+type Registration = { call: string; file?: string; note?: string; typeName: string };
 
 /** A registered procedure used to probe whether the checker resolves anything at all. */
 type Witness = { declaration: VariableDeclaration; exportName: string; relativePath: string };
@@ -119,13 +151,35 @@ const INDIRECT_INITIALIZER: MissedRegistration = {
     remediation: "A factory that returns a registration cannot be read statically — inline it, or export what the factory builds.",
 };
 
+/**
+ * `defineShape` and friends are read from ONE module each — `lunora/shapes.ts`,
+ * `lunora/mutators.ts`, `lunora/workflows.ts`, `lunora/queues.ts`,
+ * `lunora/agents.ts`, `lunora/containers.ts` — so the same call in any other
+ * file is skipped no matter how directly it is assigned. Reporting the
+ * indirection cause here would send the reader to inline a factory that is not
+ * the problem, and they would still get nothing.
+ */
+const wrongFile = (file: string): MissedRegistration => {
+    return {
+        cause: `codegen reads this kind of registration only from \`lunora/${file}.ts\`, and this is a different module`,
+        remediation: `Move it into \`lunora/${file}.ts\` — the declaration itself is fine.`,
+    };
+};
+
 const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
     cause: "the binding is exported by a separate `export { … }` statement, and codegen reads the `export` keyword on the declaration itself",
     remediation: "Move the keyword onto the declaration and drop the separate export statement.",
 };
 
-const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, missed: MissedRegistration): Finding => {
-    const { call, note, typeName } = registration;
+const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
+    const { call, file, note, typeName } = registration;
+    // The wrong module beats every other cause: nothing about how the value was
+    // produced matters while codegen is not reading this file for this kind —
+    // and telling someone to assign a registration they already assigned
+    // directly is how a diagnostic loses trust.
+    const misplacedIn = file !== undefined && relativePath !== file ? file : undefined;
+    const missed = misplacedIn === undefined ? indirection : wrongFile(misplacedIn);
+    const suffix = note === undefined ? missed.remediation : `${note} ${missed.remediation}`;
 
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
@@ -137,7 +191,7 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         level: "WARN",
         metadata: { exportName, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: `Assign the registration directly: \`export const ${exportName} = ${call};\`. ${note === undefined ? "" : `${note} `}${missed.remediation}`,
+        remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${exportName} = ${call};\`. ${suffix}` : suffix,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
@@ -157,14 +211,14 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
  * This is a type-level check rather than a syntactic one, so it cannot be
  * fooled by the very indirection that causes the bug.
  */
-const namedExportFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
+const namedExportFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
 
     for (const statement of source.getVariableStatements().filter((entry) => entry.isExported())) {
         for (const declaration of statement.getDeclarations()) {
             const exportName = declaration.getName();
 
-            if (registered.has(`${relativePath}:${exportName}`) || !mayHideRegistration(declaration)) {
+            if (isRegistered(registrations, relativePath, exportName) || !mayHideRegistration(declaration)) {
                 continue;
             }
 
@@ -185,8 +239,8 @@ const namedExportFindings = (source: SourceFile, relativePath: string, registere
  * dropped exactly like a named one — and would otherwise be the single shape
  * this check could not see.
  */
-const defaultExportFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
-    if (registered.has(`${relativePath}:default`)) {
+const defaultExportFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
+    if (isRegistered(registrations, relativePath, "default")) {
         return [];
     }
 
@@ -217,14 +271,14 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registe
  * skipped: the declaration lives in another file, and naming this one would send
  * the reader to the wrong place.
  */
-const exportDeclarationFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => {
+const exportDeclarationFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
 
     for (const declaration of source.getExportDeclarations().filter((entry) => entry.getModuleSpecifier() === undefined)) {
         for (const specifier of declaration.getNamedExports()) {
             const exportName = specifier.getAliasNode()?.getText() ?? specifier.getName();
 
-            if (registered.has(`${relativePath}:${exportName}`)) {
+            if (isRegistered(registrations, relativePath, exportName)) {
                 continue;
             }
 
@@ -245,10 +299,10 @@ const exportDeclarationFindings = (source: SourceFile, relativePath: string, reg
     return findings;
 };
 
-const fileFindings = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Finding[] => [
-    ...namedExportFindings(source, relativePath, registered),
-    ...defaultExportFindings(source, relativePath, registered),
-    ...exportDeclarationFindings(source, relativePath, registered),
+const fileFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => [
+    ...namedExportFindings(source, relativePath, registrations),
+    ...defaultExportFindings(source, relativePath, registrations),
+    ...exportDeclarationFindings(source, relativePath, registrations),
 ];
 
 /**
@@ -271,12 +325,12 @@ const fileFindings = (source: SourceFile, relativePath: string, registered: Read
  * yields no witness and gets no verdict — which errs toward saying nothing
  * rather than toward a warning nobody can act on.
  */
-const registeredDeclarations = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Witness[] =>
+const registeredDeclarations = (source: SourceFile, relativePath: string, registrations: Registrations): Witness[] =>
     source
         .getVariableStatements()
         .filter((entry) => entry.isExported())
         .flatMap((entry) => entry.getDeclarations())
-        .filter((declaration) => registered.has(`${relativePath}:${declaration.getName()}`))
+        .filter((declaration) => isRegistered(registrations, relativePath, declaration.getName()))
         .filter((declaration) => {
             const initializer = declaration.getInitializer();
 
@@ -312,8 +366,7 @@ const typeCheckUnavailable = ({ exportName, relativePath }: Witness): Finding =>
     };
 };
 
-const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR>): Finding[] => {
-    const registered = new Set(functions.map((entry) => `${entry.filePath}:${entry.exportName}`));
+const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
     const witnesses: Witness[] = [];
 
@@ -329,8 +382,8 @@ const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: strin
 
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        findings.push(...fileFindings(source, relativePath, registered));
-        witnesses.push(...registeredDeclarations(source, relativePath, registered));
+        findings.push(...fileFindings(source, relativePath, registrations));
+        witnesses.push(...registeredDeclarations(source, relativePath, registrations));
     }
 
     // ONE resolving procedure is enough to prove the checker, so `every` walks
