@@ -902,10 +902,12 @@ describe("wrangler-validator", () => {
             });
         });
 
-        describe("a schema with vector indexes whose entry never chains .vectors()", () => {
+        describe("a schema with vector indexes no source chains .vectors() onto", () => {
             // The generated builder throws for this from `buildWorkerOptions` — on
             // the first REQUEST. codegen, build, verify, tsc and the test suite all
             // pass on a tree where every request 500s, `/_lunora/health` included.
+            const COMPOSING_SOURCE = `import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`;
+
             const writeVectorProject = (entry: string, options: { entryFile?: string; main?: string } = {}): void => {
                 const entryFile = options.entryFile ?? "index.ts";
 
@@ -973,11 +975,13 @@ describe("wrangler-validator", () => {
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
             });
 
-            it("still fires when the entry imports defineApp under an alias", () => {
+            it("still fires when the composing file imports defineApp under an alias", () => {
                 expect.assertions(1);
 
-                // Matching the callee TEXT alone turned the whole check into a
-                // silent no-op for anyone using an ordinary aliased import.
+                // The composition marker is a parsed CALL, so it has to resolve
+                // `createApp()` back to the imported `defineApp` — an ordinary
+                // import style, and a silent no-op for anyone using it if the
+                // callee text alone were matched.
                 writeVectorProject(
                     `import { defineApp as createApp } from "../lunora/_generated/app";\n\nconst app = createApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
                 );
@@ -1000,16 +1004,12 @@ describe("wrangler-validator", () => {
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
             });
 
-            it("fires for a class-A project, whose `main` names no file at all", () => {
+            it("fires when `main` names no file at all, as a Vite-first app's does", () => {
                 expect.assertions(1);
 
                 // `main: "virtual:lunora/worker"` resolves to no entry, so a check
-                // keyed on the entry reported nothing for every Vite-first app —
-                // which is most of them.
-                writeVectorProject(`import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`, {
-                    entryFile: "server.ts",
-                    main: "virtual:lunora/worker",
-                });
+                // keyed on the entry reported nothing at all here.
+                writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts", main: "virtual:lunora/worker" });
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
@@ -1021,14 +1021,52 @@ describe("wrangler-validator", () => {
 
                 // The class-B composed entry wins over `main`, and it composes
                 // nothing itself — the app is built in `src/server.ts` next to it.
-                writeVectorProject(`import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`, {
-                    entryFile: "server.ts",
-                });
+                writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts" });
                 writeFileSync(join(workdir, "src", "worker.ts"), `export { default } from "./server";\n`, "utf8");
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
                 expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("says nothing about a file that only mentions the factory's name", () => {
+                expect.assertions(1);
+
+                // The composition marker ARMS a deploy-blocking error, so a bare
+                // substring must never be enough. Nuxt's own `defineAppConfig`
+                // contains it, and two of this repo's templates name `defineApp()`
+                // in prose — neither is a project anyone could edit their way out of.
+                writeVectorProject(`export { default } from "@acme/worker";\n`);
+                writeFileSync(join(workdir, "app.config.ts"), `export default defineAppConfig({ theme: "dark" });\n`, "utf8");
+                writeFileSync(join(workdir, "src", "notes.ts"), `// The worker is composed with defineApp() over in @acme/worker.\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("says nothing when the chain lives in a .server directory or a .mjs module", () => {
+                expect.assertions(2);
+
+                // Both are real layouts — `.server/` is the React Router v7 / Remix
+                // convention — and a chain the scan cannot see hard-errors a project
+                // that is correctly wired.
+                for (const [directory, file] of [
+                    [".server", "vectors.ts"],
+                    ["config", "vectors.mjs"],
+                ]) {
+                    writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts" });
+                    mkdirSync(join(workdir, "src", String(directory)), { recursive: true });
+                    writeFileSync(
+                        join(workdir, "src", String(directory), String(file)),
+                        `export const configureVectors = (app) => app.vectors((env) => ({ "docs-body": env.DOCS_BODY }));\n`,
+                        "utf8",
+                    );
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+
+                    expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+                }
             });
         });
 

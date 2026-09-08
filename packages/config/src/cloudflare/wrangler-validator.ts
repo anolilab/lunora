@@ -19,7 +19,7 @@ import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
 import type { WorkerEntry } from "./worker-entry-checks";
-import { readWorkerEntry, scanAppComposition } from "./worker-entry-checks";
+import { findUnchainedVectorsSite, readWorkerEntry } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -1508,32 +1508,27 @@ const collectContainerImageErrors = (
  * Same relationship the unexported-class check validates, which is why it lives
  * here rather than in the runtime.
  *
- * Blocking, so both halves fail open. The project must name `defineApp` somewhere
- * in its own sources (a worker composed in another package is out of reach and
- * must not be judged), and a `.vectors(` anywhere in them clears it — the builder
- * returns `this`, so chaining it from a neighbouring module is a supported wiring,
- * and hard-erroring that would tell an author to add a call they already wrote.
- *
- * Both facts come from {@link scanAppComposition}, i.e. from the project rather
- * than from the worker entry. Keying "does this project compose an app" on the
- * ENTRY is what silently disabled the check for the two commonest Vite-first
- * layouts: `main: "virtual:lunora/worker"` names no file at all, and a generated
- * `src/worker.ts` only re-exports the app composed in `src/server.ts`.
+ * Blocking, so it fails open both ways — see {@link findUnchainedVectorsSite},
+ * which reads the PROJECT rather than the worker entry. Keying "does this project
+ * compose an app" on the entry is what silently disabled the check for the two
+ * commonest Vite-first layouts: `main: "virtual:lunora/worker"` names no file at
+ * all, and a generated `src/worker.ts` only re-exports the app composed in
+ * `src/server.ts`.
  */
 const collectUnchainedVectorsError = (vectorIndexNames: ReadonlyArray<string>, projectRoot: string): string[] => {
     if (vectorIndexNames.length === 0) {
         return [];
     }
 
-    const { chainsVectors, composedIn } = scanAppComposition(projectRoot);
+    const site = findUnchainedVectorsSite(projectRoot);
 
-    if (chainsVectors || composedIn === undefined) {
+    if (site === undefined) {
         return [];
     }
 
     return [
         `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
-            `(composed in: ${composedIn}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+            `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
             `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
     ];
 };
@@ -1677,9 +1672,8 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         report.errors.push(...collectUnexportedClassErrors(resolvedWrangler, workerEntry));
     }
 
-    // Outside the guard above on purpose: this one reads the project, not the
-    // entry, and an unresolvable entry (class-A's virtual `main`) says nothing
-    // about whether the app binds its vector indexes.
+    // Deliberately outside that guard: it reads the project, and an unresolvable
+    // entry (class-A's virtual `main`) says nothing about the vector bindings.
     report.errors.push(...collectUnchainedVectorsError(schemaInfo?.vectorIndexNames ?? [], options.projectRoot));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
