@@ -1,32 +1,70 @@
 import type { Finding } from "@lunora/advisor";
-import type { Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { FunctionIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
- * The types `@lunora/server`'s builder chains terminate in. A binding whose
- * TYPE is one of these is a registered procedure no matter how the value was
- * produced — which is the whole point: the syntactic scan can be fooled by a
- * factory, the type cannot.
+ * The types `@lunora/server`'s builder chains terminate in, each mapped to the
+ * chain that produces it. A binding whose TYPE is one of these is a registered
+ * procedure no matter how the value was produced — which is the whole point:
+ * the syntactic scan can be fooled by a factory, a resolved type cannot.
+ *
+ * The chain is stored whole rather than assembled from a kind because the two
+ * halves do not always match: `.stream()` hangs off the QUERY builder
+ * (`QueryBuilder.stream`), so a dropped stream needs `query.….stream(handler)`.
+ * Assembling `${kind}.input(…).${kind}(…)` printed `query.….query(…)` for every
+ * kind, which handed an action author a query to paste.
  */
-const REGISTERED_TYPE_NAMES = new Set(["RegisteredAction", "RegisteredMutation", "RegisteredQuery"]);
+const CHAIN_BY_TYPE_NAME = new Map([
+    ["RegisteredAction", "action.input({ … }).action(handler)"],
+    ["RegisteredMutation", "mutation.input({ … }).mutation(handler)"],
+    ["RegisteredQuery", "query.input({ … }).query(handler)"],
+    ["RegisteredStream", "query.input({ … }).stream(handler)"],
+]);
+
+/** A binding the type checker says is a registered procedure. */
+type Registration = { chain: string; typeName: string };
+
+/** A registered procedure used to probe whether the checker resolves anything at all. */
+type Witness = { declaration: VariableDeclaration; exportName: string; relativePath: string };
 
 /**
- * The registration type of a binding, or `undefined` when it is not one.
+ * Whether the checker resolved this type at all.
+ *
+ * An unresolvable type is `any` — `@lunora/server` not installed, no usable
+ * tsconfig, unbuilt project references. That is the one state in which nothing
+ * this pass reports means anything, so it is checked rather than assumed away;
+ * see {@link typeCheckUnavailable}.
+ */
+const resolves = (type: Type): boolean => !type.isAny();
+
+/**
+ * The registration of a binding, or `undefined` when it is not one.
  *
  * Resolves through the alias symbol first so a re-exported or locally aliased
- * `RegisteredQuery` still matches. When the type cannot be resolved at all
- * (`@lunora/server` not installed, a project assembled without a tsconfig) the
- * type is an error type whose symbol matches nothing — so this reports nothing
- * rather than reporting everything, which is the right way to fail.
+ * `RegisteredQuery` still matches.
+ *
+ * Unresolved types are rejected before the name is read, and that order is the
+ * whole point: TypeScript keeps the alias symbol of an unresolved annotation,
+ * so `const x: RegisteredQuery<…> = …` in a project with no `@lunora/server`
+ * still answers `"RegisteredQuery"` off an `any`. Matching that would be a
+ * string comparison against the text the author typed — which a factory fools
+ * exactly as easily as the syntactic scan does, and which any unrelated type
+ * that happens to be called `RegisteredQuery` trips.
  */
-const registrationTypeName = (node: Node): string | undefined => {
+const registrationOf = (node: Node): Registration | undefined => {
     const type = node.getType();
-    const name = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
 
-    return name !== undefined && REGISTERED_TYPE_NAMES.has(name) ? name : undefined;
+    if (!resolves(type)) {
+        return undefined;
+    }
+
+    const typeName = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
+    const chain = typeName === undefined ? undefined : CHAIN_BY_TYPE_NAME.get(typeName);
+
+    return chain === undefined || typeName === undefined ? undefined : { chain, typeName };
 };
 
 /**
@@ -62,7 +100,9 @@ const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
     remediation: "Move the keyword onto the declaration and drop the separate export statement.",
 };
 
-const findingFor = (relativePath: string, exportName: string, typeName: string, line: number, missed: MissedRegistration): Finding => {
+const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, missed: MissedRegistration): Finding => {
+    const { chain, typeName } = registration;
+
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
@@ -73,7 +113,7 @@ const findingFor = (relativePath: string, exportName: string, typeName: string, 
         level: "WARN",
         metadata: { exportName, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: `Assign the builder chain directly: \`export const ${exportName} = query.input({ … }).query(handler);\`. ${missed.remediation}`,
+        remediation: `Assign the builder chain directly: \`export const ${exportName} = ${chain};\`. ${missed.remediation}`,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
@@ -104,10 +144,10 @@ const namedExportFindings = (source: SourceFile, relativePath: string, registere
                 continue;
             }
 
-            const typeName = registrationTypeName(declaration);
+            const registration = registrationOf(declaration);
 
-            if (typeName !== undefined) {
-                findings.push(findingFor(relativePath, exportName, typeName, declaration.getStartLineNumber(), INDIRECT_INITIALIZER));
+            if (registration !== undefined) {
+                findings.push(findingFor(relativePath, exportName, registration, declaration.getStartLineNumber(), INDIRECT_INITIALIZER));
             }
         }
     }
@@ -129,10 +169,10 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registe
     const findings: Finding[] = [];
 
     for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals())) {
-        const typeName = registrationTypeName(assignment.getExpression());
+        const registration = registrationOf(assignment.getExpression());
 
-        if (typeName !== undefined) {
-            findings.push(findingFor(relativePath, "default", typeName, assignment.getStartLineNumber(), INDIRECT_INITIALIZER));
+        if (registration !== undefined) {
+            findings.push(findingFor(relativePath, "default", registration, assignment.getStartLineNumber(), INDIRECT_INITIALIZER));
         }
     }
 
@@ -170,10 +210,10 @@ const exportDeclarationFindings = (source: SourceFile, relativePath: string, reg
                 continue;
             }
 
-            const typeName = registrationTypeName(local);
+            const registration = registrationOf(local);
 
-            if (typeName !== undefined) {
-                findings.push(findingFor(relativePath, exportName, typeName, specifier.getStartLineNumber(), SEPARATE_EXPORT_STATEMENT));
+            if (registration !== undefined) {
+                findings.push(findingFor(relativePath, exportName, registration, specifier.getStartLineNumber(), SEPARATE_EXPORT_STATEMENT));
             }
         }
     }
@@ -187,9 +227,71 @@ const fileFindings = (source: SourceFile, relativePath: string, registered: Read
     ...exportDeclarationFindings(source, relativePath, registered),
 ];
 
+/**
+ * The registered exports the checker can be probed against.
+ *
+ * Deliberately the inverse of the `registered.has(...)` skip in
+ * {@link namedExportFindings}: one walk selects the exports this pass reports
+ * on, this one selects the exports it can trust, and they must keep keying
+ * identically.
+ *
+ * Only a declaration initialized by a builder TERMINAL counts — a call on a
+ * property access, `query.….query(handler)`. Discovery also registers the bare
+ * factory form `query({ args, handler })`, but the generated `query` is a
+ * non-callable builder object, so that call's type is `any` in a perfectly
+ * well-installed project; taking it as a witness reported the toolchain as
+ * blind when the truth was that the call itself is broken.
+ *
+ * Variable statements only. A project whose registrations are ALL `export
+ * default` (or arrive via mutators, http routes, or the bare factory form)
+ * yields no witness and gets no verdict — which errs toward saying nothing
+ * rather than toward a warning nobody can act on.
+ */
+const registeredDeclarations = (source: SourceFile, relativePath: string, registered: ReadonlySet<string>): Witness[] =>
+    source
+        .getVariableStatements()
+        .filter((entry) => entry.isExported())
+        .flatMap((entry) => entry.getDeclarations())
+        .filter((declaration) => registered.has(`${relativePath}:${declaration.getName()}`))
+        .filter((declaration) => {
+            const initializer = declaration.getInitializer();
+
+            return initializer !== undefined && Node.isCallExpression(initializer) && Node.isPropertyAccessExpression(initializer.getExpression());
+        })
+        .map((declaration) => {
+            return { declaration, exportName: declaration.getName(), relativePath };
+        });
+
+/**
+ * Reported when types don't resolve, so nothing above could have been found.
+ *
+ * Without it a blind checker prints exactly what a clean project prints, which
+ * is the indistinguishability the rest of this pass exists to end — see the
+ * incident in {@link namedExportFindings}.
+ *
+ * Names the witness it failed to read, so "your types don't resolve" is one
+ * `tsc` invocation away from being reproduced rather than being taken on faith.
+ */
+const typeCheckUnavailable = ({ exportName, relativePath }: Witness): Finding => {
+    return {
+        cacheKey: "procedure_type_check_unavailable",
+        categories: ["SCHEMA"],
+        description:
+            "Codegen cross-checks every export in `lunora/` against its TYPE to catch a procedure the syntactic scan dropped — a factory-assigned export, an alias, a separate `export { … }`. That check needs the type checker to resolve `@lunora/server`; when it cannot, the check reports nothing regardless of what the code does.",
+        detail: `Type resolution for \`lunora/\` is unavailable — the registered procedure \`${exportName}\` in \`${relativePath}\` types as \`any\`, as does every other one — so codegen cannot tell you when an export is dropped from \`_generated/api.ts\`. A dropped procedure will surface as \`Property '<name>' does not exist\` at its call site instead.`,
+        facing: "INTERNAL",
+        level: "WARN",
+        metadata: { exportName, filePath: relativePath },
+        name: "procedure_type_check_unavailable",
+        remediation: `Check what codegen sees: \`${exportName}\` should have a procedure type, not \`any\`. It needs a \`tsconfig.json\` at or above \`lunora/\` — the one codegen finds walking up from there, which is not necessarily the one your editor uses — resolving \`lunorash\` / \`@lunora/server\` to declarations that exist on disk (a workspace dependency has to be built first).`,
+        title: "Codegen cannot type-check `lunora/`, so dropped procedures go unreported",
+    };
+};
+
 const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR>): Finding[] => {
     const registered = new Set(functions.map((entry) => `${entry.filePath}:${entry.exportName}`));
     const findings: Finding[] = [];
+    const witnesses: Witness[] = [];
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         // Only files the discovery pass already loaded — never add one here, so
@@ -197,9 +299,26 @@ const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: strin
         // parse of the tree.
         const source: SourceFile | undefined = project.getSourceFile(filePath);
 
-        if (source !== undefined) {
-            findings.push(...fileFindings(source, lunoraRelativePath(lunoraDirectory, filePath), registered));
+        if (source === undefined) {
+            continue;
         }
+
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
+
+        findings.push(...fileFindings(source, relativePath, registered));
+        witnesses.push(...registeredDeclarations(source, relativePath, registered));
+    }
+
+    // ONE resolving procedure is enough to prove the checker, so `every` walks
+    // only until it finds one: a healthy project spends a single `getType()`
+    // here, and a blind one spends error-type lookups. Requiring *all* of them
+    // to fail — rather than sampling the first — keeps the verdict independent
+    // of file order, which is what a partially-resolving project would otherwise
+    // make it. No witness at all is not evidence of anything.
+    const [first] = witnesses;
+
+    if (first !== undefined && witnesses.every(({ declaration }) => !resolves(declaration.getType()))) {
+        findings.push(typeCheckUnavailable(first));
     }
 
     return findings.toSorted((a, b) => a.cacheKey.localeCompare(b.cacheKey));

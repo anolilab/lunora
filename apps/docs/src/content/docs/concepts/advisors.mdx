@@ -33,6 +33,10 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 ### Correctness
 
+The last three come from codegen rather than `@lunora/advisor`, so they are not in the
+programmatic `ALL_LINTS` catalog below — they travel the same channel to the terminal and the
+studio.
+
 | Lint                                | Level | Detects                                                                                                                                                                          |
 | ----------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `index_references_unknown_field`    | error | An index references a column that doesn't exist on the table.                                                                                                                    |
@@ -42,6 +46,9 @@ Run against the declared schema alone: deterministic, no running shard needed.
 | `empty_index`                       | warn  | An index declared with no columns: it narrows nothing.                                                                                                                           |
 | `circular_fk`                       | warn  | A cycle of `one` relations (A → B → C → A): cascade/restrict hazards.                                                                                                            |
 | `nondeterministic_query_mutation`   | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch`: non-deterministic reads break caching and replay. Use `ctx.now` for time; move randomness/network into an `action`. |
+| `procedure_not_registered`          | warn  | An export whose resolved TYPE is a procedure never reached `_generated/api.ts`: it exists at runtime, and callers see `Property '<name>' does not exist`.                        |
+| `procedure_type_check_unavailable`  | warn  | Types don't resolve for `lunora/` where codegen runs, so `procedure_not_registered` cannot report anything.                                                                      |
+| `procedure_arguments_unreadable`    | warn  | A registered procedure's `.input()` record could not be read, so `api.ts` types fewer arguments than the runtime enforces.                                                       |
 
 ### Performance
 
