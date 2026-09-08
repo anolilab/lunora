@@ -11,17 +11,15 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, extname } from "node:path";
-
-import type { SourceFile } from "ts-morph";
-import { Node, Project } from "ts-morph";
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
-import { COMPOSED_WORKER_ENTRY, LUNORA_WORKER_VIRTUAL_ID, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
+import type { WorkerEntry } from "./worker-entry-checks";
+import { projectChainsVectors, readWorkerEntry } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -1499,285 +1497,33 @@ const collectContainerImageErrors = (
 };
 
 /**
- * Extensions this check will read. A class-B `main` can name the framework
- * adapter's BUILD OUTPUT (`.svelte-kit/cloudflare/_worker.js`, `dist/_worker.js`),
- * which exports only the SSR fetch handler — every declared class reads as
- * unexported there. Today the composed `src/worker.ts` shadows that case, but
- * the finding now blocks a deploy, so a bundle is skipped rather than trusted:
- * an authored Lunora entry is TypeScript.
- */
-const WORKER_ENTRY_SOURCE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
-
-/**
- * Resolve the worker entry the way `lunora deploy` bundles it: the class-B
- * composed entry when present (it is passed to wrangler as the positional
- * script, overriding `main`), else `wrangler.main` relative to the config file,
- * else the conventional fallbacks.
+ * Report a schema that declares vector indexes while nothing in the project ever
+ * chains `.vectors(...)`.
  *
- * Returns `undefined` for anything this check must not judge — a missing file, a
- * build artifact, or the class-A virtual specifier, which names no file at all.
- */
-const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
-    const composed = join(projectRoot, COMPOSED_WORKER_ENTRY);
-
-    if (existsSync(composed)) {
-        return composed;
-    }
-
-    if (main === LUNORA_WORKER_VIRTUAL_ID) {
-        return undefined;
-    }
-
-    if (typeof main === "string" && main.length > 0) {
-        const resolved = join(dirname(wranglerPath), main);
-
-        return existsSync(resolved) && WORKER_ENTRY_SOURCE_EXTENSIONS.has(extname(resolved)) ? resolved : undefined;
-    }
-
-    return WORKER_ENTRY_FALLBACKS.map((fallback) => join(projectRoot, fallback)).find((candidate) => existsSync(candidate));
-};
-
-/**
- * Every name a binding pattern binds — `{ ShardDO }`, `{ a: b }`, `[x]`, and
- * nests of those. `export const { ShardDO } = app;` is the generated app
- * builder's own pattern, so this is not an exotic form.
- */
-const collectBindingNames = (nameNode: Node, names: Set<string>): void => {
-    if (Node.isIdentifier(nameNode)) {
-        names.add(nameNode.getText());
-
-        return;
-    }
-
-    if (Node.isObjectBindingPattern(nameNode) || Node.isArrayBindingPattern(nameNode)) {
-        for (const element of nameNode.getElements()) {
-            if (Node.isBindingElement(element)) {
-                collectBindingNames(element.getNameNode(), names);
-            }
-        }
-    }
-};
-
-/** The names an `export { … }` / `export … from "…"` clause binds as values. */
-const collectClauseExports = (sourceFile: SourceFile, names: Set<string>): boolean => {
-    let opaque = false;
-
-    for (const declaration of sourceFile.getExportDeclarations()) {
-        if (declaration.isTypeOnly()) {
-            continue;
-        }
-
-        // Only a STAR re-export is opaque, and `isNamespaceExport()` is the one
-        // predicate that identifies it. Testing "no named exports" instead also
-        // caught `export {}` — which binds nothing and is a routine way to mark
-        // a file as a module — and one of those anywhere in the entry silently
-        // turned this whole check off. That is worse than the bug it exists to
-        // catch, because it reads as a pass.
-        if (declaration.isNamespaceExport()) {
-            const namespaceExport = declaration.getNamespaceExport();
-
-            if (namespaceExport === undefined) {
-                // A bare `export * from "./x"` forwards names that live in
-                // another module, so the ABSENCE of a class name proves nothing.
-                opaque = true;
-            } else {
-                // `export * as ns from "…"` binds only `ns`, so it forwards
-                // nothing a class name could hide behind.
-                names.add(namespaceExport.getName());
-            }
-
-            continue;
-        }
-
-        for (const specifier of declaration.getNamedExports()) {
-            // For `export { Local as Bound }` the EXPORTED name is what wrangler
-            // binds. A leading `type` is scoped per specifier — a whole-file
-            // check let an unrelated `export type { X as … }` suppress a real
-            // `export { X }`.
-            if (!specifier.isTypeOnly()) {
-                names.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
-            }
-        }
-    }
-
-    return opaque;
-};
-
-/**
- * The names declaration-form exports bind (`export class X`, `export const { X } = app`).
+ * The generated builder already throws for this — from `buildWorkerOptions`, which
+ * runs on the first REQUEST. So `lunora codegen`, `build`, `verify`, `tsc` and the
+ * test suite all pass on a tree where every HTTP request 500s, `/_lunora/health`
+ * included, and the app ships in that state. The requirement is static: the schema
+ * states the indexes, and whether anything binds them is readable from the source.
+ * Same relationship the unexported-class check validates, which is why it lives
+ * here rather than in the runtime.
  *
- * Keyed on the `export` MODIFIER, never on `isExported()`. ts-morph answers
- * `isExported()` true for a class named by any export clause, alias and all — so
- * `class SchedulerDO {}` beside `export { SchedulerDO as SomethingElse }` read
- * as exporting `SchedulerDO`, which is the one name wrangler does NOT bind. The
- * clause walk above already records the exported name; this pass must only add
- * declarations that carry the keyword themselves, or it double-counts the local
- * one and misses the very rename the tests pin.
+ * Blocking, so both halves fail open. The entry must call `defineApp(...)` itself
+ * (a framework adapter's re-export is out of reach and must not be judged), and
+ * {@link projectChainsVectors} clears it on a `.vectors(` anywhere in the project —
+ * the builder returns `this`, so chaining it from a neighbouring module is a
+ * supported wiring, and hard-erroring that would tell an author to add a call they
+ * already wrote.
  */
-const collectDeclarationExports = (sourceFile: SourceFile, names: Set<string>): void => {
-    for (const statement of sourceFile.getVariableStatements().filter((candidate) => candidate.getExportKeyword() !== undefined)) {
-        for (const declaration of statement.getDeclarations()) {
-            collectBindingNames(declaration.getNameNode(), names);
-        }
-    }
-
-    for (const declaration of [...sourceFile.getClasses(), ...sourceFile.getFunctions(), ...sourceFile.getEnums()]) {
-        // `export default class X` binds `default`, not `X`, so a default
-        // export never satisfies a `class_name`.
-        const name = declaration.getExportKeyword() !== undefined && !declaration.isDefaultExport() ? declaration.getName() : undefined;
-
-        if (name !== undefined) {
-            names.add(name);
-        }
-    }
-};
-
-/**
- * The runtime VALUE exports of a worker entry, and whether the file forwards
- * names this scan cannot see (`opaque`).
- *
- * Parsed with ts-morph rather than scanned with regexes. The scanner this
- * replaces had to stay advisory precisely because every export form it did not
- * know failed CLOSED — reporting a correctly-wired project as broken — and two
- * such forms (a prettier-wrapped clause, and the app builder's own
- * `export const { ShardDO } = app`) turned up in a single review pass. A real
- * parser knows them all, which is what lets the check block. ts-morph is already
- * loaded on this path: `discoverSchemaInfo` parses the schema with it a few
- * lines below.
- *
- * `undefined` means "cannot be decided from this file" and the caller reports
- * nothing. Two ways to get there, and both must FAIL OPEN now that the finding
- * blocks: a bare `export *`, which forwards names from another module, and a
- * file that does not parse. ts-morph error-RECOVERS rather than throwing, and a
- * recovered parse silently drops statements — so a half-typed entry would
- * otherwise report every class as unexported and stop `lunora dev` mid-keystroke.
- * The lexer-based sibling in `infer-bindings` has the same carve-out (it catches
- * and falls back); this is that carve-out, made explicit.
- */
-const collectValueExports = (fileName: string, source: string): Set<string> | undefined => {
-    // `skipLoadingLibFiles` is load-bearing, not a micro-optimisation: asking for
-    // the program pulls in the full `lib.d.ts` set otherwise, which measured
-    // 571ms per call against 1.07ms without. Nothing here type-checks — the
-    // diagnostics read is SYNTACTIC, which is per-file parse errors and
-    // independent of the lib files.
-    const project = new Project({
-        compilerOptions: { allowJs: true },
-        skipFileDependencyResolution: true,
-        skipLoadingLibFiles: true,
-        useInMemoryFileSystem: true,
-    });
-    const sourceFile = project.createSourceFile(fileName, source, { overwrite: true });
-
-    if (project.getProgram().compilerObject.getSyntacticDiagnostics(sourceFile.compilerNode).length > 0) {
-        return undefined;
-    }
-
-    const names = new Set<string>();
-
-    if (collectClauseExports(sourceFile, names)) {
-        return undefined;
-    }
-
-    collectDeclarationExports(sourceFile, names);
-
-    return names;
-};
-
-/**
- * Every called function/method name in a file — `foo()` and `x.foo()` alike.
- *
- * `undefined` when the file does not parse, which is the same fail-open the
- * export scan takes: ts-morph error-RECOVERS rather than throwing, and a recovered
- * parse silently drops statements, so a half-typed entry would otherwise report a
- * correctly-wired chain as missing and stop `lunora dev` mid-keystroke.
- */
-const parseCalls = (fileName: string, source: string): Set<string> | undefined => {
-    // Same `skipLoadingLibFiles` reasoning as `collectValueExports`: nothing here
-    // type-checks, and asking for the program otherwise pulls in the full lib set.
-    const project = new Project({
-        compilerOptions: { allowJs: true },
-        skipFileDependencyResolution: true,
-        skipLoadingLibFiles: true,
-        useInMemoryFileSystem: true,
-    });
-    const sourceFile = project.createSourceFile(fileName, source, { overwrite: true });
-
-    if (project.getProgram().compilerObject.getSyntacticDiagnostics(sourceFile.compilerNode).length > 0) {
-        return undefined;
-    }
-
-    const names = new Set<string>();
-
-    for (const descendant of sourceFile.getDescendants()) {
-        if (!Node.isCallExpression(descendant)) {
-            continue;
-        }
-
-        const callee = descendant.getExpression();
-
-        if (Node.isIdentifier(callee)) {
-            names.add(callee.getText());
-        } else if (Node.isPropertyAccessExpression(callee)) {
-            names.add(callee.getName());
-        }
-    }
-
-    return names;
-};
-
-/**
- * Report a schema that declares vector indexes while the worker entry composes an
- * app and never chains `.vectors(...)`.
- *
- * The generated builder throws for exactly this — but from `buildWorkerOptions`,
- * which runs on the first REQUEST. So `lunora codegen`, `build`, `verify`, `tsc`
- * and the test suite all pass on a tree where every HTTP request 500s,
- * `/_lunora/health` included, and the app ships in that state. The requirement is
- * static: the schema states the indexes, and whether the chain binds them is
- * readable from the entry. Same reasoning as the unexported-class check above —
- * what is invalid is the relationship between the schema and the entry.
- *
- * Conservative in both directions, because it blocks: it says nothing unless the
- * entry itself calls `defineApp(...)` (a project that composes elsewhere is out of
- * reach), and any `.vectors(...)` call anywhere in the file clears it rather than
- * insisting the call sit on that one chain.
- */
-const collectUnchainedVectorsError = (
-    wrangler: WranglerConfig,
-    vectorIndexNames: ReadonlyArray<string>,
-    projectRoot: string,
-    wranglerPath: string,
-): string[] => {
-    if (vectorIndexNames.length === 0) {
+const collectUnchainedVectorsError = (entry: WorkerEntry, vectorIndexNames: ReadonlyArray<string>, projectRoot: string): string[] => {
+    if (vectorIndexNames.length === 0 || !entry.composesApp || projectChainsVectors(projectRoot)) {
         return [];
     }
-
-    const entryPath = resolveWorkerEntryPath(wrangler.main, projectRoot, wranglerPath);
-
-    if (entryPath === undefined) {
-        return [];
-    }
-
-    let source: string;
-
-    try {
-        source = readFileSync(entryPath, "utf8");
-    } catch {
-        return [];
-    }
-
-    const calls = parseCalls(basename(entryPath), source);
-
-    if (calls === undefined || !calls.has("defineApp") || calls.has("vectors")) {
-        return [];
-    }
-
-    const [first] = vectorIndexNames;
 
     return [
-        `schema declares vector index "${String(first)}" but the worker entry (${entryPath}) never chains .vectors(...) onto defineApp() — ` +
-            `\`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
-            `Add \`.vectors((env) => ({ ${String(first)}: env.<BINDING> }))\` to the chain.`,
+        `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
+            `(entry: ${entry.path}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+            `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
     ];
 };
 
@@ -1800,24 +1546,10 @@ const collectUnchainedVectorsError = (
  * caught it — so `verify` in a PR check went green and the deploy job failed.
  *
  * Reports nothing whenever the entry's exports cannot be decided — see
- * {@link collectValueExports}. A check that blocks must be sure.
+ * `readWorkerEntry`. A check that blocks must be sure.
  */
-const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: string, wranglerPath: string): string[] => {
-    const entryPath = resolveWorkerEntryPath(wrangler.main, projectRoot, wranglerPath);
-
-    if (entryPath === undefined) {
-        return [];
-    }
-
-    let source: string;
-
-    try {
-        source = readFileSync(entryPath, "utf8");
-    } catch {
-        return [];
-    }
-
-    const exported = collectValueExports(basename(entryPath), source);
+const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEntry): string[] => {
+    const exported = entry.exports;
 
     if (exported === undefined) {
         return [];
@@ -1833,27 +1565,27 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         }
     }
 
-    for (const entry of iterableEntries(wrangler.workflows)) {
+    for (const workflow of iterableEntries(wrangler.workflows)) {
         // Same `script_name` carve-out as the durable-object bindings above:
         // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
         // which that script exports, not this entry.
-        if (typeof entry?.class_name === "string" && entry.class_name.length > 0 && entry.script_name === undefined) {
-            declared.push({ className: entry.class_name, label: "workflows" });
+        if (typeof workflow?.class_name === "string" && workflow.class_name.length > 0 && workflow.script_name === undefined) {
+            declared.push({ className: workflow.class_name, label: "workflows" });
         }
     }
 
-    const missing = declared.filter((entry) => !exported.has(entry.className));
+    const missing = declared.filter((candidate) => !exported.has(candidate.className));
 
     // The remedy names both wirings, because the blocked user is on one of two
     // paths and the wrong instruction is worse than none: a hand-written entry
     // re-exports the class, while the generated app builder hands it back on
     // `app` and the entry destructures it.
     return missing.map(
-        (entry) =>
-            `${entry.label} declares class "${entry.className}" but the worker entry (${entryPath}) does not export it — ` +
+        (missed) =>
+            `${missed.label} declares class "${missed.className}" but the worker entry (${entry.path}) does not export it — ` +
             `wrangler refuses to bundle a Worker whose Durable Object classes are not exported. ` +
-            `Re-export it from the module that defines it (\`export { ${entry.className} } from "./…";\`), ` +
-            `or add it to the app builder's own export (\`export const { ${entry.className} } = app;\`).`,
+            `Re-export it from the module that defines it (\`export { ${missed.className} } from "./…";\`), ` +
+            `or add it to the app builder's own export (\`export const { ${missed.className} } = app;\`).`,
     );
 };
 
@@ -1924,11 +1656,20 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // rather than a warning because `collectValueExports` reports nothing unless
     // it is certain, so what reaches here is a fact, and a warning meant `verify`
     // exited 0 on a tree `lunora build` rejects.
-    report.errors.push(
-        ...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath),
-        ...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath),
-        ...collectUnchainedVectorsError(resolvedWrangler, schemaInfo?.vectorIndexNames ?? [], options.projectRoot, wranglerPath),
-    );
+    // Resolved, read and parsed ONCE for both entry-derived checks — each used to
+    // do its own, so a `lunora dev` restart paid for two full ts-morph parses of
+    // the same file. `undefined` means the entry cannot be decided, and both checks
+    // then report nothing.
+    const workerEntry = readWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
+
+    report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
+
+    if (workerEntry !== undefined) {
+        report.errors.push(
+            ...collectUnexportedClassErrors(resolvedWrangler, workerEntry),
+            ...collectUnchainedVectorsError(workerEntry, schemaInfo?.vectorIndexNames ?? [], options.projectRoot),
+        );
+    }
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*

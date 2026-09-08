@@ -936,7 +936,7 @@ describe("wrangler-validator", () => {
 
                 expect(result.report.valid).toBe(false);
                 expect(result.report.errors.join("\n")).toContain("docs-body");
-                expect(result.report.errors.join("\n")).toContain("never chains .vectors(...)");
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
             });
 
             it("passes once the chain binds them", () => {
@@ -948,7 +948,41 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.errors.filter((error) => error.includes("never chains"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("says nothing when a neighbouring module chains it — the builder returns `this`", () => {
+                expect.assertions(1);
+
+                // `configureVectors(app)` in a sibling file is a supported wiring.
+                // A check that only read the entry would hard-error a correct tree
+                // and tell the author to add a call they had already written.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\nimport { configureVectors } from "./vectors";\n\nconst app = configureVectors(defineApp().shard((env) => env.SHARD));\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+                writeFileSync(
+                    join(workdir, "src", "vectors.ts"),
+                    `export const configureVectors = (app) => app.vectors((env) => ({ "docs-body": env.DOCS_BODY }));\n`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("still fires when the entry imports defineApp under an alias", () => {
+                expect.assertions(1);
+
+                // Matching the callee TEXT alone turned the whole check into a
+                // silent no-op for anyone using an ordinary aliased import.
+                writeVectorProject(
+                    `import { defineApp as createApp } from "../lunora/_generated/app";\n\nconst app = createApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
             });
 
             it("says nothing about an entry that does not compose the app itself", () => {
@@ -960,7 +994,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.errors.filter((error) => error.includes("never chains"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
             });
         });
 
