@@ -16,6 +16,14 @@ export const schema = defineSchema({
 });
 `;
 
+const SCHEMA_HYPERDRIVE_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+    users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
+});
+`;
+
 const SCHEMA_NO_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
@@ -109,6 +117,22 @@ describe("inferLunoraBindings", () => {
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
         write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.needsD1).toBe(false);
+    });
+
+    it("does not infer D1 for a Hyperdrive-backed .global() table", async () => {
+        expect.assertions(1);
+
+        // `.global({ backend: "hyperdrive" })` lives on Postgres/MySQL behind the
+        // HYPERDRIVE binding and touches no D1 database. Reading "declares a global
+        // table" as "needs D1" provisioned a database the app never opens, and the
+        // wrangler validator then demanded a `DB` binding of a project with none.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_HYPERDRIVE_GLOBAL);
 
         const result = await inferLunoraBindings({ projectRoot: root });
 

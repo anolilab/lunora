@@ -8,7 +8,7 @@
  * that provisions itself; neither needs a D1 migration.
  */
 import type { FieldSnapshot, SchemaIR, ValidatorIR } from "@lunora/codegen";
-import { buildSchemaSnapshot } from "@lunora/codegen";
+import { buildSchemaSnapshot, isD1GlobalTable } from "@lunora/codegen";
 
 import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff";
 import { validatorKindToSqlType } from "./migration-diff";
@@ -59,7 +59,7 @@ const isNullable = (validator: ValidatorIR, field: FieldSnapshot | undefined): b
  * `@lunora/d1/dialect` directly), so the honest answer is to leave those tables
  * out of the snapshot entirely.
  */
-const isGlobal = (table: SchemaIR["tables"][number]): boolean => table.shardMode === "global" && table.globalBackend !== "hyperdrive";
+const isGlobal = isD1GlobalTable;
 
 const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};

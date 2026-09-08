@@ -760,7 +760,8 @@ const detectClassExports = <Definition extends ClassExportable>(
  * validator read the exact same fact. A missing or unparseable schema yields
  * `false` — codegen surfaces the actionable error elsewhere.
  */
-const schemaNeedsD1 = (projectRoot: string, schemaDirectory: string): boolean => discoverSchemaInfo(projectRoot, schemaDirectory).info?.hasGlobalTable ?? false;
+const schemaNeedsD1 = (projectRoot: string, schemaDirectory: string): boolean =>
+    discoverSchemaInfo(projectRoot, schemaDirectory).info?.hasD1GlobalTable ?? false;
 
 /** Union the capabilities imported across every scanned source file. */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>): Capabilities => {

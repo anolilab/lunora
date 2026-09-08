@@ -168,7 +168,7 @@ describe("wrangler-validator", () => {
                 vectorize: [null],
             } as unknown as WranglerConfig;
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             // The null entry is skipped; the declared index is simply unmatched.
             expect(report.valid).toBe(false);
@@ -218,7 +218,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             } as unknown as WranglerConfig;
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true, vectorIndexNames: [] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false, vectorIndexNames: [] });
 
             // The null entry is skipped; the missing "DB" binding is reported structurally.
             expect(report.valid).toBe(false);
@@ -396,7 +396,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false });
 
             expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
         });
@@ -410,7 +410,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             expect(report.valid).toBe(false);
             expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
@@ -427,7 +427,7 @@ describe("wrangler-validator", () => {
                 vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             expect(report.valid).toBe(true);
             expect(report.errors).toEqual([]);
@@ -570,7 +570,7 @@ describe("wrangler-validator", () => {
 
             wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production");
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production");
 
             expect(report.valid).toBe(false);
             expect(report.errors.some((line) => line.includes('d1_databases must include a binding named "DB"'))).toBe(true);
@@ -588,7 +588,7 @@ describe("wrangler-validator", () => {
                 },
             };
 
-            expect(validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production").valid).toBe(true);
+            expect(validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production").valid).toBe(true);
         });
 
         // kv_namespaces — NON-inheritable, hint-only (warns on a missing id,
@@ -1045,6 +1045,28 @@ describe("wrangler-validator", () => {
                 expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
             });
 
+            it("still fires when only a comment or a string mentions the chain", () => {
+                expect.assertions(1);
+
+                // The file that chains `.vectors()` is the likeliest one to carry a
+                // comment saying so, so "delete the call, keep the warning about
+                // deleting the call" is the realistic path back to the outage — and
+                // a substring match cleared the gate on exactly that tree.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n` +
+                        `\n` +
+                        `// Load-bearing: without .vectors((env) => ({ "docs-body": env.DOCS_BODY }))\n` +
+                        `// every request 500s.\n` +
+                        `const hint = "add .vectors(...) to the chain";\n` +
+                        `const app = defineApp().shard((env) => env.SHARD);\n` +
+                        `export const { ShardDO } = app;\nexport default app;\nexport { hint };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
             it("says nothing when the chain lives in a .server directory or a .mjs module", () => {
                 expect.assertions(2);
 
@@ -1067,6 +1089,244 @@ describe("wrangler-validator", () => {
 
                     expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
                 }
+            });
+
+            it("says nothing when whitespace separates the chain from its parentheses", () => {
+                expect.assertions(1);
+
+                // The text prefilter only decides which files are worth parsing;
+                // the parse decides the answer. An exact `.vectors(` substring made
+                // the prefilter STRICTER than the parser, so a formatting variant
+                // skipped the file and hard-errored a correctly wired project.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n` +
+                        `\n` +
+                        `const app = defineApp()\n    .shard((env) => env.SHARD)\n    . vectors ((env) => ({ "docs-body": env.DOCS_BODY }));\n` +
+                        `export const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+        });
+
+        describe("a schema with .global() tables no source chains .global() onto", () => {
+            // Without the chain the shard gets no D1 writer, so every read or write
+            // of a global table throws INTERNAL — `lunora build`, `verify` and tsc
+            // all pass first. The wrangler check next to this one proves the `DB`
+            // BINDING exists, which is the half a project usually gets right.
+            const writeGlobalProject = (entry: string): void => {
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+            };
+
+            it("errors — and the schema's own `defineTable(...).global()` does not clear it", () => {
+                expect.assertions(2);
+
+                // `.global()` names two builders. The table form is what MAKES the
+                // schema declare a global table, so it is present in every project
+                // this check can fire on — matching it would mean the check never
+                // fires at all.
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.report.errors.join("\n")).toContain("nothing chains .global(...)");
+            });
+
+            it("passes once the app chains it", () => {
+                expect.assertions(1);
+
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).global({ d1: (env) => env.DB });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("still errors when the table builder is imported under an alias", () => {
+                expect.assertions(1);
+
+                // The table-form exclusion reads the file's LOCAL names for
+                // `defineTable`, the same way the `defineApp` probe does. Keying
+                // it on the bare identifier let `import { defineTable as table }`
+                // hide the table form, so `table({...}).global()` counted as the
+                // APP chaining `.global(...)` and the gate cleared on the schema
+                // itself — silence for a shard with no global writer.
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+                writeSchema(
+                    `import { defineSchema, defineTable as table, v } from "@lunora/server";\n\nexport const schema = defineSchema({\n    users: table({ email: v.string() }).global(),\n});\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .global(...)");
+            });
+        });
+
+        describe("a schema whose .global() tables are Hyperdrive-backed", () => {
+            // `.global({ backend: "hyperdrive" })` lives on Postgres/MySQL behind a
+            // Hyperdrive binding: no D1 database, and a DIFFERENT builder method.
+            // Reading "declares a global table" as "needs D1" demanded a `DB`
+            // binding of a project that has none.
+            const HYPERDRIVE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global({ backend: "hyperdrive" }),
+});
+`;
+
+            const writeHyperdriveProject = (entry: string, { binding = true }: { binding?: boolean } = {}): void => {
+                writeSchema(HYPERDRIVE_SCHEMA);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]${binding ? ',\n    "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "hd_123" }]' : ""}
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+            };
+
+            it("demands the .hyperdriveGlobal(...) chain, not a D1 binding or .global(...)", () => {
+                expect.assertions(5);
+
+                writeHyperdriveProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+                const errors = result.report.errors.join("\n");
+
+                expect(errors).toContain("nothing chains .hyperdriveGlobal(...)");
+                expect(errors).not.toContain('d1_databases must include a binding named "DB"');
+                expect(errors).not.toContain("nothing chains .global(...)");
+                // The suggested fix has to match `HyperdriveGlobalDeclaration`
+                // (`engine` + `exec`). The D1 line's `d1: (env) => env.DB` shape
+                // does not exist on this builder, and a blocking error whose fix
+                // does not compile costs the round trip it exists to save.
+                expect(errors).toContain('.hyperdriveGlobal({ engine: "postgres", exec:');
+                expect(errors).not.toContain("hyperdrive: (env) => env.HYPERDRIVE");
+            });
+
+            it("passes once the app chains .hyperdriveGlobal(...)", () => {
+                expect.assertions(1);
+
+                writeHyperdriveProject(
+                    // The real `HyperdriveGlobalDeclaration` shape (`engine` +
+                    // `exec`), not a `hyperdrive:` selector — detection only
+                    // reads the method name, so a wrong fixture would pass while
+                    // pinning a remediation string that does not compile.
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(env.HYPERDRIVE) });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("demands SOME hyperdrive binding, without naming which", () => {
+                expect.assertions(3);
+
+                // Dropping the `DB` demand for these tables left them with no
+                // wrangler-level check at all: the chain is present, every gate
+                // passes, and `env.<BINDING>` is `undefined` at the first global
+                // read — inside the user's own `exec`, where nothing here can say
+                // what went wrong.
+                //
+                // Unlike D1 the name is not fixed: `.hyperdriveGlobal({ exec })`
+                // builds the driver from the user's selector, so naming one would
+                // false-error a project that called its binding something else.
+                const CHAIN = `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(env.PG) });\nexport const { ShardDO } = app;\nexport default app;\n`;
+
+                writeHyperdriveProject(CHAIN, { binding: false });
+
+                const missing = validateWranglerProject({ projectRoot: workdir });
+
+                expect(missing.report.valid).toBe(false);
+                expect(missing.report.errors.join("\n")).toContain("wrangler must declare a hyperdrive binding");
+
+                // A differently-named binding satisfies it; only absence is the defect.
+                writeHyperdriveProject(CHAIN);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "hyperdrive": [{ "binding": "PG", "id": "hd_123" }]
+}
+`,
+                    "utf8",
+                );
+
+                const named = validateWranglerProject({ projectRoot: workdir });
+
+                expect(named.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
+            });
+
+            it("says nothing about a hyperdrive binding for a D1-backed global schema", () => {
+                expect.assertions(1);
+
+                // The mirror of the D1 check's own scoping: a `.global()` table on
+                // D1 needs no Hyperdrive binding, and demanding one would block the
+                // common case.
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(
+                    join(workdir, "src", "index.ts"),
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).global({ d1: (env) => env.DB });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
             });
         });
 
@@ -2276,7 +2536,7 @@ describe("wrangler-validator", () => {
                     r2_buckets: [{ binding: "FILES", bucket_name: "lunora-example-team-chat-files" }],
                     vars: { PUBLIC_STORAGE_BASE_URL: "http://localhost:5173" },
                 },
-                { hasGlobalTable: true },
+                { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false },
             );
 
             expect(report.errors).toEqual([]);

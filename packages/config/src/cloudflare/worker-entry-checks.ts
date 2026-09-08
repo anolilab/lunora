@@ -6,10 +6,10 @@
  * which Durable Object / Workflow classes it exports — since wrangler binds
  * exactly what that file exports.
  *
- * {@link findUnchainedVectorsSite} answers the question the entry is the wrong
- * place to ask: does anything in the project bind the vector indexes its schema
- * declares. That is a project-wide fact, and reading it off the entry silently
- * disabled the check for every Vite-first layout.
+ * {@link scanAppChains} answers the question the entry is the wrong place to ask:
+ * does anything in the project chain the builder call a schema declaration needs
+ * (`.vectors(...)`, `.global(...)`). That is a project-wide fact, and reading it
+ * off the entry silently disabled the check for every Vite-first layout.
  *
  * The checks that consume them stay next to the wrangler config types they also read.
  */
@@ -263,8 +263,8 @@ const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts"
  */
 const MAX_SCANNED_FILES = 2000;
 
-/** The literal a project's source must contain somewhere for the vector indexes to count as bound. */
-const VECTORS_CHAIN = ".vectors(";
+/** The generated schema's table builder. A `defineTable(...).global()` chain is the SCHEMA declaring a global table, not the app binding one. */
+const TABLE_FACTORY = "defineTable";
 
 /** The generated app-composition factory, whatever a file chose to call it locally. */
 const APP_FACTORY = "defineApp";
@@ -343,26 +343,123 @@ const callsAnyOf = (sourceFile: SourceFile, names: ReadonlySet<string>): boolean
 };
 
 /**
- * Whether this file CALLS the imported `defineApp` — parsed, not text-matched.
+ * The expression a member-call chain starts from: for
+ * `defineTable({…}).global().index(…)` that is the `defineTable({…})` call.
+ */
+const chainRoot = (node: Node): Node => {
+    let current = node;
+
+    while (TsNode.isCallExpression(current) || TsNode.isPropertyAccessExpression(current)) {
+        current = current.getExpression();
+    }
+
+    return current;
+};
+
+/**
+ * Whether the chain `node` belongs to is rooted at a `defineTable(...)` call.
  *
- * The precision is the point, because this is the half of the vectors check that
- * fails CLOSED: what it finds ARMS a deploy-blocking error. A substring match
- * armed it on Nuxt's unrelated `defineAppConfig`, on a doc comment naming
+ * `.global()` names two different builders — the app's (`.global({ d1 })`) and a
+ * table's (`defineTable({…}).global()`, which is what MAKES the schema declare a
+ * global table). Every project this check fires on therefore contains the table
+ * form, so without this the schema would clear the gate on itself.
+ *
+ * Takes the file's LOCAL names for the factory rather than the bare string, the
+ * same way {@link localNamesFor} feeds the `defineApp` probe: `import
+ * { defineTable as table }` would otherwise leave the chain unrecognised, and a
+ * table's own `.global()` would clear the app's gate.
+ */
+const rootsAtTableFactory = (node: Node, factoryNames: ReadonlySet<string>): boolean => {
+    const root = chainRoot(node);
+
+    return TsNode.isIdentifier(root) && factoryNames.has(root.getText());
+};
+
+/**
+ * A builder method a schema declaration can require the app to chain. Closed on
+ * purpose: {@link CHAIN_PREFILTERS} is keyed by it, so adding a capability
+ * without its prefilter is a compile error rather than a gate that never fires.
+ */
+type CapabilityMethod = "global" | "hyperdriveGlobal" | "vectors";
+
+/**
+ * `.<method>(` with whitespace allowed on either side of the name — the text
+ * prefilter deciding which files are worth a parse, deliberately LOOSER than the
+ * parsed check that follows it. An exact `.vectors(` substring made the prefilter
+ * stricter than the parser instead: the method never reached
+ * {@link chainedMethods}, so a formatting variant reported a correctly wired
+ * project as unchained and blocked its deploy.
+ *
+ * A fixed record rather than patterns built per method, so the key set is the
+ * type and a capability nobody wrote a prefilter for is a compile error, not a
+ * gate that silently never fires.
+ *
+ * Still narrower than the parser in one shape: `.global<T>({…})` skips the file
+ * and hard-errors a project that chains it. Unreachable today — no generated
+ * builder method takes type parameters — but that is the direction to widen if
+ * one ever does.
+ */
+const CHAIN_PREFILTERS: Record<CapabilityMethod, RegExp> = {
+    global: /\.\s*global\s*\(/u,
+    hyperdriveGlobal: /\.\s*hyperdriveGlobal\s*\(/u,
+    vectors: /\.\s*vectors\s*\(/u,
+};
+
+const isCapabilityMethod = (name: string): name is CapabilityMethod => Object.hasOwn(CHAIN_PREFILTERS, name);
+
+/** Which of `methods` the file CALLS as `.<method>(...)` — parsed, so a comment or a string naming one is not a call site. */
+const chainedMethods = (sourceFile: SourceFile, methods: ReadonlySet<CapabilityMethod>): Set<CapabilityMethod> => {
+    const found = new Set<CapabilityMethod>();
+    // The literal name UNION the file's local aliases: `localNamesFor` reads
+    // named imports only, and a file that reaches the factory some other way must
+    // not lose the un-aliased exclusion this guard has always made.
+    const tableFactoryNames = new Set([TABLE_FACTORY, ...localNamesFor(sourceFile, TABLE_FACTORY)]);
+
+    sourceFile.forEachDescendant((descendant) => {
+        if (!TsNode.isCallExpression(descendant)) {
+            return;
+        }
+
+        const callee = descendant.getExpression();
+
+        if (!TsNode.isPropertyAccessExpression(callee) || rootsAtTableFactory(callee, tableFactoryNames)) {
+            return;
+        }
+
+        const name = callee.getName();
+
+        if (isCapabilityMethod(name) && methods.has(name)) {
+            found.add(name);
+        }
+    });
+
+    return found;
+};
+
+/**
+ * What one file contributes: which of `methods` it chains, and whether it
+ * composes the app. An unreadable file contributes nothing.
+ *
+ * Both markers are PARSED rather than text-matched, for opposite reasons.
+ *
+ * `defineApp` ARMS the deploy-blocking error, so a substring is too coarse: it
+ * armed on Nuxt's unrelated `defineAppConfig`, on a doc comment naming
  * `defineApp()` (which two of this repo's own templates carry), and on a type-only
  * import — none of which a project can edit its way out of. Keying on the IMPORT
  * also means the generated `app.ts` that declares the factory cannot arm anything.
  *
- * The parse costs a `Project` per file, but only files whose text mentions the
- * factory at all are ever handed here, which in a real project is one or two.
+ * A chained method CLEARS it, and a substring was too coarse there too, in the way
+ * that matters most: the file that chains `.vectors()` is the likeliest file to
+ * also carry a comment saying the chain is load-bearing, so deleting the call and
+ * keeping the warning about deleting it disarmed the check — precisely the path
+ * back to the outage it exists to prevent.
+ *
+ * A parse costs a `Project` per file, but only files whose text mentions a marker
+ * at all get one, which in a real project is one or two. A file that mentions a
+ * chain and does not parse counts as chaining it: unparseable is not evidence the
+ * call is gone, and this half fails open.
  */
-const composesApp = (file: string, source: string): boolean => {
-    const sourceFile = parseSource(basename(file), source);
-
-    return sourceFile !== undefined && callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY));
-};
-
-/** What one file contributes: it `binds` the vector indexes, `composes` the app, or neither. An unreadable file contributes nothing. */
-const readMarker = (file: string): "binds" | "composes" | undefined => {
+const readMarkers = (file: string, methods: ReadonlySet<CapabilityMethod>): { chained: Set<CapabilityMethod>; composes: boolean } | undefined => {
     let source: string;
 
     try {
@@ -371,16 +468,30 @@ const readMarker = (file: string): "binds" | "composes" | undefined => {
         return undefined;
     }
 
-    if (source.includes(VECTORS_CHAIN)) {
-        return "binds";
+    const mentioned = new Set([...methods].filter((method) => CHAIN_PREFILTERS[method].test(source)));
+
+    if (mentioned.size === 0 && !source.includes(APP_FACTORY)) {
+        return undefined;
     }
 
-    return source.includes(APP_FACTORY) && composesApp(file, source) ? "composes" : undefined;
+    const sourceFile = parseSource(basename(file), source);
+
+    if (sourceFile === undefined) {
+        return { chained: mentioned, composes: false };
+    }
+
+    return { chained: chainedMethods(sourceFile, mentioned), composes: callsAnyOf(sourceFile, localNamesFor(sourceFile, APP_FACTORY)) };
 };
 
+/** Where the app is composed, and which of the requested builder methods the project chains anywhere. */
+interface ChainScan {
+    chained: ReadonlySet<CapabilityMethod>;
+    site: string;
+}
+
 /**
- * The file composing this project's app, when nothing in the project chains
- * `.vectors(...)` — otherwise `undefined`, meaning "nothing to report".
+ * Scan the project for the builder methods a schema declaration requires the app
+ * to chain. `undefined` means "nothing to report".
  *
  * Read from the whole project rather than from the worker entry, and that is the
  * whole point in both directions. The builder returns `this`, so
@@ -392,19 +503,44 @@ const readMarker = (file: string): "binds" | "composes" | undefined => {
  * read as "composes nothing" from the entry alone, which turned this check off for
  * exactly the Vite-first projects it exists to protect.
  *
- * The two markers are deliberately asymmetric, because the caller BLOCKS a deploy.
- * `.vectors(` CLEARS the check and is a literal text match, so a comment mentioning
- * it clears too — a false negative that leaves the app exactly where it was before
- * this check existed, which is the trade a blocking gate should take. `defineApp`
- * ARMS it, so it is a parsed call ({@link composesApp}); a worker composed in
- * another package leaves no call here and is not judged.
+ * Both markers are parsed calls ({@link readMarkers}) — a comment or a string
+ * naming either one decides nothing. A worker composed in another package leaves
+ * no `defineApp` call here and is not judged.
  *
  * Both give-up routes — the file budget and an unparseable file — report nothing.
+ *
+ * Stops as soon as the answer is settled — the app is composed and every requested
+ * method is chained. Nothing read later can change it (`site` keeps the FIRST
+ * composing file, `chained` only grows), and a correctly wired project is the
+ * common case, so without this every `verify` / `doctor` / `build` / `deploy` read
+ * and scanned the whole tree to reach a conclusion it already had.
  */
-const findUnchainedVectorsSite = (projectRoot: string): string | undefined => {
+const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMethod>): ChainScan | undefined => {
     const pending: string[] = [projectRoot];
+    const chained = new Set<CapabilityMethod>();
     let scanned = 0;
     let site: string | undefined;
+
+    /** Fold one file into the running answer; `false` means the budget is spent. */
+    const take = (file: string): boolean => {
+        scanned += 1;
+
+        if (scanned > MAX_SCANNED_FILES) {
+            return false;
+        }
+
+        const markers = readMarkers(file, methods);
+
+        for (const method of markers?.chained ?? []) {
+            chained.add(method);
+        }
+
+        if (markers?.composes) {
+            site ??= file;
+        }
+
+        return true;
+    };
 
     while (pending.length > 0) {
         const directory = pending.pop() as string;
@@ -413,26 +549,18 @@ const findUnchainedVectorsSite = (projectRoot: string): string | undefined => {
         pending.push(...subdirectories);
 
         for (const file of files) {
-            scanned += 1;
-
-            if (scanned > MAX_SCANNED_FILES) {
+            if (!take(file)) {
                 return undefined;
             }
 
-            const marker = readMarker(file);
-
-            if (marker === "binds") {
-                return undefined;
-            }
-
-            if (marker === "composes") {
-                site ??= file;
+            if (site !== undefined && chained.size === methods.size) {
+                return { chained, site };
             }
         }
     }
 
-    return site;
+    return site === undefined ? undefined : { chained, site };
 };
 
-export type { WorkerEntry };
-export { findUnchainedVectorsSite, readWorkerEntry };
+export type { CapabilityMethod, WorkerEntry };
+export { readWorkerEntry, scanAppChains };

@@ -1323,6 +1323,18 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
 ```
 
+### `isD1GlobalTable` (const)
+
+```ts
+const isD1GlobalTable: (table: TableIR) => boolean;
+```
+
+### `isHyperdriveGlobalTable` (const)
+
+```ts
+const isHyperdriveGlobalTable: (table: TableIR) => boolean;
+```
+
 ### `isTypedSchema` (const)
 
 ```ts

@@ -19,6 +19,7 @@ import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/sch
 import type { CapabilityKey, CapabilityTier } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
     ContainerIR,
@@ -4506,8 +4507,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // to D1; `.global({ backend: "hyperdrive" })` routes it to a Postgres/MySQL
     // database via Hyperdrive. Both stay reactive — the writer is injected as
     // `globalDb` and the broadcast hook drives live queries.
-    const hasHyperdriveGlobal = schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive");
-    const hasD1Global = schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive");
+    const hasHyperdriveGlobal = schema.tables.some((table) => isHyperdriveGlobalTable(table));
+    const hasD1Global = schema.tables.some((table) => isD1GlobalTable(table));
     // External-source ingest (plan 077): `.source(...)` tables are materialized from
     // Hyperdrive into this DO's SQLite by the poll alarm. Everything below is gated on
     // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
