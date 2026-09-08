@@ -1,3 +1,15 @@
+## @lunora/server [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.111...@lunora/server@1.0.0-alpha.112) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.62
+* **@lunora/observability:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/server [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.110...@lunora/server@1.0.0-alpha.111) (2026-09-08)
 
 

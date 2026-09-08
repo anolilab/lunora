@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.111",
+    "version": "1.0.0-alpha.112",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -82,14 +82,14 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.35",
-        "@lunora/scheduler": "1.0.0-alpha.61",
+        "@lunora/scheduler": "1.0.0-alpha.62",
         "@lunora/values": "1.0.0-alpha.43",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/observability": "1.0.0-alpha.64",
+        "@lunora/observability": "1.0.0-alpha.65",
         "@lunora/search-core": "workspace:*",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
