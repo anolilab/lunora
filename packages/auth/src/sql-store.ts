@@ -11,8 +11,14 @@ interface SqlFragment {
 /** The framework column `defineTable` puts on every Lunora table, and better-auth knows nothing about. */
 const CREATION_TIME_COLUMN = "_creationTime";
 
-/** {@link CREATION_TIME_COLUMN} in a `CREATE TABLE` statement, whatever quoting the dialect emitted it with. */
-const CREATION_TIME_DDL = /(?<![$\w])_creationTime(?![$\w])/u;
+/**
+ * "This table has no such column", in the wording of every engine a
+ * {@link SqlExecutor} can front: SQLite/D1 say `no such column: x` (D1 keeps the
+ * message and prefixes its own code), Postgres says `column "x" does not exist`.
+ * Deliberately NOT matching a bare `does not exist`, which is also how Postgres
+ * reports a missing TABLE — a different answer, and one that must not be cached.
+ */
+const MISSING_COLUMN = /no such column|column .{0,64}? does not exist/iu;
 
 /** A fragment that never matches — mirrors the in-memory evaluator returning `false`. */
 const NEVER: SqlFragment = { params: [], sql: "0" };
@@ -208,42 +214,46 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         return executor.all(`SELECT * FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
     };
 
-    // better-auth builds an INSERT from its OWN column list, so it can never
-    // supply `_creationTime` — the `REAL NOT NULL` framework column `defineTable`
-    // puts on every Lunora table. Every insert into a `defineTable`-backed auth
-    // table then breaches that constraint, and because better-auth's durable rate
-    // limiter writes a row before every handler, the first request of a session
-    // 500s whatever it asked for: the whole of `/api/auth/*` is down while the
-    // tables sit at zero rows. A read does not reveal it — its rate-limit row
-    // already exists, so that write is an UPDATE.
+    // Answers per table, because both provenances exist on one database: a
+    // `defineTable` table carries `_creationTime` (`frameworkColumnDdl` in
+    // `@lunora/d1`), while tables better-auth's own migrator created do not, and
+    // writing the column into those fails every insert the other way.
     //
-    // Filled in per table rather than unconditionally: `lunoraDoAdapter`'s tables
-    // come from better-auth's own resolved schema (`./do-schema.ts`) and have no
-    // such column, and inventing one there would fail every insert the other way.
-    const creationTimeProbes = new Map<string, Promise<boolean>>();
+    // A zero-row SELECT rather than a `sqlite_master` DDL match, because the DDL
+    // TEXT is not the column list — `CHECK (kind <> '_creationTime')` matches a
+    // substring test on a table with no such column. SQLite resolves column names
+    // when it prepares the statement, so `LIMIT 0` costs nothing and answers
+    // exactly. Not `pragma_table_info(?)`: D1's authorizer refuses pragma
+    // table-valued functions through the Worker binding (see
+    // `./d1-index-introspection.ts`).
+    const creationTimeColumns = new Map<string, boolean>();
 
-    const hasCreationTimeColumn = (model: string): Promise<boolean> => {
-        let probe = creationTimeProbes.get(model);
+    const hasCreationTimeColumn = async (model: string): Promise<boolean> => {
+        const known = creationTimeColumns.get(model);
 
-        if (probe === undefined) {
-            // `sqlite_master` is what the rest of this package introspects through
-            // (`./migrate.ts`, `./auth-do.ts`, `./d1-index-introspection.ts`), and
-            // its `CREATE TABLE` text answers this outright. A backend that cannot
-            // serve the read keeps the previous behaviour rather than failing the
-            // write.
-            probe = executor
-                .all("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", [model])
-                .then((rows) => {
-                    const ddl = rows[0]?.["sql"];
-
-                    return typeof ddl === "string" && CREATION_TIME_DDL.test(ddl);
-                })
-                .catch(() => false);
-
-            creationTimeProbes.set(model, probe);
+        if (known !== undefined) {
+            return known;
         }
 
-        return probe;
+        try {
+            await executor.all(`SELECT ${quoteId(CREATION_TIME_COLUMN)} FROM ${quoteId(model)} LIMIT 0`, []);
+        } catch (error) {
+            // Only "no such column" is an ANSWER. A missing table (not migrated
+            // yet) or a transient backend error is not, and caching it would pin
+            // the store to `false` for the isolate's life — which is precisely the
+            // state that takes `/api/auth/*` down, one memoised failure at a time.
+            if (!MISSING_COLUMN.test(error instanceof Error ? error.message : String(error))) {
+                return false;
+            }
+
+            creationTimeColumns.set(model, false);
+
+            return false;
+        }
+
+        creationTimeColumns.set(model, true);
+
+        return true;
     };
 
     return {
@@ -271,6 +281,12 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
             return Number(row?.["__count"] ?? 0);
         },
         create: async (model, data) => {
+            // better-auth builds the INSERT from its own column list, so it can
+            // never supply `_creationTime` and every insert into a
+            // `defineTable`-backed table breached `NOT NULL`. Its durable rate
+            // limiter writes a row before every handler, so that took the whole of
+            // `/api/auth/*` down, not just sign-up.
+            //
             // Spread `data` last so a caller that supplied its own `_creationTime` wins.
             const row: AuthRow = CREATION_TIME_COLUMN in data || !(await hasCreationTimeColumn(model)) ? data : { [CREATION_TIME_COLUMN]: Date.now(), ...data };
             const columns = Object.keys(row);

@@ -514,6 +514,48 @@ describe("createSqlAuthStore — `_creationTime` on `defineTable`-backed tables"
         }
     });
 
+    it("does not mistake a CHECK expression that merely names the column for the column", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // The DDL TEXT contains `_creationTime`; the table does not have the
+            // column. A substring test over `sqlite_master.sql` says yes here and
+            // the insert then dies with `table has no column named _creationTime`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "kind" TEXT CHECK ("kind" <> '_creationTime'))`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { id: "r1", kind: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not memoise a probe that failed, so a table created later is still seen", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            const store = createSqlAuthStore(executorFor(db));
+
+            // The table does not exist yet — `ensureMigrated` has not run. Caching
+            // that "answer" would pin the store to "no `_creationTime`" for the
+            // isolate's life, which is the outage this fill-in exists to prevent.
+            await expect(store.create("rateLimit", { id: "r0", key: "k" })).rejects.toThrow(/no such table/iu);
+
+            createLunoraTable(db);
+
+            await store.create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
     it("does not invent the column on a table that has none — better-auth's own migrator makes those", async () => {
         expect.assertions(1);
 
