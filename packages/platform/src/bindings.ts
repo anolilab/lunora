@@ -243,17 +243,16 @@ export type KvNamespaceListResult<Metadata = unknown> =
  * Mirrors the surface documented at
  * https://developers.cloudflare.com/vectorize/reference/client-api/.
  *
- * Declared with **method** syntax, not arrow properties, and that is the whole
- * point of the eslint exemption: `ReadonlyArray` is the correct parameter type
- * here — it is the wider one — but under `strictFunctionTypes` an arrow property
- * makes parameters strictly contravariant, and Cloudflare's own `Vectorize`
- * declares `deleteByIds(ids: string[])`. So the real binding did not satisfy the
- * framework's own interface for it, and every app wiring one needed a cast.
- * Method syntax is checked bivariantly, which admits both the binding and a
- * `readonly`-clean double. `__tests__/vectors/binding-assignability.test-d.ts`
- * in `@lunora/bindings` pins it against the published types.
+ * **Method** syntax, not arrow properties: `ReadonlyArray` is the correct (wider)
+ * parameter type, but an arrow property makes parameters strictly contravariant
+ * under `strictFunctionTypes`, and Cloudflare declares `deleteByIds(ids: string[])`
+ * — so the real binding did not satisfy this interface at all. Methods are checked
+ * bivariantly, which admits both it and a `readonly`-clean double.
+ * `binding-assignability.test-d.ts` in `@lunora/bindings` pins that against the
+ * published types. `this: void` keeps the members usable as bare references, which
+ * is what every `expect(double.query)` assertion in those tests does.
  */
-/* eslint-disable @typescript-eslint/method-signature-style -- bivariant params: Cloudflare's own `Vectorize` declares these with mutable arrays and must stay assignable */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (Cloudflare declares mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface VectorizeIndexLike {
     deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
     describe?(this: void): Promise<VectorizeIndexDetails>;
@@ -262,7 +261,7 @@ export interface VectorizeIndexLike {
     query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
     upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
-/* eslint-enable @typescript-eslint/method-signature-style */
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
 
 export type VectorMetric = "cosine" | "euclidean" | "dot-product";
 
