@@ -175,4 +175,40 @@ describe("checkWorkerEntry", () => {
 
         expect(warn).not.toHaveBeenCalled();
     });
+
+    it("warns when a STRING LITERAL — not the file — carries the star export", () => {
+        expect.assertions(1);
+
+        directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
+        // The star-export probe keeps string literals so it can read the
+        // specifier, which is exactly what lets a snippet held in a string pass
+        // for the wiring. A scaffolder that prints the line it wants the user to
+        // add exports no `ShardDO` itself.
+        writeFileSync(
+            join(directory, "worker.ts"),
+            `export const hint = 'add export * from "./lunora/server" to worker.ts';\nexport default { ...nitro, scheduled: (c, e, x) => app.scheduled(c, e, x) };\n`,
+        );
+
+        const warn = vi.fn<(message: string) => void>();
+
+        checkWorkerEntry(directory, warn);
+
+        expect(warn.mock.calls[0]?.[0]).toMatch(/does not appear to export `ShardDO`/u);
+    });
+
+    it("is silent when a real star export follows one quoted in a string (every match is considered, not just the first)", () => {
+        expect.assertions(1);
+
+        directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
+        writeFileSync(
+            join(directory, "worker.ts"),
+            `export const hint = 'add export * from "./lunora/server" to worker.ts';\nexport * from "./lunora/server";\nexport default { ...nitro, scheduled: (c, e, x) => app.scheduled(c, e, x) };\n`,
+        );
+
+        const warn = vi.fn<(message: string) => void>();
+
+        checkWorkerEntry(directory, warn);
+
+        expect(warn).not.toHaveBeenCalled();
+    });
 });

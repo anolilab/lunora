@@ -132,6 +132,34 @@ describe("schema info", () => {
             expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(true);
         });
 
+        it("separates a Hyperdrive-backed global from a D1-backed one — they need different bindings and different chains", () => {
+            expect.assertions(4);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
+    });
+    `);
+
+            const hyperdrive = discoverSchemaInfo(workdir, "lunora").info;
+
+            // No D1 database is involved, so demanding a `DB` binding (or the
+            // app's `.global({ d1 })` chain) would block a correctly wired project.
+            expect(hyperdrive?.hasD1GlobalTable).toBe(false);
+            expect(hyperdrive?.hasHyperdriveGlobalTable).toBe(true);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global(),
+    });
+    `);
+
+            const d1 = discoverSchemaInfo(workdir, "lunora").info;
+
+            expect(d1?.hasD1GlobalTable).toBe(true);
+            expect(d1?.hasHyperdriveGlobalTable).toBe(false);
+        });
+
         it("degrades to empty information on a schema it cannot make sense of, rather than throwing", () => {
             expect.assertions(3);
 

@@ -357,22 +357,63 @@ const chainRoot = (node: Node): Node => {
 };
 
 /**
- * Whether the chain `node` belongs to is rooted at `defineTable(...)`.
+ * Whether the chain `node` belongs to is rooted at a `defineTable(...)` call.
  *
  * `.global()` names two different builders — the app's (`.global({ d1 })`) and a
  * table's (`defineTable({…}).global()`, which is what MAKES the schema declare a
  * global table). Every project this check fires on therefore contains the table
  * form, so without this the schema would clear the gate on itself.
+ *
+ * Takes the file's LOCAL names for the factory rather than the bare string, the
+ * same way {@link localNamesFor} feeds the `defineApp` probe: `import
+ * { defineTable as table }` would otherwise leave the chain unrecognised, and a
+ * table's own `.global()` would clear the app's gate.
  */
-const rootsAtTableFactory = (node: Node): boolean => {
+const rootsAtTableFactory = (node: Node, factoryNames: ReadonlySet<string>): boolean => {
     const root = chainRoot(node);
 
-    return TsNode.isIdentifier(root) && root.getText() === TABLE_FACTORY;
+    return TsNode.isIdentifier(root) && factoryNames.has(root.getText());
 };
 
+/**
+ * A builder method a schema declaration can require the app to chain. Closed on
+ * purpose: {@link CHAIN_PREFILTERS} is keyed by it, so adding a capability
+ * without its prefilter is a compile error rather than a gate that never fires.
+ */
+type CapabilityMethod = "global" | "hyperdriveGlobal" | "vectors";
+
+/**
+ * `.<method>(` with whitespace allowed on either side of the name — the text
+ * prefilter deciding which files are worth a parse, deliberately LOOSER than the
+ * parsed check that follows it. An exact `.vectors(` substring made the prefilter
+ * stricter than the parser instead: the method never reached
+ * {@link chainedMethods}, so a formatting variant reported a correctly wired
+ * project as unchained and blocked its deploy.
+ *
+ * A fixed record rather than patterns built per method, so the key set is the
+ * type and a capability nobody wrote a prefilter for is a compile error, not a
+ * gate that silently never fires.
+ *
+ * Still narrower than the parser in one shape: `.global<T>({…})` skips the file
+ * and hard-errors a project that chains it. Unreachable today — no generated
+ * builder method takes type parameters — but that is the direction to widen if
+ * one ever does.
+ */
+const CHAIN_PREFILTERS: Record<CapabilityMethod, RegExp> = {
+    global: /\.\s*global\s*\(/u,
+    hyperdriveGlobal: /\.\s*hyperdriveGlobal\s*\(/u,
+    vectors: /\.\s*vectors\s*\(/u,
+};
+
+const isCapabilityMethod = (name: string): name is CapabilityMethod => Object.hasOwn(CHAIN_PREFILTERS, name);
+
 /** Which of `methods` the file CALLS as `.<method>(...)` — parsed, so a comment or a string naming one is not a call site. */
-const chainedMethods = (sourceFile: SourceFile, methods: ReadonlySet<string>): Set<string> => {
-    const found = new Set<string>();
+const chainedMethods = (sourceFile: SourceFile, methods: ReadonlySet<CapabilityMethod>): Set<CapabilityMethod> => {
+    const found = new Set<CapabilityMethod>();
+    // The literal name UNION the file's local aliases: `localNamesFor` reads
+    // named imports only, and a file that reaches the factory some other way must
+    // not lose the un-aliased exclusion this guard has always made.
+    const tableFactoryNames = new Set([TABLE_FACTORY, ...localNamesFor(sourceFile, TABLE_FACTORY)]);
 
     sourceFile.forEachDescendant((descendant) => {
         if (!TsNode.isCallExpression(descendant)) {
@@ -381,8 +422,14 @@ const chainedMethods = (sourceFile: SourceFile, methods: ReadonlySet<string>): S
 
         const callee = descendant.getExpression();
 
-        if (TsNode.isPropertyAccessExpression(callee) && methods.has(callee.getName()) && !rootsAtTableFactory(callee)) {
-            found.add(callee.getName());
+        if (!TsNode.isPropertyAccessExpression(callee) || rootsAtTableFactory(callee, tableFactoryNames)) {
+            return;
+        }
+
+        const name = callee.getName();
+
+        if (isCapabilityMethod(name) && methods.has(name)) {
+            found.add(name);
         }
     });
 
@@ -412,7 +459,7 @@ const chainedMethods = (sourceFile: SourceFile, methods: ReadonlySet<string>): S
  * chain and does not parse counts as chaining it: unparseable is not evidence the
  * call is gone, and this half fails open.
  */
-const readMarkers = (file: string, methods: ReadonlySet<string>): { chained: Set<string>; composes: boolean } | undefined => {
+const readMarkers = (file: string, methods: ReadonlySet<CapabilityMethod>): { chained: Set<CapabilityMethod>; composes: boolean } | undefined => {
     let source: string;
 
     try {
@@ -421,7 +468,7 @@ const readMarkers = (file: string, methods: ReadonlySet<string>): { chained: Set
         return undefined;
     }
 
-    const mentioned = new Set([...methods].filter((method) => source.includes(`.${method}(`)));
+    const mentioned = new Set([...methods].filter((method) => CHAIN_PREFILTERS[method].test(source)));
 
     if (mentioned.size === 0 && !source.includes(APP_FACTORY)) {
         return undefined;
@@ -438,7 +485,7 @@ const readMarkers = (file: string, methods: ReadonlySet<string>): { chained: Set
 
 /** Where the app is composed, and which of the requested builder methods the project chains anywhere. */
 interface ChainScan {
-    chained: ReadonlySet<string>;
+    chained: ReadonlySet<CapabilityMethod>;
     site: string;
 }
 
@@ -461,10 +508,16 @@ interface ChainScan {
  * no `defineApp` call here and is not judged.
  *
  * Both give-up routes — the file budget and an unparseable file — report nothing.
+ *
+ * Stops as soon as the answer is settled — the app is composed and every requested
+ * method is chained. Nothing read later can change it (`site` keeps the FIRST
+ * composing file, `chained` only grows), and a correctly wired project is the
+ * common case, so without this every `verify` / `doctor` / `build` / `deploy` read
+ * and scanned the whole tree to reach a conclusion it already had.
  */
-const scanAppChains = (projectRoot: string, methods: ReadonlySet<string>): ChainScan | undefined => {
+const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMethod>): ChainScan | undefined => {
     const pending: string[] = [projectRoot];
-    const chained = new Set<string>();
+    const chained = new Set<CapabilityMethod>();
     let scanned = 0;
     let site: string | undefined;
 
@@ -495,13 +548,19 @@ const scanAppChains = (projectRoot: string, methods: ReadonlySet<string>): Chain
 
         pending.push(...subdirectories);
 
-        if (!files.every((file) => take(file))) {
-            return undefined;
+        for (const file of files) {
+            if (!take(file)) {
+                return undefined;
+            }
+
+            if (site !== undefined && chained.size === methods.size) {
+                return { chained, site };
+            }
         }
     }
 
     return site === undefined ? undefined : { chained, site };
 };
 
-export type { ChainScan, WorkerEntry };
+export type { CapabilityMethod, WorkerEntry };
 export { readWorkerEntry, scanAppChains };

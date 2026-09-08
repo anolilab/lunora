@@ -94,6 +94,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
     ContainerIR,
@@ -932,9 +933,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
-        hasGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
+        hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
         hasHyperdrive: featureUsage.hyperdrive,
-        hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
+        hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
         hasImages: featureUsage.images,
         // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
         // config field is emitted on the usage signal — so this MUST stay

@@ -18,7 +18,7 @@ import { isEnvEnabled } from "../../../../shared/env-flag";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
-import type { WorkerEntry } from "./worker-entry-checks";
+import type { CapabilityMethod, WorkerEntry } from "./worker-entry-checks";
 import { readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -1518,7 +1518,15 @@ const collectContainerImageErrors = (
  * unexported-class check validates, which is why it lives here rather than in the
  * runtime.
  *
- * Blocking, so it fails open both ways — see {@link scanAppChains}, which reads the
+ * Blocking — and not only at deploy: `@lunora/vite`'s wrangler-validator plugin
+ * throws on any reported problem at `configResolved`, so this also refuses to
+ * start `lunora dev`. Vector indexes are rare, but `.global()` tables are the
+ * common case, and unlike the `DB` binding validated next to it, Lunora cannot
+ * write the `.global(...)` chain into the user's `src/server.ts` for them. That
+ * is the intended trade — the alternative is a dev server whose every global read
+ * throws INTERNAL — but it is why every give-up route below reports nothing.
+ *
+ * It fails open both ways — see {@link scanAppChains}, which reads the
  * PROJECT rather than the worker entry. Keying "does this project compose an app"
  * on the entry is what silently disabled the check for the two commonest Vite-first
  * layouts: `main: "virtual:lunora/worker"` names no file at all, and a generated
@@ -1526,43 +1534,47 @@ const collectContainerImageErrors = (
  */
 const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projectRoot: string): string[] => {
     const vectorIndexNames = schema?.vectorIndexNames ?? [];
-    const required = [
-        ...(vectorIndexNames.length > 0
-            ? [
-                  {
-                      message: (site: string): string =>
-                          `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
-                          `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
-                          `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
-                      method: "vectors",
-                  },
-              ]
-            : []),
-        ...(schema?.hasD1GlobalTable
-            ? [
-                  {
-                      message: (site: string): string =>
-                          `schema declares .global() table(s) but nothing chains .global(...) onto defineApp() (composed in: ${site}) — the shard then has no global writer, ` +
-                          `so every read or write of a global table throws INTERNAL ("requires a globalDb writer"). ` +
-                          `Add \`.global({ d1: (env) => env.DB })\` to the chain.`,
-                      method: "global",
-                  },
-              ]
-            : []),
-        // The Hyperdrive flavour of the same requirement: a different builder
-        // method, the same missing `globalDb` and the same INTERNAL throw.
-        ...(schema?.hasHyperdriveGlobalTable
-            ? [
-                  {
-                      message: (site: string): string =>
-                          `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
-                          `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
-                          `Add \`.hyperdriveGlobal({ hyperdrive: (env) => env.HYPERDRIVE })\` to the chain.`,
-                      method: "hyperdriveGlobal",
-                  },
-              ]
-            : []),
-    ];
+    const required: { message: (site: string) => string; method: CapabilityMethod }[] = [];
+
+    if (vectorIndexNames.length > 0) {
+        required.push({
+            message: (site) =>
+                `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
+                `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+                `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
+            method: "vectors",
+        });
+    }
+
+    if (schema?.hasD1GlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global() table(s) but nothing chains .global(...) onto defineApp() (composed in: ${site}) — the shard then has no global writer, ` +
+                `so every read or write of a global table throws INTERNAL ("requires a globalDb writer"). ` +
+                `Add \`.global({ d1: (env) => env.DB })\` to the chain.`,
+            method: "global",
+        });
+    }
+
+    // The Hyperdrive flavour of the same requirement: a different builder
+    // method, the same missing `globalDb` and the same INTERNAL throw.
+    //
+    // The remediation is the shape `HyperdriveGlobalDeclaration` actually takes
+    // (`@lunora/codegen`'s `emit-app.ts`): `engine` plus an `exec` built from the
+    // binding, NOT a `hyperdrive: (env) => env.HYPERDRIVE` selector like the D1
+    // line above. A blocking error whose suggested fix does not compile costs the
+    // user the same round trip the error was meant to save.
+    if (schema?.hasHyperdriveGlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
+                `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
+                `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(postgres(` +
+                `env.HYPERDRIVE.connectionString))) })\` to the chain ` +
+                `(\`buildPgExec\` from \`@lunora/hyperdrive/global\`, \`fromPostgresJs\` from \`@lunora/hyperdrive\`).`,
+            method: "hyperdriveGlobal",
+        });
+    }
 
     if (required.length === 0) {
         return [];

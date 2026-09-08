@@ -897,7 +897,8 @@ interface SchemaIndex {
 
 ```ts
 interface SchemaInfo {
-    hasGlobalTable: boolean;
+    hasD1GlobalTable: boolean;
+    hasHyperdriveGlobalTable: boolean;
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }

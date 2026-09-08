@@ -69,6 +69,7 @@ export {
 } from "./emit";
 export type { EmitAppOptions } from "./emit-app";
 export { emitApp } from "./emit-app";
+export { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 export type {
     AgentIR,
     AuthApiCallIR,

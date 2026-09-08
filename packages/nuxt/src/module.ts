@@ -165,8 +165,25 @@ const EXPORT_KEYWORD_PATTERN = /\bexport\b/u;
 /** Whether the source mentions the `ShardDO` identifier anywhere at all. */
 const SHARD_DO_IDENTIFIER_PATTERN = /\bShardDO\b/u;
 
-/** `export * from` a specifier containing "lunora" — re-exports everything (including `ShardDO`) from a barrel without naming it, the common case being `export * from "./lunora/server"`. */
-const LUNORA_STAR_EXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*lunora[^"']*["']/u;
+/** `export * from` a specifier containing "lunora" — re-exports everything (including `ShardDO`) from a barrel without naming it, the common case being `export * from "./lunora/server"`. Global: every match is checked for being real code, not just the first. */
+const LUNORA_STAR_EXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*lunora[^"']*["']/gu;
+
+/**
+ * Whether the entry really re-exports a lunora barrel wholesale.
+ *
+ * The probe has to read a SPECIFIER, so it runs over {@link withoutComments},
+ * which keeps string literals — and a string literal that happens to CONTAIN
+ * `export * from "@lunora/server"` (a docs snippet, a scaffolder template) would
+ * otherwise satisfy it and silence the warning for a worker that exports no
+ * `ShardDO` at all. {@link codeOnly} blanks in place, so offsets line up across
+ * both transforms and the raw source: a match whose first character survives
+ * `codeOnly` unchanged started outside any string.
+ */
+const starExportsLunoraBarrel = (source: string): boolean => {
+    const code = codeOnly(source);
+
+    return [...withoutComments(source).matchAll(LUNORA_STAR_EXPORT_PATTERN)].some(({ index }) => code[index] === source[index]);
+};
 
 /** Whether the entry mentions `scheduled` at all — the cron entrypoint a Nitro re-export silently swallows. */
 const SCHEDULED_IDENTIFIER_PATTERN = /\bscheduled\b/u;
@@ -192,7 +209,8 @@ const SCHEDULED_IDENTIFIER_PATTERN = /\bscheduled\b/u;
  * explaining that both lines are load-bearing — the template this module ships
  * with does, at length — and matching the comment left the warning silent for a
  * worker that had dropped the export. The star-export probe reads a SPECIFIER,
- * so it gets {@link withoutComments} instead: string literals must survive.
+ * so it needs string literals to survive — see {@link starExportsLunoraBarrel},
+ * which keeps them and then rejects a match that sits inside one.
  *
  * Remaining imprecision: false-POSITIVE on `export { ShardDO as Other }`
  * (renames `ShardDO` away, so the binding wrangler needs is actually named
@@ -207,7 +225,7 @@ const looksLikeShardDoExport = (source: string): boolean => {
         return false;
     }
 
-    return SHARD_DO_IDENTIFIER_PATTERN.test(code) || LUNORA_STAR_EXPORT_PATTERN.test(withoutComments(source));
+    return SHARD_DO_IDENTIFIER_PATTERN.test(code) || starExportsLunoraBarrel(source);
 };
 
 /**

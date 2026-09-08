@@ -11,8 +11,15 @@
  * Spans are replaced with spaces rather than deleted, so nothing that was
  * separated becomes adjacent, and line structure survives.
  *
- * Known ceiling: a template literal that BOTH interpolates and mentions the name
- * in its string part still reads as code. Narrowing that needs real parsing.
+ * Known ceilings. Narrowing either needs real parsing:
+ *
+ * - A template literal that BOTH interpolates and mentions the name in its
+ *   string part still reads as code, so a probe sees a marker that never runs —
+ *   the one direction that is SILENT, since a check clears on it.
+ * - A quote this scan cannot see as part of a literal opens a string match that
+ *   swallows real code up to the next quote: a regex literal (`/["']/u`), or JSX
+ *   text carrying an apostrophe. A probe then sees LESS than the file has, so a
+ *   check warns about wiring that is present — noisy, not silent.
  */
 
 /** `/* … *\/`, non-greedy so it ends at the FIRST `*\/`. */

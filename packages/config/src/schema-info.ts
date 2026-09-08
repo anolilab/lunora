@@ -7,7 +7,7 @@
  */
 import { existsSync } from "node:fs";
 
-import { discoverSchema } from "@lunora/codegen";
+import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
 import join from "./path";
@@ -35,8 +35,8 @@ interface SchemaInfo {
      * here demanded a D1 database of a project that has none.
      */
     hasD1GlobalTable: boolean;
-    /** Whether the schema declares a `.global({ backend: "hyperdrive" })` table — needs the app's `.hyperdriveGlobal(...)` chain instead. */
-    hasHyperdriveGlobalTable?: boolean;
+    /** Whether the schema declares a `.global({ backend: "hyperdrive" })` table — needs the app's `.hyperdriveGlobal(...)` chain instead. Required, not optional: the only producer always knows the answer, and `?` made every consumer read a two-valued fact as three-valued. */
+    hasHyperdriveGlobalTable: boolean;
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 
@@ -79,8 +79,8 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
 
         return {
             info: {
-                hasD1GlobalTable: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
-                hasHyperdriveGlobalTable: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
+                hasD1GlobalTable: schema.tables.some((table) => isD1GlobalTable(table)),
+                hasHyperdriveGlobalTable: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
                 vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
                 vectorMetadata: schema.vectorIndexes.flatMap((index) =>
                     (index.metadata ?? []).map((property) => {
