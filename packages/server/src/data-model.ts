@@ -402,10 +402,11 @@ export interface TableReaderFacade<
      * the read rather than as a wrong answer downstream. `findFirst` drops that
      * assertion; this is the ORM spelling of the fluent reader's `.unique()`.
      *
-     * `limit` is ignored: "at most one" is the request.
+     * `limit`/`cursor` are not accepted rather than silently ignored: paging a read
+     * that must match at most one row is the assertion being dropped again.
      */
     findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
-        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 

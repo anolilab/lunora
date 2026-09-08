@@ -3544,7 +3544,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
-    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: QueryArgsOf<DM, REL, T> & {
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
         select?: S;
         with?: W;
     }) => Promise<LoadWith<DM, REL, T, W, S> | null>;

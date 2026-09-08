@@ -227,15 +227,9 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         }
     };
 
-    // "Exactly one row" — the assertion `findFirst` drops. Reads one row past the
-    // one expected and refuses the ambiguity, which is how a broken uniqueness
-    // invariant surfaces AT the read instead of as a wrong answer downstream. The
-    // same semantics (and error code) the fluent reader's `.unique()` has had; this
-    // is its ORM-dialect spelling, so a call site does not have to change dialect to
-    // keep the guarantee.
-    //
-    // A caller-supplied `limit` is overridden on purpose: "at most one" is the whole
-    // request, and honouring `limit: 1` would silently drop the assertion again.
+    // "Exactly one row" — the assertion `findFirst` drops. The typed surface refuses
+    // `limit`/`cursor` (see `TableReaderFacade.findUnique`), so the over-fetch below
+    // is always the whole request.
     const findUnique = async (args?: unknown): Promise<unknown> => {
         const query = (args ?? {}) as Record<string, unknown>;
         const result = (await writer.findMany(tableName, { ...query, limit: 2 })) as { page: ReadonlyArray<Record<string, unknown>> };

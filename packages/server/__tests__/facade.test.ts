@@ -332,7 +332,7 @@ describe("bindTableFacade — upsert / upsertMany", () => {
 });
 
 describe("bindTableFacade — findUnique", () => {
-    it("reads one row past the expected one, whatever limit the caller passed", async () => {
+    it("reads exactly one row past the one expected, and overrides a limit that reached it untyped", async () => {
         expect.assertions(1);
 
         const { entry, findMany } = makeWriter();
