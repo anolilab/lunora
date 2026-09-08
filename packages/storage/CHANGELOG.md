@@ -1,3 +1,5 @@
+## @lunora/storage [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.57...@lunora/storage@1.0.0-alpha.58) (2026-09-08)
+
 ## @lunora/storage [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.56...@lunora/storage@1.0.0-alpha.57) (2026-09-08)
 
 ## @lunora/storage [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.55...@lunora/storage@1.0.0-alpha.56) (2026-09-07)

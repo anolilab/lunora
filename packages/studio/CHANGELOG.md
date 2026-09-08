@@ -1,3 +1,19 @@
+## @lunora/studio [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.166...@lunora/studio@1.0.0-alpha.167) (2026-09-08)
+
+### Code Refactoring
+
+* **studio:** port the data browser grid to TanStack Table v9 ([#660](https://github.com/anolilab/lunora/issues/660)) ([95caae0](https://github.com/anolilab/lunora/commit/95caae06f049aab7d3efc8cab276b03da9bdb2ba))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.118
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/react:** upgraded to 1.0.0-alpha.96
+* **@lunora/mail:** upgraded to 1.0.0-alpha.70
+* **@lunora/notify:** upgraded to 1.0.0-alpha.45
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/studio [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.165...@lunora/studio@1.0.0-alpha.166) (2026-09-08)
 
 
