@@ -1,3 +1,19 @@
+## @lunora/codegen [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.172...@lunora/codegen@1.0.0-alpha.173) (2026-09-08)
+
+### Bug Fixes
+
+* **codegen:** report when the procedure type check cannot run ([#676](https://github.com/anolilab/lunora/issues/676)) ([6bce184](https://github.com/anolilab/lunora/commit/6bce1840182be677f190e13fc5d95b88d42a25c4))
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.122
+* **@lunora/agent:** upgraded to 1.0.0-alpha.102
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.65
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/codegen [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.171...@lunora/codegen@1.0.0-alpha.172) (2026-09-08)
 
 
