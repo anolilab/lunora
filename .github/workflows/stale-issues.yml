@@ -4,11 +4,17 @@
     "schedule":
         - "cron": "0 0 * * *"
 
-"permissions":
-    "contents": "read"
+# Mirrors what stale-issues.yml declares at the pinned SHA — each of its four jobs
+# (default/invalid/duplicate/wontfix) asks for both write scopes. With only
+# `contents: read` every run was rejected before it started (startup_failure).
+"permissions": {}
 
 "jobs":
     "stale-issues":
+        "permissions":
+            "contents": "read"
+            "issues": "write" # to label and close idle issues
+            "pull-requests": "write" # same, for idle pull requests
         "uses": "anolilab/workflows/.github/workflows/stale-issues.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
         "with":
             "target-repo": "anolilab/lunora"

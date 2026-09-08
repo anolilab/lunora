@@ -10,11 +10,16 @@
             - "alpha"
             - "beta"
 
-"permissions":
-    "contents": "read"
+# Mirrors what cleanup-branch-cache.yaml declares at the pinned SHA. With only
+# `contents: read` every run was rejected before it started (startup_failure), so
+# no merged branch has ever had its caches cleaned up.
+"permissions": {}
 
 "jobs":
     "cleanup-branch-cache":
+        "permissions":
+            "actions": "write" # to delete the merged branch's Actions caches
+            "contents": "read"
         "uses": "anolilab/workflows/.github/workflows/cleanup-branch-cache.yaml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
         "with":
             "target-repo": "anolilab/lunora"
