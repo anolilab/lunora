@@ -24,7 +24,7 @@
             "contents": "read"
             "issues": "write" # to greet a first-time issue opener
             "pull-requests": "write" # to greet a first-time pull request
-        "uses": "anolilab/workflows/.github/workflows/allo-allo.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
+        "uses": "anolilab/workflows/.github/workflows/allo-allo.yml@9b64c8cea7da5e06a9d9fd6c741619172607037f" # main
         "with":
             "target-repo": "anolilab/lunora"
             "onboarding-lead": "prisis"

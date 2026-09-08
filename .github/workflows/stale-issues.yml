@@ -15,6 +15,6 @@
             "contents": "read"
             "issues": "write" # to label and close idle issues
             "pull-requests": "write" # same, for idle pull requests
-        "uses": "anolilab/workflows/.github/workflows/stale-issues.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
+        "uses": "anolilab/workflows/.github/workflows/stale-issues.yml@9b64c8cea7da5e06a9d9fd6c741619172607037f" # main
         "with":
             "target-repo": "anolilab/lunora"
