@@ -1,3 +1,12 @@
+## @lunora/vite [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.208...@lunora/vite@1.0.0-alpha.209) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.172
+* **@lunora/config:** upgraded to 1.0.0-alpha.209
+* **@lunora/studio:** upgraded to 1.0.0-alpha.170
+
 ## @lunora/vite [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.207...@lunora/vite@1.0.0-alpha.208) (2026-09-08)
 
 
