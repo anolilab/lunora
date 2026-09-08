@@ -44,7 +44,7 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; note?: string 
     ],
     ["RegisteredMutation", { call: "mutation.input({ … }).mutation(handler)" }],
     ["RegisteredQuery", { call: "query.input({ … }).query(handler)" }],
-    ["RegisteredReactor", { call: "onQueryChange({ select, handler })", note: "A dropped reactor has no caller to fail — it silently never runs." }],
+    ["RegisteredReactor", { call: "onQueryChange(select, handler)", note: "A dropped reactor has no caller to fail — it silently never runs." }],
     ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
 ]);
 

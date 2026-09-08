@@ -44,7 +44,7 @@ export type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
 export type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
 export type RegisteredReactor = RegisteredFunction<Record<string, never>, { digest: string }, "mutation"> & { readonly lifecycle: "reactor" };
 export declare const onConnect: (handler: () => Promise<void>) => RegisteredLifecycleHook;
-export declare const onQueryChange: (config: { handler: () => Promise<void>; select: () => Promise<unknown> }) => RegisteredReactor;
+export declare const onQueryChange: <T>(select: () => Promise<T>, handler: (context: unknown, result: T) => Promise<void>) => RegisteredReactor;
 `;
 
 /** Two procedures assigned directly (registered) and three produced by a factory (dropped). */
@@ -66,7 +66,7 @@ export const viaFactoryStream = makeStream();
 const makeHook = () => onConnect(async () => {});
 export const viaFactoryHook = makeHook();
 
-const makeReactor = () => onQueryChange({ select: async () => 1, handler: async () => {} });
+const makeReactor = () => onQueryChange(async () => 1, async () => {});
 export const viaFactoryReactor = makeReactor();
 `;
 
@@ -167,7 +167,7 @@ describe("discoverUnregisteredProcedures", () => {
         // `onConnect`, `onDisconnect` and `onShardInit` share one type, so the
         // finding must not claim to know which was written.
         expect(finding("viaFactoryHook")?.remediation).toContain("Substitute the hook you called");
-        expect(finding("viaFactoryReactor")?.remediation).toContain("onQueryChange({ select, handler })");
+        expect(finding("viaFactoryReactor")?.remediation).toContain("onQueryChange(select, handler)");
         expect(finding("viaFactoryReactor")?.remediation).toContain("never runs");
     });
 

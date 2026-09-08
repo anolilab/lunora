@@ -2853,6 +2853,29 @@ export const probeListed = query.input({}).query(async () => "x");
             expect(finding?.remediation).toContain("tsconfig.json");
         });
 
+        it("keeps the type-check finding out of the generated shard while still returning it", () => {
+            expect.assertions(2);
+
+            // `_generated/shard.ts` is committed for the examples, and this
+            // finding describes the machine codegen ran on — so regenerating
+            // against a cold `dist/` must not write it into a tracked file.
+            // Asserted on the output rather than by sharing the name constant
+            // with the filter: the risk is the filter silently stopping to
+            // match, and only the emitted bytes prove it still does.
+            writeFileSync(
+                join(workdir, "lunora", "probe.ts"),
+                `import { query } from "@lunora/server";
+
+export const probeListed = query.input({}).query(async () => "x");
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.advisories.map((entry) => entry.name)).toContain("procedure_type_check_unavailable");
+            expect(result.generated.shard).not.toContain("procedure_type_check_unavailable");
+        });
+
         it("flags a procedure exported by a separate export statement, under its exported name", () => {
             expect.assertions(4);
 
