@@ -43,8 +43,24 @@ cd "$(dirname "$0")/.."
 if [ "$#" -gt 0 ]; then
     packages=("$@")
 else
-    # shellcheck disable=SC2207 # deliberate word-split: the predicate yields one bare package name per line
-    packages=($(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort))
+    # `grep -l` exits 1 when nothing matches, and under `set -e` + `pipefail` that
+    # status propagates out of the assignment and kills the script BEFORE the
+    # diagnostic below — so the "nothing to run" branch was unreachable and the
+    # failure was a bare exit 1 with no output. Capture the status instead, and keep
+    # 1 ("no match", explained below) distinct from 2 (a real grep failure, e.g. an
+    # unreadable tree), which must not be reported as an empty repo.
+    set +e
+    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+    status=$?
+    set -e
+
+    if [ "$status" -gt 1 ]; then
+        echo "Could not scan packages/*/vitest.config.ts (grep exited ${status})." >&2
+        exit 1
+    fi
+
+    # shellcheck disable=SC2206 # deliberate word-split: the predicate yields one bare package name per line
+    packages=($discovered)
 fi
 
 if [ "${#packages[@]}" -eq 0 ]; then
