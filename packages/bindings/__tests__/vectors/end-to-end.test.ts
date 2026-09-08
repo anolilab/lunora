@@ -93,7 +93,7 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
                     id: stored.id,
                     metadata: options?.returnMetadata === "none" ? undefined : stored.metadata,
                     namespace: stored.namespace,
-                    score: cosine(vector, stored.values),
+                    score: cosine(vector, [...stored.values]),
                     values: options?.returnValues ? stored.values : undefined,
                 });
             }

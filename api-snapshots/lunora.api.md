@@ -3597,6 +3597,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `VectorValues` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `VectorizeDeleteMutation` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.

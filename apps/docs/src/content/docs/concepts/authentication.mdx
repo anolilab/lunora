@@ -92,6 +92,37 @@ with real transactions. The full configuration surface (providers, rate
 limiting, migrations, the studio user dashboard) is in the
 [package reference](/docs/packages/auth).
 
+### Side effects on your own tables
+
+better-auth's `databaseHooks` receive the row and better-auth's own context —
+never a Lunora `MutationCtx`, and there is no seam to add one. The hook runs
+inside better-auth's write path, and a ctx is per-request state that `createAuth`
+(called once, at worker setup) does not have.
+
+So a side effect on an app table is a **separate write**, dispatched as an
+internal mutation over the shard client. That is the part worth designing for: a
+failure between the auth write and yours must leave a state the next attempt can
+repair, so key the mutation on the user id and make re-running it a no-op rather
+than assuming it runs exactly once.
+
+```ts
+databaseHooks: {
+    user: {
+        create: {
+            after: async (user) => {
+                // Idempotent by construction: upsert on the user id, never insert.
+                await client.mutation(internal.profiles.ensureForUser, { userId: user.id });
+            },
+        },
+    },
+},
+```
+
+`lunoraDoAdapter` is the only configuration where the auth writes are themselves
+transactional (a Durable Object has real transactions; D1 does not) — and even
+there your app-table write sits outside that transaction, so the idempotency
+requirement does not go away.
+
 ## Routing `/api/auth/*`
 
 `handleAuthRequest(auth, request)` is the single entry point that routes every

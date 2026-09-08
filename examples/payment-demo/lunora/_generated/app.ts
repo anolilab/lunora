@@ -136,8 +136,8 @@ class AppBuilder<Env extends object> {
     }
 
     /** Wire the payment options backing `ctx.payments`. */
-    public payment(factory: NonNullable<ShardConfig["payment"]>): this {
-        this.shardExtras.payment = factory;
+    public payment(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["payment"]>>): this {
+        this.shardExtras.payment = factory as NonNullable<ShardConfig["payment"]>;
 
         return this;
     }

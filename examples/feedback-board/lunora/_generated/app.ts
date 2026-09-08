@@ -136,8 +136,8 @@ class AppBuilder<Env extends object> {
     }
 
     /** Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`). */
-    public ai(factory: NonNullable<ShardConfig["ai"]>): this {
-        this.shardExtras.ai = factory;
+    public ai(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["ai"]>>): this {
+        this.shardExtras.ai = factory as NonNullable<ShardConfig["ai"]>;
 
         return this;
     }

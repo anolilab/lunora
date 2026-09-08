@@ -553,6 +553,7 @@ interface FacadeEntry {
     findFirst: (args?: unknown) => Promise<unknown>;
     findFirstOrThrow: (args?: unknown) => Promise<unknown>;
     findMany: (args?: unknown) => Promise<unknown>;
+    findUnique: (args?: unknown) => Promise<unknown>;
     get: (id: string) => Promise<unknown>;
     groupBy: (options: unknown) => Promise<unknown>;
     hardDelete: (id: string) => Promise<void>;
@@ -3543,6 +3544,10 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
+        select?: S;
+        with?: W;
+    }) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
     groupBy: (options: TableGroupByOptionsOf<DM, REL, T>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
     rank: (indexName: RANK[T], options: TableRankOptions<DM[T]>) => Promise<null | RankResult>;
