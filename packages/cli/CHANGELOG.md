@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.242...@lunora/cli@1.0.0-alpha.243) (2026-09-08)
+
+### Bug Fixes
+
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.122
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.173
+* **@lunora/config:** upgraded to 1.0.0-alpha.210
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.130
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.110
+* **@lunora/seed:** upgraded to 1.0.0-alpha.121
+* **@lunora/testing:** upgraded to 1.0.0-alpha.161
+
 ## @lunora/cli [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.241...@lunora/cli@1.0.0-alpha.242) (2026-09-08)
 
 
