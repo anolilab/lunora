@@ -133,19 +133,41 @@ describe("checkWorkerEntry", () => {
         expect(warn.mock.calls[0]?.[0]).toMatch(/could not read worker\.ts/u);
     });
 
-    it("known false positive (documented on looksLikeShardDoExport): a `ShardDO` mention inside a comment, anywhere in a file that also has a real `export`, silences the warning", () => {
+    it("warns when only a COMMENT mentions ShardDO and `scheduled` — the shape the shipped template makes likely", () => {
+        expect.assertions(2);
+
+        directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
+        // `templates/nuxt/worker.ts` carries a 30-line header explaining that
+        // both the `ShardDO` export and the `scheduled` forwarding are
+        // load-bearing. Delete the lines, keep the header, and a probe over the
+        // raw file reads the explanation as the wiring — silence for a worker
+        // that deploys without its Durable Object and runs no cron.
+        writeFileSync(
+            join(directory, "worker.ts"),
+            `/**\n * Re-exports ShardDO and forwards scheduled — both load-bearing.\n */\nexport { default } from "./.output/server/index.mjs";\n`,
+        );
+
+        const warn = vi.fn<(message: string) => void>();
+
+        checkWorkerEntry(directory, warn);
+
+        expect(warn.mock.calls[0]?.[0]).toMatch(/does not appear to export `ShardDO`/u);
+        expect(warn.mock.calls[1]?.[0]).toMatch(/does not forward `scheduled`/u);
+    });
+
+    it('is silent for a `export * from "./lunora/server"` whose specifier survives comment-blanking', () => {
         expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-nuxt-"));
-        // The guard checks "has an export keyword" and "mentions ShardDO"
-        // independently, anywhere in the file — it does not verify ShardDO
-        // sits inside an actual export statement. A comment mentioning ShardDO,
-        // in a file that separately exports something else entirely, is
-        // indistinguishable from a real `export { ShardDO }`. This is the
-        // documented imprecision, not a regression; a real TS parse would not
-        // have this gap, which is exactly the tradeoff the pattern's docblock
-        // calls out (a build-time warning hook doesn't warrant one).
-        writeFileSync(join(directory, "worker.ts"), `// TODO: remember to export ShardDO from here\n${COMPOSED_TAIL}`);
+        // The star-export probe reads the SPECIFIER, so it runs over source with
+        // comments blanked and strings intact — blanking strings too would erase
+        // the very thing it matches on.
+        // No `ShardDO` identifier anywhere, so the star-export branch is the
+        // only thing that can clear the check.
+        writeFileSync(
+            join(directory, "worker.ts"),
+            '// the barrel below carries the Durable Object class\nexport * from "./lunora/server";\nexport default { ...nitro, scheduled: (c, e, x) => app.scheduled(c, e, x) };\n',
+        );
 
         const warn = vi.fn<(message: string) => void>();
 

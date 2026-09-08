@@ -72,6 +72,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
 
+import { codeOnly, withoutComments } from "../../../shared/code-only";
 import resolveTildePath from "./resolve-tilde-path";
 
 /** Matches a trailing `.js` extension so it can be swapped for `.ts` (module-scope: compiled once). */
@@ -183,22 +184,30 @@ const SCHEDULED_IDENTIFIER_PATTERN = /\bscheduled\b/u;
  * one combined regex trying to prove `ShardDO` sits INSIDE a specific `export`
  * statement — not a real TS parse (mirrors `@lunora/astro`'s
  * `WITH_LUNORA_CALL_PATTERN`: a documented regex is judged proportionate to a
- * build-time warning hook; ts-morph would be heavier than this hook
- * warrants). Known imprecisions: false-POSITIVE on `export { ShardDO as
- * Other }` (renames `ShardDO` away, so the binding wrangler needs is actually
- * named `Other` — not caught), on a `ShardDO` mention inside a comment
- * anywhere alongside an unrelated `export`, or in principle on `export`ing
- * something else entirely while `ShardDO` is merely imported (not exported)
- * elsewhere in the file. All are accepted trade-offs for a two-line worker
- * entry file, where the realistic failure mode is "forgot the line
- * entirely", not an adversarial one.
+ * build-time warning hook; ts-morph would be heavier than this hook warrants).
+ *
+ * Probed against blanked source, never the raw file, which is the same reason
+ * `@lunora/astro` runs its probe through `codeOnly`. This entry's whole job is
+ * `ShardDO` and `scheduled`, so it is the file most likely to carry a comment
+ * explaining that both lines are load-bearing — the template this module ships
+ * with does, at length — and matching the comment left the warning silent for a
+ * worker that had dropped the export. The star-export probe reads a SPECIFIER,
+ * so it gets {@link withoutComments} instead: string literals must survive.
+ *
+ * Remaining imprecision: false-POSITIVE on `export { ShardDO as Other }`
+ * (renames `ShardDO` away, so the binding wrangler needs is actually named
+ * `Other`), or in principle on `export`ing something else entirely while
+ * `ShardDO` is merely imported. Both are accepted trade-offs for a two-line
+ * worker entry file.
  */
 const looksLikeShardDoExport = (source: string): boolean => {
-    if (!EXPORT_KEYWORD_PATTERN.test(source)) {
+    const code = codeOnly(source);
+
+    if (!EXPORT_KEYWORD_PATTERN.test(code)) {
         return false;
     }
 
-    return SHARD_DO_IDENTIFIER_PATTERN.test(source) || LUNORA_STAR_EXPORT_PATTERN.test(source);
+    return SHARD_DO_IDENTIFIER_PATTERN.test(code) || LUNORA_STAR_EXPORT_PATTERN.test(withoutComments(source));
 };
 
 /**
@@ -252,7 +261,7 @@ export const checkWorkerEntry = (rootDirectory: string, warn: (message: string) 
     // from the same codegen discovery. The trigger exists, Cloudflare fires it,
     // the invocation succeeds, and the cron does nothing. Nothing else in the
     // build says a word about it, which is why it is worth a warning.
-    if (!SCHEDULED_IDENTIFIER_PATTERN.test(source)) {
+    if (!SCHEDULED_IDENTIFIER_PATTERN.test(codeOnly(source))) {
         warn(
             `worker.ts at the project root does not forward \`scheduled\` — re-exporting Nitro's \`default\` gives Cloudflare a \`scheduled\` entrypoint that only fires an empty \`cloudflare:scheduled\` hook, so a cron declared in \`lunora/crons.ts\` is provisioned and then runs nothing. Compose the two instead (\`${WORKER_TS_SNIPPET}\`), which forwards \`queue\` and \`email\` too — Nitro's exports for those fire empty hooks the same way, and a queue consumer that returns without throwing ACKS its batch.`,
         );
@@ -265,7 +274,7 @@ const CREATE_LUNORA_PATTERN = /\bcreateLunora\b/u;
 /** Read `path` and report whether it mentions `createLunora`; an unreadable file simply doesn't count as a provider. */
 const providesLunoraClient = (path: string): boolean => {
     try {
-        return CREATE_LUNORA_PATTERN.test(readFileSync(path, "utf8"));
+        return CREATE_LUNORA_PATTERN.test(codeOnly(readFileSync(path, "utf8")));
     } catch {
         return false;
     }
