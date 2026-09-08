@@ -1,3 +1,16 @@
+## @lunora/hyperdrive [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.112...@lunora/hyperdrive@1.0.0-alpha.113) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/hyperdrive [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.111...@lunora/hyperdrive@1.0.0-alpha.112) (2026-09-07)
 
 
