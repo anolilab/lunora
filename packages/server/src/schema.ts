@@ -167,7 +167,21 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * table stays reactive — live queries re-run on write.
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
-    /** Add a secondary index. */
+
+    /**
+     * Add a secondary index.
+     *
+     * `fields` are TOP-LEVEL columns of this table (plus the system fields). A
+     * dotted path into a `v.object()` column is deliberately not accepted: the
+     * object is stored as one JSON value, so indexing inside it means an
+     * expression index over `json_extract(...)` on every engine plus a `where`
+     * DSL that can route a dotted key to it — and a predicate that missed the
+     * route would read as a silent full scan rather than an error.
+     *
+     * Denormalise the field you need to query onto the row instead, and keep the
+     * copy current in the mutation that writes the nested value. That is the
+     * intended answer, not a workaround for a gap.
+     */
     index: (
         name: string,
         fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,

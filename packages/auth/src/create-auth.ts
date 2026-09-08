@@ -366,6 +366,25 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
  *
  * (Lunora can't set this for you — `ctx.waitUntil` is per-request, but
  * `createAuth` runs once at worker setup.)
+ *
+ * ## `databaseHooks` cannot write app tables, and cannot be given a `ctx`
+ *
+ * A `databaseHooks.user.create.after` receives the row and better-auth's own
+ * context — never a Lunora `MutationCtx`. That is better-auth's shape, not a gap
+ * Lunora is withholding: the hook runs inside better-auth's write path, which
+ * reaches storage through the adapter this package supplies, and a `ctx` is
+ * per-request state `createAuth` (called once, at worker setup) does not have.
+ *
+ * So a side effect on an app table runs through an internal mutation dispatched
+ * over the shard client, and **each one has to be independently idempotent**: it
+ * is a separate write, not part of the auth write. A failure between the two must
+ * leave a state the next attempt can repair — key the mutation on the user id and
+ * make re-running it a no-op, rather than assuming it runs exactly once.
+ *
+ * `lunoraDoAdapter` is the one configuration where the auth writes themselves are
+ * transactional (a Durable Object has real transactions; D1 does not), and even
+ * there the app-table write is outside that transaction. Read `./do-store.ts`
+ * before reaching for it — the auth tables then live inside a single DO.
  */
 export type LunoraAuthOptions = BetterAuthOptions;
 
