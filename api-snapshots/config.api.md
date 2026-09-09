@@ -39,6 +39,12 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
 const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 ```
 
+### `APP_CONFIG_FILENAME` (const)
+
+```ts
+const APP_CONFIG_FILENAME = "app.ts";
+```
+
 ### `AddIndexEdit` (interface)
 
 ```ts
@@ -529,6 +535,7 @@ interface FrameworkDetection {
 const GENERATED_CLASS_MODULES: readonly [
     "agents",
     "containers",
+    "scheduler",
     "workflows"
 ];
 ```
@@ -2153,6 +2160,12 @@ const materializeRemoteWranglerConfig: (options: MaterializeOptions) => Material
 
 ```ts
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
+```
+
+### `moduleExportsValue` (const)
+
+```ts
+const moduleExportsValue: (path: string, name: string) => boolean;
 ```
 
 ### `planRemoteBindings` (const)

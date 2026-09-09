@@ -24,6 +24,20 @@ import join from "./path";
 const LUNORA_CONFIG_FILE = "lunora.json";
 
 /**
+ * The optional module a Vite-first app puts its own `defineApp()` builder calls
+ * in, relative to the schema directory — `lunora/app.ts`.
+ *
+ * A bare noun like every sibling seam (`identity.ts`, `env.ts`, `crons.ts`), and
+ * deliberately NOT `app.config.ts`, which collides with the root
+ * `app.config.ts` that Vinxi-era TanStack Start and SolidStart projects carry.
+ *
+ * Lives here rather than in `@lunora/vite` so the dev server's config watcher
+ * can name it without importing the compose plugin — that edge dragged
+ * `@lunora/config/cloudflare` (and ts-morph) into the plugin's startup graph.
+ */
+const APP_CONFIG_FILENAME = "app.ts";
+
+/**
  * The parsed `remote` preference from `lunora.json`:
  *
  * - `true` / `false` — the boolean form: enable or explicitly disable remote dev.
@@ -151,4 +165,4 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
 };
 
 export type { LunoraProjectConfig, RemotePreference };
-export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };
+export { APP_CONFIG_FILENAME, interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

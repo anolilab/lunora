@@ -179,6 +179,17 @@ interface ViteRemotePlan {
 const WORKER_STARTUP_HINT: string;
 ```
 
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    shard?: LunoraShardConfig;
+}
+```
+
 ### `augmentWorkerStartupError` (const)
 
 ```ts
@@ -198,7 +209,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, composition?: WorkerEntryComposition) => string;
 ```
 
 ### `checkLunoraProxy` (const)

@@ -433,9 +433,10 @@ const readModuleExports = (entryPath: string): Set<string> | undefined => {
  * `@lunora/vite` generates it, and it emits exactly one class of its own
  * (`export const ShardDO = app.ShardDO`, from {@link COMPOSED_ENTRY_DURABLE_OBJECTS})
  * plus a star re-export of each {@link GENERATED_CLASS_MODULES} file the project
- * has. So the export set is knowable without a bundle — and class-A is the one
- * shape where the user CANNOT add a re-export, so a `class_name` outside that
- * set is a deploy wrangler will always refuse.
+ * has — `SchedulerDO` among them, via the `scheduler` module codegen writes off
+ * `hasScheduler`. So the export set is knowable without a bundle, and class-A is
+ * the one shape where the user CANNOT add a re-export, so a `class_name` outside
+ * that set is a deploy wrangler will always refuse.
  *
  * A project with no `_generated/` directory has not run codegen yet, and the
  * composed entry is then not a fact about anything — reported as opaque rather
@@ -819,5 +820,20 @@ const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMetho
     return site === undefined ? undefined : { chained, site };
 };
 
+/**
+ * Whether `path` exports `name` as a runtime VALUE.
+ *
+ * Exported for `@lunora/vite`, which must know whether the app's config module
+ * really exports the function the generated entry is about to name-import. A
+ * substring check there passed a file that only MENTIONED the name in a comment,
+ * a type-only export, a default export, and a file that does not parse — each
+ * producing a bundle-time "does not provide an export named …" against a virtual
+ * module, which is the error that check exists to prevent.
+ *
+ * `false` when the module cannot be read or parsed: an import this cannot verify
+ * is one the entry must not emit.
+ */
+const moduleExportsValue = (path: string, name: string): boolean => readModuleExports(path)?.has(name) === true;
+
 export type { CapabilityMethod, WorkerEntry, WorkerEntryLocation };
-export { locateWorkerEntry, readWorkerEntry, scanAppChains };
+export { locateWorkerEntry, moduleExportsValue, readWorkerEntry, scanAppChains };

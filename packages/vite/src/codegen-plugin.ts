@@ -3,7 +3,7 @@ import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { CODEGEN_ENV, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
+import { APP_CONFIG_FILENAME, CODEGEN_ENV, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -808,6 +808,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             const configWatchPaths = new Set<string>([
                 ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
                 resolve(options.projectRoot, LUNORA_CONFIG_FILE),
+                // The class-A app-config seam. `load()` reads it once when the
+                // composed entry is built, and nothing invalidates a virtual
+                // module — so CREATING the file mid-session silently did nothing
+                // until a manual restart.
+                resolve(options.projectRoot, options.schemaDir, APP_CONFIG_FILENAME),
             ]);
 
             for (const configPath of configWatchPaths) {

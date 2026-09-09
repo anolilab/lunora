@@ -2008,18 +2008,22 @@ export const schema = defineSchema({
                 it("reports a class the composed entry cannot export, with the class-A remedy", () => {
                     expect.assertions(3);
 
-                    writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                    // `SessionDO`, not `SchedulerDO`: declaring the scheduler
+                    // binding is now what makes the composed entry re-export it,
+                    // so it can no longer reach this error. Auth's Durable Object
+                    // still has no route on class-A.
+                    writeClassAProject(`, { "name": "SESSION", "class_name": "SessionDO" }`);
                     mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
 
                     const result = validateWranglerProject({ projectRoot: workdir });
                     const reported = result.report.errors.filter((error) => error.includes("does not export it")).join("\n");
 
                     expect(result.report.valid).toBe(false);
-                    expect(reported).toContain("SchedulerDO");
+                    expect(reported).toContain("SessionDO");
                     // "Re-export it from the module that defines it" is unactionable
                     // advice for a generated entry, so the remedy must NOT be the
                     // authored one. Asserted on the instruction, not the prose.
-                    expect(reported).not.toContain("export { SchedulerDO } from");
+                    expect(reported).not.toContain("export { SessionDO } from");
                 });
 
                 it("accepts a class the composed entry star-re-exports from a generated module", () => {
@@ -2038,22 +2042,44 @@ export const schema = defineSchema({
                     expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
                 });
 
-                it("does not tell a SchedulerDO binding to declare itself as an agent or container", () => {
+                it("counts SchedulerDO as exported once codegen has written the scheduler module", () => {
+                    expect.assertions(2);
+
+                    // `@lunora/vite` star-re-exports every `_generated/` class
+                    // module that exists, so the presence of `scheduler.ts` IS the
+                    // fact — and codegen writes it off the same `hasScheduler`
+                    // that decides whether the builder has a `.scheduler()` method
+                    // at all. Keying this on the wrangler binding instead made the
+                    // plugin and the validator disagree under `--env`, and let a
+                    // binding-only project compose a call onto a builder without
+                    // the method.
+                    writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "scheduler.ts"), `export { SchedulerDO } from "@lunora/scheduler";\n`, "utf8");
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+
+                    // Without that module the class is genuinely not exported.
+                    rmSync(join(workdir, "lunora", "_generated", "scheduler.ts"));
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+                });
+
+                it("does not tell a framework Durable Object to declare itself as an agent or container", () => {
                     expect.assertions(3);
 
-                    // `SchedulerDO` / `SessionDO` are framework classes, not
-                    // `defineAgent` / `defineContainer` / `defineWorkflow`
-                    // declarations, so "declare it in one of those" was hours of
-                    // dead end: codegen will never emit them and the composed
-                    // entry never carried them.
-                    writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                    // A framework class is not a `defineAgent` /
+                    // `defineContainer` / `defineWorkflow` declaration, so
+                    // "declare it in one of those" was hours of dead end: codegen
+                    // will never emit it.
+                    writeClassAProject(`, { "name": "SESSION", "class_name": "SessionDO" }`);
                     mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
 
                     const reported = validateWranglerProject({ projectRoot: workdir })
                         .report.errors.filter((error) => error.includes("does not export it"))
                         .join("\n");
 
-                    expect(reported).toContain("SchedulerDO");
+                    expect(reported).toContain("SessionDO");
                     expect(reported).not.toContain("re-run `lunora codegen`");
                     // The only two real routes: drop it, or own the entry.
                     expect(reported).toContain("src/worker.ts");

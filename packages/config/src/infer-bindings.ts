@@ -566,9 +566,14 @@ interface WorkerEntry {
  * exactly one — `export const ShardDO = app.ShardDO` off the generated
  * `defineApp()` builder — plus star
  * re-exports of the generated container/workflow/agent modules (handled by
- * {@link detectClassExports}). `SchedulerDO`/`SessionDO` are NOT composed in, so
- * they stay unprovisioned, which is honest: binding them would name a class the
- * bundle does not export and `wrangler deploy` would reject it.
+ * {@link detectClassExports}). `SessionDO` is NOT composed in, so it stays
+ * unprovisioned, which is honest: binding it would name a class the bundle does
+ * not export and `wrangler deploy` would reject it.
+ *
+ * `SchedulerDO` used to be in that sentence. It now reaches the entry through
+ * the generated `scheduler` module ({@link GENERATED_CLASS_MODULES}) whenever the
+ * app has a scheduler, so `inferLunoraBindings` adds it to this list on that
+ * condition — see the call site.
  */
 const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
 
@@ -583,10 +588,16 @@ const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
  * `@lunora/vite` emits one star re-export per entry, the wrangler validator
  * DECIDES the composed entry's exports from it, `reconcile-bindings` types its
  * export-gap `module` field on it, and this module's own `detectClassExports`
- * probes the same names. `@lunora/vite` depends on `@lunora/config`, so config
+ * probes the same names.
+ *
+ * `scheduler` carries no `define*` declarations of its own — codegen writes it
+ * off `hasScheduler` purely so the composed class-A entry has a `SchedulerDO`
+ * to forward. Its presence is therefore the ONLY signal the plugin and the
+ * validator need, and it is the same signal that decides whether the builder
+ * has a `.scheduler()` method at all. `@lunora/vite` depends on `@lunora/config`, so config
  * owning it is the direction the dependency graph allows.
  */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
+const GENERATED_CLASS_MODULES = ["agents", "containers", "scheduler", "workflows"] as const;
 
 /** One {@link GENERATED_CLASS_MODULES} entry. */
 type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
@@ -1012,7 +1023,18 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     let durableObjects: DurableObjectSpec[];
 
     if (entry.composed) {
-        durableObjects = COMPOSED_ENTRY_DURABLE_OBJECTS.map((className) => {
+        // Plus `SchedulerDO` when codegen wrote the `scheduler` module: the
+        // composed entry star-re-exports it, so the class IS exported and the
+        // binding is provisionable. Reading only the base list above left
+        // `reconcile-bindings` telling a correctly-wired class-A app to
+        // "export it so the SCHEDULER binding can be provisioned" — advice that is
+        // both wrong and impossible to follow, on every `lunora dev`.
+        const composedClasses: DurableObjectClass[] = [
+            ...COMPOSED_ENTRY_DURABLE_OBJECTS,
+            ...(existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "scheduler.ts")) ? (["SchedulerDO"] as const) : []),
+        ];
+
+        durableObjects = composedClasses.map((className) => {
             return { binding: DURABLE_OBJECT_BINDINGS[className], className };
         });
     } else {

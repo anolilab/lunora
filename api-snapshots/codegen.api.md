@@ -1247,6 +1247,12 @@ const emitOpenRpc: (input: OpenRpcEmitInput) => string;
 const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ```
 
+### `emitScheduler` (const)
+
+```ts
+const emitScheduler: (hasScheduler: boolean) => string;
+```
+
 ### `emitServer` (const)
 
 ```ts

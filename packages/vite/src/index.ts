@@ -228,7 +228,7 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devStatePlugin } from "./dev-state-plugin";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
-export type { ClassAWiring } from "./framework-compose-plugin";
+export type { ClassAWiring, WorkerEntryComposition } from "./framework-compose-plugin";
 export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID } from "./framework-compose-plugin";
 // The custom HMR event the codegen plugin sends on the client environment's hot
 // channel after a successful codegen run (in place of a blanket browser reload).

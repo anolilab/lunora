@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { GeneratedClassModule } from "@lunora/config";
-import { GENERATED_CLASS_MODULES } from "@lunora/config";
+import { APP_CONFIG_FILENAME, GENERATED_CLASS_MODULES } from "@lunora/config";
+import { moduleExportsValue } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -113,6 +114,10 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
     return detected?.class === "A" && CLASS_A_WIRING[detected.framework] !== undefined;
 };
 
+/** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
+/** The named export the composed entry imports from {@link APP_CONFIG_FILENAME}. */
+const APP_CONFIG_EXPORT = "configureApp";
+
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
  * so the emitted composition is unit-testable in isolation.
@@ -128,13 +133,20 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
  * virtual module id. Absolute paths are resolved correctly in all environments
  * (Vite 8 + rolldown 1.x confirmed).
  */
-const buildWorkerEntrySource = (
-    framework: DetectedFramework,
-    generatedImportBase: string,
-    classModules: ReadonlyArray<GeneratedClassModule> = [],
-    allowUnauthenticatedShardAccess = false,
-    shard: LunoraShardConfig = {},
-): string => {
+interface WorkerEntryComposition {
+    /** Whether to allow unauthenticated shard access — `.extend(...)` on the builder. */
+    allowUnauthenticatedShardAccess?: boolean;
+    /** Absolute path to the app's own `configureApp` module, when it has one. */
+    appConfigModule?: string;
+    /** The `_generated/` class modules that exist, each star-re-exported. */
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    /** Per-shard knobs, each key named after the builder method that sets it. */
+    shard?: LunoraShardConfig;
+}
+
+const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
+    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], shard = {} } = composition;
+
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
@@ -158,6 +170,30 @@ const buildWorkerEntrySource = (
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
     const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
+
+    // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
+    // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so
+    // a class-A project had no file to add the re-export to and deferred dispatch
+    // was unreachable.
+    //
+    // Keyed on the generated `scheduler` module, which codegen writes off the
+    // same `hasScheduler` that decides whether the builder HAS a `.scheduler()`
+    // method — so the call and the method cannot disagree, and the class is
+    // forwarded by the ordinary star re-export below rather than a specifier this
+    // plugin hard-codes. Keying it on the `wrangler.jsonc` binding instead let a
+    // project declare the binding with no scheduler code and get
+    // `TypeError: ….scheduler is not a function` at worker boot.
+    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
+
+    // `configureApp` receives the builder and returns it, so the framework wiring
+    // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
+    // are chained in between. See the docs for why the seam exists at all.
+    // Carries its OWN leading newline so an app without the module gets output
+    // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
+    // stripped for the same reason the sibling `/app` import has none: the
+    // bundler resolves the extension.
+    const appConfigImport = appConfigModule === undefined ? "" : `\nimport { ${APP_CONFIG_EXPORT} } from "${appConfigModule}";`;
+    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["configureApp(", ")"];
 
     // Each declared `shard` knob as its `defineApp()` builder call. Every
     // `LunoraShardConfig` key is named after the builder method that sets it, so
@@ -193,10 +229,10 @@ const buildWorkerEntrySource = (
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 ${wiring.imports}
-import { defineApp } from "${base}/app";
+import { defineApp } from "${base}/app";${appConfigImport}
 
-const app = defineApp()
-    .shard((env) => env.SHARD)
+const app = ${configureOpen}defineApp()
+    .shard((env) => env.SHARD)${schedulerCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
@@ -204,6 +240,24 @@ export const ShardDO = app.ShardDO;
 ${classReexports}
 export default app;
 `;
+};
+
+/**
+ * The app-config module to compose through, or `undefined` when there is none.
+ *
+ * The export is verified by PARSING, not by a substring. A file that merely
+ * mentions `configureApp` in a comment — or exports it as a type, or as the
+ * default, or does not parse — fails the BUNDLE with "does not provide an export
+ * named `configureApp`" against a virtual module, the least debuggable error this
+ * plugin can produce. Anything unverifiable degrades to composing without it.
+ */
+const appConfigModule = (projectRoot: string, schemaDirectory: string): string | undefined => {
+    const path = resolve(projectRoot, schemaDirectory, APP_CONFIG_FILENAME);
+
+    // Posix-ified and extension-stripped HERE, so the emitter receives a finished
+    // specifier: `resolve()` yields backslashes on Windows (invalid escapes once
+    // interpolated into a string literal) and the bundler resolves the extension.
+    return moduleExportsValue(path, APP_CONFIG_EXPORT) ? path.replaceAll("\\", "/").slice(0, -".ts".length) : undefined;
 };
 
 /**
@@ -253,13 +307,12 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // entry carries.
                 const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
 
-                return buildWorkerEntrySource(
-                    context.framework.framework,
-                    generatedImportBase,
+                return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
+                    allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
+                    appConfigModule: appConfigModule(options.projectRoot, options.schemaDir),
                     classModules,
-                    options.allowUnauthenticatedShardAccess,
-                    options.shard,
-                );
+                    shard: options.shard,
+                });
             }
 
             return undefined;
@@ -275,5 +328,5 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     };
 };
 
-export type { ClassAWiring };
+export type { ClassAWiring, WorkerEntryComposition };
 export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
