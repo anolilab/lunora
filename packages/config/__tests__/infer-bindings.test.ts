@@ -185,6 +185,25 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
+        expect.assertions(2);
+
+        // The sibling test above is the case where `src/worker.ts` shadows the
+        // artifact. Without one, an existing `main` was accepted as the entry —
+        // and an adapter bundle exports only the SSR handler, so every class read
+        // as unexported and reconcile wrote NO bindings, not even SHARD. A green
+        // deploy that fails at runtime on a missing binding.
+        write("wrangler.jsonc", '{ "name": "app", "main": "dist/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Read off the authored entry, not the artifact.
+        expect(result.durableObjects).toHaveLength(1);
+    });
+
     it("reports no Durable Objects when the worker entry cannot be found", async () => {
         expect.assertions(1);
 

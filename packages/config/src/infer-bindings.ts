@@ -67,6 +67,38 @@ const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
  */
 const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"] as const;
 
+/** Directories a project's own sources never live in — generated or build output. */
+const NON_SOURCE_DIRECTORIES: ReadonlySet<string> = new Set(["build", "coverage", "dist", GENERATED_DIRECTORY, "node_modules", "out", "target"]);
+
+/**
+ * Dot-directories that ARE authored sources. Everything else starting with a dot
+ * is tool state (`.git`, `.wrangler`, `.svelte-kit`, `.vercel`, …) and skipping
+ * the lot by prefix keeps that list from having to be maintained. `.server` /
+ * `.client` are the React Router v7 / Remix convention for server-only and
+ * client-only modules, so a `.vectors(...)` chain genuinely lives there — and a
+ * missed chain HARD-ERRORS a correctly wired project.
+ */
+const SOURCE_DOT_DIRECTORIES: ReadonlySet<string> = new Set([".client", ".server"]);
+
+/** Either separator, so a Windows-style `main` splits the same way. */
+const PATH_SEPARATOR = /[/\\]/u;
+
+/**
+ * Whether `main` points INTO a build-output location — the same
+ * {@link NON_SOURCE_DIRECTORIES} the project scan skips, plus every
+ * dot-directory by prefix (`.svelte-kit`, `.output`, `.vercel`, `.next`) minus
+ * the two that ARE authored sources.
+ *
+ * The gate is by location because it cannot be by extension: a bundled
+ * `_worker.js` exports only the SSR handler, but a hand-written `src/worker.js`
+ * is an ordinary entry, and both are `.js`.
+ */
+const isGeneratedOutput = (relativeMain: string): boolean =>
+    relativeMain
+        .split(PATH_SEPARATOR)
+        .slice(0, -1)
+        .some((segment) => NON_SOURCE_DIRECTORIES.has(segment) || (segment.startsWith(".") && !SOURCE_DOT_DIRECTORIES.has(segment)));
+
 /**
  * Canonical Durable Object class → binding name. wrangler requires the worker
  * to export a class of this exact name, so detection keys on the class name.
@@ -595,7 +627,13 @@ const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
             return { composed: false, path: composedPath };
         }
 
-        if (typeof main === "string" && existsSync(join(projectRoot, main))) {
+        // `!isGeneratedOutput` is the same gate `locateWorkerEntry` applies, and it
+        // has to be here too: a BUILT adapter artifact exists, so without it this
+        // returned `dist/_worker.js` and lexed a bundle that exports only the SSR
+        // handler. Every class then read as unexported and reconcile provisioned
+        // NOTHING — not even SHARD — which is a green deploy that fails at runtime
+        // on a missing binding, exactly what `COMPOSED_WORKER_ENTRY` documents.
+        if (typeof main === "string" && !isGeneratedOutput(main) && existsSync(join(projectRoot, main))) {
             return { composed: false, path: join(projectRoot, main) };
         }
 
@@ -1082,8 +1120,11 @@ export {
     GENERATED_DIRECTORY,
     inferLunoraBindings,
     isFrameworkDurableObject,
+    isGeneratedOutput,
     LUNORA_WORKER_VIRTUAL_ID,
+    NON_SOURCE_DIRECTORIES,
     packageNamesFromBindings,
     resolveWorkerEntry,
+    SOURCE_DOT_DIRECTORIES,
     WORKER_ENTRY_FALLBACKS,
 };
