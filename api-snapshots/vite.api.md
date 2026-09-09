@@ -198,7 +198,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig, scheduler?: boolean) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, composition?: WorkerEntryComposition) => string;
 ```
 
 ### `checkLunoraProxy` (const)
@@ -340,5 +340,17 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface LunoraPluginContext {
     framework?: FrameworkDetection;
+}
+```
+
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    scheduler?: boolean;
+    shard?: LunoraShardConfig;
 }
 ```

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { GeneratedClassModule } from "@lunora/config";
@@ -115,6 +115,9 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
     return detected?.class === "A" && CLASS_A_WIRING[detected.framework] !== undefined;
 };
 
+/** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
+const TS_EXTENSION = /\.ts$/u;
+
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
  * so the emitted composition is unit-testable in isolation.
@@ -130,14 +133,22 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
  * virtual module id. Absolute paths are resolved correctly in all environments
  * (Vite 8 + rolldown 1.x confirmed).
  */
-const buildWorkerEntrySource = (
-    framework: DetectedFramework,
-    generatedImportBase: string,
-    classModules: ReadonlyArray<GeneratedClassModule> = [],
-    allowUnauthenticatedShardAccess = false,
-    shard: LunoraShardConfig = {},
-    scheduler = false,
-): string => {
+interface WorkerEntryComposition {
+    /** Whether to allow unauthenticated shard access — `.extend(...)` on the builder. */
+    allowUnauthenticatedShardAccess?: boolean;
+    /** Absolute path to the app's own `configureApp` module, when it has one. */
+    appConfigModule?: string;
+    /** The `_generated/` class modules that exist, each star-re-exported. */
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    /** Whether the config declares the `SchedulerDO` binding — see {@link composesScheduler}. */
+    scheduler?: boolean;
+    /** Per-shard knobs, each key named after the builder method that sets it. */
+    shard?: LunoraShardConfig;
+}
+
+const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
+    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], scheduler = false, shard = {} } = composition;
+
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
@@ -177,6 +188,24 @@ const buildWorkerEntrySource = (
     const schedulerCall = scheduler ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
     const schedulerReexport = scheduler ? `\nexport { SchedulerDO } from "@lunora/scheduler";\n` : "";
 
+    // The seam for builder calls this plugin CANNOT derive. `.scheduler(...)` is
+    // mechanical — `(env) => env.SCHEDULER` and nothing else — but `.auth(...)`
+    // takes the app's better-auth options, `.global(...)` its D1 writer, and
+    // `.vectors(...)` its embedder. A class-A app has no hand-written entry to
+    // chain those on, so they were simply unreachable: `resolveIdentity` is only
+    // ever set by `.auth()` / `.access()` / `.extend()`, all builder calls.
+    //
+    // `configureApp` receives the builder and returns it, so the framework wiring
+    // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
+    // are chained in between.
+    // Carries its OWN leading newline so an app without the module gets output
+    // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
+    // stripped for the same reason the sibling `/app` import has none: the
+    // bundler resolves the extension.
+    const appConfigImport =
+        appConfigModule === undefined ? "" : `\nimport { configureApp } from "${appConfigModule.replaceAll("\\", "/").replace(TS_EXTENSION, "")}";`;
+    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["configureApp(", ")"];
+
     // Each declared `shard` knob as its `defineApp()` builder call. Every
     // `LunoraShardConfig` key is named after the builder method that sets it, so
     // this needs no mapping table. Sorted so the emitted entry is stable across
@@ -211,10 +240,10 @@ const buildWorkerEntrySource = (
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 ${wiring.imports}
-import { defineApp } from "${base}/app";
+import { defineApp } from "${base}/app";${appConfigImport}
 
-const app = defineApp()
-    .shard((env) => env.SHARD)${schedulerCall}
+const app = ${configureOpen}defineApp()
+    .shard((env) => env.SHARD)${schedulerCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
@@ -222,6 +251,36 @@ export const ShardDO = app.ShardDO;
 ${schedulerReexport}${classReexports}
 export default app;
 `;
+};
+
+/**
+ * The optional module a class-A app puts its own builder calls in, under the
+ * schema directory. Named for the convention every other Lunora seam follows
+ * (`lunora/identity.ts`, `lunora/crons.ts`, `lunora/containers.ts`, …): a
+ * conventional path, discovered rather than configured.
+ */
+const APP_CONFIG_FILENAME = "app.config.ts";
+
+/**
+ * The app-config module to compose through, or `undefined` when there is none.
+ *
+ * The `configureApp` text check is not belt-and-braces: a file that exists but
+ * exports something else fails the BUNDLE with a resolver error naming a
+ * generated virtual module, which is the least debuggable error this plugin
+ * could produce. Absent-or-unusable degrades to today's behaviour instead.
+ */
+const appConfigModule = (projectRoot: string, schemaDirectory: string): string | undefined => {
+    const path = resolve(projectRoot, schemaDirectory, APP_CONFIG_FILENAME);
+
+    if (!existsSync(path)) {
+        return undefined;
+    }
+
+    try {
+        return readFileSync(path, "utf8").includes("configureApp") ? path : undefined;
+    } catch {
+        return undefined;
+    }
 };
 
 /**
@@ -292,14 +351,13 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // entry carries.
                 const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
 
-                return buildWorkerEntrySource(
-                    context.framework.framework,
-                    generatedImportBase,
+                return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
+                    allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
+                    appConfigModule: appConfigModule(options.projectRoot, options.schemaDir),
                     classModules,
-                    options.allowUnauthenticatedShardAccess,
-                    options.shard,
-                    composesScheduler(options.projectRoot),
-                );
+                    scheduler: composesScheduler(options.projectRoot),
+                    shard: options.shard,
+                });
             }
 
             return undefined;
@@ -316,4 +374,4 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
 };
 
 export type { ClassAWiring };
-export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export { APP_CONFIG_FILENAME, buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

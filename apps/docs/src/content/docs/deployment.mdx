@@ -52,6 +52,39 @@ Object class, and migration tags are append-only. `lunora verify` reports both i
 either is missing.
 :::
 
+## Vite-first apps: `lunora/app.config.ts`
+
+In a Vite-first app (`"main": "virtual:lunora/worker"`) `@lunora/vite` generates
+the worker entry, so there is no file to chain your own `defineApp()` calls on.
+`.scheduler(...)` is composed for you because it is mechanical — the namespace
+selector and nothing else. Everything that needs _your_ code is not:
+`.auth(...)` takes your better-auth options, `.global(...)` your D1 writer,
+`.vectors(...)` your embedder, and `resolveIdentity` is only ever set by
+`.auth()`, `.access()` or `.extend()`.
+
+Put those in `lunora/app.config.ts`, exporting `configureApp`:
+
+```ts
+// lunora/app.config.ts
+import type { AppBuilder } from "./_generated/app";
+
+export const configureApp = (app: AppBuilder<Env>) =>
+    app
+        .auth({
+            d1: (env) => env.DB,
+            options: (env) => ({ secret: env.BETTER_AUTH_SECRET, baseURL: env.BETTER_AUTH_URL }),
+        })
+        .global({ d1: (env) => env.DB });
+```
+
+The generated entry calls it between the shard selector and its own
+`.httpRouter(...)` / `.build()`, so the framework wiring stays with the plugin
+and your capabilities are chained in the middle. The file is optional: without
+it the generated entry is byte-for-byte what it was.
+
+A hand-written entry (`src/server.ts`, `src/worker.ts`) needs none of this —
+chain the calls there directly.
+
 ## Secrets
 
 ### Locally

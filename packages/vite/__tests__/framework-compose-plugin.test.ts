@@ -221,7 +221,7 @@ describe("framework-compose-plugin", () => {
         it("emits allowUnauthenticatedShardAccess through the worker-options escape hatch when opted in", () => {
             expect.hasAssertions();
 
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { allowUnauthenticatedShardAccess: true });
 
             expect(code).toContain(".extend(() => ({ allowUnauthenticatedShardAccess: true }))");
         });
@@ -233,7 +233,7 @@ describe("framework-compose-plugin", () => {
             // string literal `\U` is an invalid unicode escape → SyntaxError, and
             // `\l`/`\a` silently vanish → unresolvable specifier. The emitter must
             // convert to forward slashes so the composed worker boots everywhere.
-            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, ["containers"]);
+            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, { classModules: ["containers"] });
 
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/app"');
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/containers"');
@@ -264,7 +264,7 @@ describe("framework-compose-plugin", () => {
             // Regression: only `containers` was ever forwarded, so a class-A app with
             // a `defineWorkflow` (or `defineAgent`) got a `class_name` in
             // wrangler.jsonc the bundle did not export and `wrangler deploy` hard-failed.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["agents", "containers", "workflows"]);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["agents", "containers", "workflows"] });
 
             expect(code).toContain('export * from "./lunora/_generated/agents"');
             expect(code).toContain('export * from "./lunora/_generated/containers"');
@@ -277,7 +277,7 @@ describe("framework-compose-plugin", () => {
             // wrangler requires every container class_name to be exported by the
             // worker; a class-A app has no hand-written entry, so the composed one
             // must forward them.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["containers"]);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["containers"] });
 
             expect(code).toContain('export * from "./lunora/_generated/containers"');
         });
@@ -297,10 +297,14 @@ describe("framework-compose-plugin", () => {
             // generated `defineApp()` builder — `cdc`, the reactive query cache and
             // the relation knobs were unreachable for TanStack Start / vinext /
             // React Router / SolidStart no matter what the app wanted.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, {
-                reactiveCache: { maxEntries: 250 },
-                relationExistsPushDown: "never",
-                cdc: true,
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", {
+                classModules: [],
+                allowUnauthenticatedShardAccess: false,
+                shard: {
+                    reactiveCache: { maxEntries: 250 },
+                    relationExistsPushDown: "never",
+                    cdc: true,
+                },
             });
 
             // Keys sorted, so the emitted entry does not churn on literal ordering.
@@ -313,7 +317,7 @@ describe("framework-compose-plugin", () => {
             // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on
             // the worker, and a class-A app has no hand-written entry to add the
             // re-export to — so deferred dispatch was simply unavailable there.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, {}, true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { scheduler: true });
 
             expect(code).toContain(".scheduler({ namespace: (env) => env.SCHEDULER })");
             expect(code).toContain(`export { SchedulerDO } from "@lunora/scheduler";`);
@@ -327,10 +331,40 @@ describe("framework-compose-plugin", () => {
             // The binding IS the opt-in, so an app that never declared one must be
             // byte-for-byte what it was — a `SchedulerDO` export with no binding is
             // a class wrangler has nothing to bind.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, {}, false);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { scheduler: false });
 
             expect(code).not.toContain(".scheduler(");
             expect(code).not.toContain("SchedulerDO");
+        });
+
+        it("composes the app's own builder calls through lunora/app.config.ts", () => {
+            expect.assertions(3);
+
+            // The seam for calls this plugin cannot derive. `.scheduler(...)` is
+            // mechanical; `.auth(...)` takes the app's better-auth options,
+            // `.global(...)` its D1 writer, `.vectors(...)` its embedder — and
+            // `resolveIdentity` is only ever set by `.auth()` / `.access()` /
+            // `.extend()`, all builder calls a class-A app had no entry to write.
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora/app.config.ts" });
+
+            expect(code).toContain(`import { configureApp } from "/app/lunora/app.config";`);
+            expect(code).toContain("const app = configureApp(defineApp()");
+            // The framework wiring stays ours: the app's calls land BETWEEN the
+            // shard selector and `.httpRouter(...)` / `.build()`.
+            expect(code.indexOf("configureApp(")).toBeLessThan(code.indexOf(".httpRouter("));
+        });
+
+        it("adds no blank-line churn for an app with no app.config.ts", () => {
+            expect.assertions(2);
+
+            // The app-config import carries its own leading newline precisely so
+            // an app without the module is unchanged. Interpolating it on its own
+            // line instead left a stray blank line in every generated entry —
+            // spurious HMR and a confusing diff on an unrelated release.
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated");
+
+            expect(code).toContain(`import { defineApp } from "/app/lunora/_generated/app";\n\nconst app = defineApp()`);
+            expect(code).not.toContain("\n\n\n");
         });
 
         it("forwards every generated class module as a star re-export", () => {
@@ -342,7 +376,7 @@ describe("framework-compose-plugin", () => {
             // that set is reported as unbundlable, so "one star re-export per
             // module the project has" is the contract between the two, and it is
             // only visible in the emitted source.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [...GENERATED_CLASS_MODULES]);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: [...GENERATED_CLASS_MODULES] });
 
             expect(GENERATED_CLASS_MODULES.every((module) => code.includes(`export * from "./lunora/_generated/${module}"`))).toBe(true);
         });
