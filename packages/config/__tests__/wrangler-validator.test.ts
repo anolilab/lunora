@@ -1757,6 +1757,25 @@ export const schema = defineSchema({
                 expect(result.report.valid).toBe(true);
             });
 
+            it("still decides a barrel chain far longer than a real project's", () => {
+                expect.assertions(1);
+
+                // The ceiling was 24, which a barrel-heavy tree reaches — and
+                // reaching it turns the check off with no signal, including for
+                // classes the entry declares inline. 40 modules deep is already
+                // unrealistic and must still decide.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./m0";\nexport class ShardDO {}\nexport default { fetch() {} };\n`);
+
+                for (let index = 0; index < 40; index += 1) {
+                    const next = index === 39 ? "" : `export * from "./m${String(index + 1)}";\n`;
+
+                    writeFileSync(join(workdir, "src", `m${String(index)}.ts`), next, "utf8");
+                }
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
             it("terminates on a star re-export cycle instead of hanging", () => {
                 expect.assertions(1);
 

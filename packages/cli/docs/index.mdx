@@ -275,7 +275,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).        |
 | `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                         |
 | `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.                   |
+| `wrangler-advisory`              | warn  | A wrangler.jsonc warning no more specific check claimed.                            |
 | `wrangler-class-unexported`      | fail  | A `durable_objects` / `workflows` `class_name` is not exported by the worker entry. |
+| `wrangler-invalid`               | fail  | A wrangler.jsonc validation error no more specific check claimed.                   |
 | `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                      |
 | `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                     |
 | `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                       |

@@ -44,7 +44,9 @@ const DOCTOR_CODES = [
     "version-counter-spread",
     "version-skew-channels",
     "version-skew-cores",
+    "wrangler-advisory",
     "wrangler-class-unexported",
+    "wrangler-invalid",
     "wrangler-missing",
     "wrangler-shard-binding-missing",
     "wrangler-shard-binding-ok",
@@ -165,6 +167,32 @@ const checkWrangler = (cwd: string, parsed: WranglerConfig | undefined, path: st
             level: "warn",
             message: warning,
         });
+    }
+
+    // Everything the validator found that no check above claimed, rather than
+    // dropped. Doctor cherry-picked three findings out of the report and
+    // discarded the rest, so an unchained `.vectors()` / `.global()`, a
+    // container image pointing at a missing Dockerfile, a bad
+    // `compatibility_date` and a missing migration entry all read as a clean
+    // bill of health — from the command whose whole job is to say what it found.
+    //
+    // One catch-all code rather than one per family, so a check added to the
+    // validator later surfaces here by construction instead of being silently
+    // dropped again. The two claimed codes are excluded to keep `--format json`
+    // counts honest.
+    const claimed = (entry: string): boolean => entry.includes(UNEXPORTED_CLASS_MARKER) || entry.includes("SHARD");
+
+    for (const error of report.errors.filter((entry) => !claimed(entry))) {
+        findings.push({
+            code: "wrangler-invalid",
+            fix: "Fix the reported wrangler.jsonc problem; `lunora verify` reports the same set.",
+            level: "fail",
+            message: error,
+        });
+    }
+
+    for (const warning of report.warnings.filter((entry) => !entry.includes("LUNORA_ORIGIN_URL"))) {
+        findings.push({ code: "wrangler-advisory", level: "warn", message: warning });
     }
 
     const shardError = report.errors.find((error) => error.includes("SHARD"));

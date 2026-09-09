@@ -70,11 +70,21 @@ const JS_SPECIFIER_EXTENSIONS: Record<string, ReadonlyArray<string>> = {
 };
 
 /**
- * Ceiling on modules read per {@link readModuleExports} call while following
- * star re-exports. Past it the read gives up and the module reads as opaque —
- * the fail-open direction, because the caller BLOCKS a deploy on what it finds.
+ * Ceiling on modules FOLLOWED out of one entry through star re-exports. Past it
+ * the read gives up and the module reads as opaque — the fail-open direction,
+ * because the caller BLOCKS a deploy on what it finds.
+ *
+ * A runaway guard, not a budget to spend: it was 24, which a barrel-heavy tree
+ * can reach, and reaching it turns the check off with no signal. The cost per
+ * module is one `parseSource` (~1ms — {@link parseSource} skips the lib files
+ * for exactly this reason), and the entry's re-export graph in a real project is
+ * a handful of files, so the ceiling sits far above anything authored rather
+ * than close enough to trip.
+ *
+ * The root does not count against it: an entry that declares its classes inline
+ * should not lose the check because something it stars is wide.
  */
-const MAX_FOLLOWED_MODULES = 24;
+const MAX_FOLLOWED_MODULES = 250;
 
 /**
  * Where the worker entry is, and how confident we are that it IS the entry.
@@ -362,8 +372,8 @@ const resolveRelativeModule = (fromFile: string, specifier: string): string | un
  *
  * A cycle (`a` stars `b` stars `a`) is legal and forwards no new names, so the
  * `seen` set both terminates it and holds the work to one parse per module;
- * `MAX_FOLLOWED_MODULES` caps a wide barrel tree. Both give-up routes, plus an
- * unreadable file, an unparseable one and an unresolvable specifier, report
+ * {@link MAX_FOLLOWED_MODULES} is the runaway guard. Both give-up routes, plus
+ * an unreadable file, an unparseable one and an unresolvable specifier, report
  * `undefined` — the caller BLOCKS a deploy on what this returns.
  *
  * A flat worklist rather than recursion, matching {@link scanAppChains} below.
@@ -376,7 +386,8 @@ const readModuleExports = (entryPath: string): Set<string> | undefined => {
     const pending = [entryPath];
 
     while (pending.length > 0) {
-        if (seen.size > MAX_FOLLOWED_MODULES) {
+        // `- 1` so the ceiling counts FOLLOWED modules, not the entry itself.
+        if (seen.size - 1 > MAX_FOLLOWED_MODULES) {
             return undefined;
         }
 

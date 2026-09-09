@@ -36,12 +36,18 @@ const makeLogger = (): { lines: string[]; logger: Logger } => {
     return { lines, logger: { error: push("error: "), info: push("info: "), success: push("success: "), warn: push("warn: ") } };
 };
 
-/** A clean wrangler.jsonc: SHARD DO binding + a real-looking D1 id. */
+/**
+ * A clean wrangler.jsonc: SHARD DO binding + its migration entry + a real-looking
+ * D1 id. The migration is load-bearing — wrangler requires one per Durable Object
+ * class, and doctor now reports every validator error rather than the three it
+ * used to cherry-pick, so a fixture that omits it is not actually clean.
+ */
 const CLEAN_WRANGLER = JSON.stringify(
     {
         compatibility_date: "2026-04-07",
         d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -54,6 +60,7 @@ const PLACEHOLDER_WRANGLER = JSON.stringify(
         compatibility_date: "2026-04-07",
         d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -231,6 +238,28 @@ describe("runDoctor", () => {
 
         expect(result.code).toBe(1);
         expect(result.findings.some((finding) => finding.code === "wrangler-class-unexported" && finding.message.includes("SchedulerDO"))).toBe(true);
+    });
+
+    it("reports wrangler errors no more specific check claimed, instead of dropping them", async () => {
+        expect.assertions(2);
+
+        // Doctor cherry-picked three findings out of the validator report and
+        // discarded the rest, so a bad `compatibility_date` (and an unchained
+        // `.vectors()`, a container image with no Dockerfile, a missing
+        // migration entry) read as a clean bill of health.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "not-a-date",
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                name: "demo",
+            }),
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-invalid" && finding.message.includes("compatibility_date"))).toBe(true);
     });
 
     it("reports a failure when wrangler.jsonc is missing", async () => {
