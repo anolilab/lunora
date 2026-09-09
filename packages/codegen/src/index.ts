@@ -60,6 +60,7 @@ export {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitScheduler,
     emitServer,
     emitShard,
     emitVectors,

@@ -32,6 +32,7 @@ export {
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
 } from "./remote-bindings";
+export { moduleExportsValue } from "./worker-entry-checks";
 export type { WranglerCacheShape } from "./workers-cache";
 export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type { ReadWranglerResult } from "./wrangler-path";
@@ -50,7 +51,6 @@ export type {
     WranglerWorkflowEntry,
 } from "./wrangler-validator";
 export {
-    declaresSchedulerDurableObject,
     mergeWranglerEnvironment,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,

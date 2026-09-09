@@ -87,6 +87,7 @@ import {
     emitDrizzleSchema,
     emitFunctions,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitShard,
     emitVectors,
@@ -909,6 +910,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
+    const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -1045,6 +1047,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - agents.ts      → `@lunora/agent`, when agents are declared
         writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
         writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
+        writeIfPresent(join(outputDirectory, "scheduler.ts"), schedulerContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);

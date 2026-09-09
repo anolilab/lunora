@@ -321,10 +321,17 @@ describe("framework-compose-plugin", () => {
             // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on
             // the worker, and a class-A app has no hand-written entry to add the
             // re-export to — so deferred dispatch was simply unavailable there.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { scheduler: true });
+            //
+            // Keyed on the generated `scheduler` module, NOT the wrangler binding:
+            // codegen writes that module off the same `hasScheduler` that decides
+            // whether the builder has a `.scheduler()` method at all, so the call
+            // cannot land on a builder that lacks it.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["scheduler"] });
 
             expect(code).toContain(".scheduler({ namespace: (env) => env.SCHEDULER })");
-            expect(code).toContain(`export { SchedulerDO } from "@lunora/scheduler";`);
+            // Forwarded by the ordinary star re-export, so the plugin hard-codes
+            // no `@lunora/scheduler` specifier of its own.
+            expect(code).toContain(`export * from "./lunora/_generated/scheduler";`);
             // Ordered before `.httpRouter(...)`, which `.build()` follows.
             expect(code.indexOf(".scheduler(")).toBeLessThan(code.indexOf(".httpRouter("));
         });
@@ -332,16 +339,16 @@ describe("framework-compose-plugin", () => {
         it("composes nothing scheduler-shaped when the binding is absent", () => {
             expect.assertions(2);
 
-            // The binding IS the opt-in, so an app that never declared one must be
-            // byte-for-byte what it was — a `SchedulerDO` export with no binding is
-            // a class wrangler has nothing to bind.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { scheduler: false });
+            // An app codegen wrote no `scheduler` module for has no scheduler, so
+            // the entry must be byte-for-byte what it was — and must NOT name a
+            // specifier the app has no dependency on.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: [] });
 
             expect(code).not.toContain(".scheduler(");
             expect(code).not.toContain("SchedulerDO");
         });
 
-        describe("discovering lunora/app.config.ts on disk", () => {
+        describe("discovering lunora/app.ts on disk", () => {
             // `buildWorkerEntrySource` is pure and covered above; this drives the
             // `load()` hook against a real directory, which is the only place the
             // probe itself runs. Without it the seam was verified everywhere except
@@ -366,9 +373,27 @@ describe("framework-compose-plugin", () => {
             it("wires the module when it exports configureApp", () => {
                 expect.assertions(1);
 
-                writeFileSync(join(projectRoot, "lunora", "app.config.ts"), `export const configureApp = (app) => app;\n`, "utf8");
+                writeFileSync(join(projectRoot, "lunora", "app.ts"), `export const configureApp = (app) => app;\n`, "utf8");
 
                 expect(loadComposedEntry()).toContain("const app = configureApp(defineApp()");
+            });
+
+            it.each([
+                ["only mentions the name in a comment", `// TODO: export configureApp here later\nexport const other = 1;\n`],
+                ["mentions it in a string", `export const doc = "see configureApp in the docs";\n`],
+                ["exports it as the default", `const configureApp = (app) => app;\nexport default configureApp;\n`],
+                ["exports it as a type only", `export type configureApp = (app: unknown) => unknown;\n`],
+                ["does not parse", `export const configureApp = (app => app;\n`],
+            ])("ignores a module that %s", (_label, source) => {
+                expect.assertions(1);
+
+                // A substring guard fired on every one of these, each producing a
+                // bundle-time "does not provide an export named `configureApp`"
+                // against a virtual module — the failure the guard exists to
+                // prevent. The export is parsed instead.
+                writeFileSync(join(projectRoot, "lunora", "app.ts"), source, "utf8");
+
+                expect(loadComposedEntry()).not.toContain("configureApp");
             });
 
             it("ignores a module that exports something else", () => {
@@ -377,7 +402,7 @@ describe("framework-compose-plugin", () => {
                 // A resolver error naming a virtual module is the least debuggable
                 // failure this plugin can produce, so an unusable file degrades to
                 // the composition it had before.
-                writeFileSync(join(projectRoot, "lunora", "app.config.ts"), `export const somethingElse = 1;\n`, "utf8");
+                writeFileSync(join(projectRoot, "lunora", "app.ts"), `export const somethingElse = 1;\n`, "utf8");
 
                 expect(loadComposedEntry()).not.toContain("configureApp");
             });
@@ -389,7 +414,7 @@ describe("framework-compose-plugin", () => {
             });
         });
 
-        it("composes the app's own builder calls through lunora/app.config.ts", () => {
+        it("composes the app's own builder calls through lunora/app.ts", () => {
             expect.assertions(3);
 
             // The seam for calls this plugin cannot derive. `.scheduler(...)` is
@@ -397,16 +422,16 @@ describe("framework-compose-plugin", () => {
             // `.global(...)` its D1 writer, `.vectors(...)` its embedder — and
             // `resolveIdentity` is only ever set by `.auth()` / `.access()` /
             // `.extend()`, all builder calls a class-A app had no entry to write.
-            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora/app.config.ts" });
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora/app" });
 
-            expect(code).toContain(`import { configureApp } from "/app/lunora/app.config";`);
+            expect(code).toContain(`import { configureApp } from "/app/lunora/app";`);
             expect(code).toContain("const app = configureApp(defineApp()");
             // The framework wiring stays ours: the app's calls land BETWEEN the
             // shard selector and `.httpRouter(...)` / `.build()`.
             expect(code.indexOf("configureApp(")).toBeLessThan(code.indexOf(".httpRouter("));
         });
 
-        it("adds no blank-line churn for an app with no app.config.ts", () => {
+        it("adds no blank-line churn for an app with no app config", () => {
             expect.assertions(2);
 
             // The app-config import carries its own leading newline precisely so

@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { GeneratedClassModule } from "@lunora/config";
 import { GENERATED_CLASS_MODULES } from "@lunora/config";
-import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { declaresSchedulerDurableObject, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { moduleExportsValue } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -116,7 +115,8 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 };
 
 /** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
-const TS_EXTENSION = /\.ts$/u;
+/** The named export the composed entry imports from {@link APP_CONFIG_FILENAME}. */
+const APP_CONFIG_EXPORT = "configureApp";
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
@@ -140,14 +140,12 @@ interface WorkerEntryComposition {
     appConfigModule?: string;
     /** The `_generated/` class modules that exist, each star-re-exported. */
     classModules?: ReadonlyArray<GeneratedClassModule>;
-    /** Whether the config declares the `SchedulerDO` binding — see {@link composesScheduler}. */
-    scheduler?: boolean;
     /** Per-shard knobs, each key named after the builder method that sets it. */
     shard?: LunoraShardConfig;
 }
 
 const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
-    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], scheduler = false, shard = {} } = composition;
+    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], shard = {} } = composition;
 
     const wiring = CLASS_A_WIRING[framework];
 
@@ -174,36 +172,27 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
 
     // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
-    // worker (`create-worker`'s `schedulerDO`), and the class-A entry is
-    // generated — so a project had no file to add the re-export to and deferred
-    // dispatch was simply unavailable, while `verify` could only say so.
+    // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so
+    // a class-A project had no file to add the re-export to and deferred dispatch
+    // was unreachable.
     //
-    // The opt-in is the BINDING, not a plugin option. `wrangler.jsonc` is the one
-    // input `lunora verify` / `deploy` / `doctor` and this plugin all read, so
-    // they agree on whether the entry exports the class; a `vite.config.ts` flag
-    // is invisible to the CLI, and the export cross-check would then hard-error
-    // exactly the projects this enables. Declaring the binding also keeps its
-    // `migrations` entry the user's own deliberate act — wrangler migration tags
-    // are append-only.
-    const schedulerCall = scheduler ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
-    const schedulerReexport = scheduler ? `\nexport { SchedulerDO } from "@lunora/scheduler";\n` : "";
+    // Keyed on the generated `scheduler` module, which codegen writes off the
+    // same `hasScheduler` that decides whether the builder HAS a `.scheduler()`
+    // method — so the call and the method cannot disagree, and the class is
+    // forwarded by the ordinary star re-export below rather than a specifier this
+    // plugin hard-codes. Keying it on the `wrangler.jsonc` binding instead let a
+    // project declare the binding with no scheduler code and get
+    // `TypeError: ….scheduler is not a function` at worker boot.
+    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
 
-    // The seam for builder calls this plugin CANNOT derive. `.scheduler(...)` is
-    // mechanical — `(env) => env.SCHEDULER` and nothing else — but `.auth(...)`
-    // takes the app's better-auth options, `.global(...)` its D1 writer, and
-    // `.vectors(...)` its embedder. A class-A app has no hand-written entry to
-    // chain those on, so they were simply unreachable: `resolveIdentity` is only
-    // ever set by `.auth()` / `.access()` / `.extend()`, all builder calls.
-    //
     // `configureApp` receives the builder and returns it, so the framework wiring
     // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
-    // are chained in between.
+    // are chained in between. See the docs for why the seam exists at all.
     // Carries its OWN leading newline so an app without the module gets output
     // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
     // stripped for the same reason the sibling `/app` import has none: the
     // bundler resolves the extension.
-    const appConfigImport =
-        appConfigModule === undefined ? "" : `\nimport { configureApp } from "${appConfigModule.replaceAll("\\", "/").replace(TS_EXTENSION, "")}";`;
+    const appConfigImport = appConfigModule === undefined ? "" : `\nimport { ${APP_CONFIG_EXPORT} } from "${appConfigModule}";`;
     const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["configureApp(", ")"];
 
     // Each declared `shard` knob as its `defineApp()` builder call. Every
@@ -248,60 +237,38 @@ const app = ${configureOpen}defineApp()
     .build();
 
 export const ShardDO = app.ShardDO;
-${schedulerReexport}${classReexports}
+${classReexports}
 export default app;
 `;
 };
 
 /**
  * The optional module a class-A app puts its own builder calls in, under the
- * schema directory. Named for the convention every other Lunora seam follows
- * (`lunora/identity.ts`, `lunora/crons.ts`, `lunora/containers.ts`, …): a
- * conventional path, discovered rather than configured.
+ * schema directory — a conventional path, discovered rather than configured.
+ *
+ * `app.ts`, not `app.config.ts`: every sibling seam is a bare noun
+ * (`identity.ts`, `env.ts`, `crons.ts`, `notify.ts`), and the dotted form
+ * collides with the ROOT `app.config.ts` that Vinxi-era TanStack Start and
+ * SolidStart projects carry — which is exactly this feature's audience.
  */
-const APP_CONFIG_FILENAME = "app.config.ts";
+const APP_CONFIG_FILENAME = "app.ts";
 
 /**
  * The app-config module to compose through, or `undefined` when there is none.
  *
- * The `configureApp` text check is not belt-and-braces: a file that exists but
- * exports something else fails the BUNDLE with a resolver error naming a
- * generated virtual module, which is the least debuggable error this plugin
- * could produce. Absent-or-unusable degrades to today's behaviour instead.
+ * The export is verified by PARSING, not by a substring. A file that merely
+ * mentions `configureApp` in a comment — or exports it as a type, or as the
+ * default, or does not parse — fails the BUNDLE with "does not provide an export
+ * named `configureApp`" against a virtual module, the least debuggable error this
+ * plugin can produce. Anything unverifiable degrades to composing without it.
  */
 const appConfigModule = (projectRoot: string, schemaDirectory: string): string | undefined => {
     const path = resolve(projectRoot, schemaDirectory, APP_CONFIG_FILENAME);
 
-    if (!existsSync(path)) {
-        return undefined;
-    }
-
-    try {
-        return readFileSync(path, "utf8").includes("configureApp") ? path : undefined;
-    } catch {
-        return undefined;
-    }
-};
-
-/**
- * Whether the project's `wrangler.jsonc` declares the `SchedulerDO` binding —
- * the opt-in for `ctx.scheduler` on a class-A app.
- *
- * Read fresh from disk at `load()` rather than off a plugin option, because the
- * SAME file is what `lunora verify` / `deploy` / `doctor` decide the composed
- * entry's exports from. An unreadable or absent config means "no", which matches
- * what the export cross-check concludes from the same absence.
- */
-const composesScheduler = (projectRoot: string): boolean => {
-    const wranglerPath = findWranglerFile(projectRoot);
-
-    if (wranglerPath === undefined) {
-        return false;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
-
-    return parsed !== undefined && declaresSchedulerDurableObject(parsed);
+    // Posix-ified and extension-stripped HERE, so the emitter receives a finished
+    // specifier: `resolve()` yields backslashes on Windows (invalid escapes once
+    // interpolated into a string literal) and the bundler resolves the extension.
+    return moduleExportsValue(path, APP_CONFIG_EXPORT) ? path.replaceAll("\\", "/").slice(0, -".ts".length) : undefined;
 };
 
 /**
@@ -355,7 +322,6 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                     allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
                     appConfigModule: appConfigModule(options.projectRoot, options.schemaDir),
                     classModules,
-                    scheduler: composesScheduler(options.projectRoot),
                     shard: options.shard,
                 });
             }
@@ -373,5 +339,5 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     };
 };
 
-export type { ClassAWiring };
+export type { ClassAWiring, WorkerEntryComposition };
 export { APP_CONFIG_FILENAME, buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

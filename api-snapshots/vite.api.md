@@ -179,6 +179,17 @@ interface ViteRemotePlan {
 const WORKER_STARTUP_HINT: string;
 ```
 
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    shard?: LunoraShardConfig;
+}
+```
+
 ### `augmentWorkerStartupError` (const)
 
 ```ts
@@ -340,17 +351,5 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface LunoraPluginContext {
     framework?: FrameworkDetection;
-}
-```
-
-### `WorkerEntryComposition` (interface)
-
-```ts
-interface WorkerEntryComposition {
-    allowUnauthenticatedShardAccess?: boolean;
-    appConfigModule?: string;
-    classModules?: ReadonlyArray<GeneratedClassModule>;
-    scheduler?: boolean;
-    shard?: LunoraShardConfig;
 }
 ```

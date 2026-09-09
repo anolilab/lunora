@@ -1279,15 +1279,13 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
 /**
  * Whether this config declares the `SchedulerDO` in THIS script.
  *
- * Load-bearing beyond the origin warning below: it is the opt-in signal for
- * `ctx.scheduler` on a class-A app. `@lunora/vite` composes `.scheduler(...)` and
- * the `SchedulerDO` re-export into the generated entry off this same predicate,
- * and `readComposedEntry` decides that entry's export set off it, so the plugin
- * and the export cross-check cannot disagree. A `vite.config.ts` option could
- * not do that job — `verify` / `deploy` / `doctor` never read that file.
- *
  * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
  * owns it; same carve-out as the migration and unexported-class checks.
+ *
+ * Deliberately NOT the class-A `ctx.scheduler` opt-in: this reads the `--env`
+ * MERGED view, `durable_objects` is non-inheritable, and `@lunora/vite` has no
+ * `--env` to read — so an env-scoped binding made the two disagree about what
+ * the entry exports. The generated `scheduler` module is that signal instead.
  */
 const declaresSchedulerDurableObject = (wrangler: WranglerConfig): boolean =>
     objectBindingEntries(wrangler.durable_objects?.bindings).some((binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined);
@@ -1833,7 +1831,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // `undefined` means the entry cannot be decided (no resolvable file, or one
     // that does not parse), and the export check then reports nothing.
     const entryLocation = locateWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
-    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory, declaresSchedulerDurableObject(resolvedWrangler));
+    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory);
 
     report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
     report.warnings.push(...collectMissingEntryWarning(entryLocation));
@@ -1890,7 +1888,6 @@ export type {
 // hit the same raw `TypeError` on a `null` entry. Package-internal only — the
 // `./cloudflare` barrel re-exports by name and deliberately does not list them.
 export {
-    declaresSchedulerDurableObject,
     mergeWranglerEnvironment,
     objectBindingEntries,
     REQUIRED_COMPATIBILITY_DATE,

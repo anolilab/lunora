@@ -2042,22 +2042,27 @@ export const schema = defineSchema({
                     expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
                 });
 
-                it("counts SchedulerDO as exported once its binding is declared", () => {
+                it("counts SchedulerDO as exported once codegen has written the scheduler module", () => {
                     expect.assertions(2);
 
-                    // Declaring the binding is what makes `@lunora/vite` compose
-                    // `.scheduler(...)` and the re-export into the generated
-                    // entry, so the binding is its own opt-in AND its own remedy.
-                    // The two read the same input; if they ever disagree, `verify`
-                    // hard-errors exactly the projects that enables.
+                    // `@lunora/vite` star-re-exports every `_generated/` class
+                    // module that exists, so the presence of `scheduler.ts` IS the
+                    // fact — and codegen writes it off the same `hasScheduler`
+                    // that decides whether the builder has a `.scheduler()` method
+                    // at all. Keying this on the wrangler binding instead made the
+                    // plugin and the validator disagree under `--env`, and let a
+                    // binding-only project compose a call onto a builder without
+                    // the method.
                     writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
                     mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "scheduler.ts"), `export { SchedulerDO } from "@lunora/scheduler";\n`, "utf8");
 
-                    const result = validateWranglerProject({ projectRoot: workdir });
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
 
-                    expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
-                    // The remaining wiring step is surfaced, not silently assumed.
-                    expect(result.report.warnings.join("\n")).toContain("LUNORA_ORIGIN_URL");
+                    // Without that module the class is genuinely not exported.
+                    rmSync(join(workdir, "lunora", "_generated", "scheduler.ts"));
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
                 });
 
                 it("does not tell a framework Durable Object to declare itself as an agent or container", () => {

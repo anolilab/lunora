@@ -529,6 +529,7 @@ interface FrameworkDetection {
 const GENERATED_CLASS_MODULES: readonly [
     "agents",
     "containers",
+    "scheduler",
     "workflows"
 ];
 ```
@@ -2113,12 +2114,6 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
 ```
 
-### `declaresSchedulerDurableObject` (const)
-
-```ts
-const declaresSchedulerDurableObject: (wrangler: WranglerConfig) => boolean;
-```
-
 ### `describePreservedCrons` (const)
 
 ```ts
@@ -2159,6 +2154,12 @@ const materializeRemoteWranglerConfig: (options: MaterializeOptions) => Material
 
 ```ts
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
+```
+
+### `moduleExportsValue` (const)
+
+```ts
+const moduleExportsValue: (path: string, name: string) => boolean;
 ```
 
 ### `planRemoteBindings` (const)

@@ -11,6 +11,7 @@ import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
 import { computeConfigFingerprint } from "./config-fingerprint";
+import { APP_CONFIG_FILENAME } from "./framework-compose-plugin";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
 import { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-wrangler";
@@ -808,6 +809,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             const configWatchPaths = new Set<string>([
                 ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
                 resolve(options.projectRoot, LUNORA_CONFIG_FILE),
+                // The class-A app-config seam. `load()` reads it once when the
+                // composed entry is built, and nothing invalidates a virtual
+                // module — so CREATING the file mid-session silently did nothing
+                // until a manual restart.
+                resolve(options.projectRoot, options.schemaDir, APP_CONFIG_FILENAME),
             ]);
 
             for (const configPath of configWatchPaths) {
