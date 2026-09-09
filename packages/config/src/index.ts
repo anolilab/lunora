@@ -73,6 +73,7 @@ export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResul
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export {
+    APP_CONFIG_FILENAME,
     interpretRemote,
     LUNORA_CONFIG_FILE,
     readProjectRemotePreference,

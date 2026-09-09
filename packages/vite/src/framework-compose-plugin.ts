@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { GeneratedClassModule } from "@lunora/config";
-import { GENERATED_CLASS_MODULES } from "@lunora/config";
+import { APP_CONFIG_FILENAME, GENERATED_CLASS_MODULES } from "@lunora/config";
 import { moduleExportsValue } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
@@ -243,17 +243,6 @@ export default app;
 };
 
 /**
- * The optional module a class-A app puts its own builder calls in, under the
- * schema directory — a conventional path, discovered rather than configured.
- *
- * `app.ts`, not `app.config.ts`: every sibling seam is a bare noun
- * (`identity.ts`, `env.ts`, `crons.ts`, `notify.ts`), and the dotted form
- * collides with the ROOT `app.config.ts` that Vinxi-era TanStack Start and
- * SolidStart projects carry — which is exactly this feature's audience.
- */
-const APP_CONFIG_FILENAME = "app.ts";
-
-/**
  * The app-config module to compose through, or `undefined` when there is none.
  *
  * The export is verified by PARSING, not by a substring. A file that merely
@@ -340,4 +329,4 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
 };
 
 export type { ClassAWiring, WorkerEntryComposition };
-export { APP_CONFIG_FILENAME, buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

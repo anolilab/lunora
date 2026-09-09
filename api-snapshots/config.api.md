@@ -39,6 +39,12 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
 const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 ```
 
+### `APP_CONFIG_FILENAME` (const)
+
+```ts
+const APP_CONFIG_FILENAME = "app.ts";
+```
+
 ### `AddIndexEdit` (interface)
 
 ```ts
