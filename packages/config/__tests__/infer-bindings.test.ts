@@ -201,6 +201,26 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it.each([
+        ["a traversal that cancels a build directory", "dist/../src/entry.ts"],
+        ["a `./` prefix", "./src/entry.ts"],
+        ["no prefix at all", "src/entry.ts"],
+    ])("provisions off a main written with %s", async (_label, main) => {
+        expect.assertions(1);
+
+        // The build-output gate classifies by path segment, so it has to resolve
+        // the path first: dropping `..` on its own left `dist` behind and read
+        // `dist/../src/entry.ts` as build output, discarding the declared entry.
+        write("wrangler.jsonc", `{ "name": "app", "main": "${main}", "compatibility_date": "2026-04-07" }`);
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
     it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
         expect.assertions(2);
 

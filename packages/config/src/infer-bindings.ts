@@ -84,6 +84,31 @@ const SOURCE_DOT_DIRECTORIES: ReadonlySet<string> = new Set([".client", ".server
 const PATH_SEPARATOR = /[/\\]/u;
 
 /**
+ * A relative path's segments with `.` dropped and `..` applied — the resolution
+ * `node:path` would do, but separator-agnostic so a Windows-style `main` behaves
+ * the same on a posix host (`node:path.normalize` treats `\` as an ordinary
+ * character there). A leading `..` that escapes the root is kept: it is not a
+ * directory name, and no caller treats it as one.
+ */
+const normalizeSegments = (relativePath: string): string[] => {
+    const segments: string[] = [];
+
+    for (const segment of relativePath.split(PATH_SEPARATOR)) {
+        if (segment === "" || segment === ".") {
+            continue;
+        }
+
+        if (segment === ".." && segments.length > 0 && segments.at(-1) !== "..") {
+            segments.pop();
+        } else {
+            segments.push(segment);
+        }
+    }
+
+    return segments;
+};
+
+/**
  * Whether `main` points INTO a build-output location — the same
  * {@link NON_SOURCE_DIRECTORIES} the project scan skips, plus every
  * dot-directory by prefix (`.svelte-kit`, `.output`, `.vercel`, `.next`) minus
@@ -94,15 +119,14 @@ const PATH_SEPARATOR = /[/\\]/u;
  * is an ordinary entry, and both are `.js`.
  */
 const isGeneratedOutput = (relativeMain: string): boolean =>
-    relativeMain
-        .split(PATH_SEPARATOR)
+    // Normalized FIRST, with stack semantics, because a traversal cancels the
+    // segment before it: `dist/../src/server.ts` names an authored entry, and
+    // merely dropping the `..` left `dist` behind and classified it as build
+    // output. Reading a declared entry as build output discarded it — the
+    // validator then blocked the deploy naming whichever fallback it probed, and
+    // inference provisioned off that file, not even SHARD.
+    normalizeSegments(relativeMain)
         .slice(0, -1)
-        // `.` and `..` start with a dot and are not tool state — `"./src/entry.ts"`
-        // is an idiomatic `main` that wrangler accepts. Reading them as build
-        // output discarded the DECLARED entry, so the validator blocked the deploy
-        // naming whichever fallback it probed instead, and inference provisioned
-        // off that file — not even SHARD.
-        .filter((segment) => segment !== "." && segment !== "..")
         .some((segment) => NON_SOURCE_DIRECTORIES.has(segment) || (segment.startsWith(".") && !SOURCE_DOT_DIRECTORIES.has(segment)));
 
 /**

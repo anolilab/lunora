@@ -465,7 +465,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // queued from `reconcileBindings` now matches this baseline (or is
             // absorbed by the unsettled guard if it arrives before this line).
             if (devServer !== undefined) {
-                configFingerprint = computeConfigFingerprint(options.projectRoot);
+                configFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
                 configBaselineSettled = true;
             }
         },
@@ -482,7 +482,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // finishes its reconcile+re-baseline, config events only adopt (never
             // restart), so this hook's own boot — and a `server.restart()`'s —
             // can't restart on its own binding-provisioning write.
-            configFingerprint = computeConfigFingerprint(options.projectRoot);
+            configFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
             configBaselineSettled = false;
 
             // Reuse the dev server's logger for codegen output. Declared here
@@ -830,7 +830,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                const nextFingerprint = computeConfigFingerprint(options.projectRoot);
+                const nextFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
 
                 // Startup window: buildStart may still be provisioning bindings into
                 // wrangler.jsonc. Adopt those writes as the baseline rather than
