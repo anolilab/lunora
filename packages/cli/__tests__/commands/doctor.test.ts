@@ -200,6 +200,39 @@ describe("runDoctor", () => {
         expect(finding?.message).toContain("could not check");
     });
 
+    it("fails when a declared Durable Object class is not exported by the worker entry", async () => {
+        expect.assertions(2);
+
+        // Doctor read the PURE config validator, which cannot see the entry — so
+        // the `durable_objects.bindings[].class_name` cross-check never ran here
+        // and doctor passed a tree wrangler refuses to bundle. Its own
+        // `declared-export-missing` check covers containers/workflows/agents off
+        // inference and stopped there — which is why this one has its own code
+        // rather than reusing that one: both fire for a container, and
+        // `DOCTOR_CODES` is the `--format json` contract a CI job counts.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "2026-04-07",
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "SchedulerDO", name: "SCHEDULER" },
+                    ],
+                },
+                main: "src/server.ts",
+                name: "demo",
+            }),
+        );
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-class-unexported" && finding.message.includes("SchedulerDO"))).toBe(true);
+    });
+
     it("reports a failure when wrangler.jsonc is missing", async () => {
         expect.assertions(2);
 

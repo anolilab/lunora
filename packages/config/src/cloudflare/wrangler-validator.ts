@@ -15,11 +15,12 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
+import { COMPOSED_ENTRY_DURABLE_OBJECTS, GENERATED_CLASS_MODULES, isFrameworkDurableObject } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
-import type { CapabilityMethod, WorkerEntry } from "./worker-entry-checks";
-import { readWorkerEntry, scanAppChains } from "./worker-entry-checks";
+import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
+import { locateWorkerEntry, readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -1610,6 +1611,58 @@ const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projec
 };
 
 /**
+ * The phrase every unexported-class error carries.
+ *
+ * Exported because it is a CONTRACT, not prose: `lunora doctor` picks these
+ * errors out of the report by substring to raise its own finding, and the
+ * validator's report is a flat `string[]`. Until the report entries carry a
+ * code, a copy-edit here would silently disable that check — so the copy-edit
+ * has to go through this constant.
+ */
+const UNEXPORTED_CLASS_MARKER = "does not export it";
+
+/**
+ * What to tell a user whose entry does not export a declared class. Three cases,
+ * because the wrong instruction is worse than none.
+ *
+ * An AUTHORED entry can simply re-export it — either by hand, or off the
+ * generated app builder, which hands the class back on `app`.
+ *
+ * The class-A composed entry cannot: `@lunora/vite` GENERATES it, so there is no
+ * file to add a line to. It forwards whatever codegen emitted, so a project's
+ * OWN class gets there by being declared where codegen looks.
+ *
+ * Lunora's own Durable Objects (`SchedulerDO`, `SessionDO`) are the case that
+ * has no route at all on class-A: they are not `defineAgent` / `defineContainer`
+ * / `defineWorkflow` declarations, so no amount of editing those files makes
+ * codegen emit them, and the composed entry never carried them. Saying "declare
+ * it in one of those" pointed the user at hours of dead end.
+ */
+const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
+    if (kind !== "composed") {
+        return (
+            `Re-export it from the module that defines it (\`export { ${className} } from "./…";\`), ` +
+            `or add it to the app builder's own export (\`export const { ${className} } = app;\`).`
+        );
+    }
+
+    const composedExports = `it exports ${COMPOSED_ENTRY_DURABLE_OBJECTS.join(", ")} plus every class codegen emits from your ${GENERATED_CLASS_MODULES.map((module) => `${module}.ts`).join(" / ")} declarations`;
+
+    if (isFrameworkDurableObject(className)) {
+        return (
+            `\`@lunora/vite\` generates that entry — ${composedExports}, and ${className} is not among them. ` +
+            `Class-A composition cannot export it, so drop the binding; a project that needs ${className} has to own its worker entry ` +
+            `(add \`src/worker.ts\`, which \`lunora deploy\` bundles in place of \`main\`, and compose \`defineApp()\` there).`
+        );
+    }
+
+    return (
+        `\`@lunora/vite\` generates that entry, so there is no file to add a re-export to: ${composedExports}. ` +
+        `Declare "${className}" in one of those and re-run \`lunora codegen\`, or drop the binding.`
+    );
+};
+
+/**
  * Report every `durable_objects.bindings[].class_name` and
  * `workflows[].class_name` the worker entry does not export.
  *
@@ -1658,17 +1711,40 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEnt
 
     const missing = declared.filter((candidate) => !exported.has(candidate.className));
 
-    // The remedy names both wirings, because the blocked user is on one of two
-    // paths and the wrong instruction is worse than none: a hand-written entry
-    // re-exports the class, while the generated app builder hands it back on
-    // `app` and the entry destructures it.
     return missing.map(
         (missed) =>
-            `${missed.label} declares class "${missed.className}" but the worker entry (${entry.path}) does not export it — ` +
-            `wrangler refuses to bundle a Worker whose Durable Object classes are not exported. ` +
-            `Re-export it from the module that defines it (\`export { ${missed.className} } from "./…";\`), ` +
-            `or add it to the app builder's own export (\`export const { ${missed.className} } = app;\`).`,
+            `${missed.label} declares class "${missed.className}" but the ` +
+            `${entry.kind === "composed" ? "composed class-A worker entry" : "worker entry"} (${entry.path}) ${UNEXPORTED_CLASS_MARKER} — ` +
+            // The noun follows the LABEL, not the check: `workflows[]` names a
+            // WorkflowEntrypoint, and calling it a Durable Object sent readers
+            // looking for a migration entry that does not apply to it.
+            `wrangler refuses to bundle a Worker whose ${missed.label === "workflows" ? "Workflow" : "Durable Object"} classes are not exported. ${remedyFor(missed.className, entry.kind)}`,
     );
+};
+
+/**
+ * `main` names a file `wrangler` will not find. {@link locateWorkerEntry} has
+ * already decided that — build output and the class-A virtual specifier get
+ * their own arms — so this only formats the `"absent"` one.
+ *
+ * A WARNING, not an error, and deliberately the weaker of the two — same call as
+ * the `assets.directory` check below. It reports on a state a tree passes THROUGH
+ * (`wrangler.jsonc` reconciled before the entry is written, an entry mid-rename),
+ * and `@lunora/vite` throws on an error here, so blocking would stop `lunora dev`
+ * on a project that is one keystroke from correct.
+ */
+const collectMissingEntryWarning = (location: WorkerEntryLocation): string[] => {
+    if (location?.origin !== "absent") {
+        return [];
+    }
+
+    // `existsSync` decided this, and it answers `false` for an unreadable parent
+    // directory too — so the wording says what was observed, not that the file
+    // is definitely gone.
+    return [
+        `main is set but no readable file is there (looked in ${location.path}) — wrangler cannot resolve the worker entry, so a deploy will fail there. ` +
+            `Point main at the entry that composes your app, or remove it to fall back to the conventional locations.`,
+    ];
 };
 
 /**
@@ -1740,9 +1816,11 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // exited 0 on a tree `lunora build` rejects.
     // `undefined` means the entry cannot be decided (no resolvable file, or one
     // that does not parse), and the export check then reports nothing.
-    const workerEntry = readWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
+    const entryLocation = locateWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
+    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory);
 
     report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
+    report.warnings.push(...collectMissingEntryWarning(entryLocation));
 
     if (workerEntry !== undefined) {
         report.errors.push(...collectUnexportedClassErrors(resolvedWrangler, workerEntry));
@@ -1801,6 +1879,7 @@ export {
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
     stringEntries,
+    UNEXPORTED_CLASS_MARKER,
     validateWrangler,
     validateWranglerConfig,
     validateWranglerProject,

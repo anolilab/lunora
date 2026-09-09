@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
+import { collectExportGaps, findWranglerFile, readWranglerJsonc, UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
@@ -44,6 +44,7 @@ const DOCTOR_CODES = [
     "version-counter-spread",
     "version-skew-channels",
     "version-skew-cores",
+    "wrangler-class-unexported",
     "wrangler-missing",
     "wrangler-shard-binding-missing",
     "wrangler-shard-binding-ok",
@@ -116,7 +117,7 @@ const readWrangler = (cwd: string): { parsed: WranglerConfig | undefined; path: 
 };
 
 /** Check `wrangler.jsonc` is present and declares the SHARD DO binding (via the shared config validator). */
-const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
+const checkWrangler = (cwd: string, parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
     if (path === undefined) {
         findings.push({
             code: "wrangler-missing",
@@ -134,7 +135,25 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
         return;
     }
 
-    const report = validateWranglerConfig(parsed);
+    // The FS-AWARE validator, not `validateWranglerConfig`. Doctor read the pure
+    // one, which cannot see the worker entry — so the check that cross-checks
+    // every declared Durable Object / Workflow `class_name` against the entry's
+    // exports never ran here, and `doctor` gave a clean bill of health to a tree
+    // `wrangler` refuses to bundle. Its own `declared-export-missing` check
+    // covers containers/workflows/agents off inference, and stopped there.
+    const { report } = validateWranglerProject({ projectRoot: cwd });
+
+    // Its OWN code, not `declared-export-missing`. That one is emitted from
+    // binding inference over the schema's declarations (`checkDeclaredExports`),
+    // and containers/workflows/agents reach `wrangler.jsonc` too — so both fire
+    // for the same class. `DOCTOR_CODES` is "the contract behind `--format
+    // json`", per the block above, and a job counting one code must not
+    // double-count. This one is the wrangler-config view: it also covers
+    // `SchedulerDO` / `SessionDO` and hand-written classes, which inference
+    // never sees. The validator carries the full remedy in the message.
+    for (const error of report.errors.filter((entry) => entry.includes(UNEXPORTED_CLASS_MARKER))) {
+        findings.push({ code: "wrangler-class-unexported", level: "fail", message: error });
+    }
 
     // `doctor`'s job is "tell me what is misconfigured", so it reports the
     // scheduler-origin warning too. Reading only the SHARD error gave a clean
@@ -584,7 +603,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     const { parsed, path } = readWrangler(cwd);
 
-    checkWrangler(parsed, path, findings);
+    checkWrangler(cwd, parsed, path, findings);
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
     checkDevVariables(cwd, findings);

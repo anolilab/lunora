@@ -9,6 +9,7 @@
  * plus assert the emitted source routes `/_lunora/*` to Lunora and falls
  * through to the framework handler.
  */
+import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import type { Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 
@@ -304,6 +305,20 @@ describe("framework-compose-plugin", () => {
 
             // Keys sorted, so the emitted entry does not churn on literal ordering.
             expect(code).toContain('.cdc(true)\n    .reactiveCache({"maxEntries":250})\n    .relationExistsPushDown("never")');
+        });
+
+        it("forwards every generated class module as a star re-export", () => {
+            expect.assertions(1);
+
+            // `@lunora/config`'s wrangler validator DECIDES which classes this
+            // entry exports by reading these modules off `GENERATED_CLASS_MODULES`
+            // (which it owns — this plugin re-exports it). A `class_name` outside
+            // that set is reported as unbundlable, so "one star re-export per
+            // module the project has" is the contract between the two, and it is
+            // only visible in the emitted source.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [...GENERATED_CLASS_MODULES]);
+
+            expect(GENERATED_CLASS_MODULES.every((module) => code.includes(`export * from "./lunora/_generated/${module}"`))).toBe(true);
         });
 
         it("imports nothing but the framework handler and the generated builder", () => {

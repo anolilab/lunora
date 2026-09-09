@@ -257,28 +257,29 @@ describes everything that was checked, not only what went wrong.
 Branch on `finding.code`, never on `message`: the codes are the contract, the
 prose is not. New codes are added over time; treat an unknown one as advisory.
 
-| Code                             | Level | Meaning                                                                        |
-| -------------------------------- | ----- | ------------------------------------------------------------------------------ |
-| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).           |
-| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                   |
-| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                         |
-| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                           |
-| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry.   |
-| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.       |
-| `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.      |
-| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                |
-| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                |
-| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.  |
-| `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped. |
-| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.         |
-| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                     |
-| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).   |
-| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                    |
-| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.              |
-| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                 |
-| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                |
-| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                  |
-| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                             |
+| Code                             | Level | Meaning                                                                             |
+| -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
+| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                |
+| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                        |
+| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                              |
+| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                |
+| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry.        |
+| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.            |
+| `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.           |
+| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                     |
+| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                     |
+| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.       |
+| `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.      |
+| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.              |
+| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                          |
+| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).        |
+| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                         |
+| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.                   |
+| `wrangler-class-unexported`      | fail  | A `durable_objects` / `workflows` `class_name` is not exported by the worker entry. |
+| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                      |
+| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                     |
+| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                       |
+| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                                  |
 
 ### `lunora dev`
 
@@ -562,6 +563,18 @@ diagnostics, the schema-drift gate, and ERROR-level advisories — so a project
 `verify` passes is one `prepare` and `deploy` accept. The advisory gate takes the
 same `--no-strict-advisories` opt-out and the same CI-on/local-off default as
 everywhere else.
+
+Pass `--env <name>` to validate the `env.<name>` view of `wrangler.jsonc`, the
+way `lunora deploy --env <name>` will. It matters for bindings: `durable_objects`
+is not inheritable, so one declared only under `env.production` is invisible from
+the top level, and a PR check without the flag validates a surface the deploy
+does not use.
+
+Part of the wrangler validation is a cross-check of every declared
+`durable_objects` / `workflows` `class_name` against the worker entry's exports —
+wrangler refuses to bundle a Worker whose classes are not exported, and that used
+to surface only at `lunora build`. `lunora doctor` reports the same finding as
+`wrangler-class-unexported`.
 
 ### `lunora migrate`
 

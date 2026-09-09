@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import type { GeneratedClassModule } from "@lunora/config";
+import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -110,18 +112,6 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 
     return detected?.class === "A" && CLASS_A_WIRING[detected.framework] !== undefined;
 };
-
-/**
- * The `_generated/` modules whose exported classes wrangler validates a
- * `class_name` against: container Durable Objects, workflow entrypoints, and
- * agent (workflow) entrypoints — the same three kinds `reconcile-bindings`
- * writes into `wrangler.jsonc`. The composed entry star-re-exports each module
- * the project actually has.
- */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
-
-/** One {@link GENERATED_CLASS_MODULES} entry. */
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
@@ -285,5 +275,5 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     };
 };
 
-export type { ClassAWiring, GeneratedClassModule };
-export { buildWorkerEntrySource, CLASS_A_WIRING, GENERATED_CLASS_MODULES, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export type { ClassAWiring };
+export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

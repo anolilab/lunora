@@ -523,6 +523,22 @@ interface FrameworkDetection {
 }
 ```
 
+### `GENERATED_CLASS_MODULES` (const)
+
+```ts
+const GENERATED_CLASS_MODULES: readonly [
+    "agents",
+    "containers",
+    "workflows"
+];
+```
+
+### `GeneratedClassModule` (type)
+
+```ts
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
+
 ### `HookLogger` (interface)
 
 ```ts
@@ -1588,7 +1604,7 @@ interface ExportGap {
     className: string;
     exportName: string;
     kind: "agent" | "container" | "workflow";
-    module: "agents" | "containers" | "workflows";
+    module: GeneratedClassModule;
 }
 ```
 
@@ -1804,6 +1820,12 @@ interface TailConsumer {
     environment?: string;
     service?: string;
 }
+```
+
+### `UNEXPORTED_CLASS_MARKER` (const)
+
+```ts
+const UNEXPORTED_CLASS_MARKER = "does not export it";
 ```
 
 ### `WORKERS_CACHE_MIN_DATE` (const)

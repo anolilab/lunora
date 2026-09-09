@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +190,68 @@ describe("lunora verify", () => {
             expect(result.code).toBe(1);
             expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
             expect(result.errors.some((error) => error.toLowerCase().includes("ai"))).toBe(true);
+        });
+
+        describe("--env", () => {
+            /**
+             * `durable_objects` is non-inheritable, so an env-scoped binding is
+             * invisible from the top level. `verify` read the top level only —
+             * the cheap PR-CI gate validated a different surface from the
+             * `deploy --env` that would ship, and an env-only binding naming an
+             * unexported class was never cross-checked at all.
+             */
+            const ENV_SCOPED_WRANGLER = `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "y" }],
+    "env": {
+        "production": {
+            "durable_objects": {
+                "bindings": [
+                    { "name": "SHARD", "class_name": "ShardDO" },
+                    { "name": "SCHEDULER", "class_name": "SchedulerDO" }
+                ]
+            }
+        }
+    }
+}
+`;
+
+            const seedEnvScopedProject = (): void => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), ENV_SCOPED_WRANGLER, "utf8");
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+            };
+
+            it("validates the env.<name> view, catching a binding the top level never declares", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, env: "production", logger, typecheck: false });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("leaves the top-level view green — the env binding is not part of it", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+                expect(result.code).toBe(0);
+                expect(result.errors).toEqual([]);
+            });
         });
 
         it("returns 1 and surfaces wrangler errors", async () => {

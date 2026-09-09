@@ -29,6 +29,14 @@ interface VerifyCommandOptions {
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+
+    /**
+     * Cloudflare environment name. Validates the `env.<name>` view of
+     * `wrangler.jsonc`, the way `lunora deploy --env` does — omitted, the top
+     * level is validated, which is the wrong surface for an env-scoped project.
+     */
+    env?: string;
+
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
     /** Injectable fetch for the health probe; defaults to the global `fetch`. */
@@ -200,7 +208,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         return { code: 1, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
     }
 
-    const validation = validateWrangler({ projectRoot: cwd });
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
     const errors: string[] = [...validation.report.errors];
     const warnings: string[] = [...validation.report.warnings];
 
@@ -285,6 +293,7 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
+        env: options.env,
         format: options.format,
         healthUrl: options.healthUrl,
         logger,

@@ -228,20 +228,8 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devStatePlugin } from "./dev-state-plugin";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
-// Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
-// class-A template points its wrangler `main` at (or re-exports) so the worker
-// composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
-// is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
-// `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
-export type { ClassAWiring, GeneratedClassModule } from "./framework-compose-plugin";
-export {
-    buildWorkerEntrySource,
-    CLASS_A_WIRING,
-    frameworkComposePlugin,
-    GENERATED_CLASS_MODULES,
-    isAutoComposable,
-    LUNORA_WORKER_VIRTUAL_ID,
-} from "./framework-compose-plugin";
+export type { ClassAWiring } from "./framework-compose-plugin";
+export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID } from "./framework-compose-plugin";
 // The custom HMR event the codegen plugin sends on the client environment's hot
 // channel after a successful codegen run (in place of a blanket browser reload).
 export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
@@ -269,4 +257,14 @@ export type {
 } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
+// Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
+// class-A template points its wrangler `main` at (or re-exports) so the worker
+// composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
+// is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
+// `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
+// `GeneratedClassModule` / `GENERATED_CLASS_MODULES` are owned by `@lunora/config`
+// (the wrangler validator decides the composed entry's exports from the same
+// list); re-exported here so this package's surface is unchanged.
+export type { GeneratedClassModule } from "@lunora/config";
+export { GENERATED_CLASS_MODULES } from "@lunora/config";
 export { lunora, resolveOverlayOption, VERSION };

@@ -20,7 +20,15 @@ import { join } from "node:path";
 import { containerBuildTag } from "@lunora/container";
 
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
-import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
+import type {
+    DurableObjectSpec,
+    GeneratedClassModule,
+    InferredAgent,
+    InferredBindings,
+    InferredContainer,
+    InferredQueue,
+    InferredWorkflow,
+} from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import { objectBindingEntries, stringEntries } from "./wrangler-validator";
@@ -126,7 +134,7 @@ interface ExportGap {
     /** Which declaration is unexported. */
     kind: "agent" | "container" | "workflow";
     /** The `_generated/{module}` to re-export from, e.g. `workflows`. */
-    module: "agents" | "containers" | "workflows";
+    module: GeneratedClassModule;
 }
 
 interface ReconcileBindingsResult {

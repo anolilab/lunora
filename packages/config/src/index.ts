@@ -56,8 +56,8 @@ export {
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
-export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { COMPOSED_WORKER_ENTRY, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
+export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";

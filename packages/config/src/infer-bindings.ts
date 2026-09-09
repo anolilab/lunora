@@ -41,14 +41,31 @@ import { discoverWorkflowInfo } from "./workflow-info";
 /** Source file extensions worth scanning for capability signals. */
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 
+/** Where `@lunora/codegen` writes, relative to the schema directory. */
+const GENERATED_DIRECTORY = "_generated";
+
 /** Directories never worth descending into during a capability scan. */
-const IGNORED_DIRECTORIES = new Set([".git", ".lunora-cache", ".wrangler", "_generated", "dist", "node_modules"]);
+const IGNORED_DIRECTORIES = new Set([".git", ".lunora-cache", ".wrangler", "dist", GENERATED_DIRECTORY, "node_modules"]);
 
 /** Directories scanned for capability signals when the caller does not override. */
 const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
-/** Worker-entry candidates probed when `wrangler.main` is absent. */
-const WORKER_ENTRY_FALLBACKS = ["src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"] as const;
+/**
+ * Worker-entry candidates probed when `wrangler.main` names no readable source
+ * file — absent, or pointing at a framework adapter's build output.
+ *
+ * `src/server.ts` leads because it is where the class-B templates (astro,
+ * solid-v2, standalone) and `@lunora/astro`'s `serverEntry` compose, and its
+ * absence disabled the declared-class export cross-check for exactly those
+ * layouts. Same list, same order as `lunora registry`'s reconcile probe, which
+ * had it — the two had drifted.
+ *
+ * A probe result is a GUESS, and callers weigh it accordingly: the validator
+ * only trusts one that exports `default` (`worker-entry-checks`), and binding
+ * inference reads it to decide what to provision, so a wrong guess here is
+ * silent at deploy time.
+ */
+const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"] as const;
 
 /**
  * Canonical Durable Object class → binding name. wrangler requires the worker
@@ -63,6 +80,9 @@ const DURABLE_OBJECT_BINDINGS = {
 type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
 
 const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableObjectClass[];
+
+/** Whether `className` is one of Lunora's own Durable Object classes rather than a project's generated or hand-written one. */
+const isFrameworkDurableObject = (className: string): className is DurableObjectClass => Object.hasOwn(DURABLE_OBJECT_BINDINGS, className);
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
@@ -513,6 +533,25 @@ interface WorkerEntry {
  * bundle does not export and `wrangler deploy` would reject it.
  */
 const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
+
+/**
+ * The `_generated/` modules that hold a generated Durable Object / Workflow
+ * class — one per class kind a project can declare. wrangler validates every
+ * `class_name` against the worker's exports, so this is the set a worker entry
+ * re-exports (and the set the composed class-A entry star-re-exports for the
+ * kinds the project has).
+ *
+ * Owned here because four places need it and they must not drift:
+ * `@lunora/vite` emits one star re-export per entry, the wrangler validator
+ * DECIDES the composed entry's exports from it, `reconcile-bindings` types its
+ * export-gap `module` field on it, and this module's own `detectClassExports`
+ * probes the same names. `@lunora/vite` depends on `@lunora/config`, so config
+ * owning it is the direction the dependency graph allows.
+ */
+const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
+
+/** One {@link GENERATED_CLASS_MODULES} entry. */
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
 
 /**
  * The class-B composed entry. `lunora deploy` passes this file to wrangler as
@@ -1007,6 +1046,7 @@ const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
 export type {
     DurableObjectClass,
     DurableObjectSpec,
+    GeneratedClassModule,
     InferOptions,
     InferredAgent,
     InferredBindings,
@@ -1032,4 +1072,18 @@ export type {
 // `resolveWorkerEntry` returns a {@link WorkerEntry}, not a path: the class-A
 // composed entry (`main: "virtual:lunora/worker"`) has no file, and reading that
 // as "no worker entry" is what left every container/workflow/agent unprovisioned.
-export { COMPOSED_WORKER_ENTRY, inferLunoraBindings, LUNORA_WORKER_VIRTUAL_ID, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };
+// The composed-entry class list is shared for the same reason: the validator
+// decides that entry's exports from it, so "what class-A composition provisions"
+// and "what class-A composition is allowed to bind" cannot drift.
+export {
+    COMPOSED_ENTRY_DURABLE_OBJECTS,
+    COMPOSED_WORKER_ENTRY,
+    GENERATED_CLASS_MODULES,
+    GENERATED_DIRECTORY,
+    inferLunoraBindings,
+    isFrameworkDurableObject,
+    LUNORA_WORKER_VIRTUAL_ID,
+    packageNamesFromBindings,
+    resolveWorkerEntry,
+    WORKER_ENTRY_FALLBACKS,
+};

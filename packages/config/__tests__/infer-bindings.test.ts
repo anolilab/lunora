@@ -150,6 +150,25 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("prefers src/server.ts over src/index.ts when nothing names the entry", async () => {
+        expect.assertions(2);
+
+        // This list decides what `reconcile` PROVISIONS, so the precedence is
+        // load-bearing beyond the export cross-check that shares it:
+        // `src/server.ts` is where the astro / solid-v2 / standalone templates
+        // compose, and reading `src/index.ts` instead saw no exported class and
+        // provisioned nothing — green deploy, missing binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "compatibility_date": "2026-04-07" }');
+        write("src/index.ts", "export const clientEntry = 1;\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Same order as `lunora registry`'s reconcile probe, which had it first.
+        expect(result.durableObjects).toHaveLength(1);
+    });
+
     it("lexes src/worker.ts over an adapter-built main, matching what deploy bundles", async () => {
         expect.assertions(1);
 
