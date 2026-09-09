@@ -9,9 +9,13 @@
  * plus assert the emitted source routes `/_lunora/*` to Lunora and falls
  * through to the framework handler.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import type { Plugin } from "vite";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DetectedFramework, FrameworkClass } from "../src/detect-framework";
 import {
@@ -335,6 +339,54 @@ describe("framework-compose-plugin", () => {
 
             expect(code).not.toContain(".scheduler(");
             expect(code).not.toContain("SchedulerDO");
+        });
+
+        describe("discovering lunora/app.config.ts on disk", () => {
+            // `buildWorkerEntrySource` is pure and covered above; this drives the
+            // `load()` hook against a real directory, which is the only place the
+            // probe itself runs. Without it the seam was verified everywhere except
+            // where it decides whether to fire.
+            let projectRoot: string;
+
+            beforeEach(() => {
+                projectRoot = mkdtempSync(join(tmpdir(), "lunora-vite-app-config-"));
+                mkdirSync(join(projectRoot, "lunora"), { recursive: true });
+            });
+
+            afterEach(() => {
+                rmSync(projectRoot, { force: true, recursive: true });
+            });
+
+            const loadComposedEntry = (): string => {
+                const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
+
+                return callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
+            };
+
+            it("wires the module when it exports configureApp", () => {
+                expect.assertions(1);
+
+                writeFileSync(join(projectRoot, "lunora", "app.config.ts"), `export const configureApp = (app) => app;\n`, "utf8");
+
+                expect(loadComposedEntry()).toContain("const app = configureApp(defineApp()");
+            });
+
+            it("ignores a module that exports something else", () => {
+                expect.assertions(1);
+
+                // A resolver error naming a virtual module is the least debuggable
+                // failure this plugin can produce, so an unusable file degrades to
+                // the composition it had before.
+                writeFileSync(join(projectRoot, "lunora", "app.config.ts"), `export const somethingElse = 1;\n`, "utf8");
+
+                expect(loadComposedEntry()).not.toContain("configureApp");
+            });
+
+            it("composes as before when the module is absent", () => {
+                expect.assertions(1);
+
+                expect(loadComposedEntry()).not.toContain("configureApp");
+            });
         });
 
         it("composes the app's own builder calls through lunora/app.config.ts", () => {
