@@ -97,6 +97,12 @@ const isGeneratedOutput = (relativeMain: string): boolean =>
     relativeMain
         .split(PATH_SEPARATOR)
         .slice(0, -1)
+        // `.` and `..` start with a dot and are not tool state — `"./src/entry.ts"`
+        // is an idiomatic `main` that wrangler accepts. Reading them as build
+        // output discarded the DECLARED entry, so the validator blocked the deploy
+        // naming whichever fallback it probed instead, and inference provisioned
+        // off that file — not even SHARD.
+        .filter((segment) => segment !== "." && segment !== "..")
         .some((segment) => NON_SOURCE_DIRECTORIES.has(segment) || (segment.startsWith(".") && !SOURCE_DOT_DIRECTORIES.has(segment)));
 
 /**

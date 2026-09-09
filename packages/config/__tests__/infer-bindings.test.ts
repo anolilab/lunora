@@ -185,6 +185,22 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("provisions off a `./`-prefixed main rather than treating it as build output", async () => {
+        expect.assertions(1);
+
+        // The build-output gate read `.` as a tool-state directory, so a `./`
+        // main was discarded and inference ran on whichever fallback existed —
+        // provisioning nothing at all, not even SHARD. Green deploy, missing
+        // binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "main": "./src/entry.ts", "compatibility_date": "2026-04-07" }');
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
     it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
         expect.assertions(2);
 

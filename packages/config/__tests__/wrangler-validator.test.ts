@@ -1788,6 +1788,42 @@ export const schema = defineSchema({
                 expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
             });
 
+            it("honours a `./`-prefixed main instead of reading it as build output", () => {
+                expect.assertions(2);
+
+                // `"./src/entry.ts"` is idiomatic and wrangler accepts it. The
+                // build-output gate split on separators and tested every segment
+                // for a leading dot, so `.` matched — the DECLARED entry was
+                // discarded and whichever fallback existed got judged in its place,
+                // blocking the deploy while naming the wrong file.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "./src/entry.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "entry.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+                // A sibling that WOULD be probed, and would answer differently.
+                writeFileSync(join(workdir, "src", "index.ts"), `export const clientEntry = 1;\nexport default { fetch() {} };\n`, "utf8");
+
+                const reported = validateWranglerProject({ projectRoot: workdir })
+                    .report.errors.filter((error) => error.includes("does not export it"))
+                    .join("\n");
+
+                // Judged against the declared entry: it really is missing SchedulerDO…
+                expect(reported).toContain("src/entry.ts");
+                // …and never against the file the probe would have found.
+                expect(reported).not.toContain("src/index.ts");
+            });
+
             it("reads a hand-written JS main rather than diverting off it", () => {
                 expect.assertions(2);
 
