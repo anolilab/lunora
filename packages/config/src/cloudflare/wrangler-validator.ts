@@ -1276,6 +1276,22 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     }
 };
 
+/**
+ * Whether this config declares the `SchedulerDO` in THIS script.
+ *
+ * Load-bearing beyond the origin warning below: it is the opt-in signal for
+ * `ctx.scheduler` on a class-A app. `@lunora/vite` composes `.scheduler(...)` and
+ * the `SchedulerDO` re-export into the generated entry off this same predicate,
+ * and `readComposedEntry` decides that entry's export set off it, so the plugin
+ * and the export cross-check cannot disagree. A `vite.config.ts` option could
+ * not do that job — `verify` / `deploy` / `doctor` never read that file.
+ *
+ * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
+ * owns it; same carve-out as the migration and unexported-class checks.
+ */
+const declaresSchedulerDurableObject = (wrangler: WranglerConfig): boolean =>
+    objectBindingEntries(wrangler.durable_objects?.bindings).some((binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined);
+
 /** The `vars` key the SchedulerDO reads its dispatch origin from — see {@link validateSchedulerOrigin}. */
 const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
 
@@ -1302,11 +1318,7 @@ const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
  * owns the var; same carve-out as the migration and unexported-class checks.
  */
 const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
-    const declaresScheduler = objectBindingEntries(wrangler.durable_objects?.bindings).some(
-        (binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined,
-    );
-
-    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+    if (!declaresSchedulerDurableObject(wrangler) || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
         return;
     }
 
@@ -1632,11 +1644,15 @@ const UNEXPORTED_CLASS_MARKER = "does not export it";
  * file to add a line to. It forwards whatever codegen emitted, so a project's
  * OWN class gets there by being declared where codegen looks.
  *
- * Lunora's own Durable Objects (`SchedulerDO`, `SessionDO`) are the case that
- * has no route at all on class-A: they are not `defineAgent` / `defineContainer`
- * / `defineWorkflow` declarations, so no amount of editing those files makes
- * codegen emit them, and the composed entry never carried them. Saying "declare
- * it in one of those" pointed the user at hours of dead end.
+ * Lunora's own Durable Objects are the third case: they are not `defineAgent` /
+ * `defineContainer` / `defineWorkflow` declarations, so no amount of editing
+ * those files makes codegen emit them, and "declare it in one of those" pointed
+ * the user at hours of dead end.
+ *
+ * `SchedulerDO` can no longer reach here — declaring its binding is what makes
+ * the composed entry re-export it, so the binding's presence is also its own
+ * remedy. `SessionDO` still has no route on class-A, which is what this branch
+ * now says.
  */
 const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
     if (kind !== "composed") {
@@ -1646,12 +1662,12 @@ const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
         );
     }
 
-    const composedExports = `it exports ${COMPOSED_ENTRY_DURABLE_OBJECTS.join(", ")} plus every class codegen emits from your ${GENERATED_CLASS_MODULES.map((module) => `${module}.ts`).join(" / ")} declarations`;
+    const composedExports = `it exports ${COMPOSED_ENTRY_DURABLE_OBJECTS.join(", ")}, SchedulerDO when its binding is declared, and every class codegen emits from your ${GENERATED_CLASS_MODULES.map((module) => `${module}.ts`).join(" / ")} declarations`;
 
     if (isFrameworkDurableObject(className)) {
         return (
             `\`@lunora/vite\` generates that entry — ${composedExports}, and ${className} is not among them. ` +
-            `Class-A composition cannot export it, so drop the binding; a project that needs ${className} has to own its worker entry ` +
+            `Class-A composition does not carry ${className}, so drop the binding; a project that needs it has to own its worker entry ` +
             `(add \`src/worker.ts\`, which \`lunora deploy\` bundles in place of \`main\`, and compose \`defineApp()\` there).`
         );
     }
@@ -1817,7 +1833,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // `undefined` means the entry cannot be decided (no resolvable file, or one
     // that does not parse), and the export check then reports nothing.
     const entryLocation = locateWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
-    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory);
+    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory, declaresSchedulerDurableObject(resolvedWrangler));
 
     report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
     report.warnings.push(...collectMissingEntryWarning(entryLocation));
@@ -1874,6 +1890,7 @@ export type {
 // hit the same raw `TypeError` on a `null` entry. Package-internal only — the
 // `./cloudflare` barrel re-exports by name and deliberately does not list them.
 export {
+    declaresSchedulerDurableObject,
     mergeWranglerEnvironment,
     objectBindingEntries,
     REQUIRED_COMPATIBILITY_DATE,

@@ -50,6 +50,13 @@ const WORKER_ENTRY_SOURCE_EXTENSIONS: ReadonlySet<string> = new Set(SOURCE_EXTEN
 const WORKER_ENTRY_JS_EXTENSIONS: ReadonlySet<string> = new Set([".cjs", ".js", ".mjs"]);
 
 /**
+ * The Durable Object class `ctx.scheduler` dispatches through. The composed
+ * class-A entry re-exports it when the config declares its binding — see
+ * {@link readComposedEntry}.
+ */
+const SCHEDULER_CLASS = "SchedulerDO";
+
+/**
  * The name a `default` export binds. No class is called `default`, so carrying
  * it in the export set cannot satisfy a `class_name` — it only answers "is this
  * file a module worker?" ({@link readWorkerEntry}).
@@ -433,15 +440,16 @@ const readModuleExports = (entryPath: string): Set<string> | undefined => {
  * `@lunora/vite` generates it, and it emits exactly one class of its own
  * (`export const ShardDO = app.ShardDO`, from {@link COMPOSED_ENTRY_DURABLE_OBJECTS})
  * plus a star re-export of each {@link GENERATED_CLASS_MODULES} file the project
- * has. So the export set is knowable without a bundle — and class-A is the one
- * shape where the user CANNOT add a re-export, so a `class_name` outside that
- * set is a deploy wrangler will always refuse.
+ * has, plus `SchedulerDO` when the config declares that binding. So the export
+ * set is knowable without a bundle — and class-A is the one shape where the user
+ * CANNOT add a re-export, so a `class_name` outside that set is a deploy wrangler
+ * will always refuse.
  *
  * A project with no `_generated/` directory has not run codegen yet, and the
  * composed entry is then not a fact about anything — reported as opaque rather
  * than as an entry exporting only `ShardDO`.
  */
-const readComposedEntry = (projectRoot: string, schemaDirectory: string): WorkerEntry => {
+const readComposedEntry = (projectRoot: string, schemaDirectory: string, composesScheduler: boolean): WorkerEntry => {
     const opaque: WorkerEntry = { exports: undefined, kind: "composed", path: LUNORA_WORKER_VIRTUAL_ID };
     const generatedDirectory = join(projectRoot, schemaDirectory, GENERATED_DIRECTORY);
 
@@ -450,6 +458,13 @@ const readComposedEntry = (projectRoot: string, schemaDirectory: string): Worker
     }
 
     const names = new Set<string>(COMPOSED_ENTRY_DURABLE_OBJECTS);
+
+    // `@lunora/vite` composes `.scheduler(...)` and the `SchedulerDO` re-export
+    // into the entry exactly when the config declares that binding, so the two
+    // read the same input and cannot disagree about what the entry exports.
+    if (composesScheduler) {
+        names.add(SCHEDULER_CLASS);
+    }
 
     for (const module of GENERATED_CLASS_MODULES) {
         const modulePath = join(generatedDirectory, `${module}.ts`);
@@ -489,13 +504,13 @@ const readComposedEntry = (projectRoot: string, schemaDirectory: string): Worker
  * without the guard: the user named that file, so "it exports no `default`" is a
  * different bug and not this check's to guess at.
  */
-const readWorkerEntry = (location: WorkerEntryLocation, projectRoot: string, schemaDirectory: string): WorkerEntry | undefined => {
+const readWorkerEntry = (location: WorkerEntryLocation, projectRoot: string, schemaDirectory: string, composesScheduler = false): WorkerEntry | undefined => {
     if (location === undefined || location.origin === "absent") {
         return undefined;
     }
 
     if (location.origin === "composed") {
-        return readComposedEntry(projectRoot, schemaDirectory);
+        return readComposedEntry(projectRoot, schemaDirectory, composesScheduler);
     }
 
     const exports = readModuleExports(location.path);

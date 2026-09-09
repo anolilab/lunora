@@ -50,6 +50,7 @@ export type {
     WranglerWorkflowEntry,
 } from "./wrangler-validator";
 export {
+    declaresSchedulerDurableObject,
     mergeWranglerEnvironment,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,

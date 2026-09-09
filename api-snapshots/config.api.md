@@ -2113,6 +2113,12 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
 ```
 
+### `declaresSchedulerDurableObject` (const)
+
+```ts
+const declaresSchedulerDurableObject: (wrangler: WranglerConfig) => boolean;
+```
+
 ### `describePreservedCrons` (const)
 
 ```ts

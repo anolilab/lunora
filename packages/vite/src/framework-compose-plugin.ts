@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 
 import type { GeneratedClassModule } from "@lunora/config";
 import { GENERATED_CLASS_MODULES } from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import { declaresSchedulerDurableObject, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -134,6 +136,7 @@ const buildWorkerEntrySource = (
     classModules: ReadonlyArray<GeneratedClassModule> = [],
     allowUnauthenticatedShardAccess = false,
     shard: LunoraShardConfig = {},
+    scheduler = false,
 ): string => {
     const wiring = CLASS_A_WIRING[framework];
 
@@ -158,6 +161,21 @@ const buildWorkerEntrySource = (
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
     const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
+
+    // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
+    // worker (`create-worker`'s `schedulerDO`), and the class-A entry is
+    // generated — so a project had no file to add the re-export to and deferred
+    // dispatch was simply unavailable, while `verify` could only say so.
+    //
+    // The opt-in is the BINDING, not a plugin option. `wrangler.jsonc` is the one
+    // input `lunora verify` / `deploy` / `doctor` and this plugin all read, so
+    // they agree on whether the entry exports the class; a `vite.config.ts` flag
+    // is invisible to the CLI, and the export cross-check would then hard-error
+    // exactly the projects this enables. Declaring the binding also keeps its
+    // `migrations` entry the user's own deliberate act — wrangler migration tags
+    // are append-only.
+    const schedulerCall = scheduler ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
+    const schedulerReexport = scheduler ? `\nexport { SchedulerDO } from "@lunora/scheduler";\n` : "";
 
     // Each declared `shard` knob as its `defineApp()` builder call. Every
     // `LunoraShardConfig` key is named after the builder method that sets it, so
@@ -196,14 +214,35 @@ ${wiring.imports}
 import { defineApp } from "${base}/app";
 
 const app = defineApp()
-    .shard((env) => env.SHARD)
+    .shard((env) => env.SHARD)${schedulerCall}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
 export const ShardDO = app.ShardDO;
-${classReexports}
+${schedulerReexport}${classReexports}
 export default app;
 `;
+};
+
+/**
+ * Whether the project's `wrangler.jsonc` declares the `SchedulerDO` binding —
+ * the opt-in for `ctx.scheduler` on a class-A app.
+ *
+ * Read fresh from disk at `load()` rather than off a plugin option, because the
+ * SAME file is what `lunora verify` / `deploy` / `doctor` decide the composed
+ * entry's exports from. An unreadable or absent config means "no", which matches
+ * what the export cross-check concludes from the same absence.
+ */
+const composesScheduler = (projectRoot: string): boolean => {
+    const wranglerPath = findWranglerFile(projectRoot);
+
+    if (wranglerPath === undefined) {
+        return false;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
+
+    return parsed !== undefined && declaresSchedulerDurableObject(parsed);
 };
 
 /**
@@ -259,6 +298,7 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                     classModules,
                     options.allowUnauthenticatedShardAccess,
                     options.shard,
+                    composesScheduler(options.projectRoot),
                 );
             }
 

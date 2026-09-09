@@ -307,6 +307,32 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain('.cdc(true)\n    .reactiveCache({"maxEntries":250})\n    .relationExistsPushDown("never")');
         });
 
+        it("wires ctx.scheduler into the composed entry when the binding is declared", () => {
+            expect.assertions(3);
+
+            // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on
+            // the worker, and a class-A app has no hand-written entry to add the
+            // re-export to — so deferred dispatch was simply unavailable there.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, {}, true);
+
+            expect(code).toContain(".scheduler({ namespace: (env) => env.SCHEDULER })");
+            expect(code).toContain(`export { SchedulerDO } from "@lunora/scheduler";`);
+            // Ordered before `.httpRouter(...)`, which `.build()` follows.
+            expect(code.indexOf(".scheduler(")).toBeLessThan(code.indexOf(".httpRouter("));
+        });
+
+        it("composes nothing scheduler-shaped when the binding is absent", () => {
+            expect.assertions(2);
+
+            // The binding IS the opt-in, so an app that never declared one must be
+            // byte-for-byte what it was — a `SchedulerDO` export with no binding is
+            // a class wrangler has nothing to bind.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, {}, false);
+
+            expect(code).not.toContain(".scheduler(");
+            expect(code).not.toContain("SchedulerDO");
+        });
+
         it("forwards every generated class module as a star re-export", () => {
             expect.assertions(1);
 

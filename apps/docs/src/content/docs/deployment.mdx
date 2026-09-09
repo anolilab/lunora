@@ -36,6 +36,22 @@ separate API service, no platform sign-up.
 }
 ```
 
+:::note[Vite-first apps: the binding is the opt-in]
+`ctx.scheduler.runAfter` / `runAt` dispatch through a `SchedulerDO`, and wrangler
+binds only what the worker entry exports. In a Vite-first app (`"main":
+"virtual:lunora/worker"`) that entry is generated, so there is no file to add the
+re-export to — declaring the binding above is what tells `@lunora/vite` to
+compose `.scheduler(...)` and re-export the class.
+
+Cron jobs need none of this: they run through the worker's own `scheduled()`
+handler, so they work with or without the binding. Only deferred dispatch and the
+studio's scheduled-jobs view require it.
+
+Add the `migrations` entry in the same edit — wrangler requires one per Durable
+Object class, and migration tags are append-only. `lunora verify` reports both if
+either is missing.
+:::
+
 ## Secrets
 
 ### Locally
