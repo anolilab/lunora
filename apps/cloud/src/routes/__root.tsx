@@ -4,9 +4,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRootRouteWithContext, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import authUiCss from "../../lunora/auth-ui/styles.css?url";
+import { captureEvent } from "../client/analytics";
+import { useScreen } from "../client/tabs";
 import themeCss from "../client/theme.css?url";
 
 interface RouterContext {
@@ -18,6 +20,17 @@ const RootComponent = (): ReactElement => {
     // One client per mount. `useState` (not `useMemo`) so React can never discard
     // and rebuild it — a fresh client would drop every live subscription.
     const [client] = useState(() => new LunoraClient({ url: lunoraUrl }));
+    const screen = useScreen();
+
+    // Screen views for the whole app from one place — login, the organization
+    // list and every tab — because the router, not the browser, changes the
+    // page here. Keyed on the derived `screen` rather than the pathname, so
+    // navigating between two organizations' Projects tabs is one screen, not
+    // two, and moving within a screen (a search param, a focused trace) does
+    // not re-report it.
+    useEffect(() => {
+        captureEvent("$pageview", { screen });
+    }, [screen]);
 
     return (
         <html lang="en">

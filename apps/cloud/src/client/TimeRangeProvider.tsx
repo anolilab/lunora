@@ -1,6 +1,8 @@
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
+import { captureEvent } from "./analytics";
+import { useScreen } from "./tabs";
 import type { TimeRange, TimeRangePreset } from "./time-range";
 import { DEFAULT_TIME_RANGE_PRESET, rangeForPreset, TIME_RANGE_PRESETS } from "./time-range";
 
@@ -67,6 +69,11 @@ export const useTimeRange = (): TimeRangeContextValue => {
 /** The preset picker control (1h / 24h / 7d). Renders the shared segmented buttons. */
 export const TimeRangePicker = (): ReactElement => {
     const { preset, setPreset } = useTimeRange();
+    // Read here, in the leaf, rather than in the provider: the provider sits
+    // above the `Outlet`, and a subscription to the location there would hand
+    // every consumer a new context value on each navigation — the exact reflow
+    // of Traces, Logs and Metrics the provider is written to avoid.
+    const screen = useScreen();
 
     return (
         <div aria-label="Time range" className="time-range" role="group">
@@ -76,6 +83,11 @@ export const TimeRangePicker = (): ReactElement => {
                     className={`time-range-btn${spec.id === preset ? " active" : ""}`}
                     key={spec.id}
                     onClick={() => {
+                        // Whether the default window is the right default, and
+                        // which tab makes people reach past it. A picker nobody
+                        // touches on Logs and everybody touches on Metrics is a
+                        // per-screen default waiting to be set.
+                        captureEvent("studio_time_range_changed", { from: preset, preset: spec.id, screen });
                         setPreset(spec.id);
                     }}
                     type="button"

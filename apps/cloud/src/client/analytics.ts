@@ -1,5 +1,7 @@
 import posthogClient from "posthog-js";
 
+import { redactOrgPath } from "./tabs";
+
 /**
  * Product analytics for the hosted studio.
  *
@@ -53,6 +55,27 @@ const maskCharacter = "•";
  */
 const maskText = (text: string, element?: HTMLElement | null): string => (element?.closest(`[${UNMASK_ATTRIBUTE}]`) ? text : maskCharacter.repeat(text.length));
 
+/**
+ * The properties PostHog attaches by itself that hold a URL, and therefore an
+ * organization id. See {@link redactOrgPath} for why they are rewritten.
+ */
+const URL_PROPERTIES = ["$current_url", "$initial_current_url", "$pathname", "$initial_pathname", "$referrer", "$initial_referrer"];
+
+/** Rewrite the auto-attached URL properties. Returns a copy — the SDK hands us its own object. */
+const sanitizeProperties = (properties: Record<string, unknown>): Record<string, unknown> => {
+    const sanitized = { ...properties };
+
+    for (const key of URL_PROPERTIES) {
+        const value = sanitized[key];
+
+        if (typeof value === "string") {
+            sanitized[key] = redactOrgPath(value);
+        }
+    }
+
+    return sanitized;
+};
+
 /** Whether `posthogClient.init` actually ran. Every helper checks it: calling into an uninitialized client touches persistence `init` is supposed to create. */
 let initialized = false;
 
@@ -66,12 +89,16 @@ if (!import.meta.env.SSR && token && host) {
         // own; no DOM text rides along.
         capture_exceptions: true,
         // The router owns navigation, so PostHog's own listener would miss
-        // client-side transitions and double-count the first load.
+        // client-side transitions and double-count the first load. `__root.tsx`
+        // sends `$pageview` from a route effect instead — the standard event
+        // name, so Paths and funnels work, with a redacted URL (below) and a
+        // stable `screen` name rather than an id-bearing path.
         capture_pageview: false,
         // `init` runs before hydration; the SDK's default script target is
         // `body`, and a node appended there that React did not render is a
         // hydration mismatch.
         external_scripts_inject_target: "head",
+        sanitize_properties: sanitizeProperties,
         session_recording: {
             // Inputs are masked wholesale — a form field on this app is a
             // hostname, a secret value, or a search over tenant logs.
