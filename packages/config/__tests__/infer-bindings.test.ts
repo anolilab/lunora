@@ -150,6 +150,25 @@ describe("inferLunoraBindings", () => {
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
     });
 
+    it("prefers src/server.ts over src/index.ts when nothing names the entry", async () => {
+        expect.assertions(2);
+
+        // This list decides what `reconcile` PROVISIONS, so the precedence is
+        // load-bearing beyond the export cross-check that shares it:
+        // `src/server.ts` is where the astro / solid-v2 / standalone templates
+        // compose, and reading `src/index.ts` instead saw no exported class and
+        // provisioned nothing — green deploy, missing binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "compatibility_date": "2026-04-07" }');
+        write("src/index.ts", "export const clientEntry = 1;\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Same order as `lunora registry`'s reconcile probe, which had it first.
+        expect(result.durableObjects).toHaveLength(1);
+    });
+
     it("lexes src/worker.ts over an adapter-built main, matching what deploy bundles", async () => {
         expect.assertions(1);
 
@@ -164,6 +183,61 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("provisions off a `./`-prefixed main rather than treating it as build output", async () => {
+        expect.assertions(1);
+
+        // The build-output gate read `.` as a tool-state directory, so a `./`
+        // main was discarded and inference ran on whichever fallback existed —
+        // provisioning nothing at all, not even SHARD. Green deploy, missing
+        // binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "main": "./src/entry.ts", "compatibility_date": "2026-04-07" }');
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it.each([
+        ["a traversal that cancels a build directory", "dist/../src/entry.ts"],
+        ["a `./` prefix", "./src/entry.ts"],
+        ["no prefix at all", "src/entry.ts"],
+    ])("provisions off a main written with %s", async (_label, main) => {
+        expect.assertions(1);
+
+        // The build-output gate classifies by path segment, so it has to resolve
+        // the path first: dropping `..` on its own left `dist` behind and read
+        // `dist/../src/entry.ts` as build output, discarding the declared entry.
+        write("wrangler.jsonc", `{ "name": "app", "main": "${main}", "compatibility_date": "2026-04-07" }`);
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
+        expect.assertions(2);
+
+        // The sibling test above is the case where `src/worker.ts` shadows the
+        // artifact. Without one, an existing `main` was accepted as the entry —
+        // and an adapter bundle exports only the SSR handler, so every class read
+        // as unexported and reconcile wrote NO bindings, not even SHARD. A green
+        // deploy that fails at runtime on a missing binding.
+        write("wrangler.jsonc", '{ "name": "app", "main": "dist/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Read off the authored entry, not the artifact.
+        expect(result.durableObjects).toHaveLength(1);
     });
 
     it("reports no Durable Objects when the worker entry cannot be found", async () => {

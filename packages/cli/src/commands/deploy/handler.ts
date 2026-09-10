@@ -196,7 +196,7 @@ interface DeployCommandOptions {
     strictAdvisories?: boolean;
 
     /**
-     * Deploy target. Falls back to `"target"` in `lunora.json`, then
+     * Deploy target. Falls back to `"target"` in `lunora.config.*`, then
      * `"cloudflare"`, which selects the wrangler
      * toolchain — i.e. today's behavior for every project. An unregistered name
      * throws rather than falling back, so a typo can never ship the app to the
@@ -1684,7 +1684,7 @@ const runPreDeployPipeline = async (
     // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
     // and may mutate `wrangler.jsonc` well before the wrangler step, so
     // validating at the point of driver use would leave those side effects behind
-    // on an unknown target. Resolving here also means `lunora.json`'s `target`
+    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
     // reaches the driver, not just the `--target` flag.
     //
     // The `Runnable` form additionally rejects a registered-but-undeployable

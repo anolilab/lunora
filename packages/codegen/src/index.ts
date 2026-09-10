@@ -60,6 +60,7 @@ export {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitScheduler,
     emitServer,
     emitShard,
     emitVectors,
@@ -107,6 +108,8 @@ export type { OpenRpcEmitInput } from "./openrpc";
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION } from "./openrpc";
 export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
+export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals } from "./project-config-file";
+export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals } from "./project-config-file";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
 export type { SchemaDriftDecision } from "./schema-drift";

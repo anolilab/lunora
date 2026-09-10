@@ -27,7 +27,7 @@ const TARGET_HELP = (() => {
 
 /** The `--target` option descriptor, spread into a command's `options` array. */
 const TARGET_OPTION = {
-    description: `Deploy target: ${TARGET_HELP}. Also settable as "target" in lunora.json`,
+    description: `Deploy target: ${TARGET_HELP}. Also settable as "target" in lunora.config.*`,
     name: "target",
     type: String,
 } as const;
@@ -40,7 +40,7 @@ const TARGET_OPTION = {
  * a handler it forces a try/catch around what is otherwise a flat sequence of
  * guards, which is both noisier and a different shape from the guard sitting
  * five lines above it.
- * @param projectRoot Directory containing `lunora.json`.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @returns the resolved target, or the message explaining why it was rejected.
  */
@@ -65,7 +65,7 @@ const resolveTargetOrError = (projectRoot: string, explicit?: string): { error?:
  * command, so a check at the point of use fails after the side effects, and
  * `lunora dev` did not check at all: `toolchain?.dev(...)` fell through to
  * wrangler, silently serving a Node-target app on Cloudflare's runtime.
- * @param projectRoot Directory containing `lunora.json`.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @returns the resolved target, or the message explaining why it was rejected.
  */

@@ -6482,6 +6482,46 @@ const emitDrizzleSchema = (schema: SchemaIR, useUmbrella = false): { global: str
  * finer-grained scheduling use Durable Object alarms (`@lunora/scheduler`),
  * which have no such cap.
  */
+
+/**
+ * Emit `_generated/scheduler.ts` — the `SchedulerDO` class re-export, or `""`
+ * when the app has no scheduler (the file is not written then).
+ *
+ * It exists so the class-A composed entry has something to FORWARD. wrangler
+ * binds only what the worker entry exports, and `@lunora/vite` generates that
+ * entry, so a Vite-first app had no file to add the re-export to and
+ * `ctx.scheduler.runAfter` / `runAt` were unreachable.
+ *
+ * Emitted off the same `hasScheduler` that decides whether the builder even HAS
+ * a `.scheduler()` method, and that is the whole point: the plugin composes the
+ * call and the re-export off THIS FILE's existence, so the two cannot disagree.
+ * Keying the plugin on the `wrangler.jsonc` binding instead let a project
+ * declare the binding with no scheduler code and get
+ * `TypeError: ….scheduler is not a function` at worker boot, from inside a
+ * virtual module.
+ *
+ * `@lunora/scheduler` stays scoped — the umbrella ships no `./scheduler`
+ * subpath — and `assertRequiredPackages` already demands the dependency off the
+ * same signal, so the specifier cannot go unresolvable.
+ */
+const emitScheduler = (hasScheduler: boolean): string => {
+    if (!hasScheduler) {
+        return "";
+    }
+
+    return `${GENERATED_HEADER}/**
+ * The \`SchedulerDO\` Durable Object class, re-exported so a worker entry can
+ * forward it — wrangler binds only what the entry exports:
+ *
+ * \`export * from "./lunora/_generated/scheduler.js";\`
+ *
+ * A Vite-first (class-A) app needs no such line: the generated worker entry
+ * forwards this module for you whenever it exists.
+ */
+export { SchedulerDO } from "@lunora/scheduler";
+`;
+};
+
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const byExpression = new Map<string, CronJobIR[]>();
 
@@ -6630,6 +6670,7 @@ export {
     emitDrizzleSchema,
     emitFunctions,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitServer,
     emitShard,

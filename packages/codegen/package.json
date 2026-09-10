@@ -70,7 +70,7 @@
         "@lunora/scheduler": "1.0.0-alpha.65",
         "@lunora/values": "1.0.0-alpha.43",
         "@lunora/workflow": "1.0.0-alpha.49",
-        "jsonc-parser": "catalog:vite",
+        "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"
     },

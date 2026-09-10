@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
-import { LUNORA_CONFIG_FILE } from "@lunora/config";
+import { findProjectConfigFile } from "@lunora/codegen";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 /**
@@ -59,22 +59,44 @@ const stripCodegenOwnedCrons = (parsed: Record<string, unknown>): Record<string,
 
 /**
  * A stable fingerprint of the binding-relevant slice of the project's config
- * files (`wrangler.jsonc` + `lunora.json`), used by the dev config-drift watcher
- * to tell a real, restart-worthy edit apart from codegen's own idempotent writes.
+ * files (`wrangler.jsonc` + `lunora.config.*`), used by the dev config-drift
+ * watcher to tell a real, restart-worthy edit apart from codegen's own
+ * idempotent writes.
  *
  * The wrangler part strips the codegen-owned `triggers.crons` (see
- * {@link stripCodegenOwnedCrons}); the `lunora.json` part (the remote-binding
- * preference) is fingerprinted as-is. The two parts are joined with a NUL — a
- * control char `JSON.stringify` never emits, so neither part can forge the
- * boundary. It is written as the `\u0000` escape, NOT a raw byte: a literal NUL
- * makes this source file read as binary to grep/gitleaks. Keep the escape.
+ * {@link stripCodegenOwnedCrons}). Watching a file without fingerprinting it
+ * makes the watcher inert: `onConfigChange` returns early when the fingerprint
+ * has not moved.
+ *
+ * The config part is a hash of BYTES, not of a normalized parse, because the
+ * `app` hook is code — there is nothing to normalize, and any edit to it changes
+ * what the composed worker entry does. The cost is that a formatting-only pass
+ * over the file also restarts the dev server, which is the right trade against
+ * missing a real change.
+ *
+ * The parts are joined with a NUL — a control char `JSON.stringify` never emits,
+ * so no part can forge a boundary. It is written as the `\u0000` escape, NOT a
+ * raw byte: a literal NUL makes this source file read as binary to
+ * grep/gitleaks. Keep the escape.
  */
 const computeConfigFingerprint = (projectRoot: string): string => {
     const wranglerFile = findWranglerFile(projectRoot);
     const wranglerPart = wranglerFile === undefined ? "absent" : fingerprintJsonc(wranglerFile, stripCodegenOwnedCrons);
 
-    const lunoraConfigPath = join(projectRoot, LUNORA_CONFIG_FILE);
-    const lunoraPart = existsSync(lunoraConfigPath) ? fingerprintJsonc(lunoraConfigPath) : "absent";
+    // Hashed by CONTENT, not parsed: `lunora.config.*` is TypeScript, and the
+    // composed class-A entry embeds whichever builder calls its `app` hook makes,
+    // so any edit is restart-worthy. Absent or unreadable is "absent" — there is
+    // nothing to restart on, and the next successful read moves the fingerprint.
+    const lunoraConfigPath = findProjectConfigFile(projectRoot);
+    let lunoraPart = "absent";
+
+    try {
+        if (lunoraConfigPath !== undefined) {
+            lunoraPart = createHash("sha256").update(readFileSync(lunoraConfigPath)).digest("hex");
+        }
+    } catch {
+        // Left "absent".
+    }
 
     return `${wranglerPart}\u0000${lunoraPart}`;
 };

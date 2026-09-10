@@ -591,6 +591,9 @@ catalogs:
     dockerode:
       specifier: ^5.0.1
       version: 5.0.1
+    jiti:
+      specifier: ^2.7.0
+      version: 2.7.0
     quicktype-core:
       specifier: ^26.0.0
       version: 26.0.0
@@ -3100,9 +3103,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
-      jsonc-parser:
-        specifier: catalog:vite
-        version: 3.3.1
+      jiti:
+        specifier: catalog:tooling
+        version: 2.7.0
       quicktype-core:
         specifier: catalog:tooling
         version: 26.0.0

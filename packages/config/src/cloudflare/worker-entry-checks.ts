@@ -19,46 +19,145 @@ import { basename, dirname, extname } from "node:path";
 import type { Node, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
-import { COMPOSED_WORKER_ENTRY, LUNORA_WORKER_VIRTUAL_ID, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
+import {
+    COMPOSED_ENTRY_DURABLE_OBJECTS,
+    COMPOSED_WORKER_ENTRY,
+    GENERATED_CLASS_MODULES,
+    GENERATED_DIRECTORY,
+    isGeneratedOutput,
+    LUNORA_WORKER_VIRTUAL_ID,
+    NON_SOURCE_DIRECTORIES,
+    SOURCE_DOT_DIRECTORIES,
+    WORKER_ENTRY_FALLBACKS,
+} from "../infer-bindings";
 import join from "../path";
 
-/**
- * Extensions this check will read. A class-B `main` can name the framework
- * adapter's BUILD OUTPUT (`.svelte-kit/cloudflare/_worker.js`, `dist/_worker.js`),
- * which exports only the SSR fetch handler — every declared class reads as
- * unexported there. Today the composed `src/worker.ts` shadows that case, but
- * the finding now blocks a deploy, so a bundle is skipped rather than trusted:
- * an authored Lunora entry is TypeScript.
- */
-const WORKER_ENTRY_SOURCE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
+/** Source extensions, in the order a relative specifier resolves them. */
+const SOURCE_EXTENSION_ORDER = [".ts", ".tsx", ".mts", ".cts"] as const;
 
 /**
- * Resolve the worker entry the way `lunora deploy` bundles it: the class-B
+ * Extensions an AUTHORED Lunora entry carries. JS is absent on purpose: a
+ * class-B `main` can name the framework adapter's BUILD OUTPUT
+ * (`.svelte-kit/cloudflare/_worker.js`), which exports only the SSR fetch
+ * handler, so every declared class reads as unexported there — and this finding
+ * blocks a deploy. A JS `main` is decided by LOCATION instead
+ * ({@link isGeneratedOutput}), because a hand-written `src/worker.js` is an
+ * ordinary Lunora entry and diverting off it reported a correct project broken.
+ */
+const WORKER_ENTRY_SOURCE_EXTENSIONS: ReadonlySet<string> = new Set(SOURCE_EXTENSION_ORDER);
+
+/** Extensions a bundler-emitted worker carries. Read only when the path says it is authored. */
+const WORKER_ENTRY_JS_EXTENSIONS: ReadonlySet<string> = new Set([".cjs", ".js", ".mjs"]);
+
+/**
+ * The name a `default` export binds. No class is called `default`, so carrying
+ * it in the export set cannot satisfy a `class_name` — it only answers "is this
+ * file a module worker?" ({@link readWorkerEntry}).
+ */
+const DEFAULT_EXPORT = "default";
+
+/**
+ * The TypeScript extensions a JS specifier names. `@lunora/codegen` deliberately
+ * writes `.js` into the code it GENERATES, and its own emitted instruction is
+ * `export * from "./lunora/_generated/workflows.js"` — that specifier names a
+ * `.ts` file, so refusing to map it would leave the commonest star re-export in
+ * a Lunora entry unresolvable, and an unresolvable star turns this check off.
+ */
+const JS_SPECIFIER_EXTENSIONS: Record<string, ReadonlyArray<string>> = {
+    ".cjs": [".cts"],
+    ".js": [".ts", ".tsx"],
+    ".mjs": [".mts"],
+};
+
+/**
+ * Ceiling on modules FOLLOWED out of one entry through star re-exports. Past it
+ * the read gives up and the module reads as opaque — the fail-open direction,
+ * because the caller BLOCKS a deploy on what it finds.
+ *
+ * A runaway guard, not a budget to spend: it was 24, which a barrel-heavy tree
+ * can reach, and reaching it turns the check off with no signal. The cost per
+ * module is one `parseSource` (~1ms — {@link parseSource} skips the lib files
+ * for exactly this reason), and the entry's re-export graph in a real project is
+ * a handful of files, so the ceiling sits far above anything authored rather
+ * than close enough to trip.
+ *
+ * The root does not count against it: an entry that declares its classes inline
+ * should not lose the check because something it stars is wide.
+ */
+const MAX_FOLLOWED_MODULES = 250;
+
+/**
+ * Where the worker entry is, and how confident we are that it IS the entry.
+ *
+ * `"declared"` — `wrangler.main` (or the class-B composed `src/worker.ts`) named
+ * this file. Trusted: the user said so.
+ *
+ * `"probed"` — nothing named a readable entry, so a conventional location was
+ * guessed. A guess must not be trusted the way a declaration is; see
+ * {@link readWorkerEntry}.
+ *
+ * `"absent"` — `main` names a source file that is not there. Nothing to read,
+ * and the caller reports it (the wrangler validator raises a warning) rather
+ * than guessing a different file: diverting the cross-check onto whichever
+ * fallback happened to exist hard-errored trees that were one keystroke from
+ * correct.
+ *
+ * `"composed"` — the class-A virtual specifier, which names no file at all. Its
+ * exports come from the generator ({@link readComposedEntry}).
+ */
+type WorkerEntryLocation = { origin: "absent" | "declared" | "probed"; path: string } | { origin: "composed" } | undefined;
+
+/**
+ * Locate the worker entry the way `lunora deploy` bundles it: the class-B
  * composed entry when present (it is passed to wrangler as the positional
  * script, overriding `main`), else `wrangler.main` relative to the config file,
  * else the conventional fallbacks.
  *
- * Returns `undefined` for anything this check must not judge — a missing file, a
- * build artifact, or the class-A virtual specifier, which names no file at all.
+ * Two routes reach `"probed"`, and both are layouts where nothing names the
+ * authored entry: a `main` pointing at the framework adapter's build output (the
+ * entry that wraps it is a sibling source file), and no `main` at all, where
+ * `@cloudflare/vite-plugin` supplies it.
+ *
+ * Everything else keeps its own arm so a guess is never mistaken for a
+ * declaration. Probing for ANY unreadable `main` resolved a hand-written
+ * `src/worker.js` — a supported entry, since {@link parseSource} sets `allowJs` —
+ * to an unrelated `src/index.ts` and called its exported `ShardDO` missing.
  */
-const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
+const locateWorkerEntry = (main: string | undefined, projectRoot: string, wranglerPath: string): WorkerEntryLocation => {
     const composed = join(projectRoot, COMPOSED_WORKER_ENTRY);
 
     if (existsSync(composed)) {
-        return composed;
+        return { origin: "declared", path: composed };
     }
 
     if (main === LUNORA_WORKER_VIRTUAL_ID) {
+        return { origin: "composed" };
+    }
+
+    const probe = (): WorkerEntryLocation => {
+        const found = WORKER_ENTRY_FALLBACKS.map((fallback) => join(projectRoot, fallback)).find((candidate) => existsSync(candidate));
+
+        return found === undefined ? undefined : { origin: "probed", path: found };
+    };
+
+    if (typeof main !== "string" || main.length === 0) {
+        return probe();
+    }
+
+    // Build output is never the authored entry, whether or not it has been built
+    // yet — so the authored entry is elsewhere and worth probing for.
+    if (isGeneratedOutput(main)) {
+        return probe();
+    }
+
+    const resolved = join(dirname(wranglerPath), main);
+    const extension = extname(resolved);
+
+    if (!WORKER_ENTRY_SOURCE_EXTENSIONS.has(extension) && !WORKER_ENTRY_JS_EXTENSIONS.has(extension)) {
         return undefined;
     }
 
-    if (typeof main === "string" && main.length > 0) {
-        const resolved = join(dirname(wranglerPath), main);
-
-        return existsSync(resolved) && WORKER_ENTRY_SOURCE_EXTENSIONS.has(extname(resolved)) ? resolved : undefined;
-    }
-
-    return WORKER_ENTRY_FALLBACKS.map((fallback) => join(projectRoot, fallback)).find((candidate) => existsSync(candidate));
+    return existsSync(resolved) ? { origin: "declared", path: resolved } : { origin: "absent", path: resolved };
 };
 
 /**
@@ -82,28 +181,34 @@ const collectBindingNames = (nameNode: Node, names: Set<string>): void => {
     }
 };
 
-/** The names an `export { … }` / `export … from "…"` clause binds as values. */
-const collectClauseExports = (sourceFile: SourceFile, names: Set<string>): boolean => {
-    let opaque = false;
+/**
+ * The names an `export { … }` / `export … from "…"` clause binds as values, plus
+ * the module specifier of every bare `export * from "…"` — the names those
+ * forward live in another module, so the caller has to go read it.
+ */
+const collectClauseExports = (sourceFile: SourceFile, names: Set<string>): string[] => {
+    const stars: string[] = [];
 
     for (const declaration of sourceFile.getExportDeclarations()) {
         if (declaration.isTypeOnly()) {
             continue;
         }
 
-        // Only a STAR re-export is opaque, and `isNamespaceExport()` is the one
-        // predicate that identifies it. Testing "no named exports" instead also
-        // caught `export {}` — which binds nothing and is a routine way to mark
-        // a file as a module — and one of those anywhere in the entry silently
-        // turned this whole check off. That is worse than the bug it exists to
-        // catch, because it reads as a pass.
+        // Only a STAR re-export forwards names, and `isNamespaceExport()` is the
+        // one predicate that identifies it. Testing "no named exports" instead
+        // also caught `export {}` — which binds nothing and is a routine way to
+        // mark a file as a module — and one of those anywhere in the entry
+        // silently turned this whole check off. That is worse than the bug it
+        // exists to catch, because it reads as a pass.
         if (declaration.isNamespaceExport()) {
             const namespaceExport = declaration.getNamespaceExport();
 
             if (namespaceExport === undefined) {
-                // A bare `export * from "./x"` forwards names that live in
-                // another module, so the ABSENCE of a class name proves nothing.
-                opaque = true;
+                // `export *` cannot be written without `from`, so the fallback is
+                // unreachable — and it fails open if it ever is not: `""` is not
+                // a relative specifier, so `resolveRelativeModule` rejects it and
+                // the module reads as opaque.
+                stars.push(declaration.getModuleSpecifierValue() ?? "");
             } else {
                 // `export * as ns from "…"` binds only `ns`, so it forwards
                 // nothing a class name could hide behind.
@@ -124,7 +229,7 @@ const collectClauseExports = (sourceFile: SourceFile, names: Set<string>): boole
         }
     }
 
-    return opaque;
+    return stars;
 };
 
 /**
@@ -147,20 +252,39 @@ const collectDeclarationExports = (sourceFile: SourceFile, names: Set<string>): 
 
     for (const declaration of [...sourceFile.getClasses(), ...sourceFile.getFunctions(), ...sourceFile.getEnums()]) {
         // `export default class X` binds `default`, not `X`, so a default
-        // export never satisfies a `class_name`.
-        const name = declaration.getExportKeyword() !== undefined && !declaration.isDefaultExport() ? declaration.getName() : undefined;
+        // export never satisfies a `class_name` — but the fact that the module
+        // HAS one is what tells `readWorkerEntry` a probed file is a worker.
+        if (declaration.getExportKeyword() === undefined) {
+            continue;
+        }
+
+        const name = declaration.isDefaultExport() ? DEFAULT_EXPORT : declaration.getName();
 
         if (name !== undefined) {
             names.add(name);
         }
     }
+
+    // `export default app` / `export = app`: neither is a declaration, and
+    // `export *` does not forward `default`, so a module worker always writes one
+    // of these (or `export default class`, above) in the entry itself.
+    if (sourceFile.getExportAssignments().length > 0) {
+        names.add(DEFAULT_EXPORT);
+    }
 };
 
-/** What the entry told us. `exports` is `undefined` when the file forwards names this scan cannot see. */
+/** What the entry told us. `exports` is `undefined` when the entry forwards names this scan cannot see. */
 interface WorkerEntry {
-    /** Runtime VALUE exports, or `undefined` when a bare `export *` makes the absence of a name prove nothing. */
+    /** Runtime VALUE exports, or `undefined` when an unresolvable `export *` makes the absence of a name prove nothing. */
     exports: Set<string> | undefined;
-    /** The resolved entry path, for error messages. */
+
+    /**
+     * `"composed"` for the class-A entry `@lunora/vite` generates. The remedy
+     * differs there and nowhere else: there is no file to add a re-export to,
+     * so telling the user to add one is unactionable advice.
+     */
+    kind: "authored" | "composed";
+    /** The resolved entry path (or the virtual specifier), for error messages. */
     path: string;
 }
 
@@ -200,55 +324,189 @@ const parseSource = (name: string, source: string): SourceFile | undefined => {
 };
 
 /**
- * Resolve, read and parse the worker entry once.
+ * The file a relative `export * from "…"` specifier names, or `undefined` for
+ * anything this scan must not judge.
  *
- * `undefined` means "cannot be decided" and every caller must report nothing.
- * Both routes there fail open: no resolvable entry, and a file that does not
- * parse ({@link parseSource}).
+ * Only RELATIVE specifiers resolve. A bare one (`@lunora/scheduler`) or a
+ * tsconfig/framework alias (`~/durable-objects`, `#lunora/app`) names a module
+ * whose location this check does not know, and guessing wrong would report a
+ * correctly-wired project as broken — so those stay unresolvable, which reads
+ * the entry as opaque and reports nothing.
  */
-const readWorkerEntry = (main: string | undefined, projectRoot: string, wranglerPath: string): WorkerEntry | undefined => {
-    const path = resolveWorkerEntryPath(main, projectRoot, wranglerPath);
-
-    if (path === undefined) {
+const resolveRelativeModule = (fromFile: string, specifier: string): string | undefined => {
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
         return undefined;
     }
 
-    let source: string;
+    const base = join(dirname(fromFile), specifier);
+    const extension = extname(base);
+    // Whether the trailing dot-suffix is an extension this resolver KNOWS. A
+    // `./do.server` (the React Router / Remix convention this file already
+    // honours elsewhere) carries a dot suffix that is part of the FILENAME, and
+    // stripping it blindly both hid the real `do.server.ts` and probed a
+    // `do/index.ts` sibling in its place — a wrong export set either way.
+    const stripped = WORKER_ENTRY_SOURCE_EXTENSIONS.has(extension) || JS_SPECIFIER_EXTENSIONS[extension] !== undefined;
+    const stem = stripped ? base.slice(0, -extension.length) : base;
+    const candidates = [
+        ...(WORKER_ENTRY_SOURCE_EXTENSIONS.has(extension) ? [base] : []),
+        ...(JS_SPECIFIER_EXTENSIONS[extension] ?? []).map((candidate) => `${stem}${candidate}`),
+        // Extensionless (`./objects`) and unrecognised-suffix (`./do.server`)
+        // specifiers name the file itself.
+        ...(stripped ? [] : SOURCE_EXTENSION_ORDER.map((candidate) => `${base}${candidate}`)),
+        // A directory, probed only when nothing was stripped off a real name.
+        ...(stripped || extension.length === 0 ? SOURCE_EXTENSION_ORDER.map((candidate) => join(stem, `index${candidate}`)) : []),
+    ];
 
-    try {
-        source = readFileSync(path, "utf8");
-    } catch {
-        return undefined;
-    }
-
-    const sourceFile = parseSource(basename(path), source);
-
-    if (sourceFile === undefined) {
-        return undefined;
-    }
-
-    const names = new Set<string>();
-    const opaque = collectClauseExports(sourceFile, names);
-
-    if (!opaque) {
-        collectDeclarationExports(sourceFile, names);
-    }
-
-    return { exports: opaque ? undefined : names, path };
+    return candidates.find((candidate) => existsSync(candidate));
 };
 
-/** Directories a project's own sources never live in — generated or build output. */
-const NON_SOURCE_DIRECTORIES = new Set(["_generated", "build", "coverage", "dist", "node_modules", "out", "target"]);
+/**
+ * Every runtime VALUE name a module exports, following bare `export * from "…"`
+ * into the modules it forwards from. `undefined` means "cannot be decided".
+ *
+ * Following the star is what makes this check apply to a normal entry at all: a
+ * bare star reads as opaque otherwise, and it is the commonest shape there is —
+ * a barrel (`export * from "./durable-objects"`), and the line `@lunora/codegen`
+ * itself tells the entry to write (`export * from
+ * "./lunora/_generated/workflows.js"`).
+ *
+ * A cycle (`a` stars `b` stars `a`) is legal and forwards no new names, so the
+ * `seen` set both terminates it and holds the work to one parse per module;
+ * {@link MAX_FOLLOWED_MODULES} is the runaway guard. Both give-up routes, plus
+ * an unreadable file, an unparseable one and an unresolvable specifier, report
+ * `undefined` — the caller BLOCKS a deploy on what this returns.
+ *
+ * A flat worklist rather than recursion, matching {@link scanAppChains} below.
+ * Every name lands in one set, so there are no partial per-module results to
+ * reason about.
+ */
+const readModuleExports = (entryPath: string): Set<string> | undefined => {
+    const names = new Set<string>();
+    const seen = new Set([entryPath]);
+    const pending = [entryPath];
+
+    while (pending.length > 0) {
+        // `- 1` so the ceiling counts FOLLOWED modules, not the entry itself.
+        if (seen.size - 1 > MAX_FOLLOWED_MODULES) {
+            return undefined;
+        }
+
+        const path = pending.pop() as string;
+        let source: string;
+
+        try {
+            source = readFileSync(path, "utf8");
+        } catch {
+            return undefined;
+        }
+
+        const sourceFile = parseSource(basename(path), source);
+
+        if (sourceFile === undefined) {
+            return undefined;
+        }
+
+        const stars = collectClauseExports(sourceFile, names);
+
+        collectDeclarationExports(sourceFile, names);
+
+        for (const specifier of stars) {
+            const resolved = resolveRelativeModule(path, specifier);
+
+            if (resolved === undefined) {
+                return undefined;
+            }
+
+            if (!seen.has(resolved)) {
+                seen.add(resolved);
+                pending.push(resolved);
+            }
+        }
+    }
+
+    return names;
+};
 
 /**
- * Dot-directories that ARE authored sources. Everything else starting with a dot
- * is tool state (`.git`, `.wrangler`, `.svelte-kit`, `.vercel`, …) and skipping
- * the lot by prefix keeps that list from having to be maintained. `.server` /
- * `.client` are the React Router v7 / Remix convention for server-only and
- * client-only modules, so a `.vectors(...)` chain genuinely lives there — and a
- * missed chain HARD-ERRORS a correctly wired project.
+ * The exports of the class-A composed entry, which has no file to read.
+ *
+ * `@lunora/vite` generates it, and it emits exactly one class of its own
+ * (`export const ShardDO = app.ShardDO`, from {@link COMPOSED_ENTRY_DURABLE_OBJECTS})
+ * plus a star re-export of each {@link GENERATED_CLASS_MODULES} file the project
+ * has — `SchedulerDO` among them, via the `scheduler` module codegen writes off
+ * `hasScheduler`. So the export set is knowable without a bundle, and class-A is
+ * the one shape where the user CANNOT add a re-export, so a `class_name` outside
+ * that set is a deploy wrangler will always refuse.
+ *
+ * A project with no `_generated/` directory has not run codegen yet, and the
+ * composed entry is then not a fact about anything — reported as opaque rather
+ * than as an entry exporting only `ShardDO`.
  */
-const SOURCE_DOT_DIRECTORIES = new Set([".client", ".server"]);
+const readComposedEntry = (projectRoot: string, schemaDirectory: string): WorkerEntry => {
+    const opaque: WorkerEntry = { exports: undefined, kind: "composed", path: LUNORA_WORKER_VIRTUAL_ID };
+    const generatedDirectory = join(projectRoot, schemaDirectory, GENERATED_DIRECTORY);
+
+    if (!existsSync(generatedDirectory)) {
+        return opaque;
+    }
+
+    const names = new Set<string>(COMPOSED_ENTRY_DURABLE_OBJECTS);
+
+    for (const module of GENERATED_CLASS_MODULES) {
+        const modulePath = join(generatedDirectory, `${module}.ts`);
+
+        if (!existsSync(modulePath)) {
+            continue;
+        }
+
+        const forwarded = readModuleExports(modulePath);
+
+        if (forwarded === undefined) {
+            return opaque;
+        }
+
+        for (const name of forwarded) {
+            names.add(name);
+        }
+    }
+
+    return { exports: names, kind: "composed", path: LUNORA_WORKER_VIRTUAL_ID };
+};
+
+/**
+ * Read the exports of a located worker entry.
+ *
+ * `undefined` means "cannot be decided" and every caller must report nothing.
+ * Every route there fails open: no located entry, a `main` that names a file
+ * which is not there, one that does not parse ({@link parseSource}), a star
+ * re-export that cannot be followed ({@link readModuleExports}), and a
+ * `"probed"` file that does not look like a worker at all.
+ *
+ * That last guard is what makes probing safe. A Cloudflare module worker MUST
+ * export `default`, and a guessed location can easily be something else —
+ * `src/index.ts` is the CLIENT entry in a class-A app and an ordinary barrel in
+ * plenty of others. Reading one of those as the worker reported its declared
+ * classes missing and blocked the deploy. A `"declared"` entry is trusted
+ * without the guard: the user named that file, so "it exports no `default`" is a
+ * different bug and not this check's to guess at.
+ */
+const readWorkerEntry = (location: WorkerEntryLocation, projectRoot: string, schemaDirectory: string): WorkerEntry | undefined => {
+    if (location === undefined || location.origin === "absent") {
+        return undefined;
+    }
+
+    if (location.origin === "composed") {
+        return readComposedEntry(projectRoot, schemaDirectory);
+    }
+
+    const exports = readModuleExports(location.path);
+
+    if (location.origin === "probed" && exports !== undefined && !exports.has(DEFAULT_EXPORT)) {
+        return undefined;
+    }
+
+    return { exports, kind: "authored", path: location.path };
+};
 
 /**
  * Extensions worth reading. JS is included for the same reason `parseSource`
@@ -562,5 +820,5 @@ const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMetho
     return site === undefined ? undefined : { chained, site };
 };
 
-export type { CapabilityMethod, WorkerEntry };
-export { readWorkerEntry, scanAppChains };
+export type { CapabilityMethod, WorkerEntry, WorkerEntryLocation };
+export { locateWorkerEntry, readWorkerEntry, scanAppChains };

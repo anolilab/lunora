@@ -2,7 +2,7 @@
  * Remote-binding dev for the Vite path (`vite dev`), mirroring `lunora dev`.
  *
  * When remote mode is on (the `--remote`-equivalent `LUNORA_REMOTE` env, or the
- * `remote` key in `lunora.json`), the worker `@cloudflare/vite-plugin` boots
+ * `remote` key in `lunora.config.*`), the worker `@cloudflare/vite-plugin` boots
  * should read/write the project's **deployed** D1/KV/R2/Vectorize/Queues/
  * Services/AI instead of empty local resources. We get there exactly like the
  * CLI: materialize a temp wrangler config with `"remote": true` injected on each
@@ -48,9 +48,9 @@ interface ViteRemotePlan {
 interface PlanViteRemoteOptions {
     /** Injection seam — defaults to the real materializer. */
     materialize?: typeof materializeRemoteWranglerConfig;
-    /** Project root containing `wrangler.jsonc` + the optional `lunora.json`. */
+    /** Project root containing `wrangler.jsonc` + the optional `lunora.config.*`. */
     projectRoot: string;
-    /** Injection seam — defaults to the real `lunora.json` reader. */
+    /** Injection seam — defaults to the real `lunora.config.*` reader. */
     readPreference?: typeof readProjectRemotePreference;
     /** The raw `LUNORA_REMOTE` env value; defaults to `process.env.LUNORA_REMOTE`. */
     remoteEnv?: string;
@@ -64,7 +64,7 @@ const noopCleanup = (): void => {};
  * injected materializer; returns a `cleanup` for the dev server's close hook.
  *
  * There is no `--remote` flag on the Vite path (Vite has no Lunora CLI flags),
- * so the precedence reduces to `LUNORA_REMOTE` env > `lunora.json` `remote`.
+ * so the precedence reduces to `LUNORA_REMOTE` env > `lunora.config.*` `remote`.
  *
  * Call this from a `config` hook, never at plugin-factory time — see
  * {@link remoteBindingsPlugin} for the two defects that timing caused.

@@ -182,11 +182,11 @@ describe("lunora deploy", () => {
 
     describe("lunora deploy", () => {
         describe("deploy target", () => {
-            it("rejects an unregistered target declared in lunora.json", async () => {
+            it("rejects an unregistered target declared in lunora.config.ts", async () => {
                 expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+                writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
@@ -204,11 +204,11 @@ describe("lunora deploy", () => {
                 expect(calls).toHaveLength(0);
             });
 
-            it("lets --target override lunora.json", async () => {
+            it("lets --target override lunora.config.ts", async () => {
                 expect.assertions(1);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+                writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
                 const { spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
