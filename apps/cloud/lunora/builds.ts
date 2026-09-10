@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { executeInContainer } from "../src/builds/container-exec";
 import { runBuildDispatch } from "../src/builds/dispatch";
 import type { BuildRunnerPorts } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure } from "../src/builds/runner";
@@ -358,22 +359,21 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
 /**
  * The build source/execute seam, resolved from configuration.
  *
- * Both ports are 🌐 and neither can be faked: `fetchSource` needs a GitHub App
- * installation token (an App id + private key — distinct from the
- * `GITHUB_CLIENT_ID`/`SECRET` OAuth pair used for social sign-in), and `execute`
- * needs a container to run `lunora build` in. Until those exist, this throws with
- * the reason, which `runBuild` turns into a logged, FAILED build.
+ * `execute` runs in a container now (`containers/build/`) and needs no
+ * credential. `fetchSource` still does: a GitHub App id + private key, distinct
+ * from the `GITHUB_CLIENT_ID`/`SECRET` OAuth pair used for social sign-in.
+ * Without them this throws with the reason, which `runBuild` turns into a
+ * logged, FAILED build.
  *
  * That failure is the point. Before the dispatcher was wired, a pushed build sat
  * `pending` with nobody to claim it and was failed 24 hours later by the expiry
  * cron, with no explanation anywhere. Failing in the first minute, with the cause
- * written to `buildLogs`, is strictly better than silence — and the day the
- * infrastructure lands, only this function changes.
+ * written to `buildLogs`, is strictly better than silence.
  */
 const unconfigured = (what: string) => (): never => {
     throw new LunoraError(
         "INTERNAL",
-        `build ${what} is not configured: the control plane has no ${what === "source fetch" ? "GitHub App credentials (app id + private key) to mint an installation token" : "build container binding to execute `lunora build`"}. Builds cannot run until it is provisioned.`,
+        `build ${what} is not configured: the control plane has no GitHub App credentials (app id + private key) to mint an installation token. Builds cannot run until it is provisioned.`,
     );
 };
 
@@ -404,11 +404,32 @@ export const dispatch = internalAction.action(async ({ ctx: context }): Promise<
         complete: async (buildId, bundleHash) => {
             await context.runMutation(complete, { buildId: buildId as BuildId, bundleHash, runnerId });
         },
-        execute: unconfigured("execution"),
+        // `.any()` — a build is stateless, so any instance will do, and `.any()`
+        // is the handle that retries THROUGH a cold start (a 503 "no instance"
+        // while Cloudflare provisions) while letting a genuine 5xx from a
+        // running box pass straight through. Retrying a real build failure
+        // would just pay for the same install twice.
+        execute: async (source, onLine) => await executeInContainer(context.containers.buildBox.any(), source, onLine),
         fail: async (buildId, error) => {
             await context.runMutation(fail, { buildId: buildId as BuildId, error, runnerId });
         },
-        fetchSource: unconfigured("source fetch"),
+        fetchSource:
+            app === null
+                ? unconfigured("source fetch")
+                : async (build) => {
+                      // Same row the status reporter reads: the installation to
+                      // authenticate as, the repository, and the commit.
+                      const target = await context.runQuery(reportTarget, { buildId: build.buildId as BuildId });
+
+                      if (!target) {
+                          throw new LunoraError(
+                              "INTERNAL",
+                              "this build has no GitHub source to fetch: the project has no `githubRepo`, or the organization has no claimed App installation",
+                          );
+                      }
+
+                      return await app.downloadTarball(target);
+                  },
         ...(app === null
             ? {}
             : {

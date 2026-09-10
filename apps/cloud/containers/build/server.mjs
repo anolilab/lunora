@@ -64,7 +64,6 @@ const EXEC_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * The message to send back for a thrown error, keeping internal detail out of it.
- *
  * @param {unknown} error Whatever was thrown.
  * @returns {string} A tenant-facing message. Internal failures are generalised and logged here instead.
  */

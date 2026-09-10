@@ -1230,6 +1230,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../../packages/container
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1

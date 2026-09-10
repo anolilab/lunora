@@ -79,17 +79,30 @@ curl -sN -X POST localhost:8080/__lunora/build --data-binary @/tmp/src.tgz
 
 Expect NDJSON log lines, then a final `{"bundle":"…","bundleHash":"…"}`.
 
-## Wiring (still open)
+## Wiring
 
-The image exists; nothing calls it yet. To close A3:
+Done — the image is reachable from the control plane:
 
-1. `defineContainer` this image in the cloud app (`image: "./containers/build"`,
-   `enableInternet: false`, `allowedHosts` for the registry, an instance type
-   with enough memory for a real `pnpm install`).
-2. Implement `BuildRunnerPorts.execute` over
-   `ctx.containers.<name>.fetch("/__lunora/build", { body: source })`, parsing
-   the NDJSON and calling `onLine` per `{"line"}`.
-3. Implement `fetchSource` — the GitHub App installation token is already
-   minted by `src/github/app.ts`; this is the tarball download.
-4. Wire `src/builds/dispatch.ts` into `scheduled()`. It is deliberately not
-   wired today: claiming builds with no executor would only burn them.
+1. `lunora/containers.ts` declares it (`buildBox`), egress denied except the
+   package registries, `standard-2` because a real `pnpm install` plus a
+   bundler does not fit in the 1/16-vCPU default.
+2. `BuildRunnerPorts.execute` drives it through `src/builds/container-exec.ts`,
+   which reads the NDJSON and forwards each line to `buildLogs`.
+3. `fetchSource` downloads the tarball with the GitHub App installation token
+   (`downloadTarball` in `src/github/app.ts`, reusing the same cached token as
+   the commit-status write-back).
+4. The dispatcher was **already** on a once-a-minute cron
+   (`lunora/crons.ts` → `internal.builds.dispatch`); it needed no change.
+
+Two things to know before this runs for real:
+
+- **`wrangler deploy` builds the Dockerfile with local Docker** and pushes it
+  to the Cloudflare Registry, so whatever runs the deploy needs a Docker
+  daemon. The container entry is repeated in every `env.*` block in
+  `wrangler.jsonc` because wrangler inherits neither `containers` nor
+  `durable_objects` into an environment — a top-level-only entry deploys a cell
+  with the binding present and nothing behind it.
+- **`fetchSource` still needs the GitHub App credential** (`GITHUB_APP_ID` /
+  `GITHUB_APP_PRIVATE_KEY`). Without it a build fails in its first minute with
+  that reason in `buildLogs`, which is deliberate — see the `unconfigured`
+  note in `lunora/builds.ts`.

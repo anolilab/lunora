@@ -16,6 +16,10 @@
                 "class_name": "SchedulerDO",
                 "name": "SCHEDULER",
             },
+            {
+                "class_name": "BuildBoxContainer",
+                "name": "CONTAINER_BUILD_BOX",
+            },
         ],
     },
     "migrations": [
@@ -26,6 +30,12 @@
         {
             "new_sqlite_classes": ["SchedulerDO"],
             "tag": "v2",
+        },
+        {
+            // The build box's Container DO (GAPS.md A3). SQLite-class like the
+            // others — `@cloudflare/containers` keeps its instance state there.
+            "new_sqlite_classes": ["BuildBoxContainer"],
+            "tag": "v3",
         },
     ],
     "d1_databases": [
@@ -183,11 +193,28 @@
                 "bindings": [
                     { "class_name": "ShardDO", "name": "SHARD" },
                     { "class_name": "SchedulerDO", "name": "SCHEDULER" },
+                    { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
                 ],
             },
             "migrations": [
                 { "new_sqlite_classes": ["ShardDO"], "tag": "v1" },
                 { "new_sqlite_classes": ["SchedulerDO"], "tag": "v2" },
+                { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
+            ],
+            // Repeated per cell on purpose: wrangler does NOT inherit
+            // `containers` into an environment, so a top-level-only entry
+            // deploys a cell with the DO binding present and no container
+            // behind it — `lunora build` would fail for every tenant with
+            // nothing in the config to show why. Same reason the
+            // `durable_objects` block above is repeated.
+            "containers": [
+                {
+                    "class_name": "BuildBoxContainer",
+                    "image": "./containers/build/Dockerfile",
+                    "image_build_context": "./containers/build",
+                    "instance_type": "standard-2",
+                    "max_instances": 5,
+                },
             ],
             "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-staging-d1-id>", "database_name": "lunora-cloud-staging" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
@@ -223,11 +250,28 @@
                 "bindings": [
                     { "class_name": "ShardDO", "name": "SHARD" },
                     { "class_name": "SchedulerDO", "name": "SCHEDULER" },
+                    { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
                 ],
             },
             "migrations": [
                 { "new_sqlite_classes": ["ShardDO"], "tag": "v1" },
                 { "new_sqlite_classes": ["SchedulerDO"], "tag": "v2" },
+                { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
+            ],
+            // Repeated per cell on purpose: wrangler does NOT inherit
+            // `containers` into an environment, so a top-level-only entry
+            // deploys a cell with the DO binding present and no container
+            // behind it — `lunora build` would fail for every tenant with
+            // nothing in the config to show why. Same reason the
+            // `durable_objects` block above is repeated.
+            "containers": [
+                {
+                    "class_name": "BuildBoxContainer",
+                    "image": "./containers/build/Dockerfile",
+                    "image_build_context": "./containers/build",
+                    "instance_type": "standard-2",
+                    "max_instances": 5,
+                },
             ],
             "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-production-d1-id>", "database_name": "lunora-cloud" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
@@ -258,4 +302,15 @@
             "version_metadata": { "binding": "CF_VERSION_METADATA" },
         },
     },
+    // Top level as well as per cell: `lunora dev` and a bare `wrangler deploy`
+    // with no `--env` read this one.
+    "containers": [
+        {
+            "class_name": "BuildBoxContainer",
+            "image": "./containers/build/Dockerfile",
+            "image_build_context": "./containers/build",
+            "instance_type": "standard-2",
+            "max_instances": 5,
+        },
+    ],
 }

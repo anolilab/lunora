@@ -28,6 +28,7 @@
         "@lunora/auth": "workspace:*",
         "@lunora/bindings": "workspace:*",
         "@lunora/client": "workspace:*",
+        "@lunora/container": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/do": "workspace:*",
         "@lunora/errors": "workspace:*",
