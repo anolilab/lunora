@@ -1,3 +1,18 @@
+## @lunora/runtime [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.111...@lunora/runtime@1.0.0-alpha.112) (2026-09-10)
+
+### Features
+
+* **runtime:** run crons and queues where the host has neither ([#684](https://github.com/anolilab/lunora/issues/684)) ([4d11b0c](https://github.com/anolilab/lunora/commit/4d11b0c7912f5b781ad4f7a17dfddae229bae0e1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+* **@lunora/observability:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
 ## @lunora/runtime [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.110...@lunora/runtime@1.0.0-alpha.111) (2026-09-10)
 
 
