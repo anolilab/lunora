@@ -156,6 +156,26 @@ describe("codegen-plugin", () => {
             expect(dataModel).toContain("export interface Doc_users");
         });
 
+        it("configResolved generates, so output exists before any other plugin's configureServer", () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            // Vite runs every `configureServer` — the Cloudflare plugin's included —
+            // before the first `buildStart`, and that plugin reads the worker entry
+            // there. `virtual:lunora/worker` imports `_generated/app.ts`, so output
+            // that only lands in `buildStart` is an unresolvable specifier for the
+            // whole window in between (`_generated/` is gitignored, so CI is always
+            // cold). Nothing else in the plugin container may observe a cold
+            // `_generated/`.
+            expect(existsSync(join(workdir, "lunora", "_generated", "api.ts"))).toBe(true);
+        });
+
         it("serve: LUNORA_CODEGEN=0 writes nothing and registers no codegen watcher", () => {
             expect.assertions(4);
 
@@ -167,8 +187,10 @@ describe("codegen-plugin", () => {
             const plugin = codegenPlugin(makeOptions(workdir));
 
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
             (plugin.buildStart as (this: unknown) => void).call(undefined);
 
+            // Both hooks generate now, so both have to honour the dev switch.
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
 
             // No watcher registration: gating the RUN would still build or refresh

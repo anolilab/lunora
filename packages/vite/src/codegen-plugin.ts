@@ -283,6 +283,27 @@ const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: stri
 };
 
 /**
+ * Codegen's logger outside a dev-server context. Module-scoped because two
+ * hooks now share it — `configResolved` (the cold-start run) and `buildStart`
+ * (the post-codegen hook and binding reconcile). The dev server's own logger
+ * is used instead for watch-triggered runs, see `serverLogger` below.
+ */
+const consoleLogger = {
+    error: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.error(message);
+    },
+    info: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.info(message);
+    },
+    warn: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.warn(message);
+    },
+};
+
+/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -347,26 +368,34 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // target logs an ERROR line and still exits 0.
     let command: "build" | "serve" | undefined;
 
+    // `configResolved`'s codegen run, handed to `buildStart` so it escalates and
+    // post-processes that run instead of repeating it. See the hook for why the
+    // run moved earlier.
+    let primedCodegen: CodegenSafelyResult | undefined;
+
     return {
         config(_userConfig, env) {
             command = env.command;
         },
-        async buildStart() {
-            const logger = {
-                error: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.error(message);
-                },
-                info: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.info(message);
-                },
-                warn: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.warn(message);
-                },
-            };
+        // Codegen has to land before any OTHER plugin initialises, not before
+        // our own `buildStart`: `virtual:lunora/worker` imports
+        // `_generated/app.ts`, and Vite runs every `configureServer` — the
+        // Cloudflare plugin's included — before the first `buildStart`. On a
+        // cold `_generated/` that left a window (2.6s in the playground, and
+        // `_generated/` is gitignored so CI is always cold) in which the worker
+        // entry's own import could not resolve; whoever read the entry inside it
+        // failed on a specifier that would exist a moment later. `configResolved`
+        // is the last hook that still runs before the rest of the container, and
+        // codegen is synchronous, so the window closes entirely rather than
+        // getting smaller.
+        configResolved() {
+            if (command !== "build" && codegenDisabled) {
+                return;
+            }
 
+            primedCodegen = runCodegenSafely(options, consoleLogger);
+        },
+        async buildStart() {
             // Build mode: no devServer, no overlay callbacks.
             //
             // {@link isCodegenDisabled} is a DEV switch, honoured only in serve mode:
@@ -376,7 +405,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // shipping against a surface its target cannot serve, CI green the whole
             // way, from a variable someone exported in a shell profile.
             const skipCodegen = command !== "build" && codegenDisabled;
-            const { blockingMessage, failure, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
+            const { blockingMessage, failure, outputDirectory } = primedCodegen ?? (skipCodegen ? {} : runCodegenSafely(options, consoleLogger));
+
+            // One-shot: a `server.restart()` rebuilds the plugin container and
+            // re-primes, but if a host ever reuses this instance for a second
+            // `buildStart` it must generate afresh rather than replay a stale run.
+            primedCodegen = undefined;
 
             // Codegen threw: the schema could not be parsed or emitted at all.
             // Without this a `vite build` went on to bundle whatever `_generated/*`
@@ -408,7 +442,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 let hook;
 
                 try {
-                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: consoleLogger });
                 } finally {
                     hookRunning = false;
                 }
@@ -449,7 +483,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // re-exported container/workflow is raised in the browser error
             // overlay (Vite buffers it and replays to clients on connect) so the
             // fix surfaces here rather than at a late `wrangler deploy` failure.
-            await reconcileBindingsSafely(options, logger, (gaps) => {
+            await reconcileBindingsSafely(options, consoleLogger, (gaps) => {
                 devServer?.hot.send({
                     err: { loc: undefined, message: formatExportGapOverlay(gaps), stack: "" },
                     type: "error",
