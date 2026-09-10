@@ -4273,6 +4273,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `QueueForwardBatch` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardHandler` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardMessage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardResult` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `RankFanOutRequest` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
