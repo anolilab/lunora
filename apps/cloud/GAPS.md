@@ -482,11 +482,35 @@ pointer swap → delete old) is the shape for tenant cell-migration.
 
 ## E. Platform operations
 
-### E1. Platform self-observability + status page + on-call (🌐 mostly)
+### E1. Platform self-observability + status page + on-call (✅ product analytics + client errors; 🌐 SLOs, status page, on-call)
 
 Control-plane error rates, deploy queue depth, dispatcher latency, provisioning
 failures → SLOs + alerts + external status page + incident runbook. The studio
-observes tenants; nothing observes _us_.
+observes tenants; nothing observed _us_.
+
+**Shipped (2026-09-10).** PostHog, in two halves, both inert without a project
+token so a cell with no PostHog runs exactly as before:
+
+- **Worker** (`src/analytics/capture.ts`) — `cloud_deployment_finished` from the
+  deploy handler through an injected port, handed to `waitUntil`. Plain `fetch`,
+  not `posthog-node`: that SDK batches on a timer and flushes on process exit,
+  and a Worker isolate has neither. Keyed on the organization and cell, never a
+  person; carries ids and outcomes, never script contents, secrets, log lines or
+  hostnames.
+- **Studio** (`src/client/analytics.ts`) — unhandled errors/rejections
+  (`capture_exceptions`), masked-by-default session replay, and five product
+  events fired from shared components (`$pageview`, `studio_list_resolved`,
+  `studio_form_error`, `studio_command_run`, `studio_time_range_changed`).
+  Autocapture is **off**: it records the text of whatever was clicked, which on
+  Logs is a tenant's log line and on Secrets a secret name. See `README.md` →
+  Analytics for the `data-ph-unmask` contract and the event table.
+
+**Still open, and all of it 🌐.** Deploy queue depth, dispatcher latency and
+provisioning failures are Worker-side counters nobody emits yet; SLOs need a
+target and an alerting destination; the external status page has to live off our
+own infrastructure to be worth anything, and on-call needs a rota. The
+app-semantic alerting engine (Ring 3 item 1) covers _tenants_ and does not watch
+the control plane, so it is not the answer here.
 
 ### E2. Dispatcher canary (🧭 process)
 
