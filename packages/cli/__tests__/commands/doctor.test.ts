@@ -565,19 +565,11 @@ describe("runDoctor", () => {
 
             seed(workdir, PLACEHOLDER_WRANGLER);
 
-            const { logger } = makeLogger();
-            let stderr = "";
-            const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-                stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-                return true;
-            });
+            const { lines, logger } = makeLogger();
 
             const stdout = await captureStdout(async () => {
                 await runDoctorCommand({ cwd: workdir, format: "json", logger });
             });
-
-            stderrSpy.mockRestore();
 
             const parsed = JSON.parse(stdout) as { code: number; findings: { code: string; level: string }[]; ok: boolean; summary: Record<string, number> };
 
@@ -585,8 +577,11 @@ describe("runDoctor", () => {
             expect(parsed.code).toBe(1);
             expect(parsed.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
             expect(parsed.summary.fail).toBe(1);
-            // The report is still rendered — on stderr, so stdout stays pipeable.
-            expect(stderr).toContain("lunora doctor — project preflight");
+            // The report is still rendered, and off stdout so it stays pipeable.
+            // It goes to the logger THIS test injected: json mode only diverts to
+            // stderr when the command is logging through the process streams, so
+            // a caller's own sink survives the format switch.
+            expect(lines.join("\n")).toContain("lunora doctor — project preflight");
         });
 
         it("counts every level in the summary and keeps pass findings in the document", async () => {

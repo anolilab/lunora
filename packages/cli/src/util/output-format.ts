@@ -1,5 +1,5 @@
 import type { Logger } from "./logger";
-import { createStderrLogger } from "./logger";
+import { createStderrLogger, isProcessStreamLogger } from "./logger";
 
 /**
  * Machine-readable output formats Lunora commands understand. `pretty` is the
@@ -29,11 +29,17 @@ const isJsonFormat = (format: string | undefined): boolean => format === "json";
 
 /**
  * Pick the logger a command should use for its human/progress output given the
- * requested format. In `json` mode every line is routed to stderr (via
- * {@link createStderrLogger}) so stdout carries only the JSON document; in
- * `pretty` mode the command's normal logger is used unchanged.
+ * requested format. In `json` mode a logger that writes the process streams is
+ * routed to stderr (via {@link createStderrLogger}) so stdout carries only the
+ * JSON document; in `pretty` mode the command's normal logger is used unchanged.
+ *
+ * A logger the CALLER supplied is kept in both modes: it is already off stdout,
+ * so the swap would achieve nothing and throw their sink away — which is how an
+ * embedder passing `{ format: "json", logger }` lost every line to the real
+ * stderr. See `isProcessStreamLogger`.
  */
-const loggerForFormat = (format: string | undefined, prettyLogger: Logger): Logger => (isJsonFormat(format) ? createStderrLogger() : prettyLogger);
+const loggerForFormat = (format: string | undefined, prettyLogger: Logger): Logger =>
+    isJsonFormat(format) && isProcessStreamLogger(prettyLogger) ? createStderrLogger() : prettyLogger;
 
 /**
  * Print a structured command result as a single pretty-printed JSON document on
