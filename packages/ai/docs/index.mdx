@@ -569,6 +569,36 @@ users who need it is the wrong trade. Plain-text types (`text/plain`,
 else without one is **skipped**, never indexed as raw bytes — a PDF's binary or
 an HTML file's markup embeds to something that matches nothing.
 
+## Tagging gateway calls for cost attribution
+
+AI Gateway can only break cost down by keys that were sent **with** the call, so
+a dimension you did not tag is one you cannot recover afterwards. Two scopes,
+because they are fixed at different times:
+
+- **Deployment-scoped** — which app, which environment. Set
+  `LUNORA_AI_GATEWAY_TAGS` to a flat JSON object of string values and every
+  gateway call carries them:
+
+    ```jsonc
+    // wrangler.jsonc
+    "vars": { "LUNORA_AI_GATEWAY_TAGS": "{\"app\":\"checkout\",\"env\":\"prod\"}" }
+    ```
+
+- **Per-call** — which feature, which (hashed) user. Pass them at the call site
+  as the `tags` field of `AiGatewayMetadata`.
+
+Both land in the same place: the `cf-aig-metadata` header for bring-your-own
+providers, and the Workers AI binding's native `gateway.metadata` option. The
+built-in `functionPath` / `traceId` correlation fields always win over a tag of
+the same name.
+
+AI Gateway rejects the whole metadata object past `AI_GATEWAY_METADATA_MAX_KEYS`
+(5) keys, so the builder trims to that rather than sending something the gateway
+will throw away. A malformed `LUNORA_AI_GATEWAY_TAGS` is ignored with a
+warn-once rather than failing the call — telemetry configuration must not take
+inference down — and non-string values are dropped rather than coerced, since a
+number silently becoming `"1"` is worse than a visibly absent tag.
+
 ## Cost telemetry without an AI Gateway
 
 Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway
