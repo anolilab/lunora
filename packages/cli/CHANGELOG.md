@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.243...@lunora/cli@1.0.0-alpha.244) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.123
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.174
+* **@lunora/config:** upgraded to 1.0.0-alpha.211
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.131
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.111
+* **@lunora/seed:** upgraded to 1.0.0-alpha.122
+* **@lunora/testing:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/cli [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.242...@lunora/cli@1.0.0-alpha.243) (2026-09-08)
 
 ### Bug Fixes
