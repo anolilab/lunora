@@ -60,6 +60,7 @@ export type {
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 import type { LunoraAi } from "@lunora/ai";
 import type { LunoraPayment } from "@lunora/payment";
+import type { ContainerAccessor } from "@lunora/container";
 import type * as lunoraEnvContract from "../env.js";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
@@ -137,6 +138,8 @@ export interface CloudflareBindings {
     readonly [binding: string]: unknown;
     /** Workers AI binding (the conventional `env.AI`), narrowing `ctx.ai`. */
     readonly AI?: unknown;
+    /** Durable Object namespace for the `buildBox` container. */
+    readonly CONTAINER_BUILD_BOX?: unknown;
 }
 
 /** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
@@ -228,6 +231,9 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage" | "env">
     readonly storage: StorageBase<StorageBucketName>;
     readonly ai: LunoraAi;
     readonly payments: LunoraPayment;
+    readonly containers: {
+        readonly buildBox: ContainerAccessor;
+    };
     /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
     readonly env: LunoraEnv;
 }

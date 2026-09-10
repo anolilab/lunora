@@ -159,6 +159,17 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
 };
 
 /**
+ * The build box's Container DO, plus the `ContainerProxy` its egress firewall
+ * routes through (GAPS.md A3).
+ *
+ * Wrangler requires every `containers[].class_name` to be exported by the
+ * deployed worker, and codegen warns when one is not — without this the
+ * container deploys with nothing to run, and the failure is at build time for
+ * a tenant rather than here.
+ */
+export * from "../lunora/_generated/containers";
+
+/**
  * Deferred-dispatch DO for `@lunora/scheduler`. The control plane's own crons
  * (`lunora/crons.ts`) ride Cloudflare cron triggers and don't need this, but the
  * class must be exported for the `SCHEDULER` binding to be provisionable — so

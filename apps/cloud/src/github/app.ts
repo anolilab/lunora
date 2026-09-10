@@ -87,7 +87,24 @@ export interface CommitStatus {
 }
 
 export interface GitHubApp {
+    /**
+     * Download the repository tarball at one commit (GAPS.md A3).
+     *
+     * The source half of a server-side build. Uses the same cached installation
+     * token as the status write-back, so a build and its three status posts
+     * share one mint rather than four.
+     */
+    downloadTarball: (source: TarballSource) => Promise<ArrayBuffer>;
     postCommitStatus: (status: CommitStatus) => Promise<void>;
+}
+
+/** Which repository, at which commit, on whose installation. */
+export interface TarballSource {
+    /** The commit to archive. A SHA, so a build is reproducible and a moving branch cannot change under it. */
+    commitSha: string;
+    installationId: number;
+    /** `owner/name`. */
+    repository: string;
 }
 
 export interface GitHubAppOptions {
@@ -110,6 +127,18 @@ const INSTALLATION_TOKEN_TTL_MS = 45 * 60 * 1000;
 
 /** Descriptions are truncated by GitHub at 140 characters; do it here so the text stays ours. */
 const MAX_DESCRIPTION = 140;
+
+/**
+ * Ceiling on a downloaded source tarball.
+ *
+ * The size is the tenant's to choose, and this buffer lands in a Worker
+ * isolate's memory before it is streamed anywhere — an unbounded read is an
+ * isolate kill that takes every other in-flight request on that isolate with
+ * it, not just this build. Matches the build box's own `MAX_SOURCE_BYTES`, so
+ * the two refuse at the same point rather than one accepting what the other
+ * will reject after the transfer.
+ */
+const MAX_TARBALL_BYTES = 256 * 1024 * 1024;
 
 /**
  * Build the App client, or `null` when the credentials are absent.
@@ -166,17 +195,56 @@ export const createGitHubApp = (options: GitHubAppOptions): GitHubApp | null => 
         return body.token;
     };
 
+    /** `owner/name` → a path-safe `owner/name`, so a crafted value cannot re-target the request. */
+    const repositoryPath = (repository: string): string =>
+        repository
+            .split("/")
+            .map((segment) => encodeURIComponent(segment))
+            .join("/");
+
     return {
+        downloadTarball: async (source) => {
+            const token = await installationToken(source.installationId);
+            // Same encoding rationale as `postCommitStatus` below: `repository`
+            // is a project's unvalidated `githubRepo`, and this request carries
+            // a live installation token.
+            const url = `${apiBase}/repos/${repositoryPath(source.repository)}/tarball/${encodeURIComponent(source.commitSha)}`;
+            const response = await fetchImpl(url, {
+                headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "lunora-cloud" },
+                // GitHub answers 302 to codeload; the platform fetch follows it.
+                redirect: "follow",
+            });
+
+            if (!response.ok) {
+                throw new Error(`github tarball download failed: ${String(response.status)}`);
+            }
+
+            // Checked before the body is read where GitHub declares it, so an
+            // oversized archive costs a header round-trip rather than 256MB of
+            // isolate memory.
+            const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+
+            if (Number.isFinite(declared) && declared > MAX_TARBALL_BYTES) {
+                throw new Error(`source tarball is ${String(declared)} bytes, over the ${String(MAX_TARBALL_BYTES)} limit`);
+            }
+
+            const body = await response.arrayBuffer();
+
+            // And again after: `content-length` is absent on a chunked response,
+            // which is exactly the shape that would slip past the check above.
+            if (body.byteLength > MAX_TARBALL_BYTES) {
+                throw new Error(`source tarball is ${String(body.byteLength)} bytes, over the ${String(MAX_TARBALL_BYTES)} limit`);
+            }
+
+            return body;
+        },
         postCommitStatus: async (status) => {
             const token = await installationToken(status.installationId);
             // Each segment encoded: `repository` comes from a project's `githubRepo`,
             // which is a bounded string with no `owner/name` format check — a value
             // containing `../` or a `?` would otherwise re-target this POST at a
             // different GitHub endpoint while carrying a live installation token.
-            const path = `${status.repository
-                .split("/")
-                .map((segment) => encodeURIComponent(segment))
-                .join("/")}/statuses/${encodeURIComponent(status.sha)}`;
+            const path = `${repositoryPath(status.repository)}/statuses/${encodeURIComponent(status.sha)}`;
             const response = await fetchImpl(`${apiBase}/repos/${path}`, {
                 body: JSON.stringify({
                     context: statusContext,
