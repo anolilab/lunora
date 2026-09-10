@@ -230,7 +230,7 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (✅ queue + dispatcher + build image; 🔨 execute port)
+### A3. Server-side builds + build logs (✅ wired end to end; 🌐 GitHub App credential only)
 
 > **2026-07-21:** the claim→run→drain **dispatcher** (`src/builds/dispatch.ts`)
 > now exists and is tested — `builds.claimNext` finally has a caller at the logic
@@ -270,10 +270,25 @@ GitHub webhook only parses PR events into preview _intents_.
 > resolves a missing binary from the registry (verified on npm 10), which would
 > silently build a tenant's code with an unpinned CLI.
 >
-> This moves A3's remainder from 🌐 to **🔨**: no credential is needed any more,
-> only wiring — `defineContainer` the image, implement `execute` over its build
-> route, implement `fetchSource`, then wire `src/builds/dispatch.ts` into
-> `scheduled()`. See `containers/build/README.md` → Wiring.
+> **Wired the same day.** `lunora/containers.ts` declares the container,
+> `execute` drives it through `src/builds/container-exec.ts` (NDJSON → live
+> `buildLogs`), and `fetchSource` downloads the tarball with the App
+> installation token. The dispatcher needed no change — it has been on a
+> once-a-minute cron all along, so the old "wire dispatch into `scheduled()`"
+> item was already done.
+>
+> Two things left, and only the first is a gap: **`fetchSource` needs
+> `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`** (the same 🌐 credential A4 waits
+> on — one provisioning step now lights both). And the deploy host needs a
+> **Docker daemon**, because `wrangler deploy` builds the image locally and
+> pushes it to the Cloudflare Registry.
+>
+> The wrangler config was the subtle part: the config layer infers the binding
+> at the top level, and wrangler inherits neither `containers` nor
+> `durable_objects` into an environment, so a top-level-only entry deploys a
+> cell with the binding present and nothing behind it. Both cells carry it
+> explicitly, verified against a real production build's emitted
+> `wrangler.json`. See `containers/build/README.md`.
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 
