@@ -149,7 +149,7 @@ describe("lunora verify", () => {
             // it. Dropping the one output that depends on that target let an app
             // whose nightly cron can never fire on this host verify clean.
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
@@ -172,7 +172,7 @@ describe("lunora verify", () => {
             // with two unsupported features had one of them silently dropped from
             // the machine-readable output that gates the pipeline.
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,

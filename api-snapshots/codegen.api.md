@@ -436,6 +436,25 @@ interface LintSchemaOptions {
 }
 ```
 
+### `LoadedProjectConfig` (interface)
+
+```ts
+interface LoadedProjectConfig {
+    config?: LunoraProjectConfig;
+    error?: string;
+}
+```
+
+### `LunoraProjectConfig` (interface)
+
+```ts
+interface LunoraProjectConfig {
+    app?: unknown;
+    remote?: unknown;
+    target?: unknown;
+}
+```
+
 ### `LunoraSolution` (interface)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -550,6 +569,12 @@ interface OpenRpcMethod {
 }
 ```
 
+### `PROJECT_CONFIG_FILENAMES` (const)
+
+```ts
+const PROJECT_CONFIG_FILENAMES: ReadonlyArray<string>;
+```
+
 ### `PlatformDiagnostic` (interface)
 
 ```ts
@@ -557,9 +582,19 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
     remediation: string;
     target: string;
+}
+```
+
+### `ProjectConfigLiterals` (interface)
+
+```ts
+interface ProjectConfigLiterals {
+    remote?: boolean;
+    target?: string;
+    unreadable?: boolean;
 }
 ```
 
@@ -1311,6 +1346,12 @@ const evaluateSchemaDrift: (options: {
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `findProjectConfigFile` (const)
+
+```ts
+const findProjectConfigFile: (projectRoot: string) => string | undefined;
+```
+
 ### `findTsconfig` (const)
 
 ```ts
@@ -1359,6 +1400,12 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const listLunoraSourceFiles: (directory: string) => string[];
 ```
 
+### `loadProjectConfig` (const)
+
+```ts
+const loadProjectConfig: (projectRoot: string) => Promise<LoadedProjectConfig>;
+```
+
 ### `parseSchemaSnapshot` (const)
 
 ```ts
@@ -1375,6 +1422,12 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 
 ```ts
 const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
+```
+
+### `readProjectConfigLiterals` (const)
+
+```ts
+const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 ```
 
 ### `readProjectTarget` (const)

@@ -820,20 +820,5 @@ const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMetho
     return site === undefined ? undefined : { chained, site };
 };
 
-/**
- * Whether `path` exports `name` as a runtime VALUE.
- *
- * Exported for `@lunora/vite`, which must know whether the app's config module
- * really exports the function the generated entry is about to name-import. A
- * substring check there passed a file that only MENTIONED the name in a comment,
- * a type-only export, a default export, and a file that does not parse — each
- * producing a bundle-time "does not provide an export named …" against a virtual
- * module, which is the error that check exists to prevent.
- *
- * `false` when the module cannot be read or parsed: an import this cannot verify
- * is one the entry must not emit.
- */
-const moduleExportsValue = (path: string, name: string): boolean => readModuleExports(path)?.has(name) === true;
-
 export type { CapabilityMethod, WorkerEntry, WorkerEntryLocation };
-export { locateWorkerEntry, moduleExportsValue, readWorkerEntry, scanAppChains };
+export { locateWorkerEntry, readWorkerEntry, scanAppChains };

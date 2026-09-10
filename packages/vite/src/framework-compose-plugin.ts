@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { findProjectConfigFile, loadProjectConfig } from "@lunora/codegen";
 import type { GeneratedClassModule } from "@lunora/config";
-import { APP_CONFIG_FILENAME, GENERATED_CLASS_MODULES } from "@lunora/config";
-import { moduleExportsValue } from "@lunora/config/cloudflare";
+import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -115,8 +115,6 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 };
 
 /** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
-/** The named export the composed entry imports from {@link APP_CONFIG_FILENAME}. */
-const APP_CONFIG_EXPORT = "configureApp";
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
@@ -136,7 +134,7 @@ const APP_CONFIG_EXPORT = "configureApp";
 interface WorkerEntryComposition {
     /** Whether to allow unauthenticated shard access — `.extend(...)` on the builder. */
     allowUnauthenticatedShardAccess?: boolean;
-    /** Absolute path to the app's own `configureApp` module, when it has one. */
+    /** Finished specifier for the project's `lunora.config.*`, when it declares an `app` hook. */
     appConfigModule?: string;
     /** The `_generated/` class modules that exist, each star-re-exported. */
     classModules?: ReadonlyArray<GeneratedClassModule>;
@@ -192,8 +190,15 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
     // stripped for the same reason the sibling `/app` import has none: the
     // bundler resolves the extension.
-    const appConfigImport = appConfigModule === undefined ? "" : `\nimport { ${APP_CONFIG_EXPORT} } from "${appConfigModule}";`;
-    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["configureApp(", ")"];
+    // Carries its OWN leading newline so a project without an `app` hook gets
+    // output byte-identical to before, rather than a gratuitous blank line.
+    const appConfigImport = appConfigModule === undefined ? "" : `\nimport lunoraConfig from "${appConfigModule}";`;
+    // Called directly, with no `?? identity` fallback. The host already asserted
+    // the hook is a function; a fallback could only fire if the config changed
+    // between that check and the bundle, and it would then boot a worker with the
+    // user's `.auth()` / `.global()` wiring silently missing. A `TypeError` naming
+    // `lunoraConfig.app` is strictly better than an app quietly missing its auth.
+    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["lunoraConfig.app(", ")"];
 
     // Each declared `shard` knob as its `defineApp()` builder call. Every
     // `LunoraShardConfig` key is named after the builder method that sets it, so
@@ -243,21 +248,33 @@ export default app;
 };
 
 /**
- * The app-config module to compose through, or `undefined` when there is none.
+ * The project-config specifier to compose through, or `undefined` when the
+ * project declares no `app` hook.
  *
- * The export is verified by PARSING, not by a substring. A file that merely
- * mentions `configureApp` in a comment — or exports it as a type, or as the
- * default, or does not parse — fails the BUNDLE with "does not provide an export
- * named `configureApp`" against a virtual module, the least debuggable error this
- * plugin can produce. Anything unverifiable degrades to composing without it.
+ * Decided by LOADING the config with `jiti`, not by parsing it for a name: a
+ * computed hook works, and a config that throws is caught here instead of
+ * failing the BUNDLE with "does not provide an export named …" against a virtual
+ * module — the least debuggable error this plugin can produce. `load()` may be
+ * async, which is what lets this use `jiti`'s non-deprecated entry point.
  */
-const appConfigModule = (projectRoot: string, schemaDirectory: string): string | undefined => {
-    const path = resolve(projectRoot, schemaDirectory, APP_CONFIG_FILENAME);
+const appConfigSpecifier = async (projectRoot: string): Promise<{ error?: string; specifier?: string }> => {
+    const { config, error } = await loadProjectConfig(projectRoot);
 
-    // Posix-ified and extension-stripped HERE, so the emitter receives a finished
-    // specifier: `resolve()` yields backslashes on Windows (invalid escapes once
-    // interpolated into a string literal) and the bundler resolves the extension.
-    return moduleExportsValue(path, APP_CONFIG_EXPORT) ? path.replaceAll("\\", "/").slice(0, -".ts".length) : undefined;
+    if (error !== undefined) {
+        return { error };
+    }
+
+    if (typeof config?.app !== "function") {
+        return {};
+    }
+
+    const path = findProjectConfigFile(projectRoot);
+
+    // Posix-ified HERE, so the emitter receives a finished specifier: `resolve()`
+    // yields backslashes on Windows, which are invalid escapes once interpolated
+    // into a string literal. The extension is KEPT — stripping it made the
+    // specifier depend on Vite's default `resolve.extensions` matching ours.
+    return { specifier: path?.replaceAll("\\", "/") };
 };
 
 /**
@@ -290,7 +307,7 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
 
     return {
-        load(id) {
+        async load(id) {
             if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
                 // `@cloudflare/vite-plugin` names the browser environment "client"
                 // and the worker environment after the worker; emit the stub there
@@ -307,9 +324,19 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // entry carries.
                 const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
 
+                const { error, specifier } = await appConfigSpecifier(options.projectRoot);
+
+                if (error !== undefined) {
+                    // Evaluated on the HOST, so a `cloudflare:*` import or a
+                    // tsconfig path alias (which `jiti` does not read) throws.
+                    // Swallowing it composed a worker with the user's `.auth()` /
+                    // `.global()` wiring silently missing.
+                    this.warn(`[lunora] lunora.config could not be loaded, so its \`app\` hook was not composed: ${error}`);
+                }
+
                 return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
                     allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
-                    appConfigModule: appConfigModule(options.projectRoot, options.schemaDir),
+                    appConfigModule: specifier,
                     classModules,
                     shard: options.shard,
                 });

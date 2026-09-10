@@ -54,7 +54,7 @@ interface BuildCommandOptions {
 
     /**
      * Deploy target the artifact is built for. Defaults to `"target"` in
-     * `lunora.json`, then `"cloudflare"`. `build` is the artifact half of the
+     * `lunora.config.*`, then `"cloudflare"`. `build` is the artifact half of the
      * `lunora build` → `lunora deploy --prebuilt` CI split, so without this that
      * split can only ever produce a default-target artifact.
      */

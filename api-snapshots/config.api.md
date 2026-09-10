@@ -39,12 +39,6 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
 const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 ```
 
-### `APP_CONFIG_FILENAME` (const)
-
-```ts
-const APP_CONFIG_FILENAME = "app.ts";
-```
-
 ### `AddIndexEdit` (interface)
 
 ```ts
@@ -676,12 +670,6 @@ const LUNA_NAME = "Luna";
 const LUNA_SIGNOFF = "Safe travels, voyager.";
 ```
 
-### `LUNORA_CONFIG_FILE` (const)
-
-```ts
-const LUNORA_CONFIG_FILE = "lunora.json";
-```
-
 ### `LUNORA_EVENT_SOURCE` (const)
 
 ```ts
@@ -756,15 +744,6 @@ interface LunoraFormattedLine {
 
 ```ts
 type LunoraLineLevel = "error" | "info" | "warn";
-```
-
-### `LunoraProjectConfig` (interface)
-
-```ts
-interface LunoraProjectConfig {
-    remote?: unknown;
-    target?: unknown;
-}
 ```
 
 ### `LunoraReporter` (class)
@@ -2160,12 +2139,6 @@ const materializeRemoteWranglerConfig: (options: MaterializeOptions) => Material
 
 ```ts
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
-```
-
-### `moduleExportsValue` (const)
-
-```ts
-const moduleExportsValue: (path: string, name: string) => boolean;
 ```
 
 ### `planRemoteBindings` (const)

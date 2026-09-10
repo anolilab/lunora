@@ -53,48 +53,91 @@ dispatch origin from its own env and refuses to enqueue without it, so
 `lunora verify` warns whenever a `SchedulerDO` is declared and that var is unset.
 :::
 
-## Vite-first apps: `lunora/app.ts`
+## `lunora.config.ts`
 
-`@lunora/vite` generates the worker entry for a Vite-first app, so there is no
-file to chain your own `defineApp()` calls on. Anything mechanical is composed
-for you — the shard selector, and `.scheduler(...)` as above. Anything that needs
-_your_ code is not: `.auth(...)` takes your better-auth options, `.global(...)`
-your D1 writer, `.vectors(...)` your embedder, and `resolveIdentity` is only ever
-set by `.auth()`, `.access()` or `.extend()`.
-
-Put those in `lunora/app.ts`, exporting `configureApp`:
+One optional file at the project root carries the project's Lunora settings — the
+deploy `target`, the `remote`-binding dev preference, and the `app` hook a
+Vite-first project composes its worker with. It replaces `lunora.config.*`: the two
+were always the same question, split across a format boundary that existed only
+because the CLI could not read TypeScript. It can now (`jiti`), so there is one
+file and it is real code.
 
 ```ts
-// lunora/app.ts
-import type { AppBuilder } from "./_generated/app";
+// lunora.config.ts
+import type { LunoraConfig } from "./lunora/_generated/app";
+
+export default {
+    target: "cloudflare",
+    remote: true,
+} satisfies LunoraConfig;
+```
+
+`lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
+not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
+Vite's default `resolve.extensions` does not cover them, so the specifier the
+generated worker entry imports for the `app` hook would not resolve.
+
+Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
+which is what gets the file type-checked (nuxt declares none — it extends the
+config Nitro generates, which already covers the project root).
+
+### The `app` hook
+
+In a Vite-first app (`"main": "virtual:lunora/worker"`) `@lunora/vite` generates
+the worker entry, so there is no file to chain your own `defineApp()` calls on.
+Anything mechanical is composed for you — the shard selector, and
+`.scheduler(...)` as above. Anything that needs _your_ code is not:
+`.auth(...)` takes your better-auth options, `.global(...)` your D1 writer,
+`.vectors(...)` your embedder, and `resolveIdentity` is only ever set by
+`.auth()`, `.access()` or `.extend()`.
+
+```ts
+// lunora.config.ts
+import type { AppBuilder, LunoraConfig } from "./lunora/_generated/app";
 
 interface Env {
     DB: D1Database;
     BETTER_AUTH_SECRET: string;
 }
 
-export const configureApp = (app: AppBuilder<Env>): AppBuilder<Env> =>
-    app
-        .auth({
-            d1: (env) => env.DB,
-            options: (env) => ({ secret: env.BETTER_AUTH_SECRET }),
-        })
-        .global({ d1: (env) => env.DB });
+export default {
+    target: "cloudflare",
+    app: (app: AppBuilder<Env>): AppBuilder<Env> =>
+        app
+            .auth({
+                d1: (env) => env.DB,
+                options: (env) => ({ secret: env.BETTER_AUTH_SECRET }),
+            })
+            .global({ d1: (env) => env.DB }),
+} satisfies LunoraConfig<Env>;
 ```
 
-The generated entry calls it between the shard selector and its own
+The generated entry calls the hook between the shard selector and its own
 `.httpRouter(...)` / `.build()`, so the framework wiring stays with the plugin
 and your capabilities are chained in the middle.
 
-The explicit `: AppBuilder<Env>` return type is worth keeping. The generated
-entry is a virtual module that no `tsconfig` covers, so nothing type-checks the
-seam itself — annotate the return and a forgotten `return` fails `lunora verify`
-instead of the worker failing to boot.
+Three things are worth knowing about this file:
 
-The file is optional, and it must export `configureApp` as a value: anything
-else (a type-only export, a default export, a file that does not parse) is
-ignored and the entry composes as if it were absent. A hand-written entry
-(`src/server.ts`, `src/worker.ts`) needs none of this — chain the calls there.
+- **Export it as `default`.** Both readers resolve the default export and nothing
+  else, because the generated entry imports it as one. A hook reached through a
+  named export is ignored.
+- **Keep the imports type-only if you can.** The `app` hook is bundled into the
+  worker, so a runtime `import` here ships with it. It is also _evaluated on the
+  host_ to discover the hook, so a runtime import must resolve there too — a
+  `cloudflare:*` module or a tsconfig path alias (which the loader does not read)
+  will throw, and the build warns that the hook was not composed. `import type`
+  is erased on both counts, which is why the shape above uses `satisfies` rather
+  than a `defineConfig()` call.
+- **Write `target` and `remote` as literals.** `lunora codegen` resolves the
+  target synchronously, by parsing this file rather than running it, so a computed
+  value, a getter or a spread is not seen. It is not silently defaulted either —
+  `lunora verify` reports `platform_unreadable_target`. A `const` in the same
+  file and a shorthand property both work.
+
+A config that throws, or whose `app` is not a function, is ignored rather than
+breaking the build — the entry composes as if the hook were absent. A
+hand-written entry (`src/server.ts`, `src/worker.ts`) needs no hook at all: chain
+the calls there directly.
 
 ## Secrets
 

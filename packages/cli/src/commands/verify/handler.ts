@@ -61,7 +61,7 @@ interface VerifyCommandOptions {
 
     /**
      * Deploy target the drift gate's snapshot is emitted for. Defaults to
-     * `"target"` in `lunora.json`, then `"cloudflare"`. Verify never writes, but
+     * `"target"` in `lunora.config.*`, then `"cloudflare"`. Verify never writes, but
      * a snapshot emitted for the wrong target compares against the wrong
      * baseline.
      */

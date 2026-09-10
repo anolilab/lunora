@@ -33,7 +33,7 @@ interface CodegenCommandOptions {
      * gates on it; `--no-strict-advisories` forces it off either way.
      */
     strictAdvisories?: boolean;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 }
 

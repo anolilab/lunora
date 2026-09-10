@@ -398,6 +398,9 @@ catalogs:
     # in 19 languages. Only the generated SDK's *models* come from quicktype —
     # the method surface is emitted by `packages/codegen/src/sdk/targets/` and
     # the transport is the hand-written per-language runtime under `sdks/`.
+    # Sync TS/JS loader for the project's authored `lunora.config.*`. Host-side
+    # only: the CLI and the Vite plugin read that file, the worker never does.
+    jiti: ^2.7.0
     quicktype-core: ^26.0.0
     ts-morph: ^28.0.0
   # Terminal runtime for the `lunora` binary (@lunora/cli) and the scaffolding it

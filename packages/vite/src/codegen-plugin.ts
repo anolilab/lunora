@@ -2,8 +2,16 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { APP_CONFIG_FILENAME, CODEGEN_ENV, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
+import {
+    CodegenDiagnosticError,
+    createCodegenProject,
+    describeErrorLevelFindings,
+    findTsconfig,
+    PROJECT_CONFIG_FILENAMES,
+    refreshCodegenProject,
+    runCodegen,
+} from "@lunora/codegen";
+import { CODEGEN_ENV, isCodegenDisabled, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -345,7 +353,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // `server.restart()` (Vite re-invokes the hooks on the SAME plugin instance).
     //
     // `configFingerprint` is the binding-relevant baseline of wrangler.jsonc +
-    // lunora.json, refreshed after every Lunora-initiated config write so codegen's
+    // lunora.config.*, refreshed after every Lunora-initiated config write so codegen's
     // own idempotent rewrites never look like drift. `restartInFlight` collapses a
     // burst of edits during the async restart window into one restart.
     //
@@ -499,7 +507,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // queued from `reconcileBindings` now matches this baseline (or is
             // absorbed by the unsettled guard if it arrives before this line).
             if (devServer !== undefined) {
-                configFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
+                configFingerprint = computeConfigFingerprint(options.projectRoot);
                 configBaselineSettled = true;
             }
         },
@@ -516,7 +524,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // finishes its reconcile+re-baseline, config events only adopt (never
             // restart), so this hook's own boot — and a `server.restart()`'s —
             // can't restart on its own binding-provisioning write.
-            configFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
+            configFingerprint = computeConfigFingerprint(options.projectRoot);
             configBaselineSettled = false;
 
             // Reuse the dev server's logger for codegen output. Declared here
@@ -834,19 +842,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // in place. Both wrangler candidate names are watched (even if absent
             // now) so creating one mid-session is caught. `@cloudflare/vite-plugin`
             // already restarts on its own wrangler config change when the Cloudflare
-            // integration is active, but it does NOT watch lunora.json (the remote-
+            // integration is active, but it does NOT watch lunora.config.* (the remote-
             // binding preference) — and Vite's `server.restart()` coalesces
             // concurrent calls via its `_restartPromise`, so a same-tick double
             // restart is harmless. Under the BYO (`cloudflare: false`) path nothing
             // else watches wrangler.jsonc, so this becomes the sole restart trigger.
             const configWatchPaths = new Set<string>([
                 ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
-                resolve(options.projectRoot, LUNORA_CONFIG_FILE),
-                // The class-A app-config seam. `load()` reads it once when the
-                // composed entry is built, and nothing invalidates a virtual
-                // module — so CREATING the file mid-session silently did nothing
-                // until a manual restart.
-                resolve(options.projectRoot, options.schemaDir, APP_CONFIG_FILENAME),
+                // Every candidate name, so CREATING the config mid-session is
+                // picked up: `load()` reads it once when the composed entry is
+                // built and nothing invalidates a virtual module, so an unwatched
+                // create silently did nothing until a manual restart.
+                ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(options.projectRoot, name)),
             ]);
 
             for (const configPath of configWatchPaths) {
@@ -864,7 +871,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                const nextFingerprint = computeConfigFingerprint(options.projectRoot, options.schemaDir);
+                const nextFingerprint = computeConfigFingerprint(options.projectRoot);
 
                 // Startup window: buildStart may still be provisioning bindings into
                 // wrangler.jsonc. Adopt those writes as the baseline rather than

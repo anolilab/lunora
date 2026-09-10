@@ -39,6 +39,7 @@ const DOCTOR_CODES = [
     "email-destination-placeholder",
     "scheduler-origin-missing",
     "schema-unreadable",
+    "stale-lunora-json",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
@@ -207,6 +208,28 @@ const checkWrangler = (cwd: string, parsed: WranglerConfig | undefined, path: st
             message: shardError,
         });
     }
+};
+
+/**
+ * `lunora.json` is no longer read — `lunora.config.*` replaced it.
+ *
+ * A file left behind is not an error (nothing reads it, so nothing breaks), but
+ * silence is the wrong answer: a `lunora.json` declaring `target: "node"` used to
+ * select the provider, and after the rename the project gets the default one with
+ * nothing to explain why. That is the wrong-provider outcome the target reader
+ * refuses everywhere else.
+ */
+const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
+    if (!existsSync(join(cwd, "lunora.json"))) {
+        return;
+    }
+
+    findings.push({
+        code: "stale-lunora-json",
+        fix: 'Move `target` / `remote` into `lunora.config.ts` (`export default { target: "…" }`), then delete lunora.json.',
+        level: "warn",
+        message: "lunora.json is present but no longer read — lunora.config.* replaced it, so any `target` or `remote` in it is being ignored.",
+    });
 };
 
 /**
@@ -638,6 +661,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
+    checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
     await checkDeclaredExports(cwd, findings);
 
