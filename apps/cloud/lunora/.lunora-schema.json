@@ -1,0 +1,3831 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "alertRuleState": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "firing": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastEvaluatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastValue": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "ruleId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "alertRules"
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_rule": {
+          "fields": [
+            "ruleId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "alertRules": {
+      "fields": {
+        "baselineWindows": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "channel": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"email\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pagerduty\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"slack\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"webhook\""
+            }
+          ]
+        },
+        "comparator": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"gt\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"lt\""
+            }
+          ]
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "destination": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "enabled": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "functionPath": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "mode": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"deviation\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"threshold\""
+            }
+          ]
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "target": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"deploy\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error_rate\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"incident\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"issue\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"latency_p95\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"llm_cost\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"uptime\""
+            }
+          ]
+        },
+        "threshold": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "windowMinutes": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "alerts": {
+      "fields": {
+        "body": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "channel": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"email\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pagerduty\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"slack\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"webhook\""
+            }
+          ]
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deliveredAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "destination": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "hash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "ruleId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "alertRules"
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"delivered\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"failed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"firing\""
+            }
+          ]
+        },
+        "subject": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "target": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"deploy\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error_rate\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"incident\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"issue\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"latency_p95\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"llm_cost\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"uptime\""
+            }
+          ]
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_status": {
+          "fields": [
+            "status"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "aliasOwnership": {
+      "fields": {
+        "alias": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        }
+      },
+      "indexes": {
+        "by_alias": {
+          "fields": [
+            "alias"
+          ],
+          "unique": true
+        },
+        "by_project": {
+          "fields": [
+            "projectId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "auditLog": {
+      "fields": {
+        "action": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "actorUserId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "target": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "buildLogs": {
+      "fields": {
+        "buildId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "builds"
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "level": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"info\""
+            }
+          ]
+        },
+        "line": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        }
+      },
+      "indexes": {
+        "by_build": {
+          "fields": [
+            "buildId"
+          ],
+          "unique": false
+        },
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "builds": {
+      "fields": {
+        "branch": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "buildingAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "bundleHash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "commitSha": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "error": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "failedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "processingBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "processingStartedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"building\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"failed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pending\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"successful\""
+            }
+          ]
+        },
+        "successfulAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_project_commit": {
+          "fields": [
+            "projectId",
+            "commitSha"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "cells": {
+      "fields": {
+        "cloudflareAccountId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "dispatchNamespacePrefix": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "jurisdiction": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"active\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"draining\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"suspended\""
+            }
+          ]
+        },
+        "usageReadAtMs": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_name": {
+          "fields": [
+            "name"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "cloudflareBilling": {
+      "fields": {
+        "ciphertext": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "cloudflareAccountId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "iv": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "customers": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "email": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerCustomerId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_customer": {
+          "fields": [
+            "provider",
+            "providerCustomerId"
+          ],
+          "unique": true
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "dashboards": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "panels": {
+          "kind": "array",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "of": {
+            "kind": "object",
+            "nullable": false,
+            "optional": false,
+            "unique": false,
+            "fields": {
+              "config": {
+                "kind": "object",
+                "nullable": false,
+                "optional": false,
+                "unique": false,
+                "fields": {
+                  "filter": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                  },
+                  "metricName": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                  },
+                  "stat": {
+                    "kind": "union",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false,
+                    "members": [
+                      {
+                        "kind": "literal",
+                        "nullable": false,
+                        "optional": false,
+                        "unique": false,
+                        "literal": "\"count\""
+                      },
+                      {
+                        "kind": "literal",
+                        "nullable": false,
+                        "optional": false,
+                        "unique": false,
+                        "literal": "\"first\""
+                      },
+                      {
+                        "kind": "literal",
+                        "nullable": false,
+                        "optional": false,
+                        "unique": false,
+                        "literal": "\"last\""
+                      }
+                    ]
+                  }
+                }
+              },
+              "id": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "kind": {
+                "kind": "union",
+                "nullable": false,
+                "optional": false,
+                "unique": false,
+                "members": [
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"logs\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"metric\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"stat\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"traces\""
+                  }
+                ]
+              },
+              "title": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              }
+            }
+          }
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "deployKeys": {
+      "fields": {
+        "capability": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"deploy\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"ingest\""
+            }
+          ]
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "encryptedSecret": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "ciphertext": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "iv": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        },
+        "hashedKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastUsedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "projects"
+        },
+        "revokedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "type": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"dev\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"preview\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"production\""
+            }
+          ]
+        }
+      },
+      "indexes": {
+        "by_hash": {
+          "fields": [
+            "hashedKey"
+          ],
+          "unique": true
+        },
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "deployments": {
+      "fields": {
+        "adminToken": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "adminTokenCiphertext": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "adminTokenIv": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "alias": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "bindings": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "object",
+            "nullable": false,
+            "optional": false,
+            "unique": false,
+            "fields": {
+              "name": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "target": {
+                "kind": "string",
+                "nullable": false,
+                "optional": true,
+                "unique": false
+              },
+              "type": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              }
+            }
+          }
+        },
+        "branch": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "bundleHash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "cronSpecs": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "destroyedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "failedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "kind": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"dev\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"preview\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"production\""
+            }
+          ]
+        },
+        "liveAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        },
+        "provisioningAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "queuedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "runtimeVersion": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "scriptName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"building\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"destroyed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"failed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"live\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"provisioning\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"queued\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"superseded\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"verifying\""
+            }
+          ]
+        },
+        "supersededAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "teardownAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "url": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "verifyingAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "version": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_alias": {
+          "fields": [
+            "alias"
+          ],
+          "unique": false
+        },
+        "by_kind": {
+          "fields": [
+            "kind"
+          ],
+          "unique": false
+        },
+        "by_org_created": {
+          "fields": [
+            "organizationId",
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "by_project": {
+          "fields": [
+            "projectId"
+          ],
+          "unique": false
+        },
+        "by_script": {
+          "fields": [
+            "scriptName"
+          ],
+          "unique": false
+        },
+        "by_status": {
+          "fields": [
+            "status"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "domains": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "customHostnameId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "hostname": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        },
+        "redirectStatusCode": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "redirectTo": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "txtToken": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "verifiedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_hostname": {
+          "fields": [
+            "hostname"
+          ],
+          "unique": true
+        },
+        "by_project": {
+          "fields": [
+            "projectId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "events": {
+      "fields": {
+        "processedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerEventId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "type": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_event": {
+          "fields": [
+            "provider",
+            "providerEventId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "githubInstallations": {
+      "fields": {
+        "accountLogin": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "claimedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "installationId": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "organizations"
+        }
+      },
+      "indexes": {
+        "by_installation": {
+          "fields": [
+            "installationId"
+          ],
+          "unique": true
+        },
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "incidents": {
+      "fields": {
+        "closedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "container": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "count": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "hash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "instance": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "investigatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "investigation": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "by": {
+              "kind": "union",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "members": [
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"deterministic\""
+                },
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"llm\""
+                }
+              ]
+            },
+            "confidence": {
+              "kind": "union",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "members": [
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"high\""
+                },
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"low\""
+                },
+                {
+                  "kind": "literal",
+                  "nullable": false,
+                  "optional": false,
+                  "unique": false,
+                  "literal": "\"medium\""
+                }
+              ]
+            },
+            "evidenceNote": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "relatedTraceIds": {
+              "kind": "array",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "of": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              }
+            },
+            "rootCauseHypothesis": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "suggestedRemediation": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "summary": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        },
+        "kind": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"crash_loop\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error_spike\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"oom\""
+            }
+          ]
+        },
+        "lastSeen": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "openedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"open\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"resolved\""
+            }
+          ]
+        },
+        "title": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_hash": {
+          "fields": [
+            "organizationId",
+            "hash"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "invitations": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "email": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "invitedBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "role": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"admin\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"member\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"owner\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"viewer\""
+            }
+          ]
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"accepted\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pending\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"revoked\""
+            }
+          ]
+        },
+        "tokenHash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_token": {
+          "fields": [
+            "tokenHash"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "issues": {
+      "fields": {
+        "count": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "culprit": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "firstSeen": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "hash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastSeen": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "sampleMessage": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "sampleTraceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"open\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"resolved\""
+            }
+          ]
+        },
+        "title": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_culprit": {
+          "fields": [
+            "organizationId",
+            "culprit"
+          ],
+          "unique": false
+        },
+        "by_org_hash": {
+          "fields": [
+            "organizationId",
+            "hash"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "members": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "role": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"admin\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"member\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"owner\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"viewer\""
+            }
+          ]
+        },
+        "userId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_user": {
+          "fields": [
+            "organizationId",
+            "userId"
+          ],
+          "unique": false
+        },
+        "by_user": {
+          "fields": [
+            "userId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "metricPoints": {
+      "fields": {
+        "at": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "functionPath": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "kind": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "serviceName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "value": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_at": {
+          "fields": [
+            "organizationId",
+            "at"
+          ],
+          "unique": false
+        },
+        "by_org_name_at": {
+          "fields": [
+            "organizationId",
+            "name",
+            "at"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "observations": {
+      "fields": {
+        "attributes": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "completionTokens": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "durationMs": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "endedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "evaluations": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "object",
+            "nullable": false,
+            "optional": false,
+            "unique": false,
+            "fields": {
+              "label": {
+                "kind": "string",
+                "nullable": false,
+                "optional": true,
+                "unique": false
+              },
+              "name": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "score": {
+                "kind": "number",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              }
+            }
+          }
+        },
+        "functionPath": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "input": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "kind": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"container\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"generation\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"worker\""
+            }
+          ]
+        },
+        "level": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"info\""
+            }
+          ]
+        },
+        "model": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "output": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "parentSpanId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "promptTokens": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "serviceName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "sessionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "spanId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "startedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "statusMessage": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "traceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_deployment_started": {
+          "fields": [
+            "organizationId",
+            "deploymentId",
+            "startedAt"
+          ],
+          "unique": false
+        },
+        "by_org_session": {
+          "fields": [
+            "organizationId",
+            "sessionId"
+          ],
+          "unique": false
+        },
+        "by_org_started": {
+          "fields": [
+            "organizationId",
+            "startedAt"
+          ],
+          "unique": false
+        },
+        "by_trace": {
+          "fields": [
+            "organizationId",
+            "traceId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "organizations": {
+      "fields": {
+        "cellId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "cells"
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "creditsAccountId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "deletionRequestedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "paymentFailedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "plan": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"enterprise\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"free\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pro\""
+            }
+          ]
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "spendCapMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "suspendedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "suspendedReason": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_slug": {
+          "fields": [
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "overageDebits": {
+      "fields": {
+        "debitedCredits": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "periodStart": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_period": {
+          "fields": [
+            "organizationId",
+            "periodStart"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "paymentSessions": {
+      "fields": {
+        "amountMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "capturedMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "currency": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerSessionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "refundedMinor": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "state": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_session": {
+          "fields": [
+            "provider",
+            "providerSessionId"
+          ],
+          "unique": true
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "platformUsage": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "kind": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"aeDataPoints\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"aeReadQueries\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"browserHours\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"containerCpuSeconds\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"containerDiskGbSeconds\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"containerMemoryGibSeconds\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cpuMs\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"d1RowsRead\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"d1RowsWritten\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"d1StorageGbMonths\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doDurationGbS\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doRequests\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doRowsRead\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doRowsWritten\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"doStorageGbMonths\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"imagesDelivered\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"imagesStored\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"imagesTransformations\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"kvDeletes\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"kvLists\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"kvReads\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"kvStorageGbMonths\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"kvWrites\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"logEvents\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"logpushRequests\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"queueOperations\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"r2ClassAOps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"r2ClassBOps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"r2StorageGbMonths\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"requests\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"vectorizeQueriedDimensions\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"vectorizeStoredDimensions\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"workersAiNeurons\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"workflowSteps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"workflowStorageGbMonths\""
+            }
+          ]
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "periodStart": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "quantity": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "projects": {
+      "fields": {
+        "activeDeploymentId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "activeScriptName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "framework": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "githubRepo": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "previewPasswordHash": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "previewPasswordSalt": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "rollout": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "deploymentId": {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "deployments"
+            },
+            "percent": {
+              "kind": "number",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "scriptName": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_github_repo": {
+          "fields": [
+            "githubRepo"
+          ],
+          "unique": false
+        },
+        "by_org_slug": {
+          "fields": [
+            "organizationId",
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "rateLimits": {
+      "fields": {
+        "key": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "prev": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "ts": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "value": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_key": {
+          "fields": [
+            "key"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "secrets": {
+      "fields": {
+        "ciphertext": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "environment": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"all\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"dev\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"preview\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"production\""
+            }
+          ]
+        },
+        "iv": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_project_env_name": {
+          "fields": [
+            "projectId",
+            "environment",
+            "name"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "subscriptions": {
+      "fields": {
+        "cancelAtPeriodEnd": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "currentPeriodEnd": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "currentPeriodStart": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "priceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "providerSubscriptionId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "quantity": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "state": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_provider_subscription": {
+          "fields": [
+            "provider",
+            "providerSubscriptionId"
+          ],
+          "unique": true
+        },
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "tenantLogs": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "fields": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "any",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "functionPath": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "level": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"debug\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"error\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"fatal\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"info\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"log\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"trace\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"warn\""
+            }
+          ]
+        },
+        "message": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "scriptName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "shardKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "spanId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "traceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "userId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_script_time": {
+          "fields": [
+            "scriptName",
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "by_trace": {
+          "fields": [
+            "organizationId",
+            "traceId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "uptimeChecks": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "error": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "latencyMs": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "ok": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "statusCode": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_org_deployment": {
+          "fields": [
+            "organizationId",
+            "deploymentId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "uptimeState": {
+      "fields": {
+        "consecutiveFailures": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "lastCheckedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastOk": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_deployment": {
+          "fields": [
+            "deploymentId"
+          ],
+          "unique": false
+        },
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "usageEvents": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "featureId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "idempotencyKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "provider": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "quantity": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "reportedToProvider": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_idempotency": {
+          "fields": [
+            "provider",
+            "idempotencyKey"
+          ],
+          "unique": true
+        },
+        "by_reference_feature": {
+          "fields": [
+            "referenceId",
+            "featureId"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    }
+  },
+  "version": 1
+}

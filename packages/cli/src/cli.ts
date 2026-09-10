@@ -14,6 +14,7 @@ import { aiCommand } from "./commands/ai";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
+import { cloudCommand } from "./commands/cloud";
 import { codegenCommand } from "./commands/codegen";
 import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
@@ -156,6 +157,7 @@ const CLI_COMMANDS = [
     prepareCommand,
     linkCommand,
     deploymentsCommand,
+    cloudCommand,
     logsCommand,
     runCommand,
     insightsCommand,

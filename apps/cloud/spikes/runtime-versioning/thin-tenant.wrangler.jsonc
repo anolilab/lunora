@@ -1,0 +1,21 @@
+// Namespaced tenant stand-in for the fat-vs-thin spike (H1/H2). Deploy with:
+//   wrangler deploy -c thin-tenant.wrangler.jsonc --dispatch-namespace lunora-production
+//
+// H1 caveat: wrangler may reject a cross-script DO binding at deploy time for a
+// namespaced worker — that outcome IS the H1 answer. If it deploys, the probe's
+// /do-binding call reports whether it resolves at runtime. Try both script_name
+// values: another namespaced script, then the account-level platform worker.
+{
+    "name": "lunora-spike-thin-tenant",
+    "main": "thin-tenant-worker.ts",
+    "compatibility_date": "2026-07-01",
+    "durable_objects": {
+        "bindings": [
+            {
+                "class_name": "PlatformShardDO",
+                "name": "PLATFORM_SHARD",
+                "script_name": "lunora-spike-platform-runtime",
+            },
+        ],
+    },
+}

@@ -1656,6 +1656,61 @@ target becomes real, and `@lunora/platform-node` is still experimental with no
 itself, while 312 was the price its fix paid — since executed (see the DONE &
 REMOVED note above); its open follow-ups live in 314 and 315.
 
+## Wave 22 — Cloud spend guardrails & abuse research (baseline `d18ccd96`, 2026-08-19)
+
+Research pass over the five platform-guardrail capabilities Vercel shipped as a
+bundle (soft/hard spend caps, anomaly alerting, function recursion protection,
+agent-queryable billing usage APIs, always-on L3/L4/L7 DDoS mitigation), read
+against the OSS prior art — Lago, OpenMeter, CloudKitty, OpenCost, CrowdSec,
+Coraza, Netdata, VictoriaMetrics `vmanomaly`, Kubernetes `ResourceQuota` — and
+against what `apps/cloud` already ships. Four of the five have a working seam
+already; recursion protection has none.
+
+**The pass also turned up a live defect,** which is why this is a plan and not a
+memo: the spend-cap chain metered off Analytics Engine and summed `double1`
+without the `_sample_interval` multiplier, so the `platformUsage` ledger
+under-counted exactly when AE starts sampling — i.e. during the runaway-tenant
+scenario the hard cap exists to stop. The same repo already documented AE as "not
+for billing math" (`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
+
+| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status                        |
+| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ----------------------------- |
+| 365  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | IN PROGRESS — W0 + W1 shipped |
+
+### Notes
+
+- **W0 + W1 shipped.** The metering aggregation is fixed
+  (`SUM(_sample_interval)` over `index1`, pinned by a test on the emitted SQL —
+  a wrong aggregation returns a plausible number, never an error), and
+  `src/billing/spend.ts` went from two hard-coded constants to a 35-meter rate
+  card covering the whole Cloudflare bill: Durable Objects (requests / duration /
+  rows / SQL storage), D1, R2, KV, Queues, Workflows, Vectorize, Workers AI,
+  Analytics Engine, Logs, Browser Rendering, Containers, Images. The ledger's
+  `kind` union widened to match, so a storage-shaped runaway is now visible to
+  the cap at all. 464/464 cloud tests, `tsc --noEmit` clean.
+- **Cloudflare has no hard cap to borrow.** Budget alerts and usage notifications
+  are both documented as informational — "they do not pause or cap usage" — so
+  the stop is Lunora's to build. Since only requests that reach a Worker are
+  billed, today's dispatcher 503 pays a Workers-for-Platforms request for every
+  request of an attack, while a WAF block in the `http_request_firewall_custom`
+  phase costs nothing. §2.5 of the plan is the full interception ladder; W8 is
+  the promotion.
+- **Recursion protection (W5) moved to an Outbound Worker.** The WfP docs make it
+  a first-class seam: it sees every `fetch()` a tenant Worker makes, takes
+  context from the dispatch Worker via the binding's `parameters`, and disables
+  `connect()` — closing the exact hole Vercel documents as unprotected. Still
+  fully independent of the rest of the wave.
+- **DDoS is not a build.** L3/L4/L7 is inherited by construction (every tenant is
+  behind Cloudflare — "all customers on all plans and services"); the work is
+  visibility (firewall events in the console), per-org L7 sensitivity via the
+  account-level managed-ruleset API, and closing the CrowdSec-shaped
+  detect→enforce loop with Cloudflare as the bouncer.
+- **"OpenCloud" was assessed and is not prior art** — `opencloud-eu` is a Go
+  rewrite of ownCloud Infinite Scale (file sync & share) with no metering,
+  spend-cap, or DDoS surface. The relevant OSS neighbourhood is the
+  metering/FinOps cluster and the detection/enforcement cluster, both surveyed in
+  §2 of the plan.
+
 **452** is a row, not a plan: it exists so the deferral is visible to a wave
 sweep, and it deliberately holds no design of its own. The reasoning that decides
 whether to build it is a tripwire in the code — neither of its triggers is

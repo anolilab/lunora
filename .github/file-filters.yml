@@ -113,6 +113,11 @@ dependency_manifests:
     # notice the drift.
     - "commitlint.config.cjs"
     - "scripts/check-pr-title-types.js"
+    # The react-doctor pin lives in two files; the check that compares them, and
+    # both of its inputs, gate the job — otherwise a PR that bumps only the
+    # workflow matches `yaml_lintable` and nothing notices the drift.
+    - "scripts/check-react-doctor-pin.js"
+    - ".github/workflows/react-doctor.yml"
     - ".github/workflows/semantic-pull-request.yml"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
@@ -152,6 +157,11 @@ generated_files:
     # The generated error-code reference itself: a hand edit to the output is drift
     # too, and its generator's only other input (packages/errors) is listed below.
     - "apps/docs/src/content/docs/errors.mdx"
+    # Any app that commits a `lunora/_generated` tree — its schema and functions
+    # are what codegen reads, so a change here is a change to generated output.
+    # Listed because the sweep walks `apps/*` as well as `examples/*`:
+    # `apps/cloud` commits its tree and went stale with nothing to catch it.
+    - "apps/*/lunora/**"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"
