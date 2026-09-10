@@ -355,7 +355,8 @@ clicked, and on the Logs tab that is a tenant's log line, on Secrets a secret
 name. Every event this app sends is written by hand, so the payload is a
 decision someone made rather than whatever happened to be in the DOM.
 
-**Session replay is on, and masks by default.** This is the part to understand
+**Session replay is OFF by default** (`VITE_PUBLIC_POSTHOG_SESSION_REPLAY`),
+and when switched on it **masks by default.** This is the part to understand
 before adding a screen. The obvious configuration — `maskTextSelector` listing
 the panels that hold tenant data — is an allowlist of things to _hide_, so a
 panel added later is recorded until someone remembers it, and the failure is
@@ -425,12 +426,69 @@ errors, because a telemetry outage must not fail the deploy that triggered it.
 
 ### Configuration
 
-| Variable                            | Where             | Purpose                                                                                                                               |
-| ----------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` | build-time var    | Studio client. `VITE_PUBLIC_` because Vite inlines it — a PostHog project token is a write-only ingest key and is meant to be public. |
-| `VITE_PUBLIC_POSTHOG_HOST`          | build-time var    | Studio ingest host.                                                                                                                   |
-| `POSTHOG_PROJECT_TOKEN`             | Worker **secret** | Server-side capture. `wrangler secret put --env <cell>`.                                                                              |
-| `POSTHOG_HOST`                      | wrangler `vars`   | Server ingest host; defaults to `https://eu.i.posthog.com`.                                                                           |
+| Variable                             | Where             | Purpose                                                                                                                               |
+| ------------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN`  | build-time var    | Studio client. `VITE_PUBLIC_` because Vite inlines it — a PostHog project token is a write-only ingest key and is meant to be public. |
+| `VITE_PUBLIC_POSTHOG_HOST`           | build-time var    | Studio ingest host.                                                                                                                   |
+| `POSTHOG_PROJECT_TOKEN`              | Worker **secret** | Server-side capture. `wrangler secret put --env <cell>`.                                                                              |
+| `POSTHOG_HOST`                       | wrangler `vars`   | Server ingest host; defaults to `https://eu.i.posthog.com`.                                                                           |
+| `VITE_PUBLIC_POSTHOG_SESSION_REPLAY` | build-time var    | `"true"` switches session replay on. Off otherwise, token or no token — see GDPR posture below.                                       |
+
+### GDPR posture
+
+The configuration below is the compliance argument, not decoration — each line
+is doing a specific job.
+
+**No device storage, so no cookie banner.** `persistence: "memory"` means no
+cookie, no `localStorage`, no `sessionStorage`. Nothing is stored on the
+operator's device, so ePrivacy Art. 5(3) — the consent rule that cookie banners
+exist to satisfy — does not apply. The cost is that a distinct id does not
+survive a reload, so pre-login attribution is lost; in exchange there is no
+consent flow to build, get wrong, or maintain. `cookieless_mode: "on_reject"` is
+the upgrade path if a banner is ever wanted; it needs a project-side setting
+enabled, so it is not the safe default.
+
+**Legal basis: legitimate interest** (Art. 6(1)(f)) — operating and improving an
+authenticated B2B control plane for business users. That basis obliges three
+things, and all three are in place: the processing is disclosed, it is minimised
+(below), and there is an opt-out — `respect_dnt: true` honours the browser's Do
+Not Track. A settings toggle would be a better opt-out; see the follow-ups.
+
+**Session replay is a separate decision, and defaults to off.** Every other
+event here is a counter. A replay is a recording of a named person working,
+which is the piece that a supervisory authority expects consent and/or a DPIA
+for — so it needs an explicit `VITE_PUBLIC_POSTHOG_SESSION_REPLAY=true`, not
+merely a project token.
+
+**Data minimisation, concretely:**
+
+| What                     | How                                                                                                                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No name, no email        | `identify()` gets the better-auth **user id** only.                                                                                                                                                               |
+| No IP address            | `$ip: null` on every event, client and server. **Also enable the project's "Discard client IP data"** — the address reaches the ingest endpoint regardless, and only the project setting stops it being retained. |
+| No org ids in URLs       | `sanitize_properties` rewrites `$current_url` and friends to `/orgs/:organizationId/…`.                                                                                                                           |
+| No profiles for visitors | `person_profiles: "identified_only"` — someone who never signs in is never profiled.                                                                                                                              |
+| No profiles for tenants  | Server events set `$process_person_profile: false`; their `distinct_id` is an organization, not a person.                                                                                                         |
+| No flag/survey traffic   | `advanced_disable_feature_flags` and `disable_surveys` — both unused, and each was a request carrying the distinct id.                                                                                            |
+| No tenant content        | Autocapture off; `captureEvent` properties are typed to primitives; error text and search queries are never sent.                                                                                                 |
+
+**Required on the PostHog side** — the parts code cannot set:
+
+1. **EU project** (`https://eu.i.posthog.com`, the server-side default). A US
+   project makes every event an international transfer needing its own basis.
+2. **Discard client IP data** — on.
+3. **Retention** — set it. Short retention is most of the answer to Art. 17, and
+   the only one that works without an API key.
+4. **DPA with PostHog**, and list them as a sub-processor (GAPS.md F).
+
+**Known follow-ups** (neither is a blocker for the posture above, both are real):
+
+- **Art. 17 erasure is not wired.** Org offboarding deletes control-plane data
+  and leaves PostHog untouched. Doing it properly needs PostHog's person-delete
+  API and a personal API key — a new secret — so it is gated the same way the
+  other 🌐 items are. Retention (above) is the interim answer.
+- **Opt-out is DNT-only.** A per-operator toggle calling
+  `posthog.opt_out_capturing()` would be the better Art. 21 mechanism.
 
 Use a **separate project** from `apps/docs`. That one is a public marketing
 site with a cookie banner and a different legal basis; this one carries

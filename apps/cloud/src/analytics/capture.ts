@@ -76,10 +76,30 @@ export const captureServerEvent = async (
                 event,
                 properties: {
                     ...properties,
+                    // The organization as a PostHog GROUP, matching the studio's
+                    // `group("organization", …)`, so a query can put a tenant's
+                    // deploys and its operators' screen views side by side.
+                    $groups: { organization: context.organizationId },
+                    // Never store the control plane's own egress IP. Nothing
+                    // here is about a location, and the address of the Worker
+                    // that sent it is not the tenant's anyway — retaining it
+                    // would be collecting personal data by accident.
+                    $ip: null,
                     // Marks the event as coming from the control plane rather
                     // than the studio, so one project can hold both without the
                     // two sets of events being mistaken for each other.
                     $lib: "lunora-cloud-worker",
+
+                    /**
+                     * `distinct_id` here is an ORGANIZATION, not a person, so no
+                     * person profile may be created for it. Without this flag
+                     * PostHog mints a "person" whose id is a tenant id: the
+                     * person table fills with organizations, per-person queries
+                     * silently mix the two, and — the part that matters — the
+                     * platform would hold a personal-data record for something
+                     * that is not a person.
+                     */
+                    $process_person_profile: false,
                     ...(context.cell === undefined ? {} : { cell: context.cell }),
                     organizationId: context.organizationId,
                 },

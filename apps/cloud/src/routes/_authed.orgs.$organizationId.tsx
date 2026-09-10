@@ -119,8 +119,8 @@ const OrganizationLayout = (): ReactElement => {
     // module is inert on the server, so calling it there would be a silent
     // no-op that reads as working.
     useEffect(() => {
-        identifyOperator(session.user.id);
-    }, [session.user.id]);
+        identifyOperator(session.user.id, organizationId);
+    }, [organizationId, session.user.id]);
 
     const paletteCommands = paletteCommandsFor(navigate, organizationId);
 

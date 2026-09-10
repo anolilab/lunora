@@ -80,6 +80,13 @@ SECRET_ENCRYPTION_KEY=replace-with-openssl-rand-hex-32
 # VITE_PUBLIC_POSTHOG_PROJECT_TOKEN=phc_replace-me
 # VITE_PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com
 
+# Session replay. OFF unless this is exactly "true", even with a token set —
+# a replay is a recording of a named operator working, which is the one piece
+# here that a supervisory authority expects consent and/or a DPIA for. Text is
+# masked by default and unmasked only via `data-ph-unmask`; read the Analytics
+# section of README.md before switching it on.
+# VITE_PUBLIC_POSTHOG_SESSION_REPLAY=false
+
 # ── Optional subsystems — every one below degrades SILENTLY when unset ────────
 # These are the knobs that make a control plane boot and look healthy while a
 # subsystem is inert. Each line names the symptom you get without it, because

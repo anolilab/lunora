@@ -69,6 +69,53 @@ describe(captureServerEvent, () => {
         expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(expected);
     });
 
+    it("never creates a person profile for an organization", async () => {
+        expect.assertions(2);
+
+        await captureServerEvent({ POSTHOG_PROJECT_TOKEN: "phc_1" }, "cloud_deployment_finished", { organizationId: ORG });
+
+        const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+        const { properties } = JSON.parse(init.body as string) as { properties: Record<string, unknown> };
+
+        // `distinct_id` is a tenant id. Without this flag PostHog would hold a
+        // personal-data record for something that is not a person.
+        expect(properties.$process_person_profile).toBe(false);
+        expect(properties.$groups).toStrictEqual({ organization: ORG });
+    });
+
+    it("suppresses the IP address", async () => {
+        expect.assertions(1);
+
+        await captureServerEvent({ POSTHOG_PROJECT_TOKEN: "phc_1" }, "e", { organizationId: ORG });
+
+        const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+        const { properties } = JSON.parse(init.body as string) as { properties: Record<string, unknown> };
+
+        expect(properties.$ip).toBeNull();
+    });
+
+    it("cannot be talked into carrying a person by a caller's properties", async () => {
+        expect.assertions(2);
+
+        // A caller passing these would otherwise re-enable person processing on
+        // an org-keyed event — the spread must not win over the guarantees.
+        await captureServerEvent(
+            { POSTHOG_PROJECT_TOKEN: "phc_1" },
+            "e",
+            { organizationId: ORG },
+            {
+                $ip: "203.0.113.7",
+                $process_person_profile: true,
+            },
+        );
+
+        const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+        const { properties } = JSON.parse(init.body as string) as { properties: Record<string, unknown> };
+
+        expect(properties.$process_person_profile).toBe(false);
+        expect(properties.$ip).toBeNull();
+    });
+
     it("swallows a rejected send — a telemetry outage must not fail the deploy that triggered it", async () => {
         expect.assertions(1);
 
