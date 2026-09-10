@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.211...@lunora/config@1.0.0-alpha.212) (2026-09-10)
+
+### Features
+
+* **config,cli:** flag a missing CPU cap and R2 lifecycle rule ([#683](https://github.com/anolilab/lunora/issues/683)) ([b3efd19](https://github.com/anolilab/lunora/commit/b3efd196d475b61175a24da6704a2d43999392d3))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.175
+* **@lunora/seed:** upgraded to 1.0.0-alpha.123
+* **@lunora/studio:** upgraded to 1.0.0-alpha.173
+
 ## @lunora/config [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.210...@lunora/config@1.0.0-alpha.211) (2026-09-10)
 
 ### Bug Fixes
