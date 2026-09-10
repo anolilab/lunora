@@ -1,3 +1,17 @@
+## @lunora/d1 [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.114...@lunora/d1@1.0.0-alpha.115) (2026-09-10)
+
+### Features
+
+* **d1,codegen:** record what every D1 query actually scanned ([#680](https://github.com/anolilab/lunora/issues/680)) ([7d5340a](https://github.com/anolilab/lunora/commit/7d5340a216341a03feebc6724b0f2fec33b845f9))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.115
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+
 ## @lunora/d1 [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.113...@lunora/d1@1.0.0-alpha.114) (2026-09-08)
 
 
