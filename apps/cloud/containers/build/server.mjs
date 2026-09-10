@@ -30,6 +30,22 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/**
+ * An error whose message is written FOR the person who pushed the commit.
+ *
+ * The distinction matters because this server's replies end up in `buildLogs`,
+ * which tenants read in the Studio. "no lockfile found" and "your project does
+ * not depend on the Lunora CLI" are the whole point — a build box that hid them
+ * would leave someone staring at a red build with no cause. But an unexpected
+ * `ENOENT /workspace/build-a1b2/node_modules/…` is not their problem, is not
+ * actionable, and describes this container's insides to someone outside it.
+ *
+ * So a `BuildError` is echoed and anything else is generalised, with the detail
+ * going to the container's own log. CodeQL flagged the previous code for
+ * information exposure and it was right: it echoed every `error.message` alike.
+ */
+class BuildError extends Error {}
+
 /** Where the deploy path expects the entry module. `provision.ts` defaults `mainModule` to this. */
 const ENTRY_MODULE = "index.js";
 
@@ -47,6 +63,24 @@ const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 const EXEC_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
+ * The message to send back for a thrown error, keeping internal detail out of it.
+ *
+ * @param {unknown} error Whatever was thrown.
+ * @returns {string} A tenant-facing message. Internal failures are generalised and logged here instead.
+ */
+const clientError = (error) => {
+    if (error instanceof BuildError) {
+        return error.message;
+    }
+
+    // The operator's copy. On `stderr` so it is not mistaken for build output,
+    // and it never reaches the caller.
+    process.stderr.write(`internal build-box failure: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+
+    return "the build box failed unexpectedly; the platform operator has the details";
+};
+
+/**
  * Read a request body into one buffer, refusing anything over the cap.
  * @param {import("node:http").IncomingMessage} request Request whose body is read.
  * @param {number} limit Maximum bytes to accept before rejecting.
@@ -60,7 +94,7 @@ const readBody = async (request, limit) => {
         total += chunk.length;
 
         if (total > limit) {
-            throw new Error(`request body exceeded ${limit} bytes`);
+            throw new BuildError(`request body exceeded ${limit} bytes`);
         }
 
         chunks.push(chunk);
@@ -78,7 +112,7 @@ const readBody = async (request, limit) => {
  * a non-zero code is a result, not a throw, matching the exec contract.
  * @param {string} command Executable to run.
  * @param {string[]} args Arguments, passed unshelled.
- * @param {{ cwd?: string, env?: Record<string, string>, timeoutMs?: number }} options Spawn options plus the wall-clock kill.
+ * @param {{ cwd?: string, env?: Record<string, string>, label?: string, timeoutMs?: number }} options Spawn options, the wall-clock kill, and how the phase is named if it fires.
  * @param {(line: string, stream: "stderr" | "stdout") => void} onLine Called once per output line.
  * @returns {Promise<number>} The process exit code.
  */
@@ -110,7 +144,7 @@ const run = (command, args, options, onLine) =>
 
         const timer = setTimeout(() => {
             child.kill("SIGKILL");
-            reject(new Error(`\`${command}\` exceeded ${options.timeoutMs ?? BUILD_TIMEOUT_MS}ms and was killed`));
+            reject(new BuildError(`${options.label ?? "the command"} exceeded ${options.timeoutMs ?? BUILD_TIMEOUT_MS}ms and was killed`));
         }, options.timeoutMs ?? BUILD_TIMEOUT_MS);
 
         child.on("error", (error) => {
@@ -157,7 +191,7 @@ const detectPackageManager = async (directory) => {
         return { args: ["install", "--immutable"], command: "yarn" };
     }
 
-    throw new Error("no lockfile found (pnpm-lock.yaml, package-lock.json or yarn.lock) — a reproducible build needs one");
+    throw new BuildError("no lockfile found (pnpm-lock.yaml, package-lock.json or yarn.lock) — a reproducible build needs one");
 };
 
 /**
@@ -183,7 +217,7 @@ const resolveLunoraBin = async (directory) => {
     try {
         await access(binary);
     } catch {
-        throw new Error(
+        throw new BuildError(
             "node_modules/.bin/lunora is missing after install — add the Lunora CLI to the project's dependencies " +
                 "(`lunorash` or `@lunora/cli`). Yarn PnP projects are not supported by the build box.",
         );
@@ -210,7 +244,7 @@ const collectBundle = async (projectDirectory) => {
     try {
         entries = await readdir(outDirectory, { recursive: true, withFileTypes: true });
     } catch {
-        throw new Error(`\`lunora build\` wrote nothing to ${OUT_DIR}`);
+        throw new BuildError(`\`lunora build\` wrote nothing to ${OUT_DIR}`);
     }
 
     // Same exclusions as the CLI's `bundle-size.ts`: sourcemaps, the esbuild
@@ -220,7 +254,7 @@ const collectBundle = async (projectDirectory) => {
     );
 
     if (modules.length === 0) {
-        throw new Error(`no JavaScript module in ${OUT_DIR}`);
+        throw new BuildError(`no JavaScript module in ${OUT_DIR}`);
     }
 
     if (modules.length > 1) {
@@ -229,7 +263,7 @@ const collectBundle = async (projectDirectory) => {
             .toSorted()
             .join(", ");
 
-        throw new Error(`\`lunora build\` produced ${modules.length} modules (${names}); the deploy path uploads a single ${ENTRY_MODULE}`);
+        throw new BuildError(`\`lunora build\` produced ${modules.length} modules (${names}); the deploy path uploads a single ${ENTRY_MODULE}`);
     }
 
     const [module] = modules;
@@ -277,7 +311,9 @@ const handleBuild = async (request, response) => {
                 stderr += text;
             });
             tar.on("error", reject);
-            tar.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`tar failed (${code}): ${stderr.trim()}`))));
+            tar.on("close", (code) =>
+                code === 0 ? resolve() : reject(new BuildError(`the source archive could not be extracted (tar exit ${code}): ${stderr.trim()}`)),
+            );
             tar.stdin.end(source);
         });
 
@@ -285,7 +321,7 @@ const handleBuild = async (request, response) => {
 
         emit({ line: `installing dependencies with ${manager.command}` });
 
-        const installCode = await run(manager.command, manager.args, { cwd: workspace, timeoutMs: BUILD_TIMEOUT_MS }, onLine);
+        const installCode = await run(manager.command, manager.args, { cwd: workspace, label: "dependency install", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
 
         if (installCode !== 0) {
             emit({ error: `dependency install failed with exit code ${installCode}` });
@@ -300,7 +336,8 @@ const handleBuild = async (request, response) => {
         // this image. A build box that pinned its own CLI version would build
         // tenants' code with a toolchain their lockfile never chose, and every
         // image bump would become a fleet-wide behaviour change.
-        const buildCode = await run(await resolveLunoraBin(workspace), ["build"], { cwd: workspace, timeoutMs: BUILD_TIMEOUT_MS }, onLine);
+        const lunora = await resolveLunoraBin(workspace);
+        const buildCode = await run(lunora, ["build"], { cwd: workspace, label: "`lunora build`", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
 
         if (buildCode !== 0) {
             emit({ error: `lunora build failed with exit code ${buildCode}` });
@@ -311,7 +348,7 @@ const handleBuild = async (request, response) => {
 
         emit(await collectBundle(workspace));
     } catch (error) {
-        emit({ error: error instanceof Error ? error.message : String(error) });
+        emit({ error: clientError(error) });
     } finally {
         response.end();
         await rm(workspace, { force: true, recursive: true }).catch(() => {});
@@ -326,7 +363,19 @@ const handleBuild = async (request, response) => {
  */
 const handleExec = async (request, response) => {
     const raw = await readBody(request, 1024 * 1024);
-    const body = JSON.parse(raw.toString("utf8"));
+    let body;
+
+    try {
+        body = JSON.parse(raw.toString("utf8"));
+    } catch {
+        // A 400 naming the problem, rather than the generic 500 an escaping
+        // SyntaxError would produce — and the parser's message, which quotes
+        // the input back, never leaves the box.
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "body is not valid JSON" }));
+
+        return;
+    }
 
     if (typeof body.command !== "string" || body.command === "") {
         response.writeHead(400, { "content-type": "application/json" });
@@ -363,9 +412,15 @@ const handleExec = async (request, response) => {
         // failed is a non-zero `code` above. The contract draws that line and
         // the caller's error handling depends on it.
         response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        response.end(JSON.stringify({ error: clientError(error) }));
     }
 };
+
+/** The routes this server answers. See the `Map` note in the request handler. */
+const ROUTES = new Map([
+    ["POST /__lunora/build", handleBuild],
+    ["POST /__lunora/exec", handleExec],
+]);
 
 const server = createServer((request, response) => {
     const route = `${request.method} ${(request.url ?? "").split("?")[0]}`;
@@ -377,7 +432,12 @@ const server = createServer((request, response) => {
         return;
     }
 
-    const handler = { "POST /__lunora/build": handleBuild, "POST /__lunora/exec": handleExec }[route];
+    // A `Map`, not an object literal. An object lookup keyed on a
+    // user-controlled string walks the prototype chain, so `route` naming an
+    // inherited member resolves to a function that is not a route handler and
+    // is then called — CodeQL's "unvalidated dynamic method call". A `Map` has
+    // no such chain, so an unrecognised route can only ever be `undefined`.
+    const handler = ROUTES.get(route);
 
     if (handler === undefined) {
         response.writeHead(404, { "content-type": "application/json" });
@@ -393,7 +453,7 @@ const server = createServer((request, response) => {
             response.writeHead(500, { "content-type": "application/json" });
         }
 
-        response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        response.end(JSON.stringify({ error: clientError(error) }));
     });
 });
 

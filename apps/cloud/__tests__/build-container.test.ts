@@ -91,6 +91,27 @@ describe("build box", () => {
         expect(status).toBe(400);
     });
 
+    it("400s a malformed exec body without quoting it back", async () => {
+        expect.assertions(2);
+
+        const response = await fetch(`${origin}/__lunora/exec`, { body: "{not json", method: "POST" });
+
+        expect(response.status).toBe(400);
+        // The parser's own message quotes the input; it must not travel.
+        await expect(response.text()).resolves.not.toMatch(/not json/u);
+    });
+
+    it("cannot be routed to an inherited Object member", async () => {
+        expect.assertions(1);
+
+        // The shape CodeQL flagged: an object-literal route table walks the
+        // prototype chain, so a crafted path resolves to a function that is
+        // not a handler and is then called. A `Map` cannot.
+        const response = await fetch(`${origin}/constructor`, { method: "POST" });
+
+        expect(response.status).toBe(404);
+    });
+
     it("404s an unknown route rather than treating it as a build", async () => {
         expect.assertions(1);
 
