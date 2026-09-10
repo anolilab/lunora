@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { captureEvent } from "./analytics";
 import type { PaletteCommand } from "./use-command-palette";
 
 /**
@@ -29,6 +30,12 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
 
     const run = (command: PaletteCommand | undefined): void => {
         if (command) {
+            // The palette is the escape hatch from navigation that did not
+            // work: a tab reached far more often through ⌘K than through the
+            // sidebar is a tab the sidebar is hiding. `id` is a literal from
+            // the command table (`tab:logs`, `back`); the typed query is not
+            // sent, because an operator types anything into a search box.
+            captureEvent("studio_command_run", { command: command.id, searched: needle !== "" });
             onClose();
             command.run();
         }

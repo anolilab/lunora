@@ -380,6 +380,38 @@ no name. That id is already the subject of every audit-log row, so it adds no
 linkage the control plane did not already hold. `resetOperator()` runs on
 sign-out so the next person on a shared machine is not attributed to the last.
 
+### What is captured, and why those
+
+Five events, all fired from **shared** components rather than from each of the
+22 tabs — so a new screen is instrumented the day it ships and nothing has to be
+remembered. Each one exists to answer a question about the UI:
+
+| Event                       | Fired from                      | The question it answers                                                                                                        |
+| --------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `$pageview`                 | `src/routes/__root.tsx`         | Which screens get used and which never do. The standard event name, so PostHog's Paths and funnels work without configuration. |
+| `studio_list_resolved`      | `src/client/AsyncList.tsx`      | Which screens are **dead ends** — high views with `rows: 0` means the empty state is the page.                                 |
+| `studio_form_error`         | `FormError` in `section-ui.tsx` | Which forms operators get stuck on.                                                                                            |
+| `studio_command_run`        | `src/client/CommandPalette.tsx` | Which tabs are reached through ⌘K far more than through the sidebar — i.e. which the sidebar is hiding.                        |
+| `studio_time_range_changed` | `TimeRangePicker`               | Whether the default observability window is the right default, and on which tab it is not.                                     |
+
+Two rules make these safe to leave on, and both are enforced in code rather
+than by review:
+
+- **`screen` is an allowlist, never a URL.** `screenFor()` (`src/client/tabs.ts`)
+  maps a pathname to a known tab id or the literal `"unknown"` — it never echoes
+  back a segment it did not recognise, so an id on a route added later cannot
+  become a screen name.
+- **The auto-attached URLs are redacted.** PostHog puts `$current_url` on every
+  event whether or not we ask, and every URL here carries an organization id.
+  `sanitize_properties` rewrites it to `/orgs/:organizationId/…`. That is a
+  usability fix as much as a privacy one: without it "Projects" is not one page
+  with a thousand views but a thousand pages with one view each.
+
+Note what is deliberately **not** sent: the text of a form error (a server
+message can quote a hostname or any tenant string), and the palette's search
+query (an operator types anything into a search box). `captureEvent` types its
+properties to primitives so an object cannot smuggle a whole row along.
+
 **The Worker** (`src/analytics/capture.ts`) records platform events for
 self-observability (GAPS.md E1 — the studio observes tenants; nothing observed
 us). Plain `fetch` rather than `posthog-node`: that SDK batches on a timer and

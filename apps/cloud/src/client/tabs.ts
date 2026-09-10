@@ -22,6 +22,7 @@ import {
     UserMultipleIcon,
 } from "@hugeicons/core-free-icons";
 import type { Preloaded } from "@lunora/client";
+import { useLocation } from "@tanstack/react-router";
 
 import type { OrgId } from "./types";
 
@@ -95,3 +96,74 @@ export interface SectionProps<T = unknown> {
     /** The section's primary query, resolved by its route loader on the edge. */
     preloaded: Preloaded<T>;
 }
+
+/**
+ * Every tab id, as a set, for turning a pathname back into a screen name.
+ * Built from {@link TABS} so a new tab is analytics-visible the day it ships.
+ */
+const TAB_IDS = new Set<string>(TABS.map((tab) => tab.id));
+
+/** The screens that are not org tabs. Anything else at the top level is not a screen we recognise. */
+const TOP_LEVEL_SCREENS = new Set(["login"]);
+
+/**
+ * The analytics name for a pathname.
+ *
+ * An **allowlist**, deliberately: it returns a known tab id, a known top-level
+ * screen, or the literal `"unknown"` — never a path segment it did not
+ * recognise. The `/orgs/:organizationId` segment carries an id, and an unrecognised
+ * segment on a route added later could be any id at all, so echoing the URL
+ * back is how ids reach the event stream by accident. This way a route nobody
+ * taught the table about shows up as an "unknown" bump to investigate rather
+ * than as a thousand unique screen names.
+ */
+export const screenFor = (pathname: string): string => {
+    const segments = pathname.split("/").filter(Boolean);
+
+    if (segments.length === 0) {
+        return "organizations";
+    }
+
+    const [first] = segments;
+
+    if (first !== "orgs") {
+        return TOP_LEVEL_SCREENS.has(first) ? first : "unknown";
+    }
+
+    // Two segments is the per-organization index route; three or more is a tab and its sub-routes.
+    if (segments.length === 2) {
+        return "overview";
+    }
+
+    const tab = segments[2] ?? "";
+
+    return TAB_IDS.has(tab) ? tab : "unknown";
+};
+
+/** Matches the `/orgs/:organizationId` prefix. Static and linear — a literal prefix and one negated class, no backtracking. */
+const ORG_PATH = /\/orgs\/[^/]+/u;
+
+/**
+ * Replace the organization id in a URL or path with its route parameter.
+ *
+ * PostHog attaches `$current_url` to every event whether or not we ask, and on
+ * this app every URL embeds an organization id. Left alone that breaks the
+ * product analytics before it breaks anything else: "Projects" is not one page
+ * with a thousand views, it is a thousand pages with one view each, and the
+ * Paths and trends views over them say nothing. Collapsing the id back to
+ * `:organizationId` makes a screen a screen again — and keeps the id out of a
+ * property we never chose to send.
+ */
+export const redactOrgPath = (value: string): string => value.replace(ORG_PATH, "/orgs/:organizationId");
+
+/**
+ * The current screen name, for tagging a product event with WHERE it happened.
+ *
+ * A hook rather than a prop threaded down: the components that report events —
+ * {@link AsyncList}, the time-range picker, the form error line — are shared by
+ * every tab and are several levels below the route, and adding a `screen` prop
+ * to each would be a fourteen-file edit that the fifteenth caller forgets.
+ * `select` narrows the subscription to the derived name, so a search-param
+ * change does not re-render them.
+ */
+export const useScreen = (): string => useLocation({ select: (location) => screenFor(location.pathname) });

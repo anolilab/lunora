@@ -1,6 +1,7 @@
 import { SquareLockPasswordIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
+import { useEffect } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,7 +9,9 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
+import { captureEvent } from "./analytics";
 import { rowClassName } from "./section-styles";
+import { useScreen } from "./tabs";
 
 /**
  * Shared presentation primitives for the dashboard section bodies, so every tab
@@ -66,12 +69,32 @@ export const FieldForm = ({
 );
 
 /** Inline validation line for a form. Renders nothing when there is no error. */
-export const FormError = ({ message }: { message: null | string }): ReactElement | null =>
-    message ? (
+export const FormError = ({ message }: { message: null | string }): ReactElement | null => {
+    const screen = useScreen();
+
+    // Every form in the studio reports its failure through this one line, so
+    // this counts the screens where operators get stuck — the shortest route to
+    // "which form needs better validation, better copy, or fewer fields".
+    //
+    // The message itself is NOT sent: it is the one string here that is not
+    // static copy. "domain example.com is already claimed" names a tenant's
+    // hostname, and a server error can quote anything at all. The screen is the
+    // part that is actionable anyway.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the handler the rule wants this moved to is every form in the studio. The point of putting it here is that a screen added later is counted without anyone remembering to.
+        if (message === null || message === "") {
+            return;
+        }
+
+        captureEvent("studio_form_error", { screen });
+    }, [message, screen]);
+
+    return message ? (
         <p className="text-sm text-destructive" role="alert">
             {message}
         </p>
     ) : null;
+};
 
 type StatusTone = "danger" | "info" | "neutral" | "success" | "warning";
 
