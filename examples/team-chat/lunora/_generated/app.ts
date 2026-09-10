@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
@@ -604,6 +604,13 @@ class AppBuilder<Env extends object> {
  * read-only retry; writes — including the `UPDATE … RETURNING` the store's
  * optimistic-concurrency check issues through `all` — pass straight through,
  * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own `meta` accounting (`rows_read` /
+ * `rows_written` / `duration`) against a low-cardinality `verb:table` tag.
+ * Rows READ is rows SCANNED, not returned, so this is the number that explains
+ * a D1 bill and the one a missing index inflates without anything being
+ * deployed; the dashboard's own metric is per-database and can't name the query.
+ * The emit is best-effort — instrumentation must never fail a served query.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes `withSession`; guarded the same way as `batch`
@@ -614,6 +621,13 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
+    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+        try {
+            emitD1QueryCost(sql, meta);
+        } catch {
+            // Best-effort: never let cost accounting fail the query it measures.
+        }
+    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -634,6 +648,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // bookmark only ever moves forward, and the sink takes the last
             // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
+            meter(sql, result.meta);
 
             return result.results;
         },
@@ -651,18 +666,34 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         // `const fn = target.batch; fn(...)` capture would.
         batch: batchFn
             ? async (statements) => {
-                  await batchFn.call(
+                  const results = await batchFn.call(
                       target,
                       statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
                   );
+
+                  // Meter each leg. D1 returns one result per statement, in
+                  // order, each with its own `meta` — and a batch is where the
+                  // expensive writes live (`@lunora/sql-store` runs its
+                  // backfills through here), so discarding it left exactly the
+                  // statements worth costing unaccounted. Guarded on the array
+                  // because `batch` is optional in the structural type and a
+                  // test double may resolve to anything.
+                  if (Array.isArray(results)) {
+                      for (const [index, statement] of statements.entries()) {
+                          meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
+                      }
+                  }
+
                   onBookmark?.(session?.getBookmark() ?? undefined);
               }
             : undefined,
         run: async (sql, parameters) => {
-            await target
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+
+            meter(sql, result.meta);
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
