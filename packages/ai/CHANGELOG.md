@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.85...@lunora/ai@1.0.0-alpha.86) (2026-09-10)
+
+### Features
+
+* **ai:** let a deployment tag its AI Gateway calls ([#682](https://github.com/anolilab/lunora/issues/682)) ([4e6f832](https://github.com/anolilab/lunora/commit/4e6f832b63726215f4a3d0f565f979ea22a4bbb9))
+
 ## @lunora/ai [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.84...@lunora/ai@1.0.0-alpha.85) (2026-09-10)
 
 ## @lunora/ai [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.83...@lunora/ai@1.0.0-alpha.84) (2026-09-08)
