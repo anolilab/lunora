@@ -230,7 +230,7 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (✅ queue + dispatcher; 🌐 execution)
+### A3. Server-side builds + build logs (✅ queue + dispatcher + build image; 🔨 execute port)
 
 > **2026-07-21:** the claim→run→drain **dispatcher** (`src/builds/dispatch.ts`)
 > now exists and is tested — `builds.claimNext` finally has a caller at the logic
@@ -257,8 +257,23 @@ GitHub webhook only parses PR events into preview _intents_.
 - The build _runner_ is a port (`BuildRunner`): fetch the repo tarball (GitHub
   App installation token), run `lunora build` in a throwaway **Cloudflare
   Container** (our `@lunora/container` package is exactly this seam), capture
-  logs, emit the bundle. The runner's container execution is 🌐; everything
-  around it (tables, lease claim, log streaming, dedup, status flow) is 🔨.
+  logs, emit the bundle. Everything around it (tables, lease claim, log
+  streaming, dedup, status flow) was already 🔨.
+
+> **2026-09-10: the build image exists** — `containers/build/` (Dockerfile plus
+> a zero-dependency server). It serves the `@lunora/container` exec contract at
+> `/__lunora/exec` and, because `execute` receives the source as an
+> `ArrayBuffer` that exec has nowhere to put, a `POST /__lunora/build` that
+> takes the tarball as its body and streams NDJSON log lines followed by the
+> bundle. It installs with the manager the lockfile names and runs the
+> project's own `node_modules/.bin/lunora` — every package manager's `exec`
+> resolves a missing binary from the registry (verified on npm 10), which would
+> silently build a tenant's code with an unpinned CLI.
+>
+> This moves A3's remainder from 🌐 to **🔨**: no credential is needed any more,
+> only wiring — `defineContainer` the image, implement `execute` over its build
+> route, implement `fetchSource`, then wire `src/builds/dispatch.ts` into
+> `scheduled()`. See `containers/build/README.md` → Wiring.
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 
