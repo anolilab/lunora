@@ -1,3 +1,11 @@
+## @lunora/vue [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.131...@lunora/vue@1.0.0-alpha.132) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.52
+
 ## @lunora/vue [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.130...@lunora/vue@1.0.0-alpha.131) (2026-09-08)
 
 
