@@ -1,6 +1,6 @@
 {
     "name": "@lunora/storage",
-    "version": "1.0.0-alpha.62",
+    "version": "1.0.0-alpha.63",
     "description": "R2-backed storage for Lunora: typed buckets and signed URLs",
     "keywords": [
         "cloudflare",
