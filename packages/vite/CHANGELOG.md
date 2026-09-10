@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.210...@lunora/vite@1.0.0-alpha.211) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.174
+* **@lunora/config:** upgraded to 1.0.0-alpha.211
+* **@lunora/studio:** upgraded to 1.0.0-alpha.172
+
 ## @lunora/vite [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.209...@lunora/vite@1.0.0-alpha.210) (2026-09-08)
 
 
