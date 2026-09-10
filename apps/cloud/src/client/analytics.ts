@@ -28,6 +28,20 @@ const token = typeof import.meta.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN === "stri
 const host = typeof import.meta.env.VITE_PUBLIC_POSTHOG_HOST === "string" ? import.meta.env.VITE_PUBLIC_POSTHOG_HOST : undefined;
 
 /**
+ * Session replay is **off unless explicitly switched on**, and stays that way
+ * even when a PostHog project is configured.
+ *
+ * Replay of an identified operator is the highest-risk processing this app
+ * does: masked or not, it is a recording of a named person working. Every other
+ * event here is a counter that legitimate interest covers comfortably; a
+ * recording is the one that a supervisory authority expects consent, a DPIA, or
+ * both for. So it is a separate, deliberate switch rather than something that
+ * arrives with a project token — and the masking below is the safety belt for
+ * when someone flips it, not a licence to leave it on.
+ */
+const sessionReplayEnabled = import.meta.env.VITE_PUBLIC_POSTHOG_SESSION_REPLAY === "true";
+
+/**
  * Marks a subtree whose text is safe to record in a session replay.
  *
  * An attribute rather than a class so it cannot be swept up by a styling
@@ -61,9 +75,18 @@ const maskText = (text: string, element?: HTMLElement | null): string => (elemen
  */
 const URL_PROPERTIES = ["$current_url", "$initial_current_url", "$pathname", "$initial_pathname", "$referrer", "$initial_referrer"];
 
-/** Rewrite the auto-attached URL properties. Returns a copy — the SDK hands us its own object. */
+/**
+ * Rewrite the auto-attached properties. Returns a copy — the SDK hands us its own object.
+ *
+ * Two jobs: redact the organization id out of the URLs (see
+ * {@link redactOrgPath}), and drop the IP address. `$ip: null` is the
+ * client-side request not to store it; the authoritative control is the
+ * project's own **Discard client IP data** setting, because the address is
+ * visible to the ingest endpoint either way and only the project setting stops
+ * it being retained. Both are set, so neither is a single point of failure.
+ */
 const sanitizeProperties = (properties: Record<string, unknown>): Record<string, unknown> => {
-    const sanitized = { ...properties };
+    const sanitized: Record<string, unknown> = { ...properties, $ip: null };
 
     for (const key of URL_PROPERTIES) {
         const value = sanitized[key];
@@ -81,6 +104,9 @@ let initialized = false;
 
 if (!import.meta.env.SSR && token && host) {
     posthogClient.init(token, {
+        // Feature flags and surveys are unused, and each is an extra request
+        // that carries the distinct id to a third party for nothing. Off.
+        advanced_disable_feature_flags: true,
         api_host: host,
         // Off, and the reason is the whole point of this file — see the module
         // docblock. Manual events only.
@@ -97,7 +123,39 @@ if (!import.meta.env.SSR && token && host) {
         // `init` runs before hydration; the SDK's default script target is
         // `body`, and a node appended there that React did not render is a
         // hydration mismatch.
+        // See `sessionReplayEnabled` — off by default, by design.
+        disable_session_recording: !sessionReplayEnabled,
+        disable_surveys: true,
         external_scripts_inject_target: "head",
+        // Only sign-in operators become person profiles. The default (`always`)
+        // would profile every visitor to the login page, which is a person
+        // record created for someone who never got in.
+        person_profiles: "identified_only",
+
+        /**
+         * **No cookie, no localStorage, no sessionStorage.** This is the choice
+         * that keeps the studio out of ePrivacy Art. 5(3) consent territory
+         * altogether: nothing is stored on the operator's device, so there is
+         * no banner to show and nothing to ask permission for.
+         *
+         * The cost is small here and worth naming. A distinct id held in memory
+         * does not survive a reload, so each page load starts anonymous — but
+         * the org layout calls {@link identifyOperator} on mount, so in practice
+         * every session is attributed within a render, and cross-session
+         * stitching happens on PostHog's side by user id. What is genuinely
+         * lost is pre-login attribution: an operator's path through the login
+         * page cannot be joined to the session that follows it.
+         *
+         * `cookieless_mode: "on_reject"` is the alternative if a consent banner
+         * is ever added — it uses cookies for operators who accept and a
+         * server-side hash for those who do not. It needs a project-side
+         * setting enabled to work at all, so it is not the safe default.
+         */
+        persistence: "memory",
+        // Honour the browser's Do Not Track. Combined with the memory-only
+        // persistence above this is the operator's opt-out channel until a
+        // settings toggle exists (GDPR Art. 21).
+        respect_dnt: true,
         sanitize_properties: sanitizeProperties,
         session_recording: {
             // Inputs are masked wholesale — a form field on this app is a
@@ -119,12 +177,19 @@ if (!import.meta.env.SSR && token && host) {
  * subject of every audit-log row, so it adds no linkage the control plane did
  * not already hold, and it is what makes "who hit this error" answerable.
  */
-export const identifyOperator = (userId: string): void => {
+export const identifyOperator = (userId: string, organizationId: string): void => {
     if (!initialized) {
         return;
     }
 
     posthogClient.identify(userId);
+    // The organization is the unit of analysis for a B2B control plane — "which
+    // tenants never open Traces", "does the empty Projects screen correlate
+    // with churn" — and none of that is answerable from person-level events
+    // alone. A PostHog group rather than an event property so the association
+    // survives onto every subsequent event without each one carrying it, and so
+    // it lines up with the server-side events, which are keyed on the same id.
+    posthogClient.group("organization", organizationId);
 };
 
 /** Drop the identity and its persisted device id — called on sign-out, so the next operator on a shared machine is not attributed to the last one. */
