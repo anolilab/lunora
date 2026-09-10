@@ -5,8 +5,11 @@ export {
     AI_DEFAULT_MODEL_ENV,
     AI_GATEWAY_ACCOUNT_ID_ENV,
     AI_GATEWAY_ID_ENV,
+    AI_GATEWAY_METADATA_MAX_KEYS,
+    AI_GATEWAY_TAGS_ENV,
     AI_GATEWAY_TOKEN_ENV,
     buildAiGatewayMetadataFields,
+    readAiGatewayEnvTags,
     resolveAiGateway,
 } from "./gateway";
 export type { ModelPrice, ModelUsage } from "./pricing";

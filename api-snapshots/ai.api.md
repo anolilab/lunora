@@ -35,6 +35,18 @@ const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 ```
 
+### `AI_GATEWAY_METADATA_MAX_KEYS` (const)
+
+```ts
+const AI_GATEWAY_METADATA_MAX_KEYS = 5;
+```
+
+### `AI_GATEWAY_TAGS_ENV` (const)
+
+```ts
+const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
+```
+
 ### `AI_GATEWAY_TOKEN_ENV` (const)
 
 ```ts
@@ -152,6 +164,12 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 ### `lookupModelPrice` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `readAiGatewayEnvTags` (const)
+
+```ts
+const readAiGatewayEnvTags: (env: Record<string, unknown>) => Record<string, string> | undefined;
+```
 
 ### `resolveAiGateway` (const)
 
