@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.62...@lunora/shard-engine@1.0.0-alpha.63) (2026-09-10)
+
+### Features
+
+* **observability,do:** stamp the deploy onto every request-log row ([#681](https://github.com/anolilab/lunora/issues/681)) ([925dbda](https://github.com/anolilab/lunora/commit/925dbda2479e258aa71582170dd20f2d85ffece8))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+
 ## @lunora/shard-engine [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.61...@lunora/shard-engine@1.0.0-alpha.62) (2026-09-08)
 
 
