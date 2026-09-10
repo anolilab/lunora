@@ -1903,6 +1903,9 @@ interface WranglerConfig {
         binding?: string;
         id?: string;
     } | null | undefined>;
+    limits?: {
+        cpu_ms?: number;
+    };
     logpush?: boolean;
     main?: string;
     migrations?: ReadonlyArray<{
@@ -1924,6 +1927,7 @@ interface WranglerConfig {
         logs?: {
             enabled?: boolean;
             head_sampling_rate?: number;
+            invocation_logs?: boolean;
         };
     };
     pipelines?: ReadonlyArray<{
