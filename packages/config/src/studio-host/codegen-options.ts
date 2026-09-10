@@ -25,7 +25,7 @@ interface StudioCodegenRequest {
  * nothing when it is handed no evidence, so the edit would silently regenerate
  * with that security check disabled.
  *
- * `target` is deliberately absent: `runCodegen` resolves it from `lunora.json`
+ * `target` is deliberately absent: `runCodegen` resolves it from `lunora.config.*`
  * when omitted, which is the same value the host would pass.
  */
 const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => {

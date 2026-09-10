@@ -27,7 +27,7 @@ export default defineConfig({
 | --------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `schemaDir`                       | `"lunora"`      | Directory containing `schema.ts` + function files                                                                          |
 | `apiSpec`                         | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                             |
-| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.json`                            |
+| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*`                        |
 | `studio`                          | `true`          | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                                      |
 | `cloudflare`                      | `true`          | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                                              |
 | `overlay`                         | `true`          | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward                       |

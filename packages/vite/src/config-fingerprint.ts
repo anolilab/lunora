@@ -68,6 +68,12 @@ const stripCodegenOwnedCrons = (parsed: Record<string, unknown>): Record<string,
  * makes the watcher inert: `onConfigChange` returns early when the fingerprint
  * has not moved.
  *
+ * The config part is a hash of BYTES, not of a normalized parse, because the
+ * `app` hook is code — there is nothing to normalize, and any edit to it changes
+ * what the composed worker entry does. The cost is that a formatting-only pass
+ * over the file also restarts the dev server, which is the right trade against
+ * missing a real change.
+ *
  * The parts are joined with a NUL — a control char `JSON.stringify` never emits,
  * so no part can forge a boundary. It is written as the `\u0000` escape, NOT a
  * raw byte: a literal NUL makes this source file read as binary to

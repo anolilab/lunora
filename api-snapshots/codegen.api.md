@@ -436,6 +436,15 @@ interface LintSchemaOptions {
 }
 ```
 
+### `LoadedProjectConfig` (interface)
+
+```ts
+interface LoadedProjectConfig {
+    config?: LunoraProjectConfig;
+    error?: string;
+}
+```
+
 ### `LunoraProjectConfig` (interface)
 
 ```ts
@@ -560,23 +569,10 @@ interface OpenRpcMethod {
 }
 ```
 
-### `PROJECT_CONFIG_BASENAME` (const)
+### `PROJECT_CONFIG_FILENAMES` (const)
 
 ```ts
-const PROJECT_CONFIG_BASENAME = "lunora.config";
-```
-
-### `PROJECT_CONFIG_EXTENSIONS` (const)
-
-```ts
-const PROJECT_CONFIG_EXTENSIONS: readonly [
-    ".ts",
-    ".mts",
-    ".cts",
-    ".js",
-    ".mjs",
-    ".cjs"
-];
+const PROJECT_CONFIG_FILENAMES: ReadonlyArray<string>;
 ```
 
 ### `PlatformDiagnostic` (interface)
@@ -586,9 +582,19 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
     remediation: string;
     target: string;
+}
+```
+
+### `ProjectConfigLiterals` (interface)
+
+```ts
+interface ProjectConfigLiterals {
+    remote?: boolean;
+    target?: string;
+    unreadable?: boolean;
 }
 ```
 
@@ -1397,7 +1403,7 @@ const listLunoraSourceFiles: (directory: string) => string[];
 ### `loadProjectConfig` (const)
 
 ```ts
-const loadProjectConfig: (projectRoot: string) => Promise<LunoraProjectConfig | undefined>;
+const loadProjectConfig: (projectRoot: string) => Promise<LoadedProjectConfig>;
 ```
 
 ### `parseSchemaSnapshot` (const)
@@ -1421,7 +1427,7 @@ const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 ### `readProjectConfigLiterals` (const)
 
 ```ts
-const readProjectConfigLiterals: (projectRoot: string) => Pick<LunoraProjectConfig, "remote" | "target">;
+const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 ```
 
 ### `readProjectTarget` (const)

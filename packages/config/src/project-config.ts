@@ -8,7 +8,7 @@
  * selects the deploy target (plan 114 §5.3/§5.5), and `app`, the hook a
  * Vite-first project composes its generated worker entry with.
  *
- * It replaces `lunora.json`. The two were always the same question — "how is
+ * It replaces `lunora.config.*`. The two were always the same question — "how is
  * this project wired?" — split across a format boundary that existed only
  * because the CLI could not read TypeScript. It can now: `@lunora/codegen` owns
  * one `jiti`-backed loader for the file, and this module reads `remote` off it.
@@ -17,19 +17,12 @@
  * throws, or an unexpected `remote` value all degrade to "no project preference"
  * rather than throwing, so a typo never breaks `lunora dev`.
  */
-import { PROJECT_CONFIG_BASENAME, PROJECT_CONFIG_EXTENSIONS, readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
+import { readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 
 import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
 
 /**
- * The project-config filenames probed at the project root, in order — the same
- * set the loader in `@lunora/codegen` resolves, re-exported here because the dev
- * server watches and fingerprints them.
- */
-const LUNORA_CONFIG_FILES: string[] = PROJECT_CONFIG_EXTENSIONS.map((extension) => `${PROJECT_CONFIG_BASENAME}${extension}`);
-
-/**
- * The parsed `remote` preference from `lunora.json`:
+ * The parsed `remote` preference from `lunora.config.*`:
  *
  * - `true` / `false` — the boolean form: enable or explicitly disable remote dev.
  * - `undefined` — no usable preference (file absent, key absent, or malformed).
@@ -39,12 +32,6 @@ const LUNORA_CONFIG_FILES: string[] = PROJECT_CONFIG_EXTENSIONS.map((extension) 
  * presence) so forward-written configs still turn remote on.
  */
 type RemotePreference = boolean | undefined;
-
-/** The structural slice of `lunora.json` Lunora reads. */
-interface LunoraProjectConfig {
-    remote?: unknown;
-    target?: unknown;
-}
 
 /**
  * Interpret a raw `remote` value into a tri-state preference. A boolean passes
@@ -72,7 +59,7 @@ const interpretRemote = (value: unknown): RemotePreference => {
 const readProjectRemotePreference = (projectRoot: string): RemotePreference => interpretRemote(readProjectConfigLiterals(projectRoot).remote);
 
 /**
- * Read the project's deploy `target` from `lunora.json`, or `undefined` when
+ * Read the project's deploy `target` from `lunora.config.*`, or `undefined` when
  * absent.
  *
  * Delegates to `@lunora/codegen` rather than re-reading the file here.
@@ -84,7 +71,7 @@ const readProjectTarget = (projectRoot: string): string | undefined => readCodeg
 
 /**
  * Resolve the deploy target for a command: an explicit `--target` wins, then
- * `lunora.json`, then the registry default.
+ * `lunora.config.*`, then the registry default.
  *
  * **This is the canonical resolution point, and the reason it is one place.**
  * Codegen tailors the emitted `ctx.*` surface to a target while deploy picks
@@ -109,7 +96,7 @@ const resolveProjectTarget = (projectRoot: string, explicit?: string): string =>
  * Callers that go on to resolve a driver get this for free; the ones that never
  * look a driver up — codegen, the Vite plugin — need it, because otherwise
  * nothing in their path ever rejects the name.
- * @param projectRoot Directory containing `lunora.json`.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @throws when the resolved target names no registered driver.
  * @returns the resolved, registered target id.
@@ -123,5 +110,5 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
     return target;
 };
 
-export type { LunoraProjectConfig, RemotePreference };
-export { interpretRemote, LUNORA_CONFIG_FILES, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };
+export type { RemotePreference };
+export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

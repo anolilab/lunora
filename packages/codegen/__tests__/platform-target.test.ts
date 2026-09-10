@@ -238,23 +238,44 @@ describe("project-declared target", () => {
         expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
     });
 
-    it("ignores a computed target, which the literal reader cannot see", () => {
+    it("warns rather than silently defaulting when the target cannot be read as a literal", () => {
         expect.assertions(1);
 
-        // The sync reader parses literals; `runCodegen` resolves the target
-        // inside itself and cannot await. A computed value therefore falls back
-        // to the default, which is the documented limit of this path.
+        // The sync reader parses literals; `runCodegen` resolves the target inside
+        // itself and cannot await. Falling back to the default in SILENCE meant a
+        // project that declared `node` got the Cloudflare surface emitted and the
+        // wrangler toolchain run — the wrong-provider outcome this file's own
+        // `readProjectTarget` docblock refuses.
         writeConfig(`{ target: ["a", "ws"].join("") }`);
 
+        expect(diagnosticNames()).toStrictEqual(["platform_unreadable_target"]);
+    });
+
+    it("says nothing when the config simply declares no target", () => {
+        expect.assertions(1);
+
+        // "no target declared" and "a target I could not read" must not be the
+        // same silence, but they must also not be the same warning.
+        writeConfig(`{ remote: true }`);
+
         expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("says nothing when --target was passed, which wins anyway", () => {
+        expect.assertions(1);
+
+        writeConfig(`{ target: ["a", "ws"].join("") }`);
+
+        expect(diagnosticNames("cloudflare")).toStrictEqual([]);
     });
 
     it("reads the target from a real TypeScript config, comments and all", () => {
         expect.assertions(1);
 
-        // The file is loaded with `jiti`, so comments and trailing commas are just
-        // TypeScript. One loader is shared with `@lunora/config`, which is exactly
-        // the drift a second reader would reintroduce.
+        // This path is `runCodegen` -> `readProjectTarget` -> the LITERAL reader
+        // (ts-morph), not the `jiti` evaluator: `runCodegen` is synchronous. In a
+        // file whose central risk is having two readers, naming the wrong one is
+        // worse than saying nothing.
         writeConfig(`{\n    // the target we ship to\n    target: "aws",\n}`);
 
         expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);

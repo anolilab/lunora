@@ -108,7 +108,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         // worker entry of its own to pass one from. See `LunoraShardConfig`.
         shard: input.shard ?? {},
         // Same resolution AND validation as the CLI — explicit option, then
-        // `lunora.json`, then the default — so a project that sets `target`
+        // `lunora.config.*`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
         // fails here rather than emitting the default surface silently.
         target: resolveRunnableTargetOrThrow(projectRoot, input.target),
@@ -191,7 +191,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // the remote plugin reports the materialized config instead of injecting it.
     const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
 
-    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on the
+    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.config.*` `remote`) on the
     // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
     // config with `"remote": true` on each eligible binding (DO shards stay local)
     // and inject it as the cloudflare plugin's `configPath`.

@@ -54,7 +54,7 @@ import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
+import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
 
 /**
  * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
@@ -334,7 +334,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         hasFlags,
         hasNotify,
         identity,
-        platformGate,
+        platformGate: {
+            ...platformGate,
+            // Prepended, not appended: "your target was not read" explains every
+            // feature diagnostic that follows it, so it has to be read first.
+            diagnostics: [...readTargetDiagnostics(projectRoot, options.target), ...platformGate.diagnostics],
+        },
         queues,
         serverContent: emitServer({
             agents,

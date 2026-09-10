@@ -64,7 +64,7 @@ const DEFAULT_TARGET = "cloudflare";
 const readProjectTarget = (projectRoot: string): string | undefined => {
     const { target } = readProjectConfigLiterals(projectRoot);
 
-    return typeof target === "string" && target.length > 0 ? target : undefined;
+    return target !== undefined && target.length > 0 ? target : undefined;
 };
 
 /**
@@ -81,6 +81,41 @@ const readProjectTarget = (projectRoot: string): string | undefined => {
  * @returns the resolved target id — not guaranteed to be registered.
  */
 const resolveCodegenTarget = (projectRoot: string, explicit?: string): string => explicit ?? readProjectTarget(projectRoot) ?? DEFAULT_TARGET;
+
+/**
+ * The diagnostic for a `lunora.config.*` whose `target` the synchronous reader
+ * could not parse — a computed value, a getter, a spread, `module.exports`.
+ *
+ * Without it, "no `target` declared" and "a `target` I could not read" were the
+ * same silence, and both fell through to `cloudflare`: codegen emits the
+ * Cloudflare `ctx.*` surface and `lunora deploy` runs the wrangler toolchain for
+ * a project that asked for something else. A WARNING, not an error, because the
+ * config may legitimately declare no target at all and `--target` still wins —
+ * but a silent wrong provider is exactly what this stack refuses elsewhere.
+ *
+ * Skipped when the caller passed `--target`: the file's value is then moot.
+ */
+const readTargetDiagnostics = (projectRoot: string, explicit?: string): PlatformDiagnostic[] => {
+    if (explicit !== undefined) {
+        return [];
+    }
+
+    const { target, unreadable } = readProjectConfigLiterals(projectRoot);
+
+    if (unreadable !== true || target !== undefined) {
+        return [];
+    }
+
+    return [
+        {
+            level: "warn",
+            message: `lunora.config declares a \`target\` that codegen cannot read without evaluating it, so the "${DEFAULT_TARGET}" surface was emitted. \`runCodegen\` resolves the target synchronously, which means it reads literals only.`,
+            name: "platform_unreadable_target",
+            remediation: `Write \`target\` as a string literal on the config's default export (\`export default { target: "${DEFAULT_TARGET}" }\`), or pass \`--target\`.`,
+            target: DEFAULT_TARGET,
+        },
+    ];
+};
 
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
@@ -269,7 +304,7 @@ interface PlatformDiagnostic {
     /** Human-readable explanation of the gap. */
     message: string;
     /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, or `platform_unknown_target`. */
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
     /** How to resolve it. */
     remediation: string;
     /** The requested deploy target. */
@@ -480,4 +515,13 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
 };
 
 export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };
-export { CAPABILITY_TO_FEATURE, DEFAULT_TARGET, gateAgainstMatrix, gatePlatformFeatures, platformMatrixIds, readProjectTarget, resolveCodegenTarget };
+export {
+    CAPABILITY_TO_FEATURE,
+    DEFAULT_TARGET,
+    gateAgainstMatrix,
+    gatePlatformFeatures,
+    platformMatrixIds,
+    readProjectTarget,
+    readTargetDiagnostics,
+    resolveCodegenTarget,
+};

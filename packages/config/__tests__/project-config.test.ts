@@ -44,7 +44,7 @@ describe("readProjectRemotePreference", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    /** Write the project's `lunora.config.ts`. `value` is embedded as a TS object literal. */
+    /** Write the project's `lunora.config.ts`. `source` is embedded as the default-exported object literal. */
     const writeProjectConfig = (source: string): void => {
         writeFileSync(join(root, "lunora.config.ts"), `export default ${source};\n`, "utf8");
     };

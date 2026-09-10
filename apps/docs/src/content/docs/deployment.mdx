@@ -57,7 +57,7 @@ dispatch origin from its own env and refuses to enqueue without it, so
 
 One optional file at the project root carries the project's Lunora settings — the
 deploy `target`, the `remote`-binding dev preference, and the `app` hook a
-Vite-first project composes its worker with. It replaces `lunora.json`: the two
+Vite-first project composes its worker with. It replaces `lunora.config.*`: the two
 were always the same question, split across a format boundary that existed only
 because the CLI could not read TypeScript. It can now (`jiti`), so there is one
 file and it is real code.
@@ -72,9 +72,14 @@ export default {
 } satisfies LunoraConfig;
 ```
 
-`lunora.config.js`, `.mjs`, `.cjs`, `.mts` and `.cts` are read too, so a
-JS-authored project is not forced into TypeScript for one file. Every template's
-`tsconfig.json` lists it in `include`, which is what gets it type-checked.
+`lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
+not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
+Vite's default `resolve.extensions` does not cover them, so the specifier the
+generated worker entry imports for the `app` hook would not resolve.
+
+Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
+which is what gets the file type-checked (nuxt declares none — it extends the
+config Nitro generates, which already covers the project root).
 
 ### The `app` hook
 
@@ -111,16 +116,23 @@ The generated entry calls the hook between the shard selector and its own
 `.httpRouter(...)` / `.build()`, so the framework wiring stays with the plugin
 and your capabilities are chained in the middle.
 
-Two things are worth knowing about this file:
+Three things are worth knowing about this file:
 
-- **Keep the type imports type-only.** The `app` hook is bundled into the worker,
-  so a runtime `import` here ships with it — and a host-only one breaks the build.
-  `import type` is erased, which is why the shape above uses `satisfies` rather
+- **Export it as `default`.** Both readers resolve the default export and nothing
+  else, because the generated entry imports it as one. A hook reached through a
+  named export is ignored.
+- **Keep the imports type-only if you can.** The `app` hook is bundled into the
+  worker, so a runtime `import` here ships with it. It is also _evaluated on the
+  host_ to discover the hook, so a runtime import must resolve there too — a
+  `cloudflare:*` module or a tsconfig path alias (which the loader does not read)
+  will throw, and the build warns that the hook was not composed. `import type`
+  is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Annotate the hook's return type.** The generated entry is a virtual module no
-  `tsconfig` covers, so nothing type-checks the seam itself; the annotation is
-  what turns a forgotten `return` into a `lunora verify` failure instead of a
-  worker that fails to boot.
+- **Write `target` and `remote` as literals.** `lunora codegen` resolves the
+  target synchronously, by parsing this file rather than running it, so a computed
+  value, a getter or a spread is not seen. It is not silently defaulted either —
+  `lunora verify` reports `platform_unreadable_target`. A `const` in the same
+  file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than
 breaking the build — the entry composes as if the hook were absent. A

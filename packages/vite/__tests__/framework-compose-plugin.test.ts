@@ -63,11 +63,16 @@ const callResolveId = (plugin: Plugin, id: string): unknown => {
  * emitted in every non-"client" environment, so the harness defaults to `"ssr"`
  * (the real-entry path) and callers pass an explicit name when they care.
  */
+/** Warnings the plugin pushed through its context during `callLoad`. */
+const loadWarnings: string[] = [];
+
 const callLoad = async (plugin: Plugin, id: string, environment = "ssr"): Promise<unknown> => {
     const hook = plugin.load;
     const run = typeof hook === "function" ? hook : hook?.handler;
 
-    return await run?.call({ environment: { name: environment } } as never, id, undefined as never);
+    // `warn` included: the plugin reports a config it could not load through the
+    // plugin context, and a stub without it turned that report into a TypeError.
+    return await run?.call({ environment: { name: environment }, warn: (message: string) => loadWarnings.push(message) } as never, id, undefined as never);
 };
 
 describe("framework-compose-plugin", () => {
@@ -376,19 +381,25 @@ describe("framework-compose-plugin", () => {
 
                 const code = await loadComposedEntry();
 
-                expect(code).toContain("const app = configureApp(defineApp()");
-                expect(code).toContain("const configureApp = lunoraConfig.app ?? ((builder) => builder);");
+                expect(code).toContain("const app = lunoraConfig.app(defineApp()");
+                // No `?? identity` fallback: it could only fire if the config
+                // changed between the host check and the bundle, and it would then
+                // boot a worker with the user's wiring silently missing.
+                expect(code).not.toContain("((builder) => builder)");
             });
 
-            it("accepts named exports as well as a default export", async () => {
+            it("ignores a hook reached by a named export, which the emitted entry cannot import", async () => {
                 expect.assertions(1);
 
-                // `jiti`'s `interopDefault` reads a namespace through to its default
-                // export, so both shapes arrive as the same object — there is no
-                // second code path here, and rejecting one would be arbitrary.
+                // The entry emits `import lunoraConfig from "…"`, so a hook that is
+                // not on the DEFAULT export fails the bundle with "does not provide
+                // an export named default". An earlier revision accepted it: the
+                // loader used `interopDefault`, which collapses the namespace onto
+                // the default and made the shapes indistinguishable here while the
+                // emitter still spoke only one of them.
                 writeFileSync(join(projectRoot, "lunora.config.ts"), `export const app = (builder) => builder;\n`, "utf8");
 
-                await expect(loadComposedEntry()).resolves.toContain("const app = configureApp(defineApp()");
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
             });
 
             it.each([
@@ -406,13 +417,28 @@ describe("framework-compose-plugin", () => {
                 // to the composition it had before.
                 writeFileSync(join(projectRoot, "lunora.config.ts"), source, "utf8");
 
-                await expect(loadComposedEntry()).resolves.not.toContain("configureApp");
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+            });
+
+            it("reports a config it could not load instead of dropping the hook in silence", async () => {
+                expect.assertions(2);
+
+                // The hook is worker code but is EVALUATED on the host, so an
+                // import that does not resolve there — a `cloudflare:*` module, or
+                // a tsconfig path alias, which `jiti` does not read, and which 5
+                // templates ship — throws. Swallowing that composed a worker with
+                // the user's `.auth()` / `.global()` wiring silently missing.
+                loadWarnings.length = 0;
+                writeFileSync(join(projectRoot, "lunora.config.ts"), `import { x } from "~/nope";\nexport default { app: (app) => x(app) };\n`, "utf8");
+
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+                expect(loadWarnings.join("\n")).toContain("could not be loaded");
             });
 
             it("composes as before when there is no config file", async () => {
                 expect.assertions(1);
 
-                await expect(loadComposedEntry()).resolves.not.toContain("configureApp");
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
             });
         });
 
@@ -424,13 +450,13 @@ describe("framework-compose-plugin", () => {
             // `.global(...)` its D1 writer, `.vectors(...)` its embedder — and
             // `resolveIdentity` is only ever set by `.auth()` / `.access()` /
             // `.extend()`, all builder calls a class-A app had no entry to write.
-            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora.config" });
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora.config.ts" });
 
-            expect(code).toContain(`import lunoraConfig from "/app/lunora.config";`);
-            expect(code).toContain("const app = configureApp(defineApp()");
+            expect(code).toContain(`import lunoraConfig from "/app/lunora.config.ts";`);
+            expect(code).toContain("const app = lunoraConfig.app(defineApp()");
             // The framework wiring stays ours: the app's calls land BETWEEN the
             // shard selector and `.httpRouter(...)` / `.build()`.
-            expect(code.indexOf("configureApp(")).toBeLessThan(code.indexOf(".httpRouter("));
+            expect(code.indexOf("lunoraConfig.app(")).toBeLessThan(code.indexOf(".httpRouter("));
         });
 
         it("adds no blank-line churn for an app with no app config", async () => {

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCodegenProject, findTsconfig } from "@lunora/codegen";
+import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import { runPostCodegenHook } from "@lunora/config";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -987,9 +987,9 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // config mid-session has to be picked up.
             const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
 
-            expect(added).toEqual(
-                expect.arrayContaining([join(workdir, "wrangler.jsonc"), join(workdir, "lunora.config.ts"), join(workdir, "lunora.config.js")]),
-            );
+            // Against the exported list, not two hand-picked members: adding an
+            // extension must not be able to leave it unwatched.
+            expect(added).toEqual(expect.arrayContaining([join(workdir, "wrangler.jsonc"), ...PROJECT_CONFIG_FILENAMES.map((name) => join(workdir, name))]));
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 

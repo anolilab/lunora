@@ -670,12 +670,6 @@ const LUNA_NAME = "Luna";
 const LUNA_SIGNOFF = "Safe travels, voyager.";
 ```
 
-### `LUNORA_CONFIG_FILES` (const)
-
-```ts
-const LUNORA_CONFIG_FILES: string[];
-```
-
 ### `LUNORA_EVENT_SOURCE` (const)
 
 ```ts
@@ -750,15 +744,6 @@ interface LunoraFormattedLine {
 
 ```ts
 type LunoraLineLevel = "error" | "info" | "warn";
-```
-
-### `LunoraProjectConfig` (interface)
-
-```ts
-interface LunoraProjectConfig {
-    remote?: unknown;
-    target?: unknown;
-}
 ```
 
 ### `LunoraReporter` (class)
@@ -2154,12 +2139,6 @@ const materializeRemoteWranglerConfig: (options: MaterializeOptions) => Material
 
 ```ts
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
-```
-
-### `moduleExportsValue` (const)
-
-```ts
-const moduleExportsValue: (path: string, name: string) => boolean;
 ```
 
 ### `planRemoteBindings` (const)

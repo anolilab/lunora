@@ -71,15 +71,8 @@ export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
-export type { LunoraProjectConfig, RemotePreference } from "./project-config";
-export {
-    interpretRemote,
-    LUNORA_CONFIG_FILES,
-    readProjectRemotePreference,
-    readProjectTarget,
-    resolveProjectTarget,
-    resolveTargetOrThrow,
-} from "./project-config";
+export type { RemotePreference } from "./project-config";
+export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export type {

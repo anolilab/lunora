@@ -262,6 +262,23 @@ describe("runDoctor", () => {
         expect(result.findings.some((finding) => finding.code === "wrangler-invalid" && finding.message.includes("compatibility_date"))).toBe(true);
     });
 
+    it("warns when a stale lunora.json is left behind", async () => {
+        expect.assertions(2);
+
+        // Nothing reads it any more, so nothing breaks — but a `target` in it used
+        // to select the provider, and after the rename the project silently gets
+        // the default one.
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }\n`, "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.code === "stale-lunora-json");
+
+        expect(finding?.level).toBe("warn");
+        // A warning, not a failure: the file is inert, not invalid.
+        expect(result.code).toBe(0);
+    });
+
     it("reports a failure when wrangler.jsonc is missing", async () => {
         expect.assertions(2);
 
