@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.173...@lunora/codegen@1.0.0-alpha.174) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.123
+* **@lunora/agent:** upgraded to 1.0.0-alpha.103
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.66
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
 ## @lunora/codegen [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.172...@lunora/codegen@1.0.0-alpha.173) (2026-09-08)
 
 ### Bug Fixes
