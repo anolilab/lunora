@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.174...@lunora/codegen@1.0.0-alpha.175) (2026-09-10)
+
+### Features
+
+* **d1,codegen:** record what every D1 query actually scanned ([#680](https://github.com/anolilab/lunora/issues/680)) ([7d5340a](https://github.com/anolilab/lunora/commit/7d5340a216341a03feebc6724b0f2fec33b845f9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.124
+* **@lunora/agent:** upgraded to 1.0.0-alpha.104
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/queue:** upgraded to 1.0.0-alpha.53
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.67
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
 ## @lunora/codegen [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.173...@lunora/codegen@1.0.0-alpha.174) (2026-09-10)
 
 ### Bug Fixes
