@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.123...@lunora/advisor@1.0.0-alpha.124) (2026-09-10)
+
+### Features
+
+* **advisor:** flag a signup mutation with no disposable-email gate ([#685](https://github.com/anolilab/lunora/issues/685)) ([acbff85](https://github.com/anolilab/lunora/commit/acbff85138d3fde8bc22c9bce9ff052ab7017896))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
 ## @lunora/advisor [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.122...@lunora/advisor@1.0.0-alpha.123) (2026-09-10)
 
 
