@@ -4352,6 +4352,12 @@ const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) =>
 const readCommitSeq: (sql: SqlExec) => number;
 ```
 
+### `readDeployInfo` (const)
+
+```ts
+const readDeployInfo: (rawEnv: unknown) => DeployInfo;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
