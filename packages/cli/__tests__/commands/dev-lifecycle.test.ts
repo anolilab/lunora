@@ -374,7 +374,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            // Absent, not empty-string: the daemon re-reads `lunora.json`, so
+            // Absent, not empty-string: the daemon re-reads `lunora.config.ts`, so
             // passing `--target ""` would override a project setting with junk.
             expect(args).not.toContain("--target");
         });

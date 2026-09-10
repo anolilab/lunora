@@ -25,7 +25,7 @@ interface LogsCommandOptions {
     spawner?: Spawner;
     /** Filter by invocation status: `ok`, `error`, or `canceled` (forwarded as `--status`). */
     status?: string;
-    /** Deploy target whose tail command to run. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    /** Deploy target whose tail command to run. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 
     /**

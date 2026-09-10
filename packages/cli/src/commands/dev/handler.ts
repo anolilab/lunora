@@ -152,7 +152,7 @@ interface DevCommandOptions {
 
     /** Disable the embedded studio server. */
     studio?: boolean;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 
     /**
@@ -1454,7 +1454,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     // Remote-binding mode obeys a clear precedence: an explicit `--remote`
     // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
-    // key in the project's `lunora.json` (a project default). See
+    // key in the project's `lunora.config.*` (a project default). See
     // `resolveRemoteEnabled` in @lunora/config.
     const remote = resolveRemoteEnabled({
         configPreference: readProjectRemotePreference(cwd),

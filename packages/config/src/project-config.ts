@@ -1,41 +1,32 @@
 /**
- * `lunora.json` — the optional project config file at the repo root.
+ * `lunora.config.*` — the optional project config file at the repo root.
  *
  * It is distinct from `wrangler.jsonc` (the Cloudflare worker config): this is
  * Lunora-level project settings the CLI + Vite plugin read. It carries `remote`,
  * which opts the project into remote-binding dev (PLAN5 §5.3) without needing
- * the `--remote` flag or `LUNORA_REMOTE` env on every run, and `target`, which
- * selects the deploy target (plan 114 §5.3/§5.5).
+ * the `--remote` flag or `LUNORA_REMOTE` env on every run, `target`, which
+ * selects the deploy target (plan 114 §5.3/§5.5), and `app`, the hook a
+ * Vite-first project composes its generated worker entry with.
  *
- * The file is entirely optional and best-effort: a missing file, malformed
- * JSONC, or an unexpected `remote` value all degrade to "no project preference"
+ * It replaces `lunora.json`. The two were always the same question — "how is
+ * this project wired?" — split across a format boundary that existed only
+ * because the CLI could not read TypeScript. It can now: `@lunora/codegen` owns
+ * one `jiti`-backed loader for the file, and this module reads `remote` off it.
+ *
+ * The file is entirely optional and best-effort: a missing file, a config that
+ * throws, or an unexpected `remote` value all degrade to "no project preference"
  * rather than throwing, so a typo never breaks `lunora dev`.
  */
-import { existsSync, readFileSync } from "node:fs";
-
-import { readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
-import type { ParseError } from "jsonc-parser";
-import { parse as parseJsonc } from "jsonc-parser";
+import { PROJECT_CONFIG_BASENAME, PROJECT_CONFIG_EXTENSIONS, readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 
 import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
-import join from "./path";
-
-/** The canonical project-config filename probed at the project root. */
-const LUNORA_CONFIG_FILE = "lunora.json";
 
 /**
- * The optional module a Vite-first app puts its own `defineApp()` builder calls
- * in, relative to the schema directory — `lunora/app.ts`.
- *
- * A bare noun like every sibling seam (`identity.ts`, `env.ts`, `crons.ts`), and
- * deliberately NOT `app.config.ts`, which collides with the root
- * `app.config.ts` that Vinxi-era TanStack Start and SolidStart projects carry.
- *
- * Lives here rather than in `@lunora/vite` so the dev server's config watcher
- * can name it without importing the compose plugin — that edge dragged
- * `@lunora/config/cloudflare` (and ts-morph) into the plugin's startup graph.
+ * The project-config filenames probed at the project root, in order — the same
+ * set the loader in `@lunora/codegen` resolves, re-exported here because the dev
+ * server watches and fingerprints them.
  */
-const APP_CONFIG_FILENAME = "app.ts";
+const LUNORA_CONFIG_FILES: string[] = PROJECT_CONFIG_EXTENSIONS.map((extension) => `${PROJECT_CONFIG_BASENAME}${extension}`);
 
 /**
  * The parsed `remote` preference from `lunora.json`:
@@ -75,42 +66,10 @@ const interpretRemote = (value: unknown): RemotePreference => {
 };
 
 /**
- * Parse `lunora.json`, or `undefined` when there is nothing usable to read.
- *
- * Best-effort by design: a missing file, unreadable file, malformed JSONC, or
- * non-object root all collapse to `undefined` so a typo in an optional config
- * never breaks a command that would otherwise run fine without it.
- */
-const readProjectConfig = (projectRoot: string): LunoraProjectConfig | undefined => {
-    const configPath = join(projectRoot, LUNORA_CONFIG_FILE);
-
-    if (!existsSync(configPath)) {
-        return undefined;
-    }
-
-    let text: string;
-
-    try {
-        text = readFileSync(configPath, "utf8");
-    } catch {
-        return undefined;
-    }
-
-    const parseErrors: ParseError[] = [];
-    const parsed: unknown = parseJsonc(text, parseErrors, { allowTrailingComma: true });
-
-    if (parseErrors.length > 0 || parsed === null || typeof parsed !== "object") {
-        return undefined;
-    }
-
-    return parsed;
-};
-
-/**
  * Read the project's `remote` preference, or `undefined` when there is no
  * usable one — the caller then falls through to the env/flag layers.
  */
-const readProjectRemotePreference = (projectRoot: string): RemotePreference => interpretRemote(readProjectConfig(projectRoot)?.remote);
+const readProjectRemotePreference = (projectRoot: string): RemotePreference => interpretRemote(readProjectConfigLiterals(projectRoot).remote);
 
 /**
  * Read the project's deploy `target` from `lunora.json`, or `undefined` when
@@ -165,4 +124,4 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
 };
 
 export type { LunoraProjectConfig, RemotePreference };
-export { APP_CONFIG_FILENAME, interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };
+export { interpretRemote, LUNORA_CONFIG_FILES, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

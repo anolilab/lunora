@@ -970,7 +970,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
     });
 
     describe("config-drift auto-restart (configureServer)", () => {
-        it("registers a config-drift watcher for wrangler + lunora.json", () => {
+        it("registers a config-drift watcher for wrangler + every lunora.config candidate", () => {
             expect.assertions(2);
 
             writeFixture(workdir);
@@ -981,11 +981,15 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             wireServer(plugin, server);
 
-            // The plugin added the config files (both wrangler names + lunora.json)
-            // to the watcher and registered a second `change` listener for them.
+            // The plugin added the config files (both wrangler names + every
+            // `lunora.config.*` candidate) to the watcher and registered a second
+            // `change` listener for them. Every candidate, because CREATING the
+            // config mid-session has to be picked up.
             const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
 
-            expect(added).toEqual(expect.arrayContaining([join(workdir, "wrangler.jsonc"), join(workdir, "lunora.json")]));
+            expect(added).toEqual(
+                expect.arrayContaining([join(workdir, "wrangler.jsonc"), join(workdir, "lunora.config.ts"), join(workdir, "lunora.config.js")]),
+            );
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
@@ -1088,12 +1092,12 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).toHaveBeenCalledTimes(1);
         });
 
-        it("lunora.json drift restarts (the cloudflare plugin does not watch it)", async () => {
+        it("lunora.config.ts drift restarts (the cloudflare plugin does not watch it)", async () => {
             expect.assertions(2);
 
             writeFixture(workdir);
-            // No lunora.json initially → baseline records it absent.
-            const lunoraConfigPath = join(workdir, "lunora.json");
+            // No lunora.config.ts initially → baseline records it absent.
+            const lunoraConfigPath = join(workdir, "lunora.config.ts");
 
             const plugin = codegenPlugin(makeOptions(workdir));
             const { restart, server } = makeStubServer();
@@ -1109,7 +1113,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).not.toHaveBeenCalled();
 
             // …but writing a real remote preference is binding-relevant drift.
-            writeFileSync(lunoraConfigPath, '{ "remote": true }\n', "utf8");
+            writeFileSync(lunoraConfigPath, "export default { remote: true };\n", "utf8");
             onConfigChange(lunoraConfigPath);
 
             expect(restart).toHaveBeenCalledTimes(1);

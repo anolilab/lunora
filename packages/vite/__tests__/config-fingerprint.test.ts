@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -77,33 +77,31 @@ describe("config-fingerprint", () => {
             // than a literal so this test source stays plain text (an embedded NUL
             // makes the file read as binary to grep/gitleaks).
             const nul = String.fromCodePoint(0);
-            const fingerprint = computeConfigFingerprint(workdir, "lunora");
+            const fingerprint = computeConfigFingerprint(workdir);
 
             // Nothing in a fresh dir -> every part absent.
             expect(fingerprint).toContain(nul);
-            expect(fingerprint).toBe(`absent${nul}absent${nul}absent`);
+            expect(fingerprint).toBe(`absent${nul}absent`);
         });
 
-        it("moves when lunora/app.ts changes, so the watcher is not inert", () => {
+        it("moves when lunora.config.ts changes, so the watcher is not inert", () => {
             expect.assertions(2);
 
             // The dev watcher watches this file, but `onConfigChange` returns early
             // when the fingerprint has not moved — so watching it without
             // fingerprinting it did nothing at all.
-            mkdirSync(join(workdir, "lunora"), { recursive: true });
-
-            const appConfigPath = join(workdir, "lunora", "app.ts");
-            const absent = computeConfigFingerprint(workdir, "lunora");
+            const appConfigPath = join(workdir, "lunora.config.ts");
+            const absent = computeConfigFingerprint(workdir);
 
             writeFileSync(appConfigPath, "export const configureApp = (app) => app;\n", "utf8");
 
-            const present = computeConfigFingerprint(workdir, "lunora");
+            const present = computeConfigFingerprint(workdir);
 
             expect(present).not.toBe(absent);
 
             writeFileSync(appConfigPath, "export const configureApp = (app) => app.global({ d1: (env) => env.DB });\n", "utf8");
 
-            expect(computeConfigFingerprint(workdir, "lunora")).not.toBe(present);
+            expect(computeConfigFingerprint(workdir)).not.toBe(present);
         });
 
         it("adding the first cron does not change the fingerprint (anti-loop)", () => {
@@ -112,11 +110,11 @@ describe("config-fingerprint", () => {
             const wranglerPath = join(workdir, "wrangler.jsonc");
 
             writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB" }] }\n', "utf8");
-            const before = computeConfigFingerprint(workdir, "lunora");
+            const before = computeConfigFingerprint(workdir);
 
             // Codegen adds triggers.crons — must be excluded from the fingerprint.
             writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "triggers": { "crons": ["0 9 * * *"] } }\n', "utf8");
-            const after = computeConfigFingerprint(workdir, "lunora");
+            const after = computeConfigFingerprint(workdir);
 
             expect(after).toBe(before);
         });
@@ -127,10 +125,10 @@ describe("config-fingerprint", () => {
             const wranglerPath = join(workdir, "wrangler.jsonc");
 
             writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
-            const before = computeConfigFingerprint(workdir, "lunora");
+            const before = computeConfigFingerprint(workdir);
 
             writeFileSync(wranglerPath, '{ "name": "app", "kv_namespaces": [{ "binding": "KV" }] }\n', "utf8");
-            const after = computeConfigFingerprint(workdir, "lunora");
+            const after = computeConfigFingerprint(workdir);
 
             expect(after).not.toBe(before);
         });

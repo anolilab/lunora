@@ -385,7 +385,24 @@ class AppBuilder<Env extends object> {
  * `type AppEnv = Env & Record<string, unknown>`. The builder only ever reads `env`
  * through the selectors you pass it, so the looser bound costs nothing.
  */
+/**
+ * Shape of the project's root `lunora.config.*`.
+ *
+ * Declared HERE, not in a package, so the `app` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = Record<string, unknown>> {
+    /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. */
+    remote?: boolean;
+    /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. */
+    target?: string;
+}
+
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, Selector };
+export type { AuthDeclaration, ComposedApp, LunoraConfig, Selector };

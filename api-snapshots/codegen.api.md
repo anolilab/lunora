@@ -436,6 +436,16 @@ interface LintSchemaOptions {
 }
 ```
 
+### `LunoraProjectConfig` (interface)
+
+```ts
+interface LunoraProjectConfig {
+    app?: unknown;
+    remote?: unknown;
+    target?: unknown;
+}
+```
+
 ### `LunoraSolution` (interface)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -548,6 +558,25 @@ interface OpenRpcMethod {
     summary?: string;
     "x-lunora-function-kind"?: string;
 }
+```
+
+### `PROJECT_CONFIG_BASENAME` (const)
+
+```ts
+const PROJECT_CONFIG_BASENAME = "lunora.config";
+```
+
+### `PROJECT_CONFIG_EXTENSIONS` (const)
+
+```ts
+const PROJECT_CONFIG_EXTENSIONS: readonly [
+    ".ts",
+    ".mts",
+    ".cts",
+    ".js",
+    ".mjs",
+    ".cjs"
+];
 ```
 
 ### `PlatformDiagnostic` (interface)
@@ -1311,6 +1340,12 @@ const evaluateSchemaDrift: (options: {
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `findProjectConfigFile` (const)
+
+```ts
+const findProjectConfigFile: (projectRoot: string) => string | undefined;
+```
+
 ### `findTsconfig` (const)
 
 ```ts
@@ -1359,6 +1394,12 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const listLunoraSourceFiles: (directory: string) => string[];
 ```
 
+### `loadProjectConfig` (const)
+
+```ts
+const loadProjectConfig: (projectRoot: string) => Promise<LunoraProjectConfig | undefined>;
+```
+
 ### `parseSchemaSnapshot` (const)
 
 ```ts
@@ -1375,6 +1416,12 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 
 ```ts
 const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
+```
+
+### `readProjectConfigLiterals` (const)
+
+```ts
+const readProjectConfigLiterals: (projectRoot: string) => Pick<LunoraProjectConfig, "remote" | "target">;
 ```
 
 ### `readProjectTarget` (const)

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
-import { APP_CONFIG_FILENAME, LUNORA_CONFIG_FILE } from "@lunora/config";
+import { findProjectConfigFile } from "@lunora/codegen";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 /**
@@ -60,41 +59,40 @@ const stripCodegenOwnedCrons = (parsed: Record<string, unknown>): Record<string,
 
 /**
  * A stable fingerprint of the binding-relevant slice of the project's config
- * files (`wrangler.jsonc` + `lunora.json` + the app-config seam), used by the
- * dev config-drift watcher to tell a real, restart-worthy edit apart from
- * codegen's own idempotent writes.
+ * files (`wrangler.jsonc` + `lunora.config.*`), used by the dev config-drift
+ * watcher to tell a real, restart-worthy edit apart from codegen's own
+ * idempotent writes.
  *
  * The wrangler part strips the codegen-owned `triggers.crons` (see
- * {@link stripCodegenOwnedCrons}); the `lunora.json` part (the remote-binding
- * preference) is fingerprinted as-is. `lunora/app.ts` is fingerprinted by
- * CONTENT, not parsed — it is TypeScript, and the composed class-A entry embeds
- * whichever builder calls it makes, so any edit is restart-worthy. Watching it
- * without fingerprinting it made the watcher inert: `onConfigChange` returns
- * early when the fingerprint has not moved.
+ * {@link stripCodegenOwnedCrons}). Watching a file without fingerprinting it
+ * makes the watcher inert: `onConfigChange` returns early when the fingerprint
+ * has not moved.
  *
  * The parts are joined with a NUL — a control char `JSON.stringify` never emits,
  * so no part can forge a boundary. It is written as the `\u0000` escape, NOT a
  * raw byte: a literal NUL makes this source file read as binary to
  * grep/gitleaks. Keep the escape.
  */
-const computeConfigFingerprint = (projectRoot: string, schemaDirectory: string): string => {
+const computeConfigFingerprint = (projectRoot: string): string => {
     const wranglerFile = findWranglerFile(projectRoot);
     const wranglerPart = wranglerFile === undefined ? "absent" : fingerprintJsonc(wranglerFile, stripCodegenOwnedCrons);
 
-    const lunoraConfigPath = join(projectRoot, LUNORA_CONFIG_FILE);
-    const lunoraPart = existsSync(lunoraConfigPath) ? fingerprintJsonc(lunoraConfigPath) : "absent";
-
-    const appConfigPath = join(projectRoot, schemaDirectory, APP_CONFIG_FILENAME);
-    let appConfigPart = "absent";
+    // Hashed by CONTENT, not parsed: `lunora.config.*` is TypeScript, and the
+    // composed class-A entry embeds whichever builder calls its `app` hook makes,
+    // so any edit is restart-worthy. Absent or unreadable is "absent" — there is
+    // nothing to restart on, and the next successful read moves the fingerprint.
+    const lunoraConfigPath = findProjectConfigFile(projectRoot);
+    let lunoraPart = "absent";
 
     try {
-        appConfigPart = createHash("sha256").update(readFileSync(appConfigPath)).digest("hex");
+        if (lunoraConfigPath !== undefined) {
+            lunoraPart = createHash("sha256").update(readFileSync(lunoraConfigPath)).digest("hex");
+        }
     } catch {
-        // Absent (the common case) or unreadable — either way there is nothing
-        // to restart on, and the next successful read moves the fingerprint.
+        // Left "absent".
     }
 
-    return `${wranglerPart}\u0000${lunoraPart}\u0000${appConfigPart}`;
+    return `${wranglerPart}\u0000${lunoraPart}`;
 };
 
 export { computeConfigFingerprint, fingerprintJsonc, stripCodegenOwnedCrons };
