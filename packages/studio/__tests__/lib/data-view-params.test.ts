@@ -103,7 +103,7 @@ describe("validateDataViewSearch", () => {
     it("drops every unknown param", () => {
         expect.assertions(1);
 
-        expect(validateDataViewSearch({ __proto__: "x", evil: "<script>", token: "secret" })).toStrictEqual({});
+        expect(validateDataViewSearch({ ["__proto__"]: "x", evil: "<script>", token: "secret" })).toStrictEqual({});
     });
 
     it("passes valid values through verbatim so shared links stay compatible", () => {

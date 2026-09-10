@@ -1,0 +1,11 @@
+// Account-level "central runtime" stand-in for the fat-vs-thin spike (H1b/H2).
+{
+    "name": "lunora-spike-platform-runtime",
+    "main": "platform-runtime-worker.ts",
+    "compatibility_date": "2026-07-01",
+    "durable_objects": {
+        "bindings": [{ "class_name": "PlatformShardDO", "name": "PLATFORM_SHARD" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["PlatformShardDO"], "tag": "v1" }],
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
+}

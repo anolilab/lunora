@@ -8,6 +8,7 @@ import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { runDurableLogsCommand } from "./durable";
 import type { LogsOptions } from "./index";
+import { runLocalLogsCommand } from "./local";
 
 /** Output formats `wrangler tail` understands. */
 const LOG_FORMATS = new Set(["json", "pretty"]);
@@ -104,6 +105,30 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
     // `--durable` switches from tailing a live Worker to reading the persisted
     // `ctx.log` archive (pipelineLogSink → R2) back via R2 SQL — a different data
     // path with its own credentials, so it forks here before touching wrangler.
+    // `--local` reads the RUNNING dev server's own capture — the one source that
+    // needs no deploy, and so the one the inner loop actually reaches for. Checked
+    // first only because it is the cheaper, more common case; the three sources are
+    // independent and never combine.
+    if (options.local === true && options.durable === true) {
+        logger.error("logs: --local and --durable are different sources — pass one, not both");
+
+        return Promise.resolve({ code: 1 });
+    }
+
+    if (options.local === true) {
+        return runLocalLogsCommand({
+            level: options.level,
+            limit: options.limit,
+            logger,
+            ndjson: options.ndjson === true,
+            search: options.search,
+            since: options.since,
+            traceId: options.traceId,
+            until: options.until,
+            url: options.url,
+        });
+    }
+
     if (options.durable === true) {
         return runDurableLogsCommand({
             cursor: options.cursor,

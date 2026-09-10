@@ -1,0 +1,145 @@
+---
+title: CLI
+description: Deploy to Lunora Cloud, roll a release back, and eject your data and config to your own Cloudflare account — all from the one `lunora` binary, authenticated with an org deploy key.
+---
+
+The same `lunora` binary that runs your dev server ships to the managed cloud.
+`lunora cloud` is the command group for it: **deploy** a build, **roll back** to a
+retained release, and **eject** everything to your own Cloudflare account.
+
+```bash
+LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js
+```
+
+## Authentication
+
+Every subcommand authenticates with an **org deploy key**, read from the
+`LUNORA_DEPLOY_KEY` environment variable.
+
+It is deliberately not a flag and not a config file. A flag lands in your shell
+history and in CI logs; a file gets committed. An environment variable is the one
+place a secret can live that neither happens by accident.
+
+| Variable            | Purpose                                                                       |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `LUNORA_DEPLOY_KEY` | The org deploy key. Required. Issue one from the dashboard's Deploy keys tab. |
+| `LUNORA_CLOUD_URL`  | Control-plane API URL. Required unless you pass `--url`.                      |
+
+Deploy keys carry a **capability**. A `deploy` key is the full key your CI uses;
+an `ingest` key is telemetry-only and is rejected by these commands, so a leaked
+ingest token cannot ship code. See [Monitoring](/docs/cloud/monitoring#scoped-ingest-keys).
+
+## `lunora cloud deploy`
+
+Uploads a prebuilt worker bundle and streams the deployment's progress until it
+goes live or fails.
+
+```bash
+lunora build
+LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js
+```
+
+| Flag        | Meaning                                                                       |
+| ----------- | ----------------------------------------------------------------------------- |
+| `--project` | Target project id. Required.                                                  |
+| `--bundle`  | Path to the prebuilt worker bundle to upload. Required.                       |
+| `--name`    | Worker/script name. Defaults to `name` in your wrangler config.               |
+| `--kind`    | `production` (default), `preview`, or `dev`.                                  |
+| `--branch`  | Git branch to record against the deployment — what preview URLs are keyed on. |
+| `--url`     | Control-plane API URL, if not using `LUNORA_CLOUD_URL`.                       |
+
+It reads your wrangler config to send the **binding manifest** and any
+`triggers.crons` alongside the bundle, so the platform provisions what your
+Worker actually needs. Workers-for-Platforms drops cron triggers on namespaced
+workers, so the control plane fans those ticks out to your deployment itself —
+you do not configure that.
+
+The command exits non-zero unless the deployment reaches `live`.
+
+## `lunora cloud rollback`
+
+Points a project's stable URL back at a retained earlier release. Deployments are
+immutable and versioned, so a rollback is a pointer swap rather than a rebuild.
+
+```bash
+lunora cloud rollback dep_456 --org org_789 --yes
+```
+
+| Flag    | Meaning                                             |
+| ------- | --------------------------------------------------- |
+| `--org` | Organization id that owns the deployment. Required. |
+| `--yes` | Confirm. Required — a rollback shifts live traffic. |
+
+`--yes` is not ceremony. Without it the command refuses and tells you what would
+have happened, because the effect is immediate and user-visible.
+
+## `lunora cloud eject`
+
+Packages a deployment for your own Cloudflare account: your full data snapshot,
+the `wrangler.jsonc` the project would have on BYO, and a README with the restore
+steps.
+
+```bash
+lunora cloud eject dep_456          # writes ./eject
+lunora cloud eject dep_456 --out backup
+```
+
+| Flag    | Meaning                                  |
+| ------- | ---------------------------------------- |
+| `--out` | Output directory. Defaults to `./eject`. |
+
+Three files land in it:
+
+| File             | What it is                                                    |
+| ---------------- | ------------------------------------------------------------- |
+| `export.ndjson`  | Your full data snapshot — every shard plus the global tables. |
+| `wrangler.jsonc` | The BYO config, named after your deployment's own script.     |
+| `README.md`      | The restore steps, with your project's names filled in.       |
+
+**Ejecting changes nothing.** It is a read: your managed deployment keeps serving
+afterwards, and you can run it whenever you like — including just to confirm that
+you can. That is the point. A portability guarantee you have never exercised is a
+claim, not a feature.
+
+The control plane holds your tenant's admin token, uses it, and keeps it — the
+CLI only ever receives the resulting bytes. So ejecting never leaves a long-lived
+tenant credential on your disk or in your shell history.
+
+The export completes before the first file is written, so a failed eject leaves
+nothing behind rather than a half-written directory that looks like a backup.
+
+## Reading logs
+
+`lunora cloud` ships code; `lunora logs` reads it back. That command has three
+independent sources:
+
+| Source      | Reads                                     | Needs                               |
+| ----------- | ----------------------------------------- | ----------------------------------- |
+| _(default)_ | A deployed Worker, live (`wrangler tail`) | A deployment                        |
+| `--durable` | The persisted `ctx.log` archive in R2     | A Pipeline → R2 Data Catalog table  |
+| `--local`   | What your running dev server captured     | Nothing — just `lunora dev` running |
+
+```bash
+lunora logs --local                              # the last 200 captured lines
+lunora logs --local --search "checkout"          # substring match
+lunora logs --local --trace-id 37cfd081…         # one request's whole output
+lunora logs --local --level error --limit 20     # errors only
+lunora logs --local --url http://localhost:5174  # when Vite picked another port
+```
+
+`--local` reads the dev runtime's own capture, so it needs no deploy and no
+credentials. Lines are formatted by the same formatter `lunora dev` uses, so a
+`ctx.log` call reads identically in both places.
+
+Two honest limits. The capture starts when the dev server does and holds only
+what it has seen since — restart the server and it is empty again. And `--level`
+there filters the **console channel** (`info`, `warn`, `error`), not the
+seven-tier `ctx.log` ramp, because the channel is what the capture records; the
+finer level still shows in the formatted line.
+
+## What is not here yet
+
+Lunora Cloud is early, and this command group ships what exists. Push-to-deploy
+from a git remote, build logs from server-side builds, and preview environments
+per pull request are on the [roadmap](https://github.com/anolilab/lunora) rather
+than in the CLI today.
