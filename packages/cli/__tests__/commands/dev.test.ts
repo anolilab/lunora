@@ -6,7 +6,15 @@ import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { defaultWorkerSpawner, detectDevFlavor, negatableDevFlags, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
+import {
+    defaultWorkerSpawner,
+    detectDevFlavor,
+    negatableDevFlags,
+    planDevCommand,
+    resolveInspectorPort,
+    resolveWorkerPort,
+    runDevCommand,
+} from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -160,6 +168,42 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args).toContain("9999");
             expect(plan.workerOrigin).toBe("http://localhost:9999");
             expect(plan.studioPort).toBe(7000);
+        });
+
+        it("routes a resolved inspector port into wrangler --inspector-port", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, inspectorPort: 9235, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("--inspector-port 9235");
+            // Still on the same `wrangler dev` invocation as the worker port.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev --port");
+        });
+
+        it("leaves --inspector-port out of the argv when nothing resolved one", () => {
+            expect.assertions(1);
+
+            // Wrangler's own 9229-and-upward probe stays in charge for every
+            // project that pinned nothing — forcing a default here would take a
+            // port away from whatever already holds it.
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--inspector-port");
+        });
+
+        it("refuses --inspector-port on the vite flavor and names the knob that works there", () => {
+            expect.assertions(2);
+
+            // `wrangler dev` is never spawned on this flavor, so the flag has no
+            // argv to reach: say where the port is set instead of dropping it.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "^1.0.0" } }), "utf8");
+
+            const messages: string[] = [];
+            const logger = { ...silentLogger(), warn: (message: string) => messages.push(message) };
+            const plan = planDevCommand({ cwd: workdir, inspectorPort: 9235, logger });
+
+            expect(plan.wrangler.args).not.toContain("--inspector-port");
+            expect(messages.join(" ")).toContain("cloudflare: { inspectorPort: 9235 }");
         });
 
         it("pins the worker to 127.0.0.1 when the host has no IPv6 loopback", () => {
@@ -520,6 +564,43 @@ describe("lunora dev", () => {
         });
     });
 
+    describe("resolveInspectorPort", () => {
+        it("uses an explicit inspector port", () => {
+            expect.assertions(1);
+
+            expect(resolveInspectorPort({ inspectorPort: 9235, logger: silentLogger() }, workdir)).toBe(9235);
+        });
+
+        it("falls back to `dev.inspector_port` in the wrangler config", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9240 }, name: "app" }), "utf8");
+
+            expect(resolveInspectorPort({ logger: silentLogger() }, workdir)).toBe(9240);
+        });
+
+        it("lets an explicit --inspector-port win over the wrangler config", () => {
+            expect.assertions(1);
+
+            // Same precedence as `--worker-port` over `dev.port` — the whole
+            // point of the flag is that it beats the file, not the reverse.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9240 }, name: "app" }), "utf8");
+
+            expect(resolveInspectorPort({ inspectorPort: 9235, logger: silentLogger() }, workdir)).toBe(9235);
+        });
+
+        it("resolves nothing when neither the flag nor the config names a port", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { port: 8788 }, name: "app" }), "utf8");
+
+            // `undefined`, never a default: the argv must stay exactly as it was
+            // so wrangler keeps its own upward probe.
+            expect(resolveInspectorPort({ logger: silentLogger() }, workdir)).toBeUndefined();
+            expect(resolveInspectorPort({ logger: silentLogger() }, join(workdir, "no-wrangler-here"))).toBeUndefined();
+        });
+    });
+
     describe("runDevCommand", () => {
         it("spawns the wrangler worker, starts studio + codegen, and tears them down on exit", async () => {
             expect.assertions(6);
@@ -565,6 +646,37 @@ describe("lunora dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
+            expect.assertions(2);
+
+            // The resolution lives one level above `planDevCommand`, so a flag
+            // that resolves correctly and never reaches the spawn is the failure
+            // mode this covers end to end.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9235 }, name: "app" }), "utf8");
+
+            let spawned: string | undefined;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: (descriptor) => {
+                    spawned = descriptor.args.join(" ");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toContain("--inspector-port 9235");
         });
 
         it("provisions the bindings the code implies before starting the wrangler worker", async () => {
