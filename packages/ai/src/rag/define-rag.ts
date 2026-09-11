@@ -10,7 +10,7 @@ import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
-import hybridRank from "./hybrid-rank";
+import { hybridRank } from "./hybrid-rank";
 import type {
     IndexInput,
     IndexResult,
@@ -1245,7 +1245,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             for (const extraQuery of searchQueries.slice(1)) {
                 // eslint-disable-next-line no-await-in-loop -- bounded, caller-sized fan-out over a subrequest budget
-                chunks = [...hybridRank(chunks, await runVectorLeg(extraQuery))];
+                chunks = [...hybridRank([{ chunks }, { chunks: await runVectorLeg(extraQuery) }])];
             }
 
             // Hybrid search: also rank via the lexical (BM25) leg and fuse the
@@ -1265,7 +1265,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // `chunks` and this is only an RRF boost. See `belowMinScore`.
                 const admissible = lexicalMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                chunks = [...hybridRank(chunks, await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace))];
+                chunks = [...hybridRank([{ chunks }, { chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace) }])];
             }
 
             // Graph search: the third signal. The search legs answer "which
@@ -1300,7 +1300,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // it, in which case this is only an RRF boost.
                 const admissible = graphMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                chunks = [...hybridRank(chunks, [], await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace))];
+                chunks = [...hybridRank([{ chunks }, { chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace), weight: "proximity" }])];
             }
 
             // Importance weighting can reorder; re-rank on the adjusted score.
