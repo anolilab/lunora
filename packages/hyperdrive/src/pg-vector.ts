@@ -46,6 +46,7 @@ import type {
     VectorizeUpsertMutation,
     VectorizeVector,
     VectorMetric,
+    VectorValues,
 } from "@lunora/platform";
 
 import { isBareIdentifier } from "../../../shared/bare-identifier";
@@ -145,7 +146,7 @@ interface PgVectorIndexOptions {
 }
 
 /** Render a vector as the `[1,2,3]` text literal pgvector parses on the `::vector` cast. */
-const vectorLiteral = (values: ReadonlyArray<number>): string => `[${values.join(",")}]`;
+const vectorLiteral = (values: VectorValues): string => `[${[...values].join(",")}]`;
 
 /**
  * Whether `value`'s own enumerable entries ARE its contents — the only shape
@@ -511,7 +512,10 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             await ensure();
 
             const wantValues = queryOptions?.returnValues === true;
-            const wantMetadata = (queryOptions?.returnMetadata ?? "none") !== "none";
+            // `returnMetadata` also carries Cloudflare's legacy boolean arm, so "not
+            // \"none\"" is not on its own the answer: `false` means no metadata.
+            const requested = queryOptions?.returnMetadata ?? "none";
+            const wantMetadata = requested !== "none" && requested !== false;
 
             const parameters: unknown[] = [];
             // `push` returns the new length, which IS the 1-based bind index — so

@@ -485,6 +485,13 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--worker-port", String(options.workerPort));
     }
 
+    // The daemon is the process that spawns `wrangler dev`, so an unforwarded
+    // `--inspector-port` would leave the background run on wrangler's own
+    // upward walk — the exact failure the flag exists to stop.
+    if (options.inspectorPort !== undefined) {
+        args.push("--inspector-port", String(options.inspectorPort));
+    }
+
     // Forwarded, or a `--background` run would emit nothing: the daemon child is
     // the process that knows the resolved origin, and the supervisor asking for
     // the manifest is the same one that wanted the server detached.
@@ -506,7 +513,7 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
 
     // Forwarded explicitly, like every other flag here: the daemon is a fresh
     // process that re-parses argv, so an unforwarded flag is silently dropped.
-    // `lunora.json`'s target still reaches it (the daemon re-reads the config),
+    // `lunora.config.*`'s target still reaches it (the daemon re-reads the config),
     // which is what makes a missing `--target` look accepted and do nothing.
     if (options.target !== undefined) {
         args.push("--target", options.target);

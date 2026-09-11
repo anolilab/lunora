@@ -35,7 +35,7 @@ interface PrepareCommandOptions {
     strictAdvisories?: boolean;
 
     /**
-     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
+     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`.
      * Resolved through the same registry they use so a second driver does not
      * have to be found here separately.
      */

@@ -50,8 +50,8 @@
         "lint:eslint": "vis run lint:eslint",
         "lint:eslint:fix": "vis run lint:eslint:fix",
         "lint:node-capabilities-docs": "node --experimental-strip-types scripts/check-node-capabilities-docs.js",
-        "lint:package-json": "vis sort-package-json --check",
-        "lint:package-json:fix": "vis sort-package-json",
+        "lint:package-json": "./scripts/sort-package-json-all.sh --check",
+        "lint:package-json:fix": "./scripts/sort-package-json-all.sh",
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:project-json": "node scripts/check-project-json-targets.js",
@@ -67,6 +67,7 @@
         "test:clean-machine": "./scripts/clean-machine-smoke.sh",
         "test:coverage": "vis run test:coverage --query \"project!=lunora-e2e\"",
         "test:templates": "./scripts/template-build-smoke.sh",
+        "test:workerd": "./scripts/test-workerd.sh",
         "worker-size:check": "node scripts/check-worker-size.js",
         "worker-size:update": "node scripts/check-worker-size.js --update"
     },

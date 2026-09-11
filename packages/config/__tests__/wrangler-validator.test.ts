@@ -75,6 +75,16 @@ const writeSchema = (source: string): void => {
     writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
 };
 
+/**
+ * Write the `src/index.ts` these fixtures point `main` at. A `main` with no file
+ * behind it draws a warning of its own, so a fixture that declares one ships it
+ * rather than asserting around the noise.
+ */
+const writeMainEntry = (): void => {
+    mkdirSync(join(workdir, "src"), { recursive: true });
+    writeFileSync(join(workdir, "src", "index.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+};
+
 describe("wrangler-validator", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-config-wrangler-"));
@@ -168,7 +178,7 @@ describe("wrangler-validator", () => {
                 vectorize: [null],
             } as unknown as WranglerConfig;
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             // The null entry is skipped; the declared index is simply unmatched.
             expect(report.valid).toBe(false);
@@ -218,7 +228,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             } as unknown as WranglerConfig;
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true, vectorIndexNames: [] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false, vectorIndexNames: [] });
 
             // The null entry is skipped; the missing "DB" binding is reported structurally.
             expect(report.valid).toBe(false);
@@ -396,7 +406,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false });
 
             expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
         });
@@ -410,7 +420,7 @@ describe("wrangler-validator", () => {
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             expect(report.valid).toBe(false);
             expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
@@ -427,7 +437,7 @@ describe("wrangler-validator", () => {
                 vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
             };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, vectorIndexNames: ["docs-body"] });
 
             expect(report.valid).toBe(true);
             expect(report.errors).toEqual([]);
@@ -570,7 +580,7 @@ describe("wrangler-validator", () => {
 
             wrangler.env = { production: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } };
 
-            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production");
+            const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production");
 
             expect(report.valid).toBe(false);
             expect(report.errors.some((line) => line.includes('d1_databases must include a binding named "DB"'))).toBe(true);
@@ -588,7 +598,7 @@ describe("wrangler-validator", () => {
                 },
             };
 
-            expect(validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production").valid).toBe(true);
+            expect(validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production").valid).toBe(true);
         });
 
         // kv_namespaces — NON-inheritable, hint-only (warns on a missing id,
@@ -790,6 +800,7 @@ describe("wrangler-validator", () => {
             expect.assertions(3);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
+            writeMainEntry();
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
             const result = validateWranglerProject({ projectRoot: workdir });
@@ -832,6 +843,7 @@ describe("wrangler-validator", () => {
                 expect.assertions(1);
 
                 writeSchema(SCHEMA_WITH_GLOBAL);
+                writeMainEntry();
                 writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
 
                 expect(validateWranglerProject({ projectRoot: workdir }).report.valid).toBe(true);
@@ -841,6 +853,7 @@ describe("wrangler-validator", () => {
                 expect.assertions(1);
 
                 writeSchema(SCHEMA_WITH_GLOBAL);
+                writeMainEntry();
                 writeFileSync(join(workdir, "wrangler.jsonc"), MULTI_ENV_WRANGLER, "utf8");
 
                 const result = validateWranglerProject({ environment: "production", projectRoot: workdir });
@@ -902,6 +915,509 @@ describe("wrangler-validator", () => {
             });
         });
 
+        describe("a schema with vector indexes no source chains .vectors() onto", () => {
+            // The generated builder throws for this from `buildWorkerOptions` — on
+            // the first REQUEST. codegen, build, verify, tsc and the test suite all
+            // pass on a tree where every request 500s, `/_lunora/health` included.
+            const COMPOSING_SOURCE = `import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().shard((env) => env.SHARD);\n`;
+
+            const writeVectorProject = (entry: string, options: { entryFile?: string; main?: string } = {}): void => {
+                const entryFile = options.entryFile ?? "index.ts";
+
+                writeSchema(SCHEMA_WITH_VECTOR);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "${options.main ?? `src/${entryFile}`}",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", entryFile), entry, "utf8");
+            };
+
+            it("errors, naming the index and the chain that binds it", () => {
+                expect.assertions(3);
+
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.report.errors.join("\n")).toContain("docs-body");
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("passes once the chain binds them", () => {
+                expect.assertions(1);
+
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).vectors((env) => ({ "docs-body": env.DOCS_BODY }));\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("says nothing when a neighbouring module chains it — the builder returns `this`", () => {
+                expect.assertions(1);
+
+                // `configureVectors(app)` in a sibling file is a supported wiring.
+                // A check that only read the entry would hard-error a correct tree
+                // and tell the author to add a call they had already written.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\nimport { configureVectors } from "./vectors";\n\nconst app = configureVectors(defineApp().shard((env) => env.SHARD));\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+                writeFileSync(
+                    join(workdir, "src", "vectors.ts"),
+                    `export const configureVectors = (app) => app.vectors((env) => ({ "docs-body": env.DOCS_BODY }));\n`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("still fires when the composing file imports defineApp under an alias", () => {
+                expect.assertions(1);
+
+                // The composition marker is a parsed CALL, so it has to resolve
+                // `createApp()` back to the imported `defineApp` — an ordinary
+                // import style, and a silent no-op for anyone using it if the
+                // callee text alone were matched.
+                writeVectorProject(
+                    `import { defineApp as createApp } from "../lunora/_generated/app";\n\nconst app = createApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("says nothing about a project that composes its worker elsewhere", () => {
+                expect.assertions(1);
+
+                // The worker is built in another package and re-exported here, so
+                // nothing in this project's own sources names `defineApp`. The
+                // check must not block what it cannot see.
+                writeVectorProject(`export { default } from "@acme/worker";\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("fires when `main` names no file at all, as a Vite-first app's does", () => {
+                expect.assertions(1);
+
+                // `main: "virtual:lunora/worker"` resolves to no entry, so a check
+                // keyed on the entry reported nothing at all here.
+                writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts", main: "virtual:lunora/worker" });
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("fires when the generated `src/worker.ts` only re-exports the composed app", () => {
+                expect.assertions(1);
+
+                // The class-B composed entry wins over `main`, and it composes
+                // nothing itself — the app is built in `src/server.ts` next to it.
+                writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts" });
+                writeFileSync(join(workdir, "src", "worker.ts"), `export { default } from "./server";\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("says nothing about a file that only mentions the factory's name", () => {
+                expect.assertions(1);
+
+                // The composition marker ARMS a deploy-blocking error, so a bare
+                // substring must never be enough. Nuxt's own `defineAppConfig`
+                // contains it, and two of this repo's templates name `defineApp()`
+                // in prose — neither is a project anyone could edit their way out of.
+                writeVectorProject(`export { default } from "@acme/worker";\n`);
+                writeFileSync(join(workdir, "app.config.ts"), `export default defineAppConfig({ theme: "dark" });\n`, "utf8");
+                writeFileSync(join(workdir, "src", "notes.ts"), `// The worker is composed with defineApp() over in @acme/worker.\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("still fires when only a comment or a string mentions the chain", () => {
+                expect.assertions(1);
+
+                // The file that chains `.vectors()` is the likeliest one to carry a
+                // comment saying so, so "delete the call, keep the warning about
+                // deleting the call" is the realistic path back to the outage — and
+                // a substring match cleared the gate on exactly that tree.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n` +
+                        `\n` +
+                        `// Load-bearing: without .vectors((env) => ({ "docs-body": env.DOCS_BODY }))\n` +
+                        `// every request 500s.\n` +
+                        `const hint = "add .vectors(...) to the chain";\n` +
+                        `const app = defineApp().shard((env) => env.SHARD);\n` +
+                        `export const { ShardDO } = app;\nexport default app;\nexport { hint };\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .vectors(...)");
+            });
+
+            it("says nothing when the chain lives in a .server directory or a .mjs module", () => {
+                expect.assertions(2);
+
+                // Both are real layouts — `.server/` is the React Router v7 / Remix
+                // convention — and a chain the scan cannot see hard-errors a project
+                // that is correctly wired.
+                for (const [directory, file] of [
+                    [".server", "vectors.ts"],
+                    ["config", "vectors.mjs"],
+                ]) {
+                    writeVectorProject(COMPOSING_SOURCE, { entryFile: "server.ts" });
+                    mkdirSync(join(workdir, "src", String(directory)), { recursive: true });
+                    writeFileSync(
+                        join(workdir, "src", String(directory), String(file)),
+                        `export const configureVectors = (app) => app.vectors((env) => ({ "docs-body": env.DOCS_BODY }));\n`,
+                        "utf8",
+                    );
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+
+                    expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+                }
+            });
+
+            it("says nothing when whitespace separates the chain from its parentheses", () => {
+                expect.assertions(1);
+
+                // The text prefilter only decides which files are worth parsing;
+                // the parse decides the answer. An exact `.vectors(` substring made
+                // the prefilter STRICTER than the parser, so a formatting variant
+                // skipped the file and hard-errored a correctly wired project.
+                writeVectorProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n` +
+                        `\n` +
+                        `const app = defineApp()\n    .shard((env) => env.SHARD)\n    . vectors ((env) => ({ "docs-body": env.DOCS_BODY }));\n` +
+                        `export const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+        });
+
+        describe("a schema with .global() tables no source chains .global() onto", () => {
+            // Without the chain the shard gets no D1 writer, so every read or write
+            // of a global table throws INTERNAL — `lunora build`, `verify` and tsc
+            // all pass first. The wrangler check next to this one proves the `DB`
+            // BINDING exists, which is the half a project usually gets right.
+            const writeGlobalProject = (entry: string): void => {
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+            };
+
+            it("errors — and the schema's own `defineTable(...).global()` does not clear it", () => {
+                expect.assertions(2);
+
+                // `.global()` names two builders. The table form is what MAKES the
+                // schema declare a global table, so it is present in every project
+                // this check can fire on — matching it would mean the check never
+                // fires at all.
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.valid).toBe(false);
+                expect(result.report.errors.join("\n")).toContain("nothing chains .global(...)");
+            });
+
+            it("passes once the app chains it", () => {
+                expect.assertions(1);
+
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).global({ d1: (env) => env.DB });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("still errors when the table builder is imported under an alias", () => {
+                expect.assertions(1);
+
+                // The table-form exclusion reads the file's LOCAL names for
+                // `defineTable`, the same way the `defineApp` probe does. Keying
+                // it on the bare identifier let `import { defineTable as table }`
+                // hide the table form, so `table({...}).global()` counted as the
+                // APP chaining `.global(...)` and the gate cleared on the schema
+                // itself — silence for a shard with no global writer.
+                writeGlobalProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+                writeSchema(
+                    `import { defineSchema, defineTable as table, v } from "@lunora/server";\n\nexport const schema = defineSchema({\n    users: table({ email: v.string() }).global(),\n});\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("nothing chains .global(...)");
+            });
+        });
+
+        describe("a schema whose .global() tables are Hyperdrive-backed", () => {
+            // `.global({ backend: "hyperdrive" })` lives on Postgres/MySQL behind a
+            // Hyperdrive binding: no D1 database, and a DIFFERENT builder method.
+            // Reading "declares a global table" as "needs D1" demanded a `DB`
+            // binding of a project that has none.
+            const HYPERDRIVE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global({ backend: "hyperdrive" }),
+});
+`;
+
+            const writeHyperdriveProject = (entry: string, { binding = true }: { binding?: boolean } = {}): void => {
+                writeSchema(HYPERDRIVE_SCHEMA);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]${binding ? ',\n    "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "hd_123" }]' : ""}
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), entry, "utf8");
+            };
+
+            it("demands the .hyperdriveGlobal(...) chain, not a D1 binding or .global(...)", () => {
+                expect.assertions(5);
+
+                writeHyperdriveProject(
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD);\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+                const errors = result.report.errors.join("\n");
+
+                expect(errors).toContain("nothing chains .hyperdriveGlobal(...)");
+                expect(errors).not.toContain('d1_databases must include a binding named "DB"');
+                expect(errors).not.toContain("nothing chains .global(...)");
+                // The suggested fix has to match `HyperdriveGlobalDeclaration`
+                // (`engine` + `exec`). The D1 line's `d1: (env) => env.DB` shape
+                // does not exist on this builder, and a blocking error whose fix
+                // does not compile costs the round trip it exists to save.
+                expect(errors).toContain('.hyperdriveGlobal({ engine: "postgres", exec:');
+                expect(errors).not.toContain("hyperdrive: (env) => env.HYPERDRIVE");
+            });
+
+            it("passes once the app chains .hyperdriveGlobal(...)", () => {
+                expect.assertions(1);
+
+                writeHyperdriveProject(
+                    // The real `HyperdriveGlobalDeclaration` shape (`engine` +
+                    // `exec`), not a `hyperdrive:` selector — detection only
+                    // reads the method name, so a wrong fixture would pass while
+                    // pinning a remediation string that does not compile.
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(env.HYPERDRIVE) });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("nothing chains"))).toEqual([]);
+            });
+
+            it("demands SOME hyperdrive binding, without naming which", () => {
+                expect.assertions(3);
+
+                // Dropping the `DB` demand for these tables left them with no
+                // wrangler-level check at all: the chain is present, every gate
+                // passes, and `env.<BINDING>` is `undefined` at the first global
+                // read — inside the user's own `exec`, where nothing here can say
+                // what went wrong.
+                //
+                // Unlike D1 the name is not fixed: `.hyperdriveGlobal({ exec })`
+                // builds the driver from the user's selector, so naming one would
+                // false-error a project that called its binding something else.
+                const CHAIN = `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(env.PG) });\nexport const { ShardDO } = app;\nexport default app;\n`;
+
+                writeHyperdriveProject(CHAIN, { binding: false });
+
+                const missing = validateWranglerProject({ projectRoot: workdir });
+
+                expect(missing.report.valid).toBe(false);
+                expect(missing.report.errors.join("\n")).toContain("wrangler must declare a hyperdrive binding");
+
+                // A differently-named binding satisfies it; only absence is the defect.
+                writeHyperdriveProject(CHAIN);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "hyperdrive": [{ "binding": "PG", "id": "hd_123" }]
+}
+`,
+                    "utf8",
+                );
+
+                const named = validateWranglerProject({ projectRoot: workdir });
+
+                expect(named.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
+            });
+
+            it("says nothing about a hyperdrive binding for a D1-backed global schema", () => {
+                expect.assertions(1);
+
+                // The mirror of the D1 check's own scoping: a `.global()` table on
+                // D1 needs no Hyperdrive binding, and demanding one would block the
+                // common case.
+                writeSchema(SCHEMA_WITH_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(
+                    join(workdir, "src", "index.ts"),
+                    `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().shard((env) => env.SHARD).global({ d1: (env) => env.DB });\nexport const { ShardDO } = app;\nexport default app;\n`,
+                    "utf8",
+                );
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).not.toContain("wrangler must declare a hyperdrive binding");
+            });
+        });
+
+        describe("main naming a file that does not exist", () => {
+            const writeMain = (main: string): void => {
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "${main}",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
+}
+`,
+                    "utf8",
+                );
+            };
+
+            it("warns on a TypeScript main that is absent — wrangler cannot resolve it", () => {
+                expect.assertions(2);
+
+                // Renaming the entry and forgetting `main` deploys nothing while
+                // `verify` calls the project valid. A warning rather than an
+                // error: a tree passes THROUGH this state, and `@lunora/vite`
+                // throws on an error here.
+                writeMain("src/serverr.ts");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.warnings.join("\n")).toContain("main is set but no readable file is there");
+                expect(result.report.errors.filter((error) => error.includes("no readable file"))).toEqual([]);
+            });
+
+            it("does not divert the export cross-check onto a fallback when main is absent", () => {
+                expect.assertions(2);
+
+                // The warning above exists BECAUSE this must not happen: probing
+                // the conventional locations for a mistyped `main` read an
+                // unrelated `src/index.ts` as the worker and reported its
+                // declared classes missing — a hard error, on a tree one
+                // keystroke from correct.
+                writeMain("src/serverr.ts");
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), `export const unrelated = 1;\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors).toEqual([]);
+                expect(result.report.valid).toBe(true);
+            });
+
+            it("says nothing about an adapter build output that has not been built yet", () => {
+                expect.assertions(1);
+
+                // `templates/sveltekit` points `main` at the adapter's output,
+                // which only exists after a build. Warning on that would nag
+                // every correct project before its first build — and the path is
+                // build output either way, so there is no missing file to report.
+                writeMain(".svelte-kit/cloudflare/_worker.js");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.warnings.filter((warning) => warning.includes("no readable file"))).toEqual([]);
+            });
+
+            it("says nothing about the class-A virtual specifier, which names no file", () => {
+                expect.assertions(1);
+
+                writeMain("virtual:lunora/worker");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.warnings.filter((warning) => warning.includes("no readable file"))).toEqual([]);
+            });
+        });
+
         describe("durable object / workflow classes the entry does not export", () => {
             // `.scheduler()` / `.workflow()` write the binding and the migration
             // entry but cannot add the `export { SchedulerDO }` the entry needs,
@@ -938,11 +1454,11 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                // A warning, not an error: the scanner cannot know every export
-                // form, and a miss must not block a deploy that would have worked.
-                expect(result.report.valid).toBe(true);
-                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
-                expect(result.report.warnings.join("\n")).toContain("does not export it");
+                // An ERROR: `verify` used to exit 0 on a tree `lunora build`
+                // rejects, so a PR check went green and the deploy job failed.
+                expect(result.report.valid).toBe(false);
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+                expect(result.report.errors.join("\n")).toContain("does not export it");
             });
 
             it("passes once the class is exported", () => {
@@ -955,7 +1471,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
             });
 
             it("treats a type-only export as unexported — it compiles away", () => {
@@ -966,7 +1482,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
             });
 
             it("does not accept a commented-out export, or the class named in prose", () => {
@@ -985,7 +1501,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.join("\n")).toContain("SchedulerDO");
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
             });
 
             it("accepts a multi-line export list — the way prettier formats three or more", () => {
@@ -1000,7 +1516,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
             });
 
             it("does not let a type-only re-export elsewhere suppress a real value export", () => {
@@ -1018,7 +1534,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
             });
 
             it("resolves `export { Local as Bound }` by the EXPORTED name, which is what wrangler binds", () => {
@@ -1029,12 +1545,12 @@ describe("wrangler-validator", () => {
 
                 const accepted = validateWranglerProject({ projectRoot: workdir });
 
-                expect(accepted.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+                expect(accepted.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
 
                 // The LOCAL name is not what is bound, so aliasing it away is a miss.
                 writeEntry(`export { ShardDO } from "./shard";\nexport { SchedulerDO as SomethingElse } from "./s";\nexport default { fetch() {} };\n`);
 
-                expect(validateWranglerProject({ projectRoot: workdir }).report.warnings.join("\n")).toContain("SchedulerDO");
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
             });
 
             it("stays silent when the entry has a star re-export", () => {
@@ -1048,7 +1564,595 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.filter((warning) => warning.includes("does not export it"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("accepts the app builder's own `export const { ShardDO } = app`", () => {
+                expect.assertions(1);
+
+                // The check now BLOCKS, so every form a real entry uses has to
+                // be understood. This one is generated, not hand-written.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`const app = createApp();\nexport const { SchedulerDO, ShardDO } = app;\nexport default app;\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("accepts a class declared and exported in the entry itself", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport class SchedulerDO extends Base {}\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("does not accept `export default class SchedulerDO` — that binds `default`", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport default class SchedulerDO extends Base {}\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("does not treat `export * as ns from` as opaque — it binds only `ns`", () => {
+                expect.assertions(1);
+
+                // Unlike a bare star re-export, a namespace re-export forwards
+                // no top-level name, so absence is still a fact.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport * as scheduler from "./scheduler";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("is not switched off by an `export {}` — only a star re-export is opaque", () => {
+                expect.assertions(1);
+
+                // `export {}` lists no names, exactly like `export * from`, but it
+                // forwards nothing and is a routine way to mark a file as a
+                // module. Treating it as opaque turned the whole check off and
+                // read as a pass — worse than the bug the check exists to catch.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export {};\nexport { ShardDO } from "./shard";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("does not count a locally declared class that an export clause aliases away", () => {
+                expect.assertions(1);
+
+                // ts-morph answers `isExported()` true for a class named by ANY
+                // export clause, alias and all — so this read as exporting
+                // `SchedulerDO`, the one name wrangler does not bind.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nclass SchedulerDO {}\nexport { SchedulerDO as SomethingElse };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("reports nothing when the entry does not parse — a blocking check must be sure", () => {
+                expect.assertions(2);
+
+                // ts-morph error-RECOVERS instead of throwing, and a recovered
+                // parse drops statements. Blocking on a half-typed file would
+                // stop `lunora dev` mid-keystroke.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export { ShardDO } from "./shard";\nexport const broken = (\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+                expect(result.report.valid).toBe(true);
+            });
+
+            it("does not judge a built worker artifact named by main", () => {
+                expect.assertions(1);
+
+                // A class-B `main` can name the framework adapter's build output,
+                // which exports only the SSR fetch handler — every declared class
+                // reads as unexported there.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "dist/_worker.js",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "dist"), { recursive: true });
+                writeFileSync(join(workdir, "dist", "_worker.js"), `export default { fetch() {} };\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("follows a bare star re-export into a relative module", () => {
+                expect.assertions(2);
+
+                // A bare star used to read as opaque and switch the whole check
+                // off — and a barrel entry is an ordinary shape, so a project
+                // written that way had no cross-check at all.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./durable-objects";\nexport default { fetch() {} };\n`);
+                writeFileSync(join(workdir, "src", "durable-objects.ts"), `export class ShardDO {}\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+
+                writeFileSync(join(workdir, "src", "durable-objects.ts"), `export class ShardDO {}\nexport class SchedulerDO {}\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("follows the `.js` specifier codegen itself tells the entry to write", () => {
+                expect.assertions(1);
+
+                // `@lunora/codegen` emits `export * from "./lunora/_generated/workflows.js"`
+                // as the instruction to copy, and that specifier names a `.ts`
+                // file. Not mapping the extension left the commonest star in a
+                // Lunora entry unresolvable, which reads as opaque.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./generated/classes.js";\nexport default { fetch() {} };\n`);
+                mkdirSync(join(workdir, "src", "generated"), { recursive: true });
+                writeFileSync(join(workdir, "src", "generated", "classes.ts"), `export class ShardDO {}\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("resolves a star re-export of a directory through its index file", () => {
+                expect.assertions(1);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./objects";\nexport default { fetch() {} };\n`);
+                mkdirSync(join(workdir, "src", "objects"), { recursive: true });
+                writeFileSync(join(workdir, "src", "objects", "index.ts"), `export class ShardDO {}\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("stays silent when a star re-export names a bare specifier", () => {
+                expect.assertions(1);
+
+                // `export * from "@lunora/scheduler"` (or a `~/…` alias) names a
+                // module whose location this check does not know, so the absence
+                // of a class name proves nothing. A false error here blocks a
+                // deploy that works.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "@lunora/scheduler";\nexport { ShardDO } from "./shard";\nexport default { fetch() {} };\n`);
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("stays silent when a followed module does not parse", () => {
+                expect.assertions(2);
+
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./durable-objects";\nexport default { fetch() {} };\n`);
+                writeFileSync(join(workdir, "src", "durable-objects.ts"), `export class ShardDO {\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+                expect(result.report.valid).toBe(true);
+            });
+
+            it("still decides a barrel chain far longer than a real project's", () => {
+                expect.assertions(1);
+
+                // The ceiling was 24, which a barrel-heavy tree reaches — and
+                // reaching it turns the check off with no signal, including for
+                // classes the entry declares inline. 40 modules deep is already
+                // unrealistic and must still decide.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./m0";\nexport class ShardDO {}\nexport default { fetch() {} };\n`);
+
+                for (let index = 0; index < 40; index += 1) {
+                    const next = index === 39 ? "" : `export * from "./m${String(index + 1)}";\n`;
+
+                    writeFileSync(join(workdir, "src", `m${String(index)}.ts`), next, "utf8");
+                }
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("terminates on a star re-export cycle instead of hanging", () => {
+                expect.assertions(1);
+
+                // `a` stars `b` stars `a` is legal and forwards no new names.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./a";\nexport default { fetch() {} };\n`);
+                writeFileSync(join(workdir, "src", "a.ts"), `export * from "./b";\nexport class ShardDO {}\n`, "utf8");
+                writeFileSync(join(workdir, "src", "b.ts"), `export * from "./a";\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("honours a `./`-prefixed main instead of reading it as build output", () => {
+                expect.assertions(2);
+
+                // `"./src/entry.ts"` is idiomatic and wrangler accepts it. The
+                // build-output gate split on separators and tested every segment
+                // for a leading dot, so `.` matched — the DECLARED entry was
+                // discarded and whichever fallback existed got judged in its place,
+                // blocking the deploy while naming the wrong file.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "./src/entry.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "entry.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+                // A sibling that WOULD be probed, and would answer differently.
+                writeFileSync(join(workdir, "src", "index.ts"), `export const clientEntry = 1;\nexport default { fetch() {} };\n`, "utf8");
+
+                const reported = validateWranglerProject({ projectRoot: workdir })
+                    .report.errors.filter((error) => error.includes("does not export it"))
+                    .join("\n");
+
+                // Judged against the declared entry: it really is missing SchedulerDO…
+                expect(reported).toContain("src/entry.ts");
+                // …and never against the file the probe would have found.
+                expect(reported).not.toContain("src/index.ts");
+            });
+
+            it("reads a hand-written JS main rather than diverting off it", () => {
+                expect.assertions(2);
+
+                // `WORKER_ENTRY_SOURCE_EXTENSIONS` excludes JS because a bundled
+                // `_worker.js` exports only the SSR handler — but `src/worker.js`
+                // is an ordinary authored entry (`parseSource` sets `allowJs`).
+                // Treating "not TypeScript" as "unreadable" probed the fallbacks
+                // and reported this project's correctly exported ShardDO missing.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/worker.js",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), `export const unrelated = 1;\n`, "utf8");
+                writeFileSync(join(workdir, "src", "worker.js"), `export class ShardDO {}\nexport default { fetch() {} };\n`, "utf8");
+
+                const missing = validateWranglerProject({ projectRoot: workdir });
+
+                // The JS entry itself is judged: it really is missing SchedulerDO,
+                // and the message names `src/worker.js`, not the fallback.
+                expect(missing.report.errors.join("\n")).toContain("src/worker.js");
+
+                writeFileSync(
+                    join(workdir, "src", "worker.js"),
+                    `export class ShardDO {}\nexport class SchedulerDO {}\nexport default { fetch() {} };\n`,
+                    "utf8",
+                );
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("does not judge a probed entry that exports no default — it is not a worker", () => {
+                expect.assertions(2);
+
+                // A probe is a GUESS. `src/index.ts` is the client entry in a
+                // class-A app and an ordinary barrel in plenty of others, and
+                // reading one as the worker hard-errored correct projects. A
+                // Cloudflare module worker must export `default`, so that is the
+                // discriminator.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "dist/_worker.js",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), `export { App } from "./app";\n`, "utf8");
+
+                const barrel = validateWranglerProject({ projectRoot: workdir });
+
+                expect(barrel.report.errors).toEqual([]);
+
+                // The same probe, on a file that IS a worker, is judged.
+                writeFileSync(join(workdir, "src", "index.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("resolves a dotted filename rather than stripping the suffix as an extension", () => {
+                expect.assertions(2);
+
+                // `./do.server` is the React Router / Remix convention. Treating
+                // `.server` as an extension hid the real `do.server.ts` AND
+                // probed a `do/index.ts` sibling in its place — reporting a
+                // correctly wired project broken, or reading the wrong module.
+                writeWrangler(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                writeEntry(`export * from "./do.server";\nexport default { fetch() {} };\n`);
+                writeFileSync(join(workdir, "src", "do.server.ts"), `export class ShardDO {}\nexport class SchedulerDO {}\n`, "utf8");
+                mkdirSync(join(workdir, "src", "do"), { recursive: true });
+                writeFileSync(join(workdir, "src", "do", "index.ts"), `export const unrelated = 1;\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+
+                // And the real file is what decides a genuine miss.
+                writeFileSync(join(workdir, "src", "do.server.ts"), `export class ShardDO {}\n`, "utf8");
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("cross-checks the authored entry when main names the adapter build output", () => {
+                expect.assertions(2);
+
+                // The build output is not lexed (above), but giving up there
+                // switched the check off for every class-B layout whose `main`
+                // is adapter-owned and whose composition lives in a sibling
+                // source file — `verify` passed a tree `wrangler` rejects.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "dist/_worker.js",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "dist"), { recursive: true });
+                writeFileSync(join(workdir, "dist", "_worker.js"), `export default { fetch() {} };\n`, "utf8");
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "server.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+
+                const missing = validateWranglerProject({ projectRoot: workdir });
+
+                expect(missing.report.errors.join("\n")).toContain("SchedulerDO");
+
+                writeFileSync(
+                    join(workdir, "src", "server.ts"),
+                    `export { ShardDO } from "./shard";\nexport { SchedulerDO } from "@lunora/scheduler";\nexport default { fetch() {} };\n`,
+                    "utf8",
+                );
+
+                expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+            });
+
+            it("cross-checks src/server.ts when wrangler declares no main", () => {
+                expect.assertions(1);
+
+                // `@cloudflare/vite-plugin` supplies the entry, so a class-B
+                // project can legitimately ship no `main` — and `src/server.ts`
+                // was missing from the fallback probe, which is where the astro /
+                // solid-v2 / standalone templates compose.
+                writeSchema(SCHEMA_NO_GLOBAL);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }, { "name": "SCHEDULER", "class_name": "SchedulerDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                    "utf8",
+                );
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "server.ts"), `export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`, "utf8");
+
+                const result = validateWranglerProject({ projectRoot: workdir });
+
+                expect(result.report.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            describe("the class-A composed entry (main: virtual:lunora/worker)", () => {
+                // `@lunora/vite` GENERATES this entry, so there is no file to add
+                // a re-export to — which is exactly why the finding matters here:
+                // the user cannot wire their way out of it, and `verify` used to
+                // report nothing at all because the entry names no file to read.
+                const writeClassAProject = (extra: string): void => {
+                    writeSchema(SCHEMA_NO_GLOBAL);
+                    writeFileSync(
+                        join(workdir, "wrangler.jsonc"),
+                        `{
+    "name": "x",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }${extra}] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
+}
+`,
+                        "utf8",
+                    );
+                };
+
+                it("reports a class the composed entry cannot export, with the class-A remedy", () => {
+                    expect.assertions(3);
+
+                    // `SessionDO`, not `SchedulerDO`: declaring the scheduler
+                    // binding is now what makes the composed entry re-export it,
+                    // so it can no longer reach this error. Auth's Durable Object
+                    // still has no route on class-A.
+                    writeClassAProject(`, { "name": "SESSION", "class_name": "SessionDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+                    const reported = result.report.errors.filter((error) => error.includes("does not export it")).join("\n");
+
+                    expect(result.report.valid).toBe(false);
+                    expect(reported).toContain("SessionDO");
+                    // "Re-export it from the module that defines it" is unactionable
+                    // advice for a generated entry, so the remedy must NOT be the
+                    // authored one. Asserted on the instruction, not the prose.
+                    expect(reported).not.toContain("export { SessionDO } from");
+                });
+
+                it("accepts a class the composed entry star-re-exports from a generated module", () => {
+                    expect.assertions(1);
+
+                    // The composed entry carries `export * from "…/_generated/agents"`
+                    // for every generated class kind the project declares, and a
+                    // voice agent's `VoiceSessionDO` subclass is a real Durable
+                    // Object that needs its own binding.
+                    writeClassAProject(`, { "name": "SUPPORT_VOICE", "class_name": "SupportVoiceDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "agents.ts"), `export class SupportAgent {}\nexport class SupportVoiceDO {}\n`, "utf8");
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+
+                    expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+                });
+
+                it("counts SchedulerDO as exported once codegen has written the scheduler module", () => {
+                    expect.assertions(2);
+
+                    // `@lunora/vite` star-re-exports every `_generated/` class
+                    // module that exists, so the presence of `scheduler.ts` IS the
+                    // fact — and codegen writes it off the same `hasScheduler`
+                    // that decides whether the builder has a `.scheduler()` method
+                    // at all. Keying this on the wrangler binding instead made the
+                    // plugin and the validator disagree under `--env`, and let a
+                    // binding-only project compose a call onto a builder without
+                    // the method.
+                    writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "scheduler.ts"), `export { SchedulerDO } from "@lunora/scheduler";\n`, "utf8");
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+
+                    // Without that module the class is genuinely not exported.
+                    rmSync(join(workdir, "lunora", "_generated", "scheduler.ts"));
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
+                });
+
+                it("does not tell a framework Durable Object to declare itself as an agent or container", () => {
+                    expect.assertions(3);
+
+                    // A framework class is not a `defineAgent` /
+                    // `defineContainer` / `defineWorkflow` declaration, so
+                    // "declare it in one of those" was hours of dead end: codegen
+                    // will never emit it.
+                    writeClassAProject(`, { "name": "SESSION", "class_name": "SessionDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+
+                    const reported = validateWranglerProject({ projectRoot: workdir })
+                        .report.errors.filter((error) => error.includes("does not export it"))
+                        .join("\n");
+
+                    expect(reported).toContain("SessionDO");
+                    expect(reported).not.toContain("re-run `lunora codegen`");
+                    // The only two real routes: drop it, or own the entry.
+                    expect(reported).toContain("src/worker.ts");
+                });
+
+                it("still points a project's OWN class at the declaration codegen emits it from", () => {
+                    expect.assertions(2);
+
+                    writeClassAProject(`, { "name": "TRANSCODER", "class_name": "TranscoderContainer" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+
+                    const reported = validateWranglerProject({ projectRoot: workdir })
+                        .report.errors.filter((error) => error.includes("does not export it"))
+                        .join("\n");
+
+                    expect(reported).toContain("TranscoderContainer");
+                    expect(reported).toContain("re-run `lunora codegen`");
+                });
+
+                it("stays silent before codegen has run — no _generated/ is not a fact about the entry", () => {
+                    expect.assertions(1);
+
+                    writeClassAProject(`, { "name": "SCHEDULER", "class_name": "SchedulerDO" }`);
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+
+                    expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+                });
+
+                it("does not probe the entry fallbacks — src/index.ts is the CLIENT entry in a class-A app", () => {
+                    expect.assertions(1);
+
+                    writeClassAProject(``);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    mkdirSync(join(workdir, "src"), { recursive: true });
+                    // A class-A client entry exports no Durable Object at all;
+                    // reading it as the worker would report `ShardDO` missing.
+                    writeFileSync(join(workdir, "src", "index.ts"), `import "./app";\n`, "utf8");
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+
+                    expect(result.report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+                });
+            });
+
+            it("calls a workflows[] class a Workflow, not a Durable Object", () => {
+                expect.assertions(2);
+
+                // The check covers `workflows[]` too, and the shared wording sent
+                // readers looking for a `migrations` entry that does not apply to
+                // a WorkflowEntrypoint.
+                writeWrangler(``);
+                writeEntry(`export { ShardDO } from "./shard";\nexport default { fetch() {} };\n`);
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "workflows": [{ "name": "orders", "binding": "ORDERS", "class_name": "OrderPipelineWorkflow" }]
+}
+`,
+                    "utf8",
+                );
+
+                const reported = validateWranglerProject({ projectRoot: workdir })
+                    .report.errors.filter((error) => error.includes("does not export it"))
+                    .join("\n");
+
+                expect(reported).toContain("whose Workflow classes are not exported");
+                expect(reported).not.toContain("whose Durable Object classes");
             });
 
             it("ignores a binding whose class lives in another script", () => {
@@ -1059,7 +2163,7 @@ describe("wrangler-validator", () => {
 
                 const result = validateWranglerProject({ projectRoot: workdir });
 
-                expect(result.report.warnings.filter((warning) => warning.includes("RemoteDO"))).toEqual([]);
+                expect(result.report.errors.filter((error) => error.includes("RemoteDO"))).toEqual([]);
             });
         });
 
@@ -1320,6 +2424,57 @@ describe("wrangler-validator", () => {
             const result = validateWranglerProject({ projectRoot: workdir });
 
             expect(result.problems.some((line) => line.includes("does not exist"))).toBe(true);
+        });
+    });
+
+    describe("limits.cpu_ms", () => {
+        const withLimits = (limits: unknown): WranglerConfig => ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, limits }) as WranglerConfig;
+
+        it("accepts a positive integer cap", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits({ cpu_ms: 30_000 })).errors.join(" ")).not.toContain("cpu_ms");
+        });
+
+        it("rejects a non-positive or fractional cap", () => {
+            expect.assertions(3);
+
+            for (const value of [0, -1, 1.5]) {
+                expect(validateWranglerConfig(withLimits({ cpu_ms: value })).errors.join(" ")).toContain("limits.cpu_ms must be a positive integer");
+            }
+        });
+
+        it("rejects a cap above Cloudflare's ceiling, which would fail at deploy", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits({ cpu_ms: 300_001 })).errors.join(" ")).toContain("at most 300000");
+        });
+
+        it("rejects a non-object limits block", () => {
+            expect.assertions(1);
+
+            expect(validateWranglerConfig(withLimits(30_000)).errors.join(" ")).toContain("limits must be an object");
+        });
+    });
+
+    describe("observability.logs.invocation_logs", () => {
+        const withLogs = (logs: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability: { enabled: true, logs } }) as WranglerConfig;
+
+        it("accepts the boolean that keeps per-invocation summaries", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: true }));
+
+            expect(report.errors.join(" ")).not.toContain("invocation_logs");
+        });
+
+        it("rejects a non-boolean, which wrangler would otherwise ignore silently", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: "true" }));
+
+            expect(report.errors.join(" ")).toContain("observability.logs.invocation_logs must be a boolean");
         });
     });
 
@@ -1989,7 +3144,7 @@ describe("wrangler-validator", () => {
                     r2_buckets: [{ binding: "FILES", bucket_name: "lunora-example-team-chat-files" }],
                     vars: { PUBLIC_STORAGE_BASE_URL: "http://localhost:5173" },
                 },
-                { hasGlobalTable: true },
+                { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false },
             );
 
             expect(report.errors).toEqual([]);

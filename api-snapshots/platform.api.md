@@ -73,6 +73,7 @@ interface D1DatabaseLike {
 ```ts
 interface D1PreparedStatementLike {
     all: <T = unknown>() => Promise<{
+        meta?: Record<string, unknown>;
         results: T[];
         success: boolean;
     }>;
@@ -687,6 +688,12 @@ interface VectorRecordLike {
 }
 ```
 
+### `VectorValues` (type)
+
+```ts
+type VectorValues = Float32Array | Float64Array | ReadonlyArray<number>;
+```
+
 ### `VectorizeDeleteMutation` (interface)
 
 ```ts
@@ -701,9 +708,10 @@ interface VectorizeDeleteMutation {
 ```ts
 interface VectorizeIndexDetails {
     dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
+    processedUpToDatetime?: number | string;
+    processedUpToMutation?: number | string;
+    vectorCount?: number;
+    vectorsCount?: number;
 }
 ```
 
@@ -711,12 +719,12 @@ interface VectorizeIndexDetails {
 
 ```ts
 interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    describe?(this: void): Promise<VectorizeIndexDetails>;
+    getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
 ```
 
@@ -728,7 +736,7 @@ interface VectorizeMatch {
     metadata?: Record<string, unknown>;
     namespace?: string;
     score: number;
-    values?: ReadonlyArray<number>;
+    values?: VectorValues;
 }
 ```
 
@@ -747,7 +755,7 @@ interface VectorizeMatches {
 interface VectorizeQueryOptions {
     filter?: Record<string, unknown>;
     namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
+    returnMetadata?: "none" | "indexed" | "all" | boolean;
     returnValues?: boolean;
     topK?: number;
 }
@@ -768,7 +776,7 @@ interface VectorizeVector {
     id: string;
     metadata?: Record<string, unknown>;
     namespace?: string;
-    values: ReadonlyArray<number>;
+    values: VectorValues;
 }
 ```
 
@@ -865,3 +873,56 @@ Re-exported from `@lunora/platform/conformance` — signature tracked in that se
 ### `defineHostContractSuite` (const)
 
 Re-exported from `@lunora/platform/conformance` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AccessContextLike` (interface)
+
+```ts
+interface AccessContextLike {
+    getIdentity: () => AccessIdentityLike | null | undefined | Promise<AccessIdentityLike | null | undefined>;
+}
+```
+
+### `AccessIdentityLike` (interface)
+
+```ts
+interface AccessIdentityLike {
+    [claim: string]: unknown;
+    common_name?: string;
+    email?: string;
+    exp?: number;
+    groups?: unknown;
+    name?: string;
+    sub?: string;
+    user_uuid?: string;
+}
+```
+
+### `REGION_HINTS` (const)
+
+```ts
+const REGION_HINTS: readonly [
+    "wnam",
+    "enam",
+    "sam",
+    "weur",
+    "eeur",
+    "apac",
+    "apac-ne",
+    "apac-se",
+    "oc",
+    "afr",
+    "me"
+];
+```
+
+### `RegionHint` (type)
+
+```ts
+type RegionHint = (typeof REGION_HINTS)[number];
+```

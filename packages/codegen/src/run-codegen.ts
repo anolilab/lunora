@@ -72,6 +72,7 @@ import discoverStaleMigrationImports from "./discover/stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
@@ -86,6 +87,7 @@ import {
     emitDrizzleSchema,
     emitFunctions,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitShard,
     emitVectors,
@@ -93,6 +95,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
     ContainerIR,
@@ -741,14 +744,26 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   wranglerVariables: options.wranglerVariables,
               });
 
-    // A binding whose TYPE is a registered procedure but which never reached
-    // `api.ts` was dropped by the syntactic scan. Reported alongside the
-    // advisor's findings so it travels the same channel to the terminal and the
-    // studio.
+    // Two ways a procedure reaches `api.ts` wrong, both silent until now, both
+    // reported alongside the advisor's findings so they travel the same channel
+    // to the terminal and the studio: a binding whose TYPE is a registered
+    // procedure but which never reached `api.ts` at all (dropped by the
+    // syntactic scan), and one that did reach it carrying fewer arguments than
+    // the runtime enforces (an argument record codegen could not read).
     const advisories =
         advisorContext === undefined
             ? []
-            : [...runAdvisor(advisorContext, { source: "static" }), ...discoverUnregisteredProcedures(project, lunoraDirectory, functions)];
+            : [
+                  ...runAdvisor(advisorContext, { source: "static" }),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
+                  ...discoverUnreadableArguments(project, lunoraDirectory),
+              ];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -839,7 +854,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
     const shardContent = emitShard({
-        advisories,
+        // `_generated/shard.ts` is committed, and this finding is a fact about
+        // the machine codegen ran on rather than about the app — regenerating
+        // against a stale `dist/` would write it into a tracked file, so the
+        // diff would differ per developer. It still reaches the terminal through
+        // `CodegenResult.advisories`, which is where a fact about this run
+        // belongs. (`procedure_not_registered` is embedded like every other
+        // finding, and it is resolution-dependent too — a cold `dist/` drops it
+        // from the emitted list. That is the pre-existing cost of embedding
+        // advisories at all, not something this filter can fix.)
+        advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
@@ -886,6 +910,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
+    const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -925,9 +950,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
-        hasGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
+        hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
         hasHyperdrive: featureUsage.hyperdrive,
-        hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
+        hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
         hasImages: featureUsage.images,
         // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
         // config field is emitted on the usage signal — so this MUST stay
@@ -1022,6 +1047,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - agents.ts      → `@lunora/agent`, when agents are declared
         writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
         writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
+        writeIfPresent(join(outputDirectory, "scheduler.ts"), schedulerContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);

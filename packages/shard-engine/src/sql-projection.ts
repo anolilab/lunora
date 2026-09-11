@@ -144,6 +144,96 @@ const decodeBigintSqlKey = (raw: string): bigint | undefined => {
 };
 
 /**
+ * Hex digits one float64 key carries: the eight bytes of an IEEE-754 double,
+ * four bits per digit. Fixed, so equal-width keys compare digit by digit.
+ */
+const FLOAT64_KEY_DIGITS = 16;
+
+/** A key's shape: exactly {@link FLOAT64_KEY_DIGITS} lowercase hex digits, which is what `toString(16)` emits. */
+const FLOAT64_KEY_RE = /^[\da-f]{16}$/u;
+
+/* eslint-disable no-bitwise -- the IEEE-754 total-order transform IS bit manipulation; expressing it any other way would obscure the one thing these two functions do. */
+
+/**
+ * An order-preserving, exactly-reversible text key for a JS number — the
+ * float64 twin of {@link bigintSqlKey}, and the transform the reactive layer's
+ * range narrowing (`index-key-codec.ts`) already runs on.
+ *
+ * The standard total-order transform: view the double as big-endian bits; for
+ * negatives (sign bit set) flip every bit so more-negative sorts lower, for
+ * non-negatives flip only the sign bit so they all sort above the negatives.
+ * Lexicographic order over the fixed 16-character hex output is then exactly
+ * numeric order over the input, `-0` normalized to `0` so the two encode
+ * identically — SQL compares them equal, so two keys would make an `eq` binding
+ * miss half the rows it should match.
+ *
+ * Unlike {@link bigintSqlKey} there is no width to overflow, so every double is
+ * representable — including `NaN` and `±Infinity`, which have exact bit patterns
+ * and therefore exact round trips. IEEE's total order places `-Infinity` lowest,
+ * `+Infinity` above every finite value, and `NaN` above that; `undefined`, not
+ * being a number, never reaches here.
+ */
+const float64SqlKey = (value: number): string => {
+    const view = new DataView(new ArrayBuffer(8));
+
+    view.setFloat64(0, value === 0 ? 0 : value, false);
+
+    let high = view.getUint32(0, false);
+    let low = view.getUint32(4, false);
+
+    if ((high & 0x80_00_00_00) === 0) {
+        // Non-negative: set the sign bit so it sorts above every negative.
+        // `>>> 0` is load-bearing — JS bitwise ops yield a SIGNED int32, and a
+        // negative `high` would render as "-3ff00000" and destroy the ordering.
+        high = (high ^ 0x80_00_00_00) >>> 0;
+    } else {
+        // Negative: flip everything so larger magnitudes sort lower.
+        high = ~high >>> 0;
+        low = ~low >>> 0;
+    }
+
+    return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
+};
+
+/**
+ * Inverse of {@link float64SqlKey}, or `undefined` when `raw` is not a key.
+ *
+ * Lives beside the encoder for the reason {@link decodeBigintSqlKey} does: the
+ * two halves share the width and the bit transform, and a decoder a file away
+ * from them is how a change to either ships as a silent mis-read.
+ *
+ * The shape test is exact — 16 lowercase hex digits — but the encoding is
+ * total over doubles, so unlike the bigint key there is no value the encoder
+ * can produce that this refuses.
+ */
+const decodeFloat64SqlKey = (raw: string): number | undefined => {
+    if (!FLOAT64_KEY_RE.test(raw)) {
+        return undefined;
+    }
+
+    let high = Number.parseInt(raw.slice(0, 8), 16);
+    let low = Number.parseInt(raw.slice(8), 16);
+
+    if ((high & 0x80_00_00_00) === 0) {
+        // The sign bit is clear, so the encoder took its negative branch and
+        // flipped every bit. Flipping again is its own inverse.
+        high = ~high >>> 0;
+        low = ~low >>> 0;
+    } else {
+        high = (high ^ 0x80_00_00_00) >>> 0;
+    }
+
+    const view = new DataView(new ArrayBuffer(8));
+
+    view.setUint32(0, high, false);
+    view.setUint32(4, low, false);
+
+    return view.getFloat64(0, false);
+};
+
+/* eslint-enable no-bitwise -- back to ordinary code. */
+
+/**
  * The SQL-comparable scalar to store at `$.field` — and to bind against it — in
  * place of a value SQLite cannot compare in its wire-tagged form.
  * @returns the projected scalar, or `undefined` when the value already compares correctly and should be used as-is
@@ -194,9 +284,21 @@ const mayHoldProjectedValue = (validator: KindedValidator): boolean => {
     return isProjectedKind(validator) || kind === "any" || kind === "union" || kind === "from";
 };
 
-// The codec pair is exported for `@lunora/sql-store`, which must produce a
+// Both codec pairs are exported for `@lunora/sql-store`, which must produce a
 // BYTE-IDENTICAL key on the `.global()` plane — the two planes are compared
 // directly by a parity test, and a second copy of an order-preserving encoding
-// is precisely the thing that drifts. The sign characters and the width stay
+// is precisely the thing that drifts. `index-key-codec.ts` shares the float64
+// half for the same reason: the reactive layer decides whether a written row
+// falls inside a live query's range, and it can only get that right if its
+// numeric order IS the stored one. The sign characters and the widths stay
 // module-local: nothing outside needs them now that both halves live here.
-export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, isProjectedKind, mayHoldProjectedValue, sqlComparableProjection };
+export {
+    BIGINT_KEY_DIGITS,
+    bigintSqlKey,
+    decodeBigintSqlKey,
+    decodeFloat64SqlKey,
+    float64SqlKey,
+    isProjectedKind,
+    mayHoldProjectedValue,
+    sqlComparableProjection,
+};

@@ -11,14 +11,16 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
-import { COMPOSED_WORKER_ENTRY, WORKER_ENTRY_FALLBACKS } from "../infer-bindings";
+import { COMPOSED_ENTRY_DURABLE_OBJECTS, GENERATED_CLASS_MODULES, isFrameworkDurableObject } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
+import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
+import { locateWorkerEntry, readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
@@ -138,6 +140,10 @@ interface WranglerConfig {
     // Workers KV namespaces. The namespace `id` is a remote resource Lunora
     // can't mint — warn, don't fail. See `validateKvNamespaces`.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+    // Per-Worker runtime caps. `cpu_ms` bounds the blast radius of a runaway
+    // handler — detection is lagging by definition, so the cap is what actually
+    // limits the bill while an alert is still being written. See `validateLimits`.
+    limits?: { cpu_ms?: number };
     // Cloudflare Logpush toggle (jobs are created out-of-band via dashboard/API).
     logpush?: boolean;
     // The worker entry, relative to the config file. Read to check that every
@@ -162,7 +168,11 @@ interface WranglerConfig {
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
     // `validateMtlsCertificates`.
     mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
-    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
+    observability?: {
+        enabled?: boolean;
+        head_sampling_rate?: number;
+        logs?: { enabled?: boolean; head_sampling_rate?: number; invocation_logs?: boolean };
+    };
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
     // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
@@ -179,7 +189,11 @@ interface WranglerConfig {
     };
     // Structural only (`validateR2Buckets`): a declared bucket needs a
     // `bucket_name` — the remote bucket itself (`wrangler r2 bucket create`) is
-    // out of scope for a pure validator.
+    // out of scope for a pure validator. `bucket_name` is the remote bucket the
+    // binding points at, projected here (wrangler has always required it) so a
+    // consumer can name the real bucket in a diagnostic instead of the binding
+    // alias. Entries stay nullable: the shared array validator reports a
+    // non-object entry itself, so narrowing here would only move the failure.
     r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
     // Cloudflare Secrets Store bindings (`env.<BINDING>.get()`). Each references a
     // remote store + secret by name (created out-of-band); `validateSecretsStore`
@@ -904,6 +918,39 @@ const REQUIRED_FIELD_BINDING_RULES = [
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
 /**
+ * The binding each `.global()` backend needs in order to exist at all — the
+ * config half of the chain requirement the unchained-capability check below
+ * reads out of the source.
+ *
+ * The two halves are asymmetric because the builders are. `.global({ d1 })` is
+ * reconciled by the dev server onto a fixed `DB`, so the exact name is checkable.
+ * `.hyperdriveGlobal({ exec })` builds the driver from whatever the user's own
+ * selector reads — `env.HYPERDRIVE` in the docs, but the name is theirs — so the
+ * only static fact is that SOME Hyperdrive binding has to exist. Naming one would
+ * false-error a project that called it something else; demanding none left these
+ * tables with no config check at all, and `env.<BINDING>` is then `undefined` at
+ * the first global read, throwing inside the user's `exec` where nothing here can
+ * say what went wrong.
+ *
+ * A schema may declare both flavours, so these are independent, not exclusive.
+ */
+const validateGlobalBackendBindings = (wrangler: WranglerConfig, schema: SchemaInfo | undefined, errors: string[]): void => {
+    if (schema?.hasD1GlobalTable && !objectBindingEntries(wrangler.d1_databases).some((binding) => binding.binding === "DB")) {
+        errors.push(
+            'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
+        );
+    }
+
+    if (schema?.hasHyperdriveGlobalTable && objectBindingEntries(wrangler.hyperdrive).length === 0) {
+        errors.push(
+            'schema declares .global({ backend: "hyperdrive" }) tables; wrangler must declare a hyperdrive binding for `.hyperdriveGlobal({ exec })` to read — ' +
+                "run `wrangler hyperdrive create <name> --connection-string=...` and add " +
+                '`"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<id>" }]` (any binding name works; your `exec` selector picks it)',
+        );
+    }
+};
+
+/**
  * Structural check for every `d1_databases[]` entry: a non-empty `binding`,
  * plus a `database_id` or a `database_name` identifying which database it
  * binds. Both are remote-ish (created via `wrangler d1 create`, which prints
@@ -989,6 +1036,49 @@ const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
     }
 };
 
+/** Cloudflare's own ceiling on `limits.cpu_ms`; a value above it is rejected at deploy rather than clamped. */
+const MAX_CPU_MS = 300_000;
+
+/**
+ * `limits` bounds a Worker's runtime consumption — today just `cpu_ms`.
+ *
+ * Worth validating rather than ignoring because it is a GUARDRAIL, and a
+ * guardrail that silently isn't applied is worse than none: alerting is lagging
+ * by definition, so the cap is what actually bounds the blast radius of a
+ * runaway handler or a retry storm while a human is still reading the alert. A
+ * mistyped `cpu_ms` (or a `limits` block wrangler drops) leaves the deployment
+ * uncapped while the config reads as though it isn't.
+ */
+const validateLimits = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { limits } = wrangler;
+
+    if (limits === undefined) {
+        return;
+    }
+
+    if (typeof limits !== "object" || Array.isArray(limits)) {
+        errors.push('limits must be an object (e.g. { "cpu_ms": 30000 })');
+
+        return;
+    }
+
+    const cpuMs = limits.cpu_ms;
+
+    if (cpuMs === undefined) {
+        return;
+    }
+
+    if (typeof cpuMs !== "number" || !Number.isFinite(cpuMs) || !Number.isInteger(cpuMs) || cpuMs <= 0) {
+        errors.push("limits.cpu_ms must be a positive integer number of milliseconds");
+
+        return;
+    }
+
+    if (cpuMs > MAX_CPU_MS) {
+        errors.push(`limits.cpu_ms must be at most ${String(MAX_CPU_MS)} (Cloudflare's per-invocation ceiling)`);
+    }
+};
+
 /**
  * The `placement.mode` values wrangler's own config schema accepts:
  * `"smart"` opts into Smart Placement, `"targeted"` pins the Worker to a
@@ -1058,6 +1148,14 @@ const validateObservability = (wrangler: WranglerConfig, errors: string[]): void
             errors.push("observability.logs must be an object");
         } else {
             checkSamplingRate(observability.logs.head_sampling_rate, "observability.logs.head_sampling_rate");
+
+            // `invocation_logs` is the per-invocation summary line (status,
+            // duration, outcome) that the Workers Logs Query Builder groups on.
+            // Shape-checked rather than required: wrangler silently ignores a
+            // mistyped key, which is exactly the failure this catches.
+            if (observability.logs.invocation_logs !== undefined && typeof observability.logs.invocation_logs !== "boolean") {
+                errors.push('observability.logs.invocation_logs must be a boolean (set "invocation_logs": true to keep per-invocation summaries)');
+            }
         }
     }
 };
@@ -1241,6 +1339,20 @@ const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void
     }
 };
 
+/**
+ * Whether this config declares the `SchedulerDO` in THIS script.
+ *
+ * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
+ * owns it; same carve-out as the migration and unexported-class checks.
+ *
+ * Deliberately NOT the class-A `ctx.scheduler` opt-in: this reads the `--env`
+ * MERGED view, `durable_objects` is non-inheritable, and `@lunora/vite` has no
+ * `--env` to read — so an env-scoped binding made the two disagree about what
+ * the entry exports. The generated `scheduler` module is that signal instead.
+ */
+const declaresSchedulerDurableObject = (wrangler: WranglerConfig): boolean =>
+    objectBindingEntries(wrangler.durable_objects?.bindings).some((binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined);
+
 /** The `vars` key the SchedulerDO reads its dispatch origin from — see {@link validateSchedulerOrigin}. */
 const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
 
@@ -1267,11 +1379,7 @@ const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
  * owns the var; same carve-out as the migration and unexported-class checks.
  */
 const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
-    const declaresScheduler = objectBindingEntries(wrangler.durable_objects?.bindings).some(
-        (binding) => binding.class_name === "SchedulerDO" && binding.script_name === undefined,
-    );
-
-    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+    if (!declaresSchedulerDurableObject(wrangler) || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
         return;
     }
 
@@ -1382,17 +1490,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // the `>= REQUIRED_COMPATIBILITY_DATE` error above, so a separate flag error
     // adds no signal. We therefore neither require nor reject the flag here.
 
-    if (schema?.hasGlobalTable) {
-        const d1Bindings = objectBindingEntries(wrangler.d1_databases);
-        const databaseBinding = d1Bindings.find((binding) => binding.binding === "DB");
-
-        if (!databaseBinding) {
-            errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — your dev server auto-reconciles this on startup, or add the binding manually',
-            );
-        }
-    }
-
+    validateGlobalBackendBindings(wrangler, schema, errors);
     validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
@@ -1419,6 +1517,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
     validateSendEmail(wrangler, errors, warnings);
     validateLogpush(wrangler, errors);
+    validateLimits(wrangler, errors);
     validatePlacement(wrangler, errors);
     validateObservability(wrangler, errors);
     validateAssets(wrangler, errors);
@@ -1496,193 +1595,149 @@ const collectContainerImageErrors = (
 };
 
 /**
- * Resolve the worker entry the way `lunora deploy` bundles it: the class-B
- * composed entry when present (it is passed to wrangler as the positional
- * script, overriding `main`), else `wrangler.main` relative to the config file,
- * else the conventional fallbacks.
+ * Report a schema declaration whose matching `defineApp()` chain is missing.
+ *
+ * The generated builder already fails for these — but from the first REQUEST. So
+ * `lunora codegen`, `build`, `verify`, `tsc` and the test suite all pass on a tree
+ * where the app cannot answer, and it ships in that state.
+ *
+ * Without `.vectors()`, `ctx.vectors` is a throwing stub and `buildWorkerOptions`
+ * rejects EVERY request, `/_lunora/health` included. Without `.global()` (or
+ * `.hyperdriveGlobal()`), the shard gets no global writer, so every read or write
+ * of a global table throws `INTERNAL` ("requires a globalDb writer") — and nothing
+ * else says a word, because the wrangler check next to this one proves the `DB`
+ * BINDING exists, which is the half a project usually gets right.
+ *
+ * Both requirements are static: the schema states them, and whether the app chains
+ * the matching call is readable from the source. Same relationship the
+ * unexported-class check validates, which is why it lives here rather than in the
+ * runtime.
+ *
+ * Blocking — and not only at deploy: `@lunora/vite`'s wrangler-validator plugin
+ * throws on any reported problem at `configResolved`, so this also refuses to
+ * start `lunora dev`. Vector indexes are rare, but `.global()` tables are the
+ * common case, and unlike the `DB` binding validated next to it, Lunora cannot
+ * write the `.global(...)` chain into the user's `src/server.ts` for them. That
+ * is the intended trade — the alternative is a dev server whose every global read
+ * throws INTERNAL — but it is why every give-up route below reports nothing.
+ *
+ * It fails open both ways — see {@link scanAppChains}, which reads the
+ * PROJECT rather than the worker entry. Keying "does this project compose an app"
+ * on the entry is what silently disabled the check for the two commonest Vite-first
+ * layouts: `main: "virtual:lunora/worker"` names no file at all, and a generated
+ * `src/worker.ts` only re-exports the app composed in `src/server.ts`.
  */
-const resolveWorkerEntryPath = (main: string | undefined, projectRoot: string, wranglerPath: string): string | undefined => {
-    const composed = join(projectRoot, COMPOSED_WORKER_ENTRY);
+const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projectRoot: string): string[] => {
+    const vectorIndexNames = schema?.vectorIndexNames ?? [];
+    const required: { message: (site: string) => string; method: CapabilityMethod }[] = [];
 
-    if (existsSync(composed)) {
-        return composed;
+    if (vectorIndexNames.length > 0) {
+        required.push({
+            message: (site) =>
+                `schema declares vector index(es) ${vectorIndexNames.map((name) => `"${name}"`).join(", ")} but nothing chains .vectors(...) onto defineApp() ` +
+                `(composed in: ${site}) — \`ctx.vectors\` is then a throwing stub and buildWorkerOptions rejects EVERY request, /_lunora/health included. ` +
+                `Add \`.vectors((env) => ({ ${String(vectorIndexNames[0])}: env.<BINDING> }))\` to the chain.`,
+            method: "vectors",
+        });
     }
 
-    if (typeof main === "string" && main.length > 0) {
-        const resolved = join(dirname(wranglerPath), main);
-
-        return existsSync(resolved) ? resolved : undefined;
+    if (schema?.hasD1GlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global() table(s) but nothing chains .global(...) onto defineApp() (composed in: ${site}) — the shard then has no global writer, ` +
+                `so every read or write of a global table throws INTERNAL ("requires a globalDb writer"). ` +
+                `Add \`.global({ d1: (env) => env.DB })\` to the chain.`,
+            method: "global",
+        });
     }
 
-    return WORKER_ENTRY_FALLBACKS.map((fallback) => join(projectRoot, fallback)).find((candidate) => existsSync(candidate));
-};
-
-/**
- * Blank out comments and string/template literals, preserving offsets.
- *
- * Without this, a commented-out export or a class named in prose reads as a real
- * export — and a worker entry that discusses its Durable Objects in comments is
- * the normal case, so the check would silently pass on exactly the tree it
- * exists to catch. Replacing with spaces rather than deleting keeps every offset
- * and line intact.
- *
- * Deliberately coarse on escapes (`"a\"b"` blanks only up to the inner quote):
- * the goal is that quoted text cannot pass for code, and blanking slightly less
- * of a string never turns a real export into a missing one.
- */
-const COMMENT_OR_STRING_RE = /\/\/[^\n]*|\/\*.*?\*\/|"[^"\n]*"|'[^'\n]*'|`[^`]*`/gsu;
-
-const blankCommentsAndStrings = (code: string): string =>
-    // The alternation is scanned positionally, so a `//` inside a string literal
-    // is consumed as part of that string rather than starting a comment.
-    code.replaceAll(COMMENT_OR_STRING_RE, (match) => match.replaceAll(/[^\n]/gu, " "));
-
-/**
- * A star re-export (`export * from "./lunora/_generated/workflows"`) forwards
- * names no per-name scan can see. When the entry has one, absence of a class
- * name proves nothing, so the check is skipped entirely — a false error on a
- * correctly-wired project is worse than a missed one, because it blocks a deploy
- * that would have worked.
- */
-const STAR_REEXPORT_RE = /\bexport\s*\*\s*(?:as\s+\w+\s*)?from\b/u;
-
-/** Every `export` keyword position in the blanked source. */
-const EXPORT_KEYWORD_RE = /\bexport\b/gu;
-
-/** Modifiers that may sit between `export` and the declaration keyword. */
-const EXPORT_MODIFIERS_RE = /^\s*(?:(?:abstract|async|declare|default)\s+)*/u;
-
-/** A declaration-form export, once its modifiers are stripped (`class X`, `const X`, `function X`). */
-const EXPORT_DECLARATION_RE = /^(?:class|const|function|let|var)\s+(?<name>[$A-Z_a-z][\w$]*)/u;
-
-/**
- * A destructuring export — `export const { ShardDO, SessionDO } = app;`.
- *
- * This is the generated app builder's OWN pattern, so it is not an exotic form:
- * `apps/playground/src/server/index.ts` ships exactly this. A scanner that only
- * understood `export const <identifier>` reported the repo's own playground as
- * missing `ShardDO`.
- */
-const EXPORT_DESTRUCTURE_RE = /^\s*(?:const|let|var)\s*\{/u;
-
-/**
- * The names the worker entry exports as runtime VALUES.
- *
- * Deliberately a small scanner over export CLAUSES rather than a proximity
- * regex. The proximity form (`export…[^\n;]*Name`) gets two realistic cases
- * wrong, and both fail CLOSED — reporting a correctly-wired project as broken,
- * which blocks a deploy that would have worked:
- *
- * A brace clause wrapped across lines — how prettier formats three or more
- * exports — cannot be matched by a bound that stops at the newline. And a
- * type-only export ANYWHERE in the file suppressed the real value export of the
- * same name (`export type { ShardDO as T }` beside `export { ShardDO }`),
- * because the type check was whole-file rather than per clause.
- *
- * `es-module-lexer` would be the right tool and is a dependency, but its WASM
- * entry needs an awaited `init` (this validator is synchronous) and its pure-JS
- * entry emits a V8 asm.js warning to stderr on load, which would appear on every
- * `prepare` / `verify` / `deploy`.
- *
- * For `export { Local as Exported }` the EXPORTED name is what wrangler binds,
- * so that is what is collected.
- */
-/** The leading identifier of a binding, after any `:` rename. */
-const LEADING_IDENTIFIER_RE = /^[$A-Z_a-z][\w$]*/u;
-
-/** `export type …` — the whole clause compiles away. */
-const TYPE_CLAUSE_RE = /^type\b/u;
-
-/** Split one export specifier into its words, so `X as Y` and `type X` are separable. */
-const SPECIFIER_WORDS_RE = /\s+/u;
-
-/**
- * Names bound by a named-export clause body (`A, B as C, type D`).
- *
- * For `A as B` the EXPORTED name is `B`, which is what wrangler binds. A leading
- * `type` marks that one specifier type-only — scoped per specifier, because a
- * whole-file check let an unrelated `export type { X as … }` suppress a real
- * `export { X }`.
- */
-const namedClauseExports = (clauseBody: string): string[] => {
-    const names: string[] = [];
-
-    for (const specifier of clauseBody.split(",")) {
-        const words = specifier.trim().split(SPECIFIER_WORDS_RE).filter(Boolean);
-        const last = words.at(-1);
-
-        if (last !== undefined && words[0] !== "type") {
-            names.push(last);
-        }
+    // The Hyperdrive flavour of the same requirement: a different builder
+    // method, the same missing `globalDb` and the same INTERNAL throw.
+    //
+    // The remediation is the shape `HyperdriveGlobalDeclaration` actually takes
+    // (`@lunora/codegen`'s `emit-app.ts`): `engine` plus an `exec` built from the
+    // binding, NOT a `hyperdrive: (env) => env.HYPERDRIVE` selector like the D1
+    // line above. A blocking error whose suggested fix does not compile costs the
+    // user the same round trip the error was meant to save.
+    if (schema?.hasHyperdriveGlobalTable) {
+        required.push({
+            message: (site) =>
+                `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
+                `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
+                `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(postgres(` +
+                `env.HYPERDRIVE.connectionString))) })\` to the chain ` +
+                `(\`buildPgExec\` from \`@lunora/hyperdrive/global\`, \`fromPostgresJs\` from \`@lunora/hyperdrive\`).`,
+            method: "hyperdriveGlobal",
+        });
     }
 
-    return names;
-};
-
-/**
- * Names bound by a destructuring export body (`A, B: C`).
- *
- * `export const { ShardDO } = app;` is the generated app builder's own pattern,
- * so this is not an exotic form — the repo's playground ships exactly it.
- */
-const destructuredExports = (patternBody: string): string[] => {
-    const names: string[] = [];
-
-    for (const binding of patternBody.split(",")) {
-        const bound = binding.includes(":") ? binding.slice(binding.indexOf(":") + 1) : binding;
-        const identifier = LEADING_IDENTIFIER_RE.exec(bound.trim());
-
-        if (identifier) {
-            names.push(identifier[0]);
-        }
-    }
-
-    return names;
-};
-
-/** The body of the first `{…}` at the start of `source`, or `undefined`. */
-const braceBody = (source: string): string | undefined => {
-    const open = source.indexOf("{");
-    const close = source.indexOf("}", open);
-
-    return open === -1 || close === -1 ? undefined : source.slice(open + 1, close);
-};
-
-/** Names one `export` keyword contributes as runtime values. */
-const exportNamesAt = (after: string): string[] => {
-    const trimmed = after.trimStart();
-
-    if (TYPE_CLAUSE_RE.test(trimmed)) {
+    if (required.length === 0) {
         return [];
     }
 
-    if (trimmed.startsWith("{")) {
-        const body = braceBody(trimmed);
+    const scan = scanAppChains(projectRoot, new Set(required.map((entry) => entry.method)));
 
-        return body === undefined ? [] : namedClauseExports(body);
+    if (scan === undefined) {
+        return [];
     }
 
-    if (EXPORT_DESTRUCTURE_RE.test(after)) {
-        const body = braceBody(after);
-
-        return body === undefined ? [] : destructuredExports(body);
-    }
-
-    const declaration = EXPORT_DECLARATION_RE.exec(after.replace(EXPORT_MODIFIERS_RE, ""));
-
-    return declaration?.groups?.["name"] === undefined ? [] : [declaration.groups["name"]];
+    return required.filter((entry) => !scan.chained.has(entry.method)).map((entry) => entry.message(scan.site));
 };
 
-const collectValueExportNames = (code: string): Set<string> => {
-    const names = new Set<string>();
+/**
+ * The phrase every unexported-class error carries.
+ *
+ * Exported because it is a CONTRACT, not prose: `lunora doctor` picks these
+ * errors out of the report by substring to raise its own finding, and the
+ * validator's report is a flat `string[]`. Until the report entries carry a
+ * code, a copy-edit here would silently disable that check — so the copy-edit
+ * has to go through this constant.
+ */
+const UNEXPORTED_CLASS_MARKER = "does not export it";
 
-    for (const match of code.matchAll(EXPORT_KEYWORD_RE)) {
-        for (const name of exportNamesAt(code.slice(match.index + "export".length))) {
-            names.add(name);
-        }
+/**
+ * What to tell a user whose entry does not export a declared class. Three cases,
+ * because the wrong instruction is worse than none.
+ *
+ * An AUTHORED entry can simply re-export it — either by hand, or off the
+ * generated app builder, which hands the class back on `app`.
+ *
+ * The class-A composed entry cannot: `@lunora/vite` GENERATES it, so there is no
+ * file to add a line to. It forwards whatever codegen emitted, so a project's
+ * OWN class gets there by being declared where codegen looks.
+ *
+ * Lunora's own Durable Objects are the third case: they are not `defineAgent` /
+ * `defineContainer` / `defineWorkflow` declarations, so no amount of editing
+ * those files makes codegen emit them, and "declare it in one of those" pointed
+ * the user at hours of dead end.
+ *
+ * `SchedulerDO` can no longer reach here — declaring its binding is what makes
+ * the composed entry re-export it, so the binding's presence is also its own
+ * remedy. `SessionDO` still has no route on class-A, which is what this branch
+ * now says.
+ */
+const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
+    if (kind !== "composed") {
+        return (
+            `Re-export it from the module that defines it (\`export { ${className} } from "./…";\`), ` +
+            `or add it to the app builder's own export (\`export const { ${className} } = app;\`).`
+        );
     }
 
-    return names;
+    const composedExports = `it exports ${COMPOSED_ENTRY_DURABLE_OBJECTS.join(", ")}, SchedulerDO when its binding is declared, and every class codegen emits from your ${GENERATED_CLASS_MODULES.map((module) => `${module}.ts`).join(" / ")} declarations`;
+
+    if (isFrameworkDurableObject(className)) {
+        return (
+            `\`@lunora/vite\` generates that entry — ${composedExports}, and ${className} is not among them. ` +
+            `Class-A composition does not carry ${className}, so drop the binding; a project that needs it has to own its worker entry ` +
+            `(add \`src/worker.ts\`, which \`lunora deploy\` bundles in place of \`main\`, and compose \`defineApp()\` there).`
+        );
+    }
+
+    return (
+        `\`@lunora/vite\` generates that entry, so there is no file to add a re-export to: ${composedExports}. ` +
+        `Declare "${className}" in one of those and re-run \`lunora codegen\`, or drop the binding.`
+    );
 };
 
 /**
@@ -1701,30 +1756,15 @@ const collectValueExportNames = (code: string): Set<string> => {
  * own description is "validate wrangler.jsonc + codegen dry-run + tsc" — the
  * thing that is invalid IS the relationship between `wrangler.jsonc` and the
  * entry. Only `lunora build`, which shells out to `wrangler deploy --dry-run`,
- * caught it.
+ * caught it — so `verify` in a PR check went green and the deploy job failed.
  *
- * Both files are already parsed here, so this is a string-set comparison.
+ * Reports nothing whenever the entry's exports cannot be decided — see
+ * `readWorkerEntry`. A check that blocks must be sure.
  */
-const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: string, wranglerPath: string): string[] => {
-    const entryPath = resolveWorkerEntryPath(wrangler.main, projectRoot, wranglerPath);
+const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEntry): string[] => {
+    const exported = entry.exports;
 
-    if (entryPath === undefined) {
-        return [];
-    }
-
-    let source: string;
-
-    try {
-        source = readFileSync(entryPath, "utf8");
-    } catch {
-        return [];
-    }
-
-    // Comments and strings are blanked first, so a commented-out export or a
-    // class name mentioned in prose cannot pass for a real one.
-    const code = blankCommentsAndStrings(source);
-
-    if (STAR_REEXPORT_RE.test(code)) {
+    if (exported === undefined) {
         return [];
     }
 
@@ -1738,24 +1778,51 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, projectRoot: str
         }
     }
 
-    for (const entry of iterableEntries(wrangler.workflows)) {
+    for (const workflow of iterableEntries(wrangler.workflows)) {
         // Same `script_name` carve-out as the durable-object bindings above:
         // Cloudflare lets a workflow binding target a class in ANOTHER Worker,
         // which that script exports, not this entry.
-        if (typeof entry?.class_name === "string" && entry.class_name.length > 0 && entry.script_name === undefined) {
-            declared.push({ className: entry.class_name, label: "workflows" });
+        if (typeof workflow?.class_name === "string" && workflow.class_name.length > 0 && workflow.script_name === undefined) {
+            declared.push({ className: workflow.class_name, label: "workflows" });
         }
     }
 
-    const exported = collectValueExportNames(code);
-    const missing = declared.filter((entry) => !exported.has(entry.className));
+    const missing = declared.filter((candidate) => !exported.has(candidate.className));
 
     return missing.map(
-        (entry) =>
-            `${entry.label} declares class "${entry.className}" but the worker entry (${entryPath}) does not export it — ` +
-            `wrangler refuses to bundle a Worker whose Durable Object classes are not exported. ` +
-            `Add \`export { ${entry.className} } from "…";\` to the entry.`,
+        (missed) =>
+            `${missed.label} declares class "${missed.className}" but the ` +
+            `${entry.kind === "composed" ? "composed class-A worker entry" : "worker entry"} (${entry.path}) ${UNEXPORTED_CLASS_MARKER} — ` +
+            // The noun follows the LABEL, not the check: `workflows[]` names a
+            // WorkflowEntrypoint, and calling it a Durable Object sent readers
+            // looking for a migration entry that does not apply to it.
+            `wrangler refuses to bundle a Worker whose ${missed.label === "workflows" ? "Workflow" : "Durable Object"} classes are not exported. ${remedyFor(missed.className, entry.kind)}`,
     );
+};
+
+/**
+ * `main` names a file `wrangler` will not find. {@link locateWorkerEntry} has
+ * already decided that — build output and the class-A virtual specifier get
+ * their own arms — so this only formats the `"absent"` one.
+ *
+ * A WARNING, not an error, and deliberately the weaker of the two — same call as
+ * the `assets.directory` check below. It reports on a state a tree passes THROUGH
+ * (`wrangler.jsonc` reconciled before the entry is written, an entry mid-rename),
+ * and `@lunora/vite` throws on an error here, so blocking would stop `lunora dev`
+ * on a project that is one keystroke from correct.
+ */
+const collectMissingEntryWarning = (location: WorkerEntryLocation): string[] => {
+    if (location?.origin !== "absent") {
+        return [];
+    }
+
+    // `existsSync` decided this, and it answers `false` for an unreadable parent
+    // directory too — so the wording says what was observed, not that the file
+    // is definitely gone.
+    return [
+        `main is set but no readable file is there (looked in ${location.path}) — wrangler cannot resolve the worker entry, so a deploy will fail there. ` +
+            `Point main at the entry that composes your app, or remove it to fall back to the conventional locations.`,
+    ];
 };
 
 /**
@@ -1815,28 +1882,31 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         report.warnings.push(`schema parse failed in ${schemaDirectory}/schema.ts: ${schemaError}`);
     }
 
-    // FS-aware: a local-path container image must point at an existing
-    // Dockerfile (wrangler resolves it relative to the config file). Registry
-    // references are left to wrangler — pure shape checks already ran above.
     const configDirectory = dirname(wranglerPath);
 
-    report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
+    // Both are FS-aware checks, so neither could run in `validateWranglerConfig`
+    // above. A local-path container image must point at an existing Dockerfile
+    // (wrangler resolves it relative to the config file; registry references are
+    // left to wrangler). And every declared Durable Object / Workflow class must
+    // be exported by the worker entry, or wrangler refuses to bundle — an error
+    // rather than a warning because `collectValueExports` reports nothing unless
+    // it is certain, so what reaches here is a fact, and a warning meant `verify`
+    // exited 0 on a tree `lunora build` rejects.
+    // `undefined` means the entry cannot be decided (no resolvable file, or one
+    // that does not parse), and the export check then reports nothing.
+    const entryLocation = locateWorkerEntry(resolvedWrangler.main, options.projectRoot, wranglerPath);
+    const workerEntry = readWorkerEntry(entryLocation, options.projectRoot, schemaDirectory);
 
-    // FS-aware: every declared Durable Object / Workflow class must be exported
-    // by the worker entry, or wrangler refuses to bundle.
-    //
-    // A WARNING, not an error, and deliberately so. `collectValueExportNames` is
-    // a scanner, not a parser, and every form it does not know fails CLOSED —
-    // reporting a correctly-wired project as broken, which blocks `prepare` /
-    // `deploy` and stops `lunora dev` from starting. Two such forms (a
-    // prettier-wrapped clause, and the generated app builder's own
-    // `export const { ShardDO } = app`) were found in a single review pass, which
-    // is enough evidence that more exist.
-    //
-    // Warning still closes the reported gap: `verify` and `doctor` used to print
-    // a clean bill of health on a tree that cannot deploy, and now they say so.
-    // The authoritative check remains wrangler's own, which `lunora build` runs.
-    report.warnings.push(...collectUnexportedClassErrors(resolvedWrangler, options.projectRoot, wranglerPath));
+    report.errors.push(...collectContainerImageErrors(resolvedWrangler.containers ?? [], configDirectory, wranglerPath));
+    report.warnings.push(...collectMissingEntryWarning(entryLocation));
+
+    if (workerEntry !== undefined) {
+        report.errors.push(...collectUnexportedClassErrors(resolvedWrangler, workerEntry));
+    }
+
+    // Deliberately outside that guard: it reads the project, and an unresolvable
+    // entry (class-A's virtual `main`) says nothing about the vector bindings.
+    report.errors.push(...collectUnchainedCapabilityErrors(schemaInfo, options.projectRoot));
 
     // FS-aware: `assets.directory` is created by the client build, so it may
     // legitimately not exist at validation time (pre-build). Surface a *warning*
@@ -1887,6 +1957,7 @@ export {
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
     stringEntries,
+    UNEXPORTED_CLASS_MARKER,
     validateWrangler,
     validateWranglerConfig,
     validateWranglerProject,

@@ -102,10 +102,10 @@ describe("lunora codegen", () => {
             expect(existsSync(join(workdir, "lunora", "_generated", "server.ts"))).toBe(false);
         });
 
-        it("refuses an unregistered target from lunora.json", () => {
+        it("refuses an unregistered target from lunora.config.ts", () => {
             expect.assertions(1);
 
-            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "clouflare" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
             // A typo in the committed config must fail the same way as a typo on
             // the command line — the config path is where it would otherwise go
@@ -113,10 +113,10 @@ describe("lunora codegen", () => {
             expect(runCodegenCommand({ cwd: workdir, logger: silentLogger() }).error).toMatch(/unknown deploy target "clouflare"/);
         });
 
-        it("lets --target override lunora.json", () => {
+        it("lets --target override lunora.config.ts", () => {
             expect.assertions(1);
 
-            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "aws" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "aws" };\n`, "utf8");
 
             expect(runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "cloudflare" }).error).toBeUndefined();
         });

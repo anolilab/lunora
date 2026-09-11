@@ -85,6 +85,29 @@ const SPREAD_INPUT_SIGNUP = `${PREAMBLE}
         });
 `;
 
+/** A spread graph that loops — the fields are dropped, so the verdict must be unknown. */
+const CYCLIC_SPREAD_SIGNUP = `${PREAMBLE}
+    const a = { ...b, name: v.string() };
+    const b = { ...a };
+
+    export const signUp = c.mutation
+        .input({ ...a })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** The address arrives through a spread codegen CAN read. */
+const RESOLVED_SPREAD_EMAIL_SIGNUP = `${PREAMBLE}
+    const signupArgs = { email: v.string(), password: v.string() };
+
+    export const signUp = c.mutation
+        .input({ ...signupArgs, name: v.string() })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 /** Names that merely start with "email" but hold a flag/id, not an address. */
 const EMAIL_LOOKALIKE_ARGS = `${PREAMBLE}
     export const update = c.mutation
@@ -558,6 +581,33 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]?.hasEmailArg).toBeUndefined();
+    });
+
+    it("leaves the verdict unknown when the spread graph cycles", () => {
+        expect.assertions(1);
+
+        // The parser breaks the cycle by emitting nothing for it, so the keys ARE
+        // dropped. Reporting the shape as fully readable would turn that into a
+        // confident `false` and clear the signup lint.
+        writeFileSync(join(workdir, "lunora", "signup.ts"), CYCLIC_SPREAD_SIGNUP, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]?.hasEmailArg).toBeUndefined();
+    });
+
+    it("finds an email argument that arrives through a READABLE spread", () => {
+        expect.assertions(1);
+
+        // Once a resolvable spread stopped being opaque, a names list that could
+        // not see through it turned "unknown" into a confident `false` — which
+        // CLEARS `signup_mutation_without_disposable_gating` on a signup that
+        // does take an address. Silent, and in the unsafe direction.
+        writeFileSync(join(workdir, "lunora", "signup.ts"), RESOLVED_SPREAD_EMAIL_SIGNUP, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUp", hasEmailArg: true });
     });
 
     it("does not treat `emailVerified` / `emailOptIn` / `emailTemplateId` as an address", () => {

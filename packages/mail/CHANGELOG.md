@@ -1,3 +1,32 @@
+## @lunora/mail [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.77...@lunora/mail@1.0.0-alpha.78) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.76...@lunora/mail@1.0.0-alpha.77) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.75...@lunora/mail@1.0.0-alpha.76) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.74...@lunora/mail@1.0.0-alpha.75) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.73...@lunora/mail@1.0.0-alpha.74) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.72...@lunora/mail@1.0.0-alpha.73) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.71...@lunora/mail@1.0.0-alpha.72) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.70...@lunora/mail@1.0.0-alpha.71) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.69...@lunora/mail@1.0.0-alpha.70) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.68...@lunora/mail@1.0.0-alpha.69) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.67...@lunora/mail@1.0.0-alpha.68) (2026-09-07)
+
+## @lunora/mail [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.66...@lunora/mail@1.0.0-alpha.67) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/mail [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.65...@lunora/mail@1.0.0-alpha.66) (2026-09-06)
 
 

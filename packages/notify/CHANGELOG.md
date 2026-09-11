@@ -1,3 +1,36 @@
+## @lunora/notify [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.52...@lunora/notify@1.0.0-alpha.53) (2026-09-11)
+
+## @lunora/notify [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.51...@lunora/notify@1.0.0-alpha.52) (2026-09-11)
+
+## @lunora/notify [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.50...@lunora/notify@1.0.0-alpha.51) (2026-09-10)
+
+## @lunora/notify [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.49...@lunora/notify@1.0.0-alpha.50) (2026-09-10)
+
+## @lunora/notify [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.48...@lunora/notify@1.0.0-alpha.49) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.47...@lunora/notify@1.0.0-alpha.48) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.46...@lunora/notify@1.0.0-alpha.47) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.45...@lunora/notify@1.0.0-alpha.46) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.44...@lunora/notify@1.0.0-alpha.45) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.43...@lunora/notify@1.0.0-alpha.44) (2026-09-08)
+
+## @lunora/notify [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.42...@lunora/notify@1.0.0-alpha.43) (2026-09-07)
+
+### Bug Fixes
+
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+## @lunora/notify [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.41...@lunora/notify@1.0.0-alpha.42) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/notify [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.40...@lunora/notify@1.0.0-alpha.41) (2026-09-06)
 
 

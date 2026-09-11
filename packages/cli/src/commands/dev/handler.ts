@@ -126,6 +126,8 @@ interface DevCommandOptions {
     flavor?: DevFlavor;
     /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
     hasIpv6Loopback?: () => boolean;
+    /** `wrangler dev` devtools inspector port (`--inspector-port`). Wrangler flavor only — see {@link resolveInspectorPort}. */
+    inspectorPort?: number;
 
     /**
      * Logs are NDJSON on stdout (`--json`, or a detected AI agent). Forwarded to
@@ -152,7 +154,7 @@ interface DevCommandOptions {
 
     /** Disable the embedded studio server. */
     studio?: boolean;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 
     /**
@@ -403,6 +405,39 @@ const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promi
 };
 
 /**
+ * Resolve the port `wrangler dev` exposes its devtools inspector on. Precedence
+ * mirrors {@link resolveWorkerPort} — an explicit choice always wins:
+ *
+ * 1. `--inspector-port` on the CLI (`options.inspectorPort`).
+ * 2. `dev.inspector_port` pinned in the project's wrangler config.
+ * 3. `undefined` — no `--inspector-port` reaches wrangler, which keeps its own default: 9229, probing upward while that is taken.
+ *
+ * Step 3 is deliberately NOT the free-port probe the worker port falls back to.
+ * Wrangler already walks upward on its own, and pinning a port from here would
+ * claim one nothing asked for. The walk is what makes this worth configuring at
+ * all: in a repo where other `wrangler dev` processes pin 9230+ in their own dev
+ * scripts, an unpinned inspector climbs into one of THEIR ports and kills a
+ * worker that named the port in its config — so the fix is to make pinning
+ * possible, not to start pinning by default.
+ */
+const resolveInspectorPort = (options: DevCommandOptions, cwd: string): number | undefined => {
+    if (options.inspectorPort !== undefined) {
+        return options.inspectorPort;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath === undefined) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<{ dev?: { inspector_port?: unknown } }>(wranglerPath);
+    const pinned = parsed?.dev?.inspector_port;
+
+    return typeof pinned === "number" ? pinned : undefined;
+};
+
+/**
  * Plan `lunora dev`. Wrangler flavor: the worker runs via `wrangler dev` and
  * nothing else as a child process. Vite flavor (`@lunora/vite` declared): the
  * plugin already runs the worker inside the Vite dev server, so the one child
@@ -457,6 +492,17 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             );
         }
 
+        // `--inspector-port` is a `wrangler dev` flag and this branch spawns no
+        // `wrangler dev` of its own, so say where the knob actually lives rather
+        // than accepting the flag and dropping it.
+        if (options.inspectorPort !== undefined) {
+            options.logger.warn(
+                flavor === "framework-worker"
+                    ? `--inspector-port does not apply to the ${flavor} flavor: pin \`dev.inspector_port\` in ${DEV_WRANGLER_CONFIG} — that is the config the worker sidecar runs.`
+                    : `--inspector-port does not apply to the ${flavor} flavor: Vite owns the worker. Pin it in vite.config — \`lunora({ cloudflare: { inspectorPort: ${String(options.inspectorPort)} } })\`.`,
+            );
+        }
+
         return {
             runsCodegenWatch: false,
             flavor,
@@ -505,7 +551,20 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     // On a host without IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't
     // abort trying to bind its default `[::1]` (see resolveLoopbackArgs).
     const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), ...loopbackArgs, "--var", "WORKER_ENV:development", ...remote.args]);
+    // Only when something actually asked for a port. Passing wrangler's own
+    // default here would pin 9229 for every project — including the ones relying
+    // on wrangler walking off it — which is the opposite of what #689 needs.
+    const inspectorArgs = options.inspectorPort === undefined ? [] : ["--inspector-port", String(options.inspectorPort)];
+    const exec = execArgsFor(manager, "wrangler", [
+        "dev",
+        "--port",
+        String(workerPort),
+        ...inspectorArgs,
+        ...loopbackArgs,
+        "--var",
+        "WORKER_ENV:development",
+        ...remote.args,
+    ]);
 
     return {
         runsCodegenWatch: codegenRequested(options),
@@ -968,8 +1027,12 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
     // The vite flavor lets Vite resolve its own port; only the wrangler flavor
     // needs a pre-picked free port passed through as `--port`.
     const workerPort = flavor === "wrangler" ? await resolveWorkerPort(options, cwd) : options.workerPort;
+    // Same split for the inspector: the other flavors get the flag back as a
+    // warning (see `planDevCommand`), so the wrangler-config fallback is only
+    // read where a `wrangler dev` argv exists to carry it.
+    const inspectorPort = flavor === "wrangler" ? resolveInspectorPort(options, cwd) : options.inspectorPort;
 
-    return planDevCommand({ ...options, cwd, flavor, workerPort });
+    return planDevCommand({ ...options, cwd, flavor, inspectorPort, workerPort });
 };
 
 /**
@@ -1454,7 +1517,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     // Remote-binding mode obeys a clear precedence: an explicit `--remote`
     // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
-    // key in the project's `lunora.json` (a project default). See
+    // key in the project's `lunora.config.*` (a project default). See
     // `resolveRemoteEnabled` in @lunora/config.
     const remote = resolveRemoteEnabled({
         configPreference: readProjectRemotePreference(cwd),
@@ -1479,6 +1542,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,
+        inspectorPort: options.inspectorPort,
         jsonLogs,
         logger,
         port: options.port,
@@ -1495,4 +1559,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { defaultWorkerSpawner, negatableDevFlags, planDevCommand, resolveWorkerPort, runDevCommand };
+export { defaultWorkerSpawner, negatableDevFlags, planDevCommand, resolveInspectorPort, resolveWorkerPort, runDevCommand };

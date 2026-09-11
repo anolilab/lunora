@@ -1,3 +1,146 @@
+## @lunora/platform-node [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.64...@lunora/platform-node@1.0.0-alpha.65) (2026-09-11)
+
+### Bug Fixes
+
+* **platform-node:** serialize writes on one lock ([#696](https://github.com/anolilab/lunora/issues/696)) ([00c3c35](https://github.com/anolilab/lunora/commit/00c3c35d59d5aca62e05846a9ee739dc278db878))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.114
+* **@lunora/storage:** upgraded to 1.0.0-alpha.66
+
+## @lunora/platform-node [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.63...@lunora/platform-node@1.0.0-alpha.64) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.113
+* **@lunora/storage:** upgraded to 1.0.0-alpha.65
+
+## @lunora/platform-node [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.62...@lunora/platform-node@1.0.0-alpha.63) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.115
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/queue:** upgraded to 1.0.0-alpha.53
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.115
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.39
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.112
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+* **@lunora/storage:** upgraded to 1.0.0-alpha.64
+
+## @lunora/platform-node [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.61...@lunora/platform-node@1.0.0-alpha.62) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.111
+* **@lunora/storage:** upgraded to 1.0.0-alpha.63
+
+## @lunora/platform-node [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.60...@lunora/platform-node@1.0.0-alpha.61) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.110
+* **@lunora/storage:** upgraded to 1.0.0-alpha.62
+
+## @lunora/platform-node [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.59...@lunora/platform-node@1.0.0-alpha.60) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.129
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.109
+* **@lunora/storage:** upgraded to 1.0.0-alpha.61
+
+## @lunora/platform-node [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.58...@lunora/platform-node@1.0.0-alpha.59) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.128
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.108
+* **@lunora/storage:** upgraded to 1.0.0-alpha.60
+
+## @lunora/platform-node [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.57...@lunora/platform-node@1.0.0-alpha.58) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.114
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/queue:** upgraded to 1.0.0-alpha.52
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.114
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.38
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.107
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+* **@lunora/storage:** upgraded to 1.0.0-alpha.59
+
+## @lunora/platform-node [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.56...@lunora/platform-node@1.0.0-alpha.57) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.126
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.106
+* **@lunora/storage:** upgraded to 1.0.0-alpha.58
+
+## @lunora/platform-node [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.55...@lunora/platform-node@1.0.0-alpha.56) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.125
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.105
+* **@lunora/storage:** upgraded to 1.0.0-alpha.57
+
+## @lunora/platform-node [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.54...@lunora/platform-node@1.0.0-alpha.55) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.124
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.104
+* **@lunora/storage:** upgraded to 1.0.0-alpha.56
+
+## @lunora/platform-node [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.53...@lunora/platform-node@1.0.0-alpha.54) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.113
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.113
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.103
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+
+## @lunora/platform-node [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.52...@lunora/platform-node@1.0.0-alpha.53) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.112
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/queue:** upgraded to 1.0.0-alpha.51
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.112
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.49
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.37
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.102
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+* **@lunora/storage:** upgraded to 1.0.0-alpha.55
+
 ## @lunora/platform-node [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.51...@lunora/platform-node@1.0.0-alpha.52) (2026-09-06)
 
 

@@ -1,3 +1,113 @@
+## @lunora/auth [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.133...@lunora/auth@1.0.0-alpha.134) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/auth [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.132...@lunora/auth@1.0.0-alpha.133) (2026-09-11)
+
+### Features
+
+* **auth:** check the schema before the first write ([#692](https://github.com/anolilab/lunora/issues/692)) ([82329ea](https://github.com/anolilab/lunora/commit/82329ea7bac0e1002535bfe21b7a56df18929821))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
+## @lunora/auth [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.131...@lunora/auth@1.0.0-alpha.132) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
+## @lunora/auth [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.130...@lunora/auth@1.0.0-alpha.131) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/auth [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.129...@lunora/auth@1.0.0-alpha.130) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/auth [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.128...@lunora/auth@1.0.0-alpha.129) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/auth [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.127...@lunora/auth@1.0.0-alpha.128) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/auth [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.126...@lunora/auth@1.0.0-alpha.127) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+
+## @lunora/auth [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.125...@lunora/auth@1.0.0-alpha.126) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
+## @lunora/auth [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.124...@lunora/auth@1.0.0-alpha.125) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/auth [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.123...@lunora/auth@1.0.0-alpha.124) (2026-09-07)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** the `@better-auth/core`, `better-auth` and `@better-auth/sso` peer
+ranges narrow from `>=1.7.1` to `>=1.7.3`. Now that no `issuer` is written, installing
+against 1.7.1 or 1.7.2 resolves cleanly and then fails at runtime, because those
+versions declare the column required.
+
+Verified in a real Durable Object: workerd accepts `ALTER TABLE ... DROP COLUMN`, and
+the test fails without the fix rather than passing either way.
+
+### Bug Fixes
+
+* **auth:** remove the reverted account.issuer column on migrate ([#661](https://github.com/anolilab/lunora/issues/661)) ([7d5cda9](https://github.com/anolilab/lunora/commit/7d5cda9a91ea873e8c62ac40930202ce20a0d4ab)), closes [#659](https://github.com/anolilab/lunora/issues/659)
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
+## @lunora/auth [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.122...@lunora/auth@1.0.0-alpha.123) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+
 ## @lunora/auth [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.121...@lunora/auth@1.0.0-alpha.122) (2026-09-06)
 
 

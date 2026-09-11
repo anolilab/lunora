@@ -523,6 +523,23 @@ interface FrameworkDetection {
 }
 ```
 
+### `GENERATED_CLASS_MODULES` (const)
+
+```ts
+const GENERATED_CLASS_MODULES: readonly [
+    "agents",
+    "containers",
+    "scheduler",
+    "workflows"
+];
+```
+
+### `GeneratedClassModule` (type)
+
+```ts
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
+
 ### `HookLogger` (interface)
 
 ```ts
@@ -653,12 +670,6 @@ const LUNA_NAME = "Luna";
 const LUNA_SIGNOFF = "Safe travels, voyager.";
 ```
 
-### `LUNORA_CONFIG_FILE` (const)
-
-```ts
-const LUNORA_CONFIG_FILE = "lunora.json";
-```
-
 ### `LUNORA_EVENT_SOURCE` (const)
 
 ```ts
@@ -733,15 +744,6 @@ interface LunoraFormattedLine {
 
 ```ts
 type LunoraLineLevel = "error" | "info" | "warn";
-```
-
-### `LunoraProjectConfig` (interface)
-
-```ts
-interface LunoraProjectConfig {
-    remote?: unknown;
-    target?: unknown;
-}
 ```
 
 ### `LunoraReporter` (class)
@@ -897,7 +899,8 @@ interface SchemaIndex {
 
 ```ts
 interface SchemaInfo {
-    hasGlobalTable: boolean;
+    hasD1GlobalTable: boolean;
+    hasHyperdriveGlobalTable: boolean;
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
@@ -1587,7 +1590,7 @@ interface ExportGap {
     className: string;
     exportName: string;
     kind: "agent" | "container" | "workflow";
-    module: "agents" | "containers" | "workflows";
+    module: GeneratedClassModule;
 }
 ```
 
@@ -1805,6 +1808,12 @@ interface TailConsumer {
 }
 ```
 
+### `UNEXPORTED_CLASS_MARKER` (const)
+
+```ts
+const UNEXPORTED_CLASS_MARKER = "does not export it";
+```
+
 ### `WORKERS_CACHE_MIN_DATE` (const)
 
 ```ts
@@ -1894,6 +1903,9 @@ interface WranglerConfig {
         binding?: string;
         id?: string;
     } | null | undefined>;
+    limits?: {
+        cpu_ms?: number;
+    };
     logpush?: boolean;
     main?: string;
     migrations?: ReadonlyArray<{
@@ -1915,6 +1927,7 @@ interface WranglerConfig {
         logs?: {
             enabled?: boolean;
             head_sampling_rate?: number;
+            invocation_logs?: boolean;
         };
     };
     pipelines?: ReadonlyArray<{
@@ -2489,4 +2502,115 @@ const studioAssetsStamp: (resolveFrom?: string) => number | undefined;
 
 ```ts
 const transportRejectionReason: (request: IncomingMessage, logger?: WarnLogger) => string | undefined;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `BindingEntry` (interface)
+
+```ts
+interface BindingEntry {
+    binding?: string;
+    remote?: boolean;
+}
+```
+
+### `DockerLogStream` (interface)
+
+```ts
+interface DockerLogStream {
+    destroy: () => void;
+    on: (event: "data" | "end" | "error", listener: (chunk?: Buffer) => void) => void;
+}
+```
+
+### `DurableObjectSpec` (interface)
+
+```ts
+interface DurableObjectSpec {
+    binding: string;
+    className: string;
+}
+```
+
+### `EnvLike` (type)
+
+```ts
+type EnvLike = Readonly<Record<string, string | undefined>>;
+```
+
+### `GlobalBackend` (type)
+
+```ts
+type GlobalBackend = "d1" | "hyperdrive";
+```
+
+### `InferredQueue` (type)
+
+```ts
+type InferredQueue = QueueIR;
+```
+
+### `RemoteEligibleKey` (type)
+
+```ts
+type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
+```
+
+### `VectorMetadataDeclaration` (interface)
+
+```ts
+interface VectorMetadataDeclaration {
+    index: string;
+    kind: string | undefined;
+    property: string;
+}
+```
+
+### `WranglerDurableObjectBinding` (interface)
+
+```ts
+interface WranglerDurableObjectBinding {
+    class_name?: string;
+    name?: string;
+    script_name?: string;
+}
+```
+
+### `WranglerDurableObjectBinding$1` (interface)
+
+```ts
+interface WranglerDurableObjectBinding$1 {
+    class_name?: string;
+    name?: string;
+    script_name?: string;
+}
+```
+
+### `WranglerQueueConsumer` (interface)
+
+```ts
+interface WranglerQueueConsumer {
+    dead_letter_queue?: string;
+    max_batch_size?: number;
+    max_batch_timeout?: number;
+    max_retries?: number;
+    queue?: string;
+    retry_delay?: number;
+    type?: string;
+}
+```
+
+### `WranglerQueueProducer` (interface)
+
+```ts
+interface WranglerQueueProducer {
+    binding?: string;
+    delivery_delay?: number;
+    queue?: string;
+}
 ```

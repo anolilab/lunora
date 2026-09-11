@@ -553,6 +553,7 @@ interface FacadeEntry {
     findFirst: (args?: unknown) => Promise<unknown>;
     findFirstOrThrow: (args?: unknown) => Promise<unknown>;
     findMany: (args?: unknown) => Promise<unknown>;
+    findUnique: (args?: unknown) => Promise<unknown>;
     get: (id: string) => Promise<unknown>;
     groupBy: (options: unknown) => Promise<unknown>;
     hardDelete: (id: string) => Promise<void>;
@@ -3543,6 +3544,10 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
+        select?: S;
+        with?: W;
+    }) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
     groupBy: (options: TableGroupByOptionsOf<DM, REL, T>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
     rank: (indexName: RANK[T], options: TableRankOptions<DM[T]>) => Promise<null | RankResult>;
@@ -5126,3 +5131,1046 @@ interface X402ProcedureConfig {
 ### `anyApi` (const)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ActionCacheIndexRange` (interface)
+
+```ts
+interface ActionCacheIndexRange {
+    eq: (field: string, value: unknown) => ActionCacheIndexRange;
+    gt: (field: string, value: unknown) => ActionCacheIndexRange;
+    gte: (field: string, value: unknown) => ActionCacheIndexRange;
+    lt: (field: string, value: unknown) => ActionCacheIndexRange;
+    lte: (field: string, value: unknown) => ActionCacheIndexRange;
+}
+```
+
+### `ActionCacheQuery` (interface)
+
+```ts
+interface ActionCacheQuery {
+    first: () => Promise<Record<string, unknown> | null>;
+    order: (direction: "asc" | "desc") => ActionCacheQuery;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
+    withIndex: (indexName: string, range?: (q: ActionCacheIndexRange) => ActionCacheIndexRange) => ActionCacheQuery;
+}
+```
+
+### `AggregateArgs` (interface)
+
+```ts
+interface AggregateArgs {
+    field?: string;
+    op: string;
+    where?: unknown;
+}
+```
+
+### `AggregateArgs$1` (interface)
+
+```ts
+interface AggregateArgs$1 {
+    baseWhere?: WhereInput;
+    field?: string;
+    op: string;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+```
+
+### `AttributeValue` (type)
+
+```ts
+type AttributeValue = string | number | boolean | Array<null | undefined | string> | Array<null | undefined | number> | Array<null | undefined | boolean>;
+```
+
+### `Attributes` (interface)
+
+```ts
+interface Attributes {
+    [attributeKey: string]: AttributeValue | undefined;
+}
+```
+
+### `AuthLike` (type)
+
+```ts
+type AuthLike = {
+    getIdentity?: () => Promise<Record<string, unknown> | null>;
+    roles?: ReadonlyArray<string>;
+    userId?: null | string;
+};
+```
+
+### `BatchWriteOptions` (interface)
+
+```ts
+interface BatchWriteOptions {
+    limit?: number;
+}
+```
+
+### `ComposedOut` (type)
+
+```ts
+type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends readonly [
+    infer Head,
+    ...infer Rest
+] ? ComposedOut<Rest> & (Head extends Plugin<any, any, infer Out> ? Out : unknown) : unknown;
+```
+
+### `Context` (interface)
+
+```ts
+interface Context {
+    getValue(key: symbol): unknown;
+    setValue(key: symbol, value: unknown): Context;
+    deleteValue(key: symbol): Context;
+}
+```
+
+### `ContextWithStorage` (interface)
+
+```ts
+interface ContextWithStorage {
+    storage: StorageDownloader;
+}
+```
+
+### `CountArgs` (interface)
+
+```ts
+interface CountArgs {
+    baseWhere?: WhereInput;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+```
+
+### `DatabaseWriterLike` (interface)
+
+```ts
+interface DatabaseWriterLike {
+    aggregate: (tableName: string, options: AggregateArgs$1) => Promise<null | number>;
+    count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
+    delete: (id: string, expectedTable?: string, options?: {
+        hard?: boolean;
+    }) => Promise<void>;
+    deleteAll?: (tableName: string, options?: {
+        chunkSize?: number;
+        hard?: boolean;
+    }) => Promise<{
+        deleted: number;
+    }>;
+    deleteMany: (ids: ReadonlyArray<string>, options?: {
+        limit?: number;
+    }, expectedTable?: string) => Promise<{
+        deleted: number;
+    }>;
+    deleteWhere?: (tableName: string, where: WhereInput, options?: {
+        limit?: number;
+    }) => Promise<{
+        deleted: number;
+    }>;
+    findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
+    findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    groupBy: (tableName: string, options: GroupByArgs$1) => Promise<ReadonlyArray<{
+        key: Record<string, unknown>;
+        value: null | number;
+    }>>;
+    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
+        limit?: number;
+        skipDuplicates?: boolean;
+    }) => Promise<(string | null)[]>;
+    insertManyUnsafe: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
+        allowExplicitId?: boolean;
+        limit?: number;
+    }) => Promise<string[]>;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | {
+        row: Record<string, unknown>;
+        tableName: string;
+    }>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchMany: (patches: ReadonlyArray<{
+        id: string;
+        patch: Record<string, unknown>;
+    }>, options?: {
+        limit?: number;
+    }, expectedTable?: string) => Promise<{
+        patched: number;
+    }>;
+    patchWhere?: (tableName: string, args: {
+        patch: Record<string, unknown>;
+        where: WhereInput;
+    }, options?: {
+        limit?: number;
+    }) => Promise<{
+        patched: number;
+    }>;
+    query: (tableName: string) => TableReaderLike$1;
+    rank: (tableName: string, indexName: string, options: RankArgs) => Promise<null | {
+        position: number;
+        total: number;
+    }>;
+    rankBefore?: (tableName: string, indexName: string, options: RankBeforeArgs) => Promise<{
+        before: number;
+        total: number;
+    }>;
+    rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
+    rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    wipeShard?: (options?: {
+        chunkSize?: number;
+        exclude?: ReadonlyArray<string>;
+        tables?: ReadonlyArray<string>;
+    }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
+}
+```
+
+### `DeferredScheduleContext` (interface)
+
+```ts
+interface DeferredScheduleContext {
+    scheduler?: unknown;
+}
+```
+
+### `DefinePluginFunction` (interface)
+
+```ts
+interface DefinePluginFunction {
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & {
+        extension: SchemaExtension<TExtension>;
+    }): Plugin<TExtension, TContextIn, TContextOut> & {
+        readonly extension: SchemaExtension<TExtension>;
+    };
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut>): Plugin<TExtension, TContextIn, TContextOut>;
+}
+```
+
+### `Exception` (type)
+
+```ts
+type Exception = ExceptionWithCode | ExceptionWithMessage | ExceptionWithName | string;
+```
+
+### `ExceptionWithCode` (interface)
+
+```ts
+interface ExceptionWithCode {
+    code: string | number;
+    name?: string;
+    message?: string;
+    stack?: string;
+}
+```
+
+### `ExceptionWithMessage` (interface)
+
+```ts
+interface ExceptionWithMessage {
+    code?: string | number;
+    message: string;
+    name?: string;
+    stack?: string;
+}
+```
+
+### `ExceptionWithName` (interface)
+
+```ts
+interface ExceptionWithName {
+    code?: string | number;
+    message?: string;
+    name: string;
+    stack?: string;
+}
+```
+
+### `ExtensionTablesOf` (type)
+
+```ts
+type ExtensionTablesOf<P> = P extends {
+    readonly extension: SchemaExtension<infer X> & {
+        readonly key: infer K;
+    };
+} ? K extends string ? PrefixedTables<X, K> : Record<never, never> : Record<never, never>;
+```
+
+### `FacadeInsertOptions` (interface)
+
+```ts
+interface FacadeInsertOptions {
+    skipDuplicates?: boolean;
+}
+```
+
+### `FunctionHandle` (interface)
+
+```ts
+interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream", Args, Return> {
+    readonly __lunoraPhantom?: {
+        args: Args;
+        kind: Kind;
+        returns: Return;
+    };
+    readonly __lunoraRef: string;
+}
+```
+
+### `GeoScoredDocument` (interface)
+
+```ts
+interface GeoScoredDocument {
+    distanceMeters: null | number;
+    document: Record<string, unknown>;
+    score?: never;
+}
+```
+
+### `GroupByArgs` (interface)
+
+```ts
+interface GroupByArgs {
+    agg?: {
+        field?: string;
+        op: string;
+    };
+    by: ReadonlyArray<string>;
+    where?: unknown;
+}
+```
+
+### `GroupByArgs$1` (interface)
+
+```ts
+interface GroupByArgs$1 {
+    agg?: {
+        field?: string;
+        op: string;
+    };
+    baseWhere?: WhereInput;
+    by: ReadonlyArray<string>;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+```
+
+### `HrTime` (type)
+
+```ts
+type HrTime = [
+    number,
+    number
+];
+```
+
+### `InsertManyOptions` (interface)
+
+```ts
+interface InsertManyOptions extends BatchWriteOptions {
+    skipDuplicates?: boolean;
+}
+```
+
+### `InstalledTables` (type)
+
+```ts
+type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends ReadonlyArray<unknown>> = Plugins extends readonly [
+    infer Head,
+    ...infer Rest
+] ? InstalledTables<ExtensionTablesOf<Head> & T, Rest> : T;
+```
+
+### `Link` (interface)
+
+```ts
+interface Link {
+    context: SpanContext;
+    attributes?: SpanAttributes;
+    droppedAttributesCount?: number;
+}
+```
+
+### `ListFilterShape` (type)
+
+```ts
+type ListFilterShape<TDocument> = {
+    [K in keyof TDocument & string]?: Validator<TDocument[K]>;
+};
+```
+
+### `LoadRelation` (type)
+
+```ts
+type LoadRelation<DM, REL extends Record<keyof DM, object>, R, WK> = R extends {
+    __relationKind: "one";
+    __target: infer Target extends keyof DM;
+} ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>> | null : R extends {
+    __relationKind: "many";
+    __target: infer Target extends keyof DM;
+} ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>>[] : never;
+```
+
+### `LoadedCount` (type)
+
+```ts
+type LoadedCount<W> = W extends {
+    _count: infer C;
+} ? {
+    _count: {
+        [K in keyof C]: number;
+    };
+} : {};
+```
+
+### `LoadedRelations` (type)
+
+```ts
+type LoadedRelations<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W> = {
+    [K in keyof W as K extends keyof REL[T] ? (W[K] extends false | undefined ? never : K) : never]: K extends keyof REL[T] ? LoadRelation<DM, REL, REL[T][K], W[K]> : never;
+};
+```
+
+### `MaskContextIn` (interface)
+
+```ts
+interface MaskContextIn {
+    auth?: AuthLike;
+    db: MaskDatabase;
+}
+```
+
+### `MaskDatabase` (interface)
+
+```ts
+interface MaskDatabase {
+    aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
+    count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
+    delete: (id: string, expectedTable?: string) => Promise<void>;
+    deleteMany: (ids: ReadonlyArray<string>, options?: {
+        limit?: number;
+    }) => Promise<{
+        deleted: number;
+    }>;
+    deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: {
+        limit?: number;
+    }) => Promise<{
+        deleted: number;
+    }>;
+    findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
+    findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{
+        key: Record<string, unknown>;
+        value: null | number;
+    }>>;
+    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
+        limit?: number;
+        skipDuplicates?: boolean;
+    }) => Promise<(string | null)[]>;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | {
+        row: Record<string, unknown>;
+        tableName: string;
+    }>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchMany: (patches: ReadonlyArray<{
+        id: string;
+        patch: Record<string, unknown>;
+    }>, options?: {
+        limit?: number;
+    }) => Promise<{
+        patched: number;
+    }>;
+    patchWhere?: (tableName: string, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }, options?: {
+        limit?: number;
+    }) => Promise<{
+        patched: number;
+    }>;
+    query: (tableName: string) => TableReaderLike;
+    rank: (tableName: string, indexName: string, options: unknown) => Promise<null | {
+        position: number;
+        total: number;
+    }>;
+    rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{
+        before: number;
+        total: number;
+    }>;
+    rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
+    rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+}
+```
+
+### `NestedSelectArgument` (type)
+
+```ts
+type NestedSelectArgument<WK> = WK extends {
+    select: infer S;
+} ? S : undefined;
+```
+
+### `NestedWithArgument` (type)
+
+```ts
+type NestedWithArgument<WK> = WK extends {
+    with: infer NW;
+} ? NW : {};
+```
+
+### `ProjectDoc` (type)
+
+```ts
+type ProjectDoc<DM, T extends keyof DM, S> = S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
+```
+
+### `QueryArgs` (interface)
+
+```ts
+interface QueryArgs {
+    baseWhere?: unknown;
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: ReadonlyArray<Record<string, unknown>>;
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+    where?: unknown;
+    with?: Record<string, unknown>;
+}
+```
+
+### `QueryArgs$1` (interface)
+
+```ts
+interface QueryArgs$1 {
+    baseWhere?: WhereInput;
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: ReadonlyArray<unknown>;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+    with?: Record<string, unknown>;
+}
+```
+
+### `QueryPage` (interface)
+
+```ts
+interface QueryPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Record<string, unknown>[];
+}
+```
+
+### `QueryPage$1` (interface)
+
+```ts
+interface QueryPage$1 {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Record<string, unknown>[];
+}
+```
+
+### `RankArgs` (interface)
+
+```ts
+interface RankArgs {
+    baseWhere?: WhereInput;
+    restrictsCounts?: boolean;
+    row: Record<string, unknown> | string;
+    where?: WhereInput;
+}
+```
+
+### `RankBeforeArgs` (interface)
+
+```ts
+interface RankBeforeArgs {
+    partitionKey: string;
+    restrictsCounts?: boolean;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+```
+
+### `RankPageArgs` (interface)
+
+```ts
+interface RankPageArgs {
+    baseWhere?: WhereInput;
+    cursor?: null | string;
+    restrictsCounts?: boolean;
+    take?: number;
+    where?: WhereInput;
+}
+```
+
+### `RankPageRowKeyLike` (interface)
+
+```ts
+interface RankPageRowKeyLike {
+    partitionKey: string;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+```
+
+### `RankPageRowLike` (interface)
+
+```ts
+interface RankPageRowLike {
+    doc: Record<string, unknown>;
+    key: RankPageRowKeyLike;
+}
+```
+
+### `RelationWhere` (type)
+
+```ts
+type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
+    [K in keyof REL[T]]?: REL[T][K] extends {
+        __relationKind: "one";
+        __target: infer Target extends keyof DM;
+    } ? OneRelationWhere<WhereOf<DM, REL, Target>> : REL[T][K] extends {
+        __relationKind: "many";
+        __target: infer Target extends keyof DM;
+    } ? ManyRelationWhere<WhereOf<DM, REL, Target>> : never;
+};
+```
+
+### `RestCachePolicy` (interface)
+
+```ts
+interface RestCachePolicy {
+    readonly credentialHeaders?: ReadonlyArray<string>;
+    readonly maxAge: number;
+    readonly scope: "private" | "public";
+    readonly staleWhileRevalidate?: number;
+    readonly tag?: string;
+    readonly vary?: string;
+}
+```
+
+### `RlsContextIn` (interface)
+
+```ts
+interface RlsContextIn {
+    auth?: AuthLike;
+    db: RlsDatabase;
+}
+```
+
+### `RlsDatabase` (type)
+
+```ts
+type RlsDatabase = DatabaseWriterLike;
+```
+
+### `RunAction` (interface)
+
+```ts
+interface RunAction {
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
+}
+```
+
+### `RunMutation` (interface)
+
+```ts
+interface RunMutation {
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
+}
+```
+
+### `RunQuery` (interface)
+
+```ts
+interface RunQuery {
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
+}
+```
+
+### `SEARCH_LANGUAGES` (const)
+
+```ts
+const SEARCH_LANGUAGES: readonly [
+    "de",
+    "en",
+    "es",
+    "fr",
+    "it",
+    "nl",
+    "none",
+    "pt"
+];
+```
+
+### `SEARCH_STRATEGIES` (const)
+
+```ts
+const SEARCH_STRATEGIES: readonly [
+    "native",
+    "portable"
+];
+```
+
+### `SYSTEM_INDEX_FIELDS` (const)
+
+```ts
+const SYSTEM_INDEX_FIELDS: readonly [
+    "_commitSeq",
+    "_creationTime",
+    "_id"
+];
+```
+
+### `SchedulableTarget` (type)
+
+```ts
+type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
+```
+
+### `SchedulableWorkflowReference` (interface)
+
+```ts
+interface SchedulableWorkflowReference {
+    readonly binding?: string;
+    readonly isLunoraWorkflow: true;
+    readonly name?: string;
+}
+```
+
+### `SchedulerLike` (interface)
+
+```ts
+interface SchedulerLike {
+    runAfter: (delayMs: number, target: never, args: never, options?: never) => Promise<string>;
+    runAt: (timestampMs: number, target: never, args: never, options?: never) => Promise<string>;
+}
+```
+
+### `ScopedReadPolicies` (interface)
+
+```ts
+interface ScopedReadPolicies {
+    readonly policies: ReadonlyArray<Policy>;
+    readonly rolePermissions: ReadonlyMap<string, ReadonlySet<string>>;
+}
+```
+
+### `ScoredDocument` (type)
+
+```ts
+type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
+```
+
+### `SearchScoredDocument` (interface)
+
+```ts
+interface SearchScoredDocument {
+    distanceMeters?: never;
+    document: Record<string, unknown>;
+    score: number;
+}
+```
+
+### `SelectAlwaysKeep` (type)
+
+```ts
+type SelectAlwaysKeep<DM, T extends keyof DM> = ("_creationTime" | "_id") & keyof DM[T];
+```
+
+### `ShardRankPageResultLike` (interface)
+
+```ts
+interface ShardRankPageResultLike {
+    directions: ReadonlyArray<"asc" | "desc">;
+    hasMore: boolean;
+    rows: ReadonlyArray<RankPageRowLike>;
+}
+```
+
+### `Span` (interface)
+
+```ts
+interface Span {
+    spanContext(): SpanContext;
+    setAttribute(key: string, value: SpanAttributeValue): this;
+    setAttributes(attributes: SpanAttributes): this;
+    addEvent(name: string, attributesOrStartTime?: SpanAttributes | TimeInput, startTime?: TimeInput): this;
+    addLink(link: Link): this;
+    addLinks(links: Link[]): this;
+    setStatus(status: SpanStatus): this;
+    updateName(name: string): this;
+    end(endTime?: TimeInput): void;
+    isRecording(): boolean;
+    recordException(exception: Exception, time?: TimeInput): void;
+}
+```
+
+### `SpanAttributeValue` (type)
+
+```ts
+type SpanAttributeValue = AttributeValue;
+```
+
+### `SpanAttributes` (type)
+
+```ts
+type SpanAttributes = Attributes;
+```
+
+### `SpanContext` (interface)
+
+```ts
+interface SpanContext {
+    traceId: string;
+    spanId: string;
+    isRemote?: boolean;
+    traceFlags: number;
+    traceState?: TraceState;
+}
+```
+
+### `SpanKind` (enum)
+
+```ts
+enum SpanKind {
+    INTERNAL = 0,
+    SERVER = 1,
+    CLIENT = 2,
+    PRODUCER = 3,
+    CONSUMER = 4
+}
+```
+
+### `SpanOptions` (interface)
+
+```ts
+interface SpanOptions {
+    kind?: SpanKind;
+    attributes?: Attributes;
+    links?: Link[];
+    startTime?: TimeInput;
+    root?: boolean;
+}
+```
+
+### `SpanStatus` (interface)
+
+```ts
+interface SpanStatus {
+    code: SpanStatusCode;
+    message?: string;
+}
+```
+
+### `SpanStatusCode` (enum)
+
+```ts
+enum SpanStatusCode {
+    UNSET = 0,
+    OK = 1,
+    ERROR = 2
+}
+```
+
+### `StorageContextIn` (interface)
+
+```ts
+interface StorageContextIn {
+    auth?: AuthLike;
+    db?: unknown;
+    storage?: unknown;
+}
+```
+
+### `StorageDownloader` (interface)
+
+```ts
+interface StorageDownloader extends StorageHead {
+    download: (key: string, options?: {
+        range?: StorageRange;
+    }) => Promise<StorageObjectBody | null>;
+}
+```
+
+### `StorageHead` (interface)
+
+```ts
+interface StorageHead {
+    head: (key: string) => Promise<Omit<StorageObjectBody, "body"> | null>;
+}
+```
+
+### `StorageObjectBody` (interface)
+
+```ts
+interface StorageObjectBody {
+    body: ReadableStream | null;
+    etag: string;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    key: string;
+    sha256?: string;
+    sha256Base64?: string;
+    size: number;
+}
+```
+
+### `StorageRange` (interface)
+
+```ts
+interface StorageRange {
+    length: number;
+    offset: number;
+}
+```
+
+### `StreamOptions` (interface)
+
+```ts
+interface StreamOptions {
+    durable?: boolean | DurableStreamOptions;
+}
+```
+
+### `SystemDocMap` (interface)
+
+```ts
+interface SystemDocMap {
+    _scheduled_functions: ScheduledFunctionDoc;
+    _storage: StorageMetadata;
+}
+```
+
+### `TableReaderLike` (interface)
+
+```ts
+interface TableReaderLike {
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
+    collect: () => Promise<Record<string, unknown>[]>;
+    collectWithScores: () => Promise<ScoredDocument[]>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
+    first: () => Promise<Record<string, unknown> | null>;
+    order: (direction: "asc" | "desc") => TableReaderLike;
+    paginate: (options: {
+        cursor?: null | string;
+        numItems: number;
+    }) => Promise<QueryPage>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
+    unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => TableReaderLike;
+    withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
+    withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
+}
+```
+
+### `TableReaderLike$1` (interface)
+
+```ts
+interface TableReaderLike$1 {
+    collect: () => Promise<Record<string, unknown>[]>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike$1;
+    first: () => Promise<Record<string, unknown> | null>;
+    paginate: (options: {
+        cursor?: null | string;
+        numItems: number;
+    }) => Promise<QueryPage$1>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
+    withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => TableReaderLike$1;
+    withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike$1;
+    withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike$1;
+}
+```
+
+### `TimeInput` (type)
+
+```ts
+type TimeInput = HrTime | number | Date;
+```
+
+### `TraceState` (interface)
+
+```ts
+interface TraceState {
+    set(key: string, value: string): TraceState;
+    unset(key: string): TraceState;
+    get(key: string): string | undefined;
+    serialize(): string;
+}
+```
+
+### `Tracer` (interface)
+
+```ts
+interface Tracer {
+    startSpan(name: string, options?: SpanOptions, context?: Context): Span;
+    startActiveSpan<F extends (span: Span) => unknown>(name: string, fn: F): ReturnType<F>;
+    startActiveSpan<F extends (span: Span) => unknown>(name: string, options: SpanOptions, fn: F): ReturnType<F>;
+    startActiveSpan<F extends (span: Span) => unknown>(name: string, options: SpanOptions, context: Context, fn: F): ReturnType<F>;
+}
+```
+
+### `UpsertArgs` (interface)
+
+```ts
+interface UpsertArgs {
+    create: Record<string, unknown>;
+    target: UpsertTarget;
+    update?: Record<string, unknown>;
+}
+```
+
+### `UpsertManyArgs` (interface)
+
+```ts
+interface UpsertManyArgs {
+    rows: ReadonlyArray<{
+        create: Record<string, unknown>;
+        update?: Record<string, unknown>;
+    }>;
+    target: UpsertTarget;
+}
+```
+
+### `UpsertResult` (interface)
+
+```ts
+interface UpsertResult {
+    created: boolean;
+    id: string;
+}
+```
+
+### `UpsertTarget` (type)
+
+```ts
+type UpsertTarget = ReadonlyArray<string> | string;
+```

@@ -233,7 +233,10 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             const records = await getMatchingRecords(indexName, ids, resolved);
 
             return records.map((record) => {
-                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: record.values };
+                // `Array.from`: the binding's own `values` may be a typed array
+                // (`VectorValues`), and `VectorRecordLike` — the ctx-facing shape — is
+                // a plain number array.
+                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: [...record.values] };
             });
         },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {

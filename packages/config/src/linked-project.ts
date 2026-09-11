@@ -8,7 +8,7 @@
  * `deploy --migrate`, `logs`, `run`, `insights`, the deploy summary — no longer
  * need `--url`/`--name` re-typed on every invocation.
  *
- * It is deliberately distinct from `lunora.json` (committed project settings)
+ * It is deliberately distinct from `lunora.config.*` (committed project settings)
  * and from `wrangler.jsonc` (Cloudflare worker config). It carries no secrets —
  * only public identifiers — so even though it is gitignored by convention, an
  * accidental commit leaks nothing sensitive.

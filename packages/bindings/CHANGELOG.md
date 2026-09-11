@@ -1,3 +1,32 @@
+## @lunora/bindings [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.55...@lunora/bindings@1.0.0-alpha.56) (2026-09-10)
+
+### Features
+
+* **bindings:** export the r2sql identifier helpers ([#686](https://github.com/anolilab/lunora/issues/686)) ([8b1ba6a](https://github.com/anolilab/lunora/commit/8b1ba6a7d15be54792e57b4926097392ca1a2e0c))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/bindings [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.54...@lunora/bindings@1.0.0-alpha.55) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
+## @lunora/bindings [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.53...@lunora/bindings@1.0.0-alpha.54) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/bindings [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.52...@lunora/bindings@1.0.0-alpha.53) (2026-09-06)
 
 

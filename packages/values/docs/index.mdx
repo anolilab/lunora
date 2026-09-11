@@ -46,7 +46,7 @@ Lunora validator directly.
 | `v.null()`             | `null`                        | Only `null`                                            |
 | `v.bigint()`           | `bigint`                      | Stored as INTEGER (int64) in D1                        |
 | `v.bytes()`            | `ArrayBuffer`                 | Binary; stored as BLOB. A `Uint8Array` is rejected     |
-| `v.any()`              | anything                      | Escape hatch; no runtime check                         |
+| `v.any()`              | anything                      | Escape hatch; no runtime check — see below             |
 | `v.id(table)`          | `Id<table>`                   | Branded id string for the given table                  |
 | `v.literal(value)`     | exact `value`                 | `string` / `number` / `boolean` / `bigint` / `null`    |
 | `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                                      |
@@ -62,6 +62,22 @@ Lunora validator directly.
 Every factory returns a `Validator` with `parse(value)` (throws
 [`ValidationError`](#validationerror)) and `safeParse(value)` (returns
 `{ ok: true, value } | { ok: false, error }`).
+
+### Which keys are optional
+
+A key is optional when its validator accepts the field **absent** — which is
+broader than `v.optional(...)`:
+
+- `v.optional(inner)` — the explicit spelling.
+- `v.any()` — it returns its input unchanged, so `undefined` parses. A bare
+  `v.any()` field is therefore `data?: unknown`, not `data: unknown`.
+- `v.union(a, b, ...)` with an `any` or `v.optional(...)` member — the union
+  tries its members, and one of them accepts `undefined`.
+
+One rule, applied everywhere: `Infer`/`InferValidatorMap` key off it, `required`
+in the emitted JSON Schema is its complement, and `@lunora/codegen` renders
+`key?: T` from it in `_generated/api.ts`. So a procedure's handler `args` and the
+generated reference for a procedure declaring the _same_ validator always agree.
 
 ### `v.partial(shape)`
 
@@ -185,7 +201,10 @@ to SQL types.
 
 `toJsonSchema(validator)` converts one validator to a JSON Schema node (Draft
 2020-12 / OpenAPI 3.1). `argsToJsonSchema(argsMap)` converts a function's arg map
-to a single object schema, marking non-`optional` args as `required`.
+to a single object schema; `required` lists every arg that does **not** accept an
+absent field (see [Which keys are optional](#which-keys-are-optional)).
+`acceptsAbsent(node, reader)` is that predicate, exported so a build-time consumer
+holding its own validator representation can answer the question the same way.
 
 ```ts
 import { argsToJsonSchema, v } from "@lunora/values";
@@ -200,4 +219,5 @@ const schema = argsToJsonSchema({ id: v.id("users"), limit: v.optional(v.number(
 `source` through its validator, re-wrapping any `ValidationError` with a
 `<label>.<key>:` prefix. It is the shared arg/field parser used by the procedure
 builder, the HTTP route builder, and reusable workflow steps. `InferValidatorMap<A>`
-gives the object type of such a map (optional validators become optional keys).
+gives the object type of such a map, with the optionality rule above applied to
+each key.

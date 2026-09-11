@@ -1560,6 +1560,38 @@ interface QueryCoordinatorOptions {
 }
 ```
 
+### `QueueForwardBatch` (interface)
+
+```ts
+interface QueueForwardBatch {
+    messages: ReadonlyArray<QueueForwardMessage>;
+    queue: string;
+}
+```
+
+### `QueueForwardHandler` (type)
+
+```ts
+type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: ExecutionContextLike) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
+```
+
+### `QueueForwardMessage` (interface)
+
+```ts
+interface QueueForwardMessage {
+    body: unknown;
+    id: string;
+}
+```
+
+### `QueueForwardResult` (interface)
+
+```ts
+interface QueueForwardResult {
+    retry?: ReadonlyArray<string>;
+}
+```
+
 ### `RankFanOutRequest` (interface)
 
 ```ts
@@ -2235,6 +2267,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
@@ -2638,4 +2671,573 @@ const webhookSink: (options: WebhookSinkOptions) => ObservabilitySink;
 
 ```ts
 const withFrameworkWorker: (host: FrameworkHostHandler, optionsInput: FrameworkWorkerOptionsInput) => LunoraWorker;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ApplyCdcFanOutRequest` (interface)
+
+```ts
+interface ApplyCdcFanOutRequest {
+    batches: ReadonlyArray<{
+        changes: ReadonlyArray<Record<string, unknown>>;
+        shardKey: string;
+    }>;
+    headers?: Record<string, string>;
+}
+```
+
+### `ApplyCdcFanOutResult` (interface)
+
+```ts
+interface ApplyCdcFanOutResult {
+    applied: number;
+    failed: number;
+    ok: number;
+}
+```
+
+### `AuthAuditEntry` (interface)
+
+```ts
+interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AuthAuditOutcome` (type)
+
+```ts
+type AuthAuditOutcome = "failure" | "success";
+```
+
+### `AuthAuditReader` (interface)
+
+```ts
+interface AuthAuditReader {
+    read: (options: ReadAuthAuditQuery) => Promise<AuthAuditEntry[]>;
+}
+```
+
+### `AuthTimestamp` (type)
+
+```ts
+type AuthTimestamp = null | number | string;
+```
+
+### `CdcSyncFanOutRequest` (interface)
+
+```ts
+interface CdcSyncFanOutRequest {
+    cursors?: Record<string, number>;
+    defaultShardKey: DefaultShardKey;
+    headers?: Record<string, string>;
+    limit?: number;
+    tables: ReadonlyArray<string>;
+}
+```
+
+### `CdcSyncFanOutResult` (interface)
+
+```ts
+interface CdcSyncFanOutResult {
+    failed: number;
+    ok: number;
+    shards: ReadonlyArray<ShardCdcOutcome>;
+}
+```
+
+### `ContextLogLevel` (type)
+
+```ts
+type ContextLogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
+```
+
+### `DEFAULT_COLUMNS` (const)
+
+```ts
+const DEFAULT_COLUMNS: {
+    readonly fields: "fields";
+    readonly functionPath: "functionPath";
+    readonly level: "level";
+    readonly message: "message";
+    readonly shardKey: "shardKey";
+    readonly spanId: "spanId";
+    readonly traceId: "traceId";
+    readonly ts: "ts";
+    readonly userId: "userId";
+};
+```
+
+### `DefaultShardKey` (type)
+
+```ts
+type DefaultShardKey = string | null;
+```
+
+### `FetchLike` (type)
+
+```ts
+type FetchLike = (input: string, init: {
+    body: string;
+    headers: Record<string, string>;
+    method: string;
+}) => Promise<{
+    ok: boolean;
+    status: number;
+}>;
+```
+
+### `FrameworkTriggers` (interface)
+
+```ts
+interface FrameworkTriggers {
+    email: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    queue: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+}
+```
+
+### `FunctionArgumentDescriptor` (interface)
+
+```ts
+interface FunctionArgumentDescriptor {
+    element?: string;
+    kind: string;
+    name: string;
+    optional: boolean;
+    table?: string;
+}
+```
+
+### `GlobalCdcApplyFunction` (type)
+
+```ts
+type GlobalCdcApplyFunction = (request: {
+    changes: ReadonlyArray<Record<string, unknown>>;
+}) => Promise<number>;
+```
+
+### `GlobalCdcSyncFunction` (type)
+
+```ts
+type GlobalCdcSyncFunction = (request: {
+    limit?: number;
+    sinceSeq: number;
+}) => Promise<{
+    changes: ReadonlyArray<Record<string, unknown>>;
+    cursor: number;
+}>;
+```
+
+### `GlobalFacetResult` (interface)
+
+```ts
+interface GlobalFacetResult {
+    truncated: boolean;
+    values: {
+        count: number;
+        value: unknown;
+    }[];
+}
+```
+
+### `GlobalFilterClause` (interface)
+
+```ts
+interface GlobalFilterClause {
+    column: string;
+    value: unknown;
+}
+```
+
+### `HealthOptions` (interface)
+
+```ts
+interface HealthOptions {
+    appName?: string;
+    appVersion?: string;
+    auth?: "admin" | "public";
+    cacheTtlMs?: number;
+    disableBindingProbes?: boolean;
+    probes?: ReadonlyArray<HealthProbe>;
+}
+```
+
+### `KvLike` (interface)
+
+```ts
+interface KvLike {
+    get: (key: string, type: "json") => Promise<unknown>;
+    put: (key: string, value: string) => Promise<unknown>;
+}
+```
+
+### `LogSinkContext` (interface)
+
+```ts
+interface LogSinkContext {
+    resourceAttributes?: () => Record<string, boolean | number | string>;
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `NotifySubscriptionFilter` (interface)
+
+```ts
+interface NotifySubscriptionFilter {
+    kind?: "fcm" | "web-push";
+    limit?: number;
+    userId?: null | string;
+}
+```
+
+### `OnlyErrorsOption` (interface)
+
+```ts
+interface OnlyErrorsOption {
+    onlyErrors?: boolean;
+}
+```
+
+### `OtlpAttributeValue` (type)
+
+```ts
+type OtlpAttributeValue = boolean | number | string;
+```
+
+### `OtlpBatchOptions` (interface)
+
+```ts
+interface OtlpBatchOptions {
+    maxDelayMs?: number;
+    maxItems?: number;
+}
+```
+
+### `OtlpPostProcessor` (interface)
+
+```ts
+interface OtlpPostProcessor {
+    log?: (event: LogEvent) => LogEvent | undefined;
+    metric?: (event: MetricEvent) => MetricEvent | undefined;
+    rpc?: (event: ObservabilityEvent) => ObservabilityEvent | undefined;
+    span?: (event: SpanEvent) => SpanEvent | undefined;
+}
+```
+
+### `OtlpSpanKind` (type)
+
+```ts
+type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `QueueConsumerHandler` (type)
+
+```ts
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+```
+
+### `R2PutLike` (interface)
+
+```ts
+interface R2PutLike {
+    put: (key: string, value: string, options?: {
+        httpMetadata?: {
+            contentType?: string;
+        };
+    }) => Promise<unknown>;
+}
+```
+
+### `REGION_HINTS` (const)
+
+```ts
+const REGION_HINTS: readonly [
+    "wnam",
+    "enam",
+    "sam",
+    "weur",
+    "eeur",
+    "apac",
+    "apac-ne",
+    "apac-se",
+    "oc",
+    "afr",
+    "me"
+];
+```
+
+### `ReadAuthAuditQuery` (interface)
+
+```ts
+interface ReadAuthAuditQuery {
+    actorId?: string;
+    event?: string;
+    limit?: number;
+    sinceSeq?: number;
+}
+```
+
+### `RegionHint` (type)
+
+```ts
+type RegionHint = (typeof REGION_HINTS)[number];
+```
+
+### `ResolvedCors` (interface)
+
+```ts
+interface ResolvedCors {
+    allowCredentials: boolean;
+    allowedHeaders: string[];
+    allowedMethods: string[];
+    enabled: boolean;
+    isAllowed: (origin: string) => boolean;
+    isExplicitlyAllowed: (origin: string) => boolean;
+    maxAge: number;
+}
+```
+
+### `ResolvedCsrf` (interface)
+
+```ts
+interface ResolvedCsrf {
+    allowLoopback: boolean;
+    enabled: boolean;
+    trustedOrigins: string[];
+}
+```
+
+### `ResolvedHeaders` (interface)
+
+```ts
+interface ResolvedHeaders {
+    coop: string | undefined;
+    csp: {
+        htmlValue: string | undefined;
+        value: string;
+    } | undefined;
+    enabled: boolean;
+    frameOptions: string | undefined;
+    hsts: string | undefined;
+    permissionsPolicy: string | undefined;
+    referrerPolicy: string | undefined;
+}
+```
+
+### `ResolvedIdentity` (interface)
+
+```ts
+interface ResolvedIdentity {
+    [key: string]: unknown;
+    exp?: number;
+    expiresAtMs?: number;
+    userId: string;
+}
+```
+
+### `RestCachePolicy` (interface)
+
+```ts
+interface RestCachePolicy {
+    readonly credentialHeaders?: ReadonlyArray<string>;
+    readonly maxAge: number;
+    readonly scope: "private" | "public";
+    readonly staleWhileRevalidate?: number;
+    readonly tag?: string;
+    readonly vary?: string;
+}
+```
+
+### `RestExposure` (interface)
+
+```ts
+interface RestExposure {
+    cache?: RestCachePolicy;
+    rest?: boolean;
+}
+```
+
+### `RestFunctionKind` (type)
+
+```ts
+type RestFunctionKind = "action" | "mutation" | "query";
+```
+
+### `RestSurfaceEntry` (interface)
+
+```ts
+interface RestSurfaceEntry {
+    functionPath: string;
+    kind: RestFunctionKind;
+    method: "GET" | "POST";
+    name: string;
+    namespace: string;
+    path: string;
+}
+```
+
+### `SchedulerContext` (interface)
+
+```ts
+interface SchedulerContext {
+    cancel: (id: string) => Promise<{
+        cancelled: boolean;
+    }>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+    list: () => Promise<Record<string, unknown>[]>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+}
+```
+
+### `ShardCdcOutcome` (interface)
+
+```ts
+interface ShardCdcOutcome {
+    changes?: ReadonlyArray<Record<string, unknown>>;
+    cursor: number;
+    error?: {
+        message: string;
+        timedOut: boolean;
+    };
+    shardKey: string;
+}
+```
+
+### `ShardGetOptions` (interface)
+
+```ts
+interface ShardGetOptions {
+    locationHint?: RegionHint;
+}
+```
+
+### `SpanEventPoint` (interface)
+
+```ts
+interface SpanEventPoint {
+    attributes?: LogFields;
+    name: string;
+    ts: number;
+}
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `StorageDeleteFunction` (type)
+
+```ts
+type StorageDeleteFunction = (key: string, options?: {
+    bucket?: string;
+}) => Promise<void> | void;
+```
+
+### `StorageDownloadFunction` (type)
+
+```ts
+type StorageDownloadFunction = (key: string, options?: {
+    bucket?: string;
+}) => Promise<{
+    body: ReadableStream | null;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    size?: number;
+} | null>;
+```
+
+### `StorageSignedUrlFunction` (type)
+
+```ts
+type StorageSignedUrlFunction = (key: string, options?: {
+    bucket?: string;
+    contentType?: string;
+    expiresInSeconds?: number;
+    method?: "GET" | "PUT";
+}) => Promise<string> | string;
+```
+
+### `StorageUploadFunction` (type)
+
+```ts
+type StorageUploadFunction = (key: string, body: ArrayBuffer, options?: {
+    bucket?: string;
+    contentType?: string;
+    sha256?: string;
+}) => Promise<{
+    etag?: string;
+    key: string;
+}> | {
+    etag?: string;
+    key: string;
+};
+```
+
+### `TailSampler` (type)
+
+```ts
+type TailSampler = (input: TailSamplerInput) => boolean;
+```
+
+### `TailSamplerInput` (interface)
+
+```ts
+interface TailSamplerInput {
+    logs: LogEvent[];
+    rpc: ObservabilityEvent[];
+    spans: SpanEvent[];
+    traceId: string | undefined;
+}
+```
+
+### `TraceSamplingDecision` (interface)
+
+```ts
+interface TraceSamplingDecision {
+    isTraced: boolean;
+    keepErrors: boolean;
+}
+```
+
+### `X402ChargeGate` (type)
+
+```ts
+type X402ChargeGate = (request: Request, spec: {
+    functionPath: string;
+    price: number | string;
+}, dispatch: () => Promise<Response>, deps?: {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}) => Promise<Response>;
+```
+
+### `describeRestSurface` (const)
+
+```ts
+const describeRestSurface: (procedures: ReadonlyArray<{
+    exposure?: RestExposure;
+    functionPath: string;
+    kind: "action" | "mutation" | "query" | "stream";
+}>) => RestSurfaceEntry[];
 ```

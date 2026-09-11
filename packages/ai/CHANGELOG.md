@@ -1,3 +1,36 @@
+## @lunora/ai [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.87...@lunora/ai@1.0.0-alpha.88) (2026-09-11)
+
+## @lunora/ai [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.86...@lunora/ai@1.0.0-alpha.87) (2026-09-11)
+
+## @lunora/ai [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.85...@lunora/ai@1.0.0-alpha.86) (2026-09-10)
+
+### Features
+
+* **ai:** let a deployment tag its AI Gateway calls ([#682](https://github.com/anolilab/lunora/issues/682)) ([4e6f832](https://github.com/anolilab/lunora/commit/4e6f832b63726215f4a3d0f565f979ea22a4bbb9))
+
+## @lunora/ai [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.84...@lunora/ai@1.0.0-alpha.85) (2026-09-10)
+
+## @lunora/ai [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.83...@lunora/ai@1.0.0-alpha.84) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.82...@lunora/ai@1.0.0-alpha.83) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.81...@lunora/ai@1.0.0-alpha.82) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.80...@lunora/ai@1.0.0-alpha.81) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.79...@lunora/ai@1.0.0-alpha.80) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.78...@lunora/ai@1.0.0-alpha.79) (2026-09-08)
+
+## @lunora/ai [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.77...@lunora/ai@1.0.0-alpha.78) (2026-09-07)
+
+## @lunora/ai [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.76...@lunora/ai@1.0.0-alpha.77) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
 ## @lunora/ai [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.75...@lunora/ai@1.0.0-alpha.76) (2026-09-06)
 
 ### Bug Fixes

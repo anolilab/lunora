@@ -387,25 +387,59 @@ interface NodeShardHostOptions {
 /**
  * Build a `ShardHost` over a real `better-sqlite3` database.
  *
- * `runSerialized` chains onto a single `tail` promise rather than the
- * reference host's explicit job-array-plus-drain-loop: every queued closure
- * runs once `tail` settles, and `tail` is reset to a version that always
- * resolves (never rejects) so one job's failure cannot wedge the queue for
- * every job after it — the same "no two closures interleave" guarantee,
- * fewer moving parts to get wrong.
+ * `runSerialized` and `transaction` share **one** boundary lock, because they
+ * write **one** `better-sqlite3` connection. `transaction` issues raw
+ * `BEGIN`/`COMMIT`/`ROLLBACK` — legal here (unlike inside a Cloudflare Durable
+ * Object, where the runtime forbids it and callers must use
+ * `storage.transaction`) because better-sqlite3 is a plain embedded database
+ * with no platform-level transaction primitive layered over it.
  *
- * `transaction` issues raw `BEGIN`/`COMMIT`/`ROLLBACK` — legal here (unlike
- * inside a Cloudflare Durable Object, where the runtime forbids it and
- * callers must use `storage.transaction`) because better-sqlite3 is a plain
- * embedded database with no platform-level transaction primitive layered over
- * it. It runs on its own private `transactionTail` chain, the same shape as
- * `runSerialized`'s but never shared with it: two bare, overlapping
- * `transaction()` calls on this host serialize against each other rather than
- * corrupting each other's commits (raw `BEGIN` on a connection already inside
- * a transaction throws, or worse, interleaves). Routing `transaction` through
- * `runSerialized` itself would deadlock, since the engine already composes
- * `runSerialized(() => transaction(work))` — the inner enqueue would then wait
- * on the outer closure awaiting it.
+ * ## Why one lane and not two
+ *
+ * This host shipped with two private tail chains, one per entry point, so each
+ * serialized against itself and neither against the other. `runSerialized`
+ * issues no `BEGIN` of its own, so one of its closures overlapping a bare
+ * `transaction()` wrote straight into that transaction's span. `assertOwnTurn`
+ * below catches the write — it is the only reason this host never silently lost
+ * one the way an unguarded connection would — but catching it is not the same
+ * as preventing it, and the refusal lands in the wrong place:
+ *
+ * 1. A `runSerialized` closure writes a row. Nothing is open, so it commits.
+ * 2. It awaits (a scheduler hop, an `onShardInit` read, any real I/O).
+ * 3. A bare `transaction()` runs `BEGIN` while it is parked. `transaction` is
+ * a public contract surface, and `./node-shard-state` re-exports it as the
+ * `storage.transaction` member `ShardDO` documents as "the platform
+ * primitive", so a subclass reaches one without going through the engine.
+ * 4. The closure resumes and its next write is refused with
+ * `SHARD_UNAVAILABLE`, so `runSerialized` **rejects** — with step 1 already
+ * durable.
+ *
+ * The boundary the contract promises is atomic-or-nothing to its caller tore in
+ * half: a rejection the caller will retry, on top of a write the retry now
+ * re-applies. That is `runSerialized`'s "no two closures interleave" guarantee
+ * broken by a `transaction` it was never serialized against.
+ *
+ * ## Why the lock is re-entrant, and why `AsyncLocalStorage` is what makes it so
+ *
+ * The engine composes the two, and stacks them: `ShardRunner.runInTransaction`
+ * is `runSerialized(() => transaction(work))` (`@lunora/shard-engine`), and
+ * `ShardDO.fetch` widens a mutation dispatch carrying `x-lunora-mutation-id`
+ * into a *further* `runSerialized` span around it (`@lunora/do`). Under two
+ * plain FIFO chains that outer span is already fatal on this host — the inner
+ * `runSerialized` waits on a `tail` that only settles when the outer closure it
+ * is running inside resolves, and because nothing ever resets that `tail`, the
+ * shard's write lane is wedged for the life of the process rather than for the
+ * life of the request.
+ *
+ * So the lock is skipped for a boundary opened from inside a boundary, and
+ * `AsyncLocalStorage` is the only thing that can tell that case from the one
+ * that must queue: its store follows a single call's own await chain without
+ * leaking into a sibling chain. A held boolean cannot — it reads `true` for an
+ * unrelated *second top-level* `transaction()` too, which would then nest a raw
+ * `BEGIN` on a connection already inside one. This is the same distinction
+ * workerd's `blockConcurrencyWhile` draws natively with "does not queue events
+ * initiated as part of the callback itself", which is what
+ * `@lunora/platform-cloudflare` leans on for the identical composition.
  *
  * The returned `dispose()` is this host's lifecycle owner: it clears the
  * pending alarm `setTimeout` (so it can never fire against a connection this
@@ -475,36 +509,68 @@ const createNodeShardHost = (
      */
     const background = new Set<Promise<unknown>>();
 
-    let tail: Promise<unknown> = Promise.resolve();
+    /**
+     * Set for the duration of a boundary's closure, and readable only from that
+     * closure's own await chain. See this module's `createNodeShardHost`
+     * docstring for why a plain boolean would be wrong here.
+     *
+     * Deliberately NOT `transactionScope`, which is a different question with a
+     * different answer. `transactionScope` means "my chain owns the open
+     * `BEGIN`", and two things read it: `assertOwnTurn`, to decide whether SQL
+     * is refused, and `createAlarms`' `inside`, to decide whether an alarm
+     * mutation is held until commit. Widening it to every `runSerialized`
+     * closure would re-open the hazard this fix closes from the other side — a
+     * plain serialized closure would be waved through `assertOwnTurn` while an
+     * unrelated transaction is open — and would strand every alarm it set in
+     * `pending`, since nothing commits a transaction that was never begun.
+     * `transactionScope` is a strict subset of this store, not a synonym for it.
+     */
+    const insideBoundary = new AsyncLocalStorage<true>();
 
-    const runSerialized: ShardHost["runSerialized"] = (function_) => {
-        const started = tail.then(function_, function_);
+    /**
+     * Tail of the one boundary queue. Only ever a `release` promise, so it
+     * cannot reject and one failed boundary cannot wedge every boundary behind
+     * it — the property the two `tail` chains this replaced got from resetting
+     * themselves to a never-rejecting version.
+     */
+    let boundaryTail: Promise<void> = Promise.resolve();
 
-        tail = started.then(
-            () => undefined,
-            () => undefined,
-        );
+    /**
+     * Hold the shard's single-writer lock for `function_`, or run it in place
+     * when the caller's own chain already holds it.
+     *
+     * The re-entrant branch takes no queue slot at all, so it cannot deadlock on
+     * the lock its own caller is holding. The queueing branch claims its slot
+     * synchronously — everything up to `await previous` runs on the calling tick
+     * — so boundaries are admitted in call order.
+     */
+    const withBoundary = async <T>(function_: () => Promise<T>): Promise<T> => {
+        if (insideBoundary.getStore() === true) {
+            return await function_();
+        }
 
-        return started;
+        const previous = boundaryTail;
+
+        let release: () => void = () => {};
+
+        boundaryTail = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        await previous;
+
+        try {
+            // `return await`, not a bare `return`: the rejection has to reach
+            // the `finally`, or a boundary whose closure threw never releases
+            // the lock and the shard wedges for good. `await` re-throws by
+            // identity, which `ShardHost`'s error-identity requirement pins.
+            return await insideBoundary.run(true, function_);
+        } finally {
+            release();
+        }
     };
 
-    // A second, private tail chain of the exact same shape as `runSerialized`
-    // above, used ONLY by `transaction`. Raw BEGIN/COMMIT/ROLLBACK on a shared
-    // connection is not safe under overlap — a second `transaction()` call
-    // that starts before the first commits either throws "cannot start a
-    // transaction within a transaction" on the second BEGIN, or (worse) its
-    // COMMIT commits the first's uncommitted writes and the first's ROLLBACK
-    // then discards work that already reported success.
-    //
-    // Routing `transaction` through the SAME `runSerialized`/`tail` chain
-    // would deadlock: the engine composes them as
-    // `runSerialized(() => transaction(work))` (`shard-runner.ts`), so the
-    // inner enqueue would wait on the outer closure that is awaiting it. This
-    // dedicated lane serializes bare, overlapping `transaction()` calls
-    // against each other (the actual bug) while leaving `runInTransaction`'s
-    // composition free of self-deadlock (the outer gate is `runSerialized`,
-    // the inner lane is always empty when it runs).
-    let transactionTail: Promise<unknown> = Promise.resolve();
+    const runSerialized: ShardHost["runSerialized"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(function_);
 
     const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
@@ -536,19 +602,7 @@ const createNodeShardHost = (
         }
     };
 
-    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
-        const started = transactionTail.then(
-            () => runTransaction(function_),
-            () => runTransaction(function_),
-        );
-
-        transactionTail = started.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return started;
-    };
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(async () => runTransaction(function_));
 
     const host: ShardHost = {
         alarms,

@@ -147,7 +147,7 @@ describe("gatePlatformFeatures", () => {
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
     // matrix above), so this exercises the real `NODE_CAPABILITIES` matrix
     // through the actual registry lookup — the thing `platformMatrixIds`
-    // reports and `resolveCodegenTarget`/`lunora.json`'s `target` field select.
+    // reports and `resolveCodegenTarget`/`lunora.config.*`'s `target` field select.
     it("gates a project declaring an unsupported ctx.* for the node target", async () => {
         expect.assertions(6);
 
@@ -193,8 +193,8 @@ describe("project-declared target", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    const writeConfig = (text: string): void => {
-        writeFileSync(join(workdir, "lunora.json"), text, "utf8");
+    const writeConfig = (body: string): void => {
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default ${body};\n`, "utf8");
     };
 
     const diagnosticNames = (target?: string): string[] =>
@@ -227,13 +227,56 @@ describe("project-declared target", () => {
         expect(diagnosticNames()).toStrictEqual([]);
     });
 
-    it("reads the target as JSONC, matching how the rest of lunora.json is parsed", () => {
+    it("reads a quoted key, which is valid TypeScript", () => {
         expect.assertions(1);
 
-        // `@lunora/config` parses this file with `jsonc-parser`. A second reader
-        // using plain `JSON.parse` would reject a config the CLI accepts, which
-        // is exactly the drift a shared parser exists to prevent.
-        writeConfig(`{\n    // the target we ship to\n    "target": "aws",\n}`);
+        // ts-morph's `getName()` keeps the quotes on a string-literal key, so
+        // `{ "target": … }` read as the name `"target"` and was ignored — the
+        // project silently got the default provider.
+        writeConfig(`{ "target": "aws" }`);
+
+        expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
+    });
+
+    it("warns rather than silently defaulting when the target cannot be read as a literal", () => {
+        expect.assertions(1);
+
+        // The sync reader parses literals; `runCodegen` resolves the target inside
+        // itself and cannot await. Falling back to the default in SILENCE meant a
+        // project that declared `node` got the Cloudflare surface emitted and the
+        // wrangler toolchain run — the wrong-provider outcome this file's own
+        // `readProjectTarget` docblock refuses.
+        writeConfig(`{ target: ["a", "ws"].join("") }`);
+
+        expect(diagnosticNames()).toStrictEqual(["platform_unreadable_target"]);
+    });
+
+    it("says nothing when the config simply declares no target", () => {
+        expect.assertions(1);
+
+        // "no target declared" and "a target I could not read" must not be the
+        // same silence, but they must also not be the same warning.
+        writeConfig(`{ remote: true }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("says nothing when --target was passed, which wins anyway", () => {
+        expect.assertions(1);
+
+        writeConfig(`{ target: ["a", "ws"].join("") }`);
+
+        expect(diagnosticNames("cloudflare")).toStrictEqual([]);
+    });
+
+    it("reads the target from a real TypeScript config, comments and all", () => {
+        expect.assertions(1);
+
+        // This path is `runCodegen` -> `readProjectTarget` -> the LITERAL reader
+        // (ts-morph), not the `jiti` evaluator: `runCodegen` is synchronous. In a
+        // file whose central risk is having two readers, naming the wrong one is
+        // worse than saying nothing.
+        writeConfig(`{\n    // the target we ship to\n    target: "aws",\n}`);
 
         expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
     });
@@ -411,7 +454,7 @@ describe("app-declarable signals with no capability row", () => {
 
 /**
  * The gate as an app author meets it: a real `runCodegen` over a real project
- * whose `lunora.json` declares `target: "node"`, asserting on what codegen
+ * whose `lunora.config.ts` declares `target: "node"`, asserting on what codegen
  * EMITTED — the diagnostics it returned and the surface it wrote — rather than
  * on an intermediate flag. Asserting the flag is how the `browserTool` hole
  * below survived a passing test suite: `usage.browser` was correctly `false`
@@ -425,7 +468,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-target-node-"));
         cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
-        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
     });
 
     afterEach(() => {

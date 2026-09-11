@@ -1,3 +1,50 @@
+## @lunora/d1 [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.114...@lunora/d1@1.0.0-alpha.115) (2026-09-10)
+
+### Features
+
+* **d1,codegen:** record what every D1 query actually scanned ([#680](https://github.com/anolilab/lunora/issues/680)) ([7d5340a](https://github.com/anolilab/lunora/commit/7d5340a216341a03feebc6724b0f2fec33b845f9))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.115
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+
+## @lunora/d1 [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.113...@lunora/d1@1.0.0-alpha.114) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.114
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+
+## @lunora/d1 [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.112...@lunora/d1@1.0.0-alpha.113) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.113
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+
+## @lunora/d1 [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.111...@lunora/d1@1.0.0-alpha.112) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.112
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+
 ## @lunora/d1 [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.110...@lunora/d1@1.0.0-alpha.111) (2026-09-06)
 
 

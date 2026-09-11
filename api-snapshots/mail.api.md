@@ -449,3 +449,35 @@ const listCapturedMail: (options: InboxOptions) => Promise<CapturedMail[]>;
 ```ts
 const waitForMail: (options: WaitForMailOptions) => Promise<CapturedMail>;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `DurableObjectJurisdiction` (type)
+
+```ts
+type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+```
+
+### `FetchLike` (type)
+
+```ts
+type FetchLike = (input: string, init?: {
+    body?: string;
+    headers?: Record<string, string>;
+    method?: string;
+}) => Promise<{
+    json: () => Promise<unknown>;
+    ok: boolean;
+    status: number;
+}>;
+```
+
+### `InboundRetain` (type)
+
+```ts
+type InboundRetain<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>, error: unknown) => Promise<void> | void;
+```

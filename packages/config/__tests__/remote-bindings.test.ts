@@ -334,7 +334,7 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({ configPreference: false, envValue: "1" })).toBe(true);
     });
 
-    it("falls back to the lunora.json preference when neither flag nor env is set", () => {
+    it("falls back to the lunora.config.* preference when neither flag nor env is set", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: true })).toBe(true);
@@ -347,7 +347,7 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({})).toBe(false);
     });
 
-    it("lets --remote and LUNORA_REMOTE override a lunora.json `remote: false`", () => {
+    it("lets --remote and LUNORA_REMOTE override a lunora.config.* `remote: false`", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: false, flag: true })).toBe(true);

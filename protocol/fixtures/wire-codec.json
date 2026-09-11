@@ -90,7 +90,21 @@
         "Language-native construction checks (e.g. bigint 7 -> the bigint tag, or an",
         "integer past the exact-float64 range being refused) live in each SDK's own",
         "suite, keyed by protocol/conformance-cases.json, since native values are not",
-        "uniformly JSON-representable."
+        "uniformly JSON-representable.",
+        "",
+        "The four `*-at-cap` / `*-past-cap` entries pin the 64-level nesting cap as an",
+        "ABSOLUTE boundary. `depth_cap_enforced` in protocol/conformance-cases.json is a",
+        "self-test — each port nests its own MAX_DEPTH + 2 deep and checks its own",
+        "decoder refuses it — so a port that miscounts a level agrees with itself and",
+        "passes, which is how two shipped an `error` tag one level too permissive. 65",
+        "nested arrays put the innermost at depth 64, the last the reference accepts; 66",
+        "is one past it.",
+        "",
+        "The `error` pair is the accounting those two got wrong: the reference decodes",
+        "the props SLOT as a value at depth+1, so the props own fields sit at depth+2.",
+        "63 nested arrays under a prop key therefore reach exactly 64 and decode, and 64",
+        "of them reach 65 and must not — while a port charging its fields depth+1 takes",
+        "the second happily and re-encodes a frame every other port refuses."
     ],
     "tag": "$lunora.wire$",
     "cases": [
@@ -303,7 +317,21 @@
             "name": "map-null-value",
             "encoded": ["$lunora.wire$", "map", [["k", null]]]
         },
-        { "name": "map-null-key", "encoded": ["$lunora.wire$", "map", [[null, "v"]]] }
+        { "name": "map-null-key", "encoded": ["$lunora.wire$", "map", [[null, "v"]]] },
+        {
+            "name": "nesting-at-cap",
+            "encoded": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+        },
+        {
+            "name": "error-props-at-cap",
+            "encoded": [
+                "$lunora.wire$",
+                "error",
+                "Error",
+                "boom",
+                { "p": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }
+            ]
+        }
     ],
     "rejected": [
         { "name": "bytes-outside-alphabet", "encoded": ["$lunora.wire$", "bytes", "not@@base64!!"] },
@@ -363,6 +391,20 @@
         { "name": "url-href-scheme-relative", "encoded": ["$lunora.wire$", "url", "//example.com/x"] },
         { "name": "url-href-scheme-empty", "encoded": ["$lunora.wire$", "url", ":x"] },
         { "name": "url-href-scheme-digit-initial", "encoded": ["$lunora.wire$", "url", "1http:x"] },
-        { "name": "url-href-scheme-non-ascii", "encoded": ["$lunora.wire$", "url", "\u00e9:x"] }
+        { "name": "url-href-scheme-non-ascii", "encoded": ["$lunora.wire$", "url", "\u00e9:x"] },
+        {
+            "name": "nesting-past-cap",
+            "encoded": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+        },
+        {
+            "name": "error-props-past-cap",
+            "encoded": [
+                "$lunora.wire$",
+                "error",
+                "Error",
+                "boom",
+                { "p": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }
+            ]
+        }
     ]
 }

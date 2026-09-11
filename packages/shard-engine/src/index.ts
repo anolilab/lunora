@@ -395,7 +395,7 @@ export type {
     WithInput,
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
-export { buildSettings, isDevEnvironment } from "./settings";
+export { buildSettings, isDevEnvironment, readDeployInfo } from "./settings";
 export { buildShapeDiff } from "./shape-diff";
 export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
@@ -407,10 +407,11 @@ export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export { lintReadonlySql } from "./sql-console";
-// The canonical order-preserving bigint codec. `@lunora/sql-store` builds and
-// reverses the same key for the `.global()` plane and the two are compared by a
-// parity test, so there must be exactly one encoder and one decoder.
-export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey } from "./sql-projection";
+// The canonical order-preserving bigint and float64 codecs. `@lunora/sql-store`
+// builds and reverses the same keys for the `.global()` plane and the two are
+// compared by a parity test, so there must be exactly one encoder and one
+// decoder of each.
+export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "./sql-projection";
 export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
+import { collectExportGaps, findWranglerFile, readWranglerJsonc, UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
@@ -31,19 +31,25 @@ const DOCTOR_CODES = [
     "admin-token-missing",
     "admin-token-set",
     "cli-shadowed",
+    "cpu-limit-missing",
     "d1-placeholder-id",
     "declared-export-missing",
     "declared-export-ok",
     "declared-export-unchecked",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "r2-lifecycle-unset",
     "scheduler-origin-missing",
     "schema-unreadable",
+    "stale-lunora-json",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
     "version-skew-channels",
     "version-skew-cores",
+    "wrangler-advisory",
+    "wrangler-class-unexported",
+    "wrangler-invalid",
     "wrangler-missing",
     "wrangler-shard-binding-missing",
     "wrangler-shard-binding-ok",
@@ -116,7 +122,7 @@ const readWrangler = (cwd: string): { parsed: WranglerConfig | undefined; path: 
 };
 
 /** Check `wrangler.jsonc` is present and declares the SHARD DO binding (via the shared config validator). */
-const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
+const checkWrangler = (cwd: string, parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
     if (path === undefined) {
         findings.push({
             code: "wrangler-missing",
@@ -134,7 +140,25 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
         return;
     }
 
-    const report = validateWranglerConfig(parsed);
+    // The FS-AWARE validator, not `validateWranglerConfig`. Doctor read the pure
+    // one, which cannot see the worker entry — so the check that cross-checks
+    // every declared Durable Object / Workflow `class_name` against the entry's
+    // exports never ran here, and `doctor` gave a clean bill of health to a tree
+    // `wrangler` refuses to bundle. Its own `declared-export-missing` check
+    // covers containers/workflows/agents off inference, and stopped there.
+    const { report } = validateWranglerProject({ projectRoot: cwd });
+
+    // Its OWN code, not `declared-export-missing`. That one is emitted from
+    // binding inference over the schema's declarations (`checkDeclaredExports`),
+    // and containers/workflows/agents reach `wrangler.jsonc` too — so both fire
+    // for the same class. `DOCTOR_CODES` is "the contract behind `--format
+    // json`", per the block above, and a job counting one code must not
+    // double-count. This one is the wrangler-config view: it also covers
+    // `SchedulerDO` / `SessionDO` and hand-written classes, which inference
+    // never sees. The validator carries the full remedy in the message.
+    for (const error of report.errors.filter((entry) => entry.includes(UNEXPORTED_CLASS_MARKER))) {
+        findings.push({ code: "wrangler-class-unexported", level: "fail", message: error });
+    }
 
     // `doctor`'s job is "tell me what is misconfigured", so it reports the
     // scheduler-origin warning too. Reading only the SHARD error gave a clean
@@ -146,6 +170,32 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
             level: "warn",
             message: warning,
         });
+    }
+
+    // Everything the validator found that no check above claimed, rather than
+    // dropped. Doctor cherry-picked three findings out of the report and
+    // discarded the rest, so an unchained `.vectors()` / `.global()`, a
+    // container image pointing at a missing Dockerfile, a bad
+    // `compatibility_date` and a missing migration entry all read as a clean
+    // bill of health — from the command whose whole job is to say what it found.
+    //
+    // One catch-all code rather than one per family, so a check added to the
+    // validator later surfaces here by construction instead of being silently
+    // dropped again. The two claimed codes are excluded to keep `--format json`
+    // counts honest.
+    const claimed = (entry: string): boolean => entry.includes(UNEXPORTED_CLASS_MARKER) || entry.includes("SHARD");
+
+    for (const error of report.errors.filter((entry) => !claimed(entry))) {
+        findings.push({
+            code: "wrangler-invalid",
+            fix: "Fix the reported wrangler.jsonc problem; `lunora verify` reports the same set.",
+            level: "fail",
+            message: error,
+        });
+    }
+
+    for (const warning of report.warnings.filter((entry) => !entry.includes("LUNORA_ORIGIN_URL"))) {
+        findings.push({ code: "wrangler-advisory", level: "warn", message: warning });
     }
 
     const shardError = report.errors.find((error) => error.includes("SHARD"));
@@ -160,6 +210,78 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
             message: shardError,
         });
     }
+};
+
+/**
+ * `lunora.json` is no longer read — `lunora.config.*` replaced it.
+ *
+ * A file left behind is not an error (nothing reads it, so nothing breaks), but
+ * silence is the wrong answer: a `lunora.json` declaring `target: "node"` used to
+ * select the provider, and after the rename the project gets the default one with
+ * nothing to explain why. That is the wrong-provider outcome the target reader
+ * refuses everywhere else.
+ */
+const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
+    if (!existsSync(join(cwd, "lunora.json"))) {
+        return;
+    }
+
+    findings.push({
+        code: "stale-lunora-json",
+        fix: 'Move `target` / `remote` into `lunora.config.ts` (`export default { target: "…" }`), then delete lunora.json.',
+        level: "warn",
+        message: "lunora.json is present but no longer read — lunora.config.* replaced it, so any `target` or `remote` in it is being ignored.",
+    });
+};
+
+/**
+ * No `limits.cpu_ms` in the wrangler config → INFO.
+ *
+ * Alerting is lagging by definition: by the time a threshold trips, the runaway
+ * handler or retry storm has already run. A CPU cap is one of the few controls
+ * that bounds the blast radius rather than reporting on it after the fact, and
+ * it costs nothing to set. INFO rather than WARN because the platform default
+ * is a real (if generous) limit, so this is a tightening, not a missing
+ * requirement.
+ */
+const checkCpuLimit = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    if (parsed === undefined || parsed.limits?.cpu_ms !== undefined) {
+        return;
+    }
+
+    findings.push({
+        code: "cpu-limit-missing",
+        fix: 'Add `"limits": { "cpu_ms": 30000 }` to wrangler.jsonc, tuned to your slowest legitimate handler.',
+        level: "info",
+        message: "no limits.cpu_ms is set — a runaway handler can burn CPU up to the platform default before anything stops it.",
+    });
+};
+
+/**
+ * An R2 bucket with no lifecycle rule → INFO, once per config.
+ *
+ * Orphaned incomplete multipart uploads are a classic silent storage cost: they
+ * are billed, they never appear as objects a listing would show, and nothing
+ * surfaces them until the invoice does. Lifecycle rules are the fix, and they
+ * live in Cloudflare (dashboard/API), not in wrangler config — so this can only
+ * ever be a prompt to go check, which is why it names the command instead of
+ * asserting a config shape.
+ */
+const checkR2Lifecycle = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    // `r2_buckets` entries are typed nullable — the validator parses user JSON
+    // defensively, so a hand-edited config can carry a hole in the array.
+    const names = (parsed?.r2_buckets ?? []).map((entry) => entry?.bucket_name).filter((name): name is string => typeof name === "string" && name.length > 0);
+
+    if (names.length === 0) {
+        return;
+    }
+
+    findings.push({
+        code: "r2-lifecycle-unset",
+        fix: "wrangler r2 bucket lifecycle list <bucket> — add an abort-incomplete-multipart rule if none exists.",
+        level: "info",
+        message: `R2 bucket(s) ${names.join(", ")}: verify a lifecycle rule aborts incomplete multipart uploads — orphaned parts are billed but invisible in a listing.`,
+    });
 };
 
 /**
@@ -584,13 +706,16 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     const { parsed, path } = readWrangler(cwd);
 
-    checkWrangler(parsed, path, findings);
+    checkWrangler(cwd, parsed, path, findings);
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
+    checkCpuLimit(parsed, findings);
+    checkR2Lifecycle(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
+    checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
     await checkDeclaredExports(cwd, findings);
 

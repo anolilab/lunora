@@ -196,7 +196,7 @@ interface DeployCommandOptions {
     strictAdvisories?: boolean;
 
     /**
-     * Deploy target. Falls back to `"target"` in `lunora.json`, then
+     * Deploy target. Falls back to `"target"` in `lunora.config.*`, then
      * `"cloudflare"`, which selects the wrangler
      * toolchain — i.e. today's behavior for every project. An unregistered name
      * throws rather than falling back, so a typo can never ship the app to the
@@ -1511,13 +1511,12 @@ const abortResult = (error: string, extra?: Partial<DeployCommandResult>): Deplo
  * Log wrangler.jsonc validation problems (if any) and report whether the deploy
  * must abort.
  *
- * Warnings are printed too. The validator's unexported-class check is
- * deliberately a warning rather than an error (its scanner fails closed on
- * export forms it does not know, and blocking a working deploy is worse than
- * missing one) — but this command only ever printed `report.errors`, so on the
- * single command that actually ships a Worker the warning was invisible and the
- * user met wrangler's own bundle failure instead. Same for the `unverifiedKeys`
- * env-override notice and the missing-assets-directory warning.
+ * Warnings are printed too, not just `report.errors`. This command is the one
+ * that actually ships a Worker, so a warning it swallows is one the user meets
+ * as a wrangler failure instead — which is what happened while the
+ * unexported-class check was warning-level (it blocks now), and still applies to
+ * the `unverifiedKeys` env-override notice and the missing-assets-directory
+ * warning.
  */
 const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; report?: { warnings: ReadonlyArray<string> } }, logger: Logger): boolean => {
     for (const warning of validation.report?.warnings ?? []) {
@@ -1685,7 +1684,7 @@ const runPreDeployPipeline = async (
     // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
     // and may mutate `wrangler.jsonc` well before the wrangler step, so
     // validating at the point of driver use would leave those side effects behind
-    // on an unknown target. Resolving here also means `lunora.json`'s `target`
+    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
     // reaches the driver, not just the `--target` flag.
     //
     // The `Runnable` form additionally rejects a registered-but-undeployable

@@ -25,5 +25,5 @@
         "sourceMap": true,
         "strict": true
     },
-    "include": ["src/**/*", "lunora/**/*"]
+    "include": ["src/**/*", "lunora/**/*", "lunora.config.ts"]
 }

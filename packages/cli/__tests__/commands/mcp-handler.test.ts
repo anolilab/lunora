@@ -9,14 +9,14 @@ import { runCli } from "../../src/cli";
 let workdir: string;
 
 /**
- * Drive the real CLI and report the exit code.
+ * Drive the real CLI and report the exit code plus everything it logged.
  *
- * Note the injected logger only captures cerebro's own rendering (help, usage);
- * command output goes through the CLI's pail logger to the real stdout. So these
- * assert the exit code, which is what proves the wiring: that `mcp` is
- * registered, that positionals and flags reach the handler, and that an unknown
- * subcommand fails rather than doing something surprising. The handlers'
- * behaviour and messages are covered directly in the sibling suites.
+ * The injected logger captures both cerebro's own rendering (help, usage) and
+ * the commands' output — `runCli` installs it as the command logger too, so
+ * nothing reaches the real stdout. These assert the wiring: that `mcp` is
+ * registered, that positionals and flags reach the handler, and that a bad
+ * invocation fails with the message that says why. The handlers' behaviour is
+ * covered directly in the sibling suites.
  */
 const runMcp = async (argv: string[]): Promise<{ code: number; output: string }> => {
     const lines: string[] = [];
@@ -51,19 +51,21 @@ describe("lunora mcp command wiring", () => {
     });
 
     it("rejects an unknown subcommand rather than doing something surprising", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const { code } = await runMcp(["mcp", "bogus"]);
+        const { code, output } = await runMcp(["mcp", "bogus"]);
 
         expect(code).toBe(1);
+        expect(output).toContain("mcp: unknown subcommand. Usage: lunora mcp <install|uninstall|serve>");
     });
 
     it("rejects `mcp` with no subcommand", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const { code } = await runMcp(["mcp"]);
+        const { code, output } = await runMcp(["mcp"]);
 
         expect(code).toBe(1);
+        expect(output).toContain("mcp: unknown subcommand. Usage: lunora mcp <install|uninstall|serve>");
     });
 
     it("runs `install --list` end to end", async () => {
@@ -75,13 +77,14 @@ describe("lunora mcp command wiring", () => {
     });
 
     it("passes positional client ids through to install", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        // Reaching `resolveClients` at all is the point: an unrecognised id is
-        // rejected there, so a non-zero exit proves the positional arrived.
-        const { code } = await runMcp(["mcp", "install", "not-a-client"]);
+        // Reaching `resolveClients` at all is the point: the id it names back
+        // is the proof the positional arrived rather than being swallowed.
+        const { code, output } = await runMcp(["mcp", "install", "not-a-client"]);
 
         expect(code).toBe(1);
+        expect(output).toContain('mcp install: unknown client "not-a-client"');
     });
 
     it("accepts --print alongside a client id", async () => {

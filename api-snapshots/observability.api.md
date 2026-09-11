@@ -46,6 +46,7 @@ interface AiRunBinding {
 ```ts
 interface AppendRequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -59,6 +60,7 @@ interface AppendRequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 
@@ -672,6 +674,7 @@ interface RecordFunctionMetricInput {
 ```ts
 interface RequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -686,6 +689,7 @@ interface RequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 
@@ -1188,4 +1192,82 @@ const resolveTraceAnchor: (traceparent: string | undefined) => {
 
 ```ts
 const upsertIssueState: (sql: SqlExec, hash: string, patch: IssueStatePatch, updatedAt: number, updatedBy?: string) => IssueState;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `EvaluationInput` (interface)
+
+```ts
+interface EvaluationInput {
+    label?: string;
+    name: string;
+    score: number;
+}
+```
+
+### `ExplainIssueDegraded` (interface)
+
+```ts
+interface ExplainIssueDegraded extends ExplainIssueGrounding {
+    degraded: true;
+    reason: ExplainIssueDegradedReason;
+}
+```
+
+### `ExplainIssueSuccess` (interface)
+
+```ts
+interface ExplainIssueSuccess extends ExplainIssueGrounding {
+    degraded: false;
+    explanation: string;
+    model: string;
+}
+```
+
+### `LogEvent` (interface)
+
+```ts
+interface LogEvent {
+    args: unknown[];
+    eventName?: string;
+    fields?: LogFields;
+    functionPath: string;
+    level: ContextLogLevel;
+    message: string;
+    shardKey?: string;
+    spanId?: string;
+    traceId?: string;
+    ts: number;
+    userId?: string;
+}
+```
+
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
+### `SpanContextIds` (interface)
+
+```ts
+interface SpanContextIds {
+    sampled?: boolean;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanIdentity` (interface)
+
+```ts
+interface SpanIdentity {
+    parentSpanId: string;
+    spanId: string;
+}
 ```

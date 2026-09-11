@@ -171,7 +171,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
         ? [
               `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-              `import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+              `import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
           ]
         : [];
 
@@ -395,12 +395,22 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
 ];
 
-/** Long-tail capability methods — thin pass-throughs into the generated `createShardDO` config. */
+/**
+ * Long-tail capability methods — thin pass-throughs into the generated
+ * `createShardDO` config.
+ *
+ * The parameter is an `Env`-typed selector, like every other builder method:
+ * `ShardConfig` types each binding factory over `Record<string, unknown>` (the DO
+ * is handed a raw env), so passing that type straight through left `env.MY_BINDING`
+ * as `unknown` and no annotation could fix it at the call site under
+ * `strictFunctionTypes`. Spelled out rather than reusing `Selector<Env, T>` because
+ * `Selector` returns `T | undefined` and these factories do not.
+ */
 const buildLongTailMethods = (options: EmitAppOptions): string[] =>
     LONG_TAIL.filter(([flag]) => options[flag]).map(
         ([, name, key, document_]) => `    /** ${document_} */
-    public ${name}(factory: NonNullable<ShardConfig["${key}"]>): this {
-        this.shardExtras.${key} = factory;
+    public ${name}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${key}"]>>): this {
+        this.shardExtras.${key} = factory as NonNullable<ShardConfig["${key}"]>;
 
         return this;
     }`,
@@ -1153,6 +1163,13 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * read-only retry; writes — including the \`UPDATE … RETURNING\` the store's
  * optimistic-concurrency check issues through \`all\` — pass straight through,
  * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own \`meta\` accounting (\`rows_read\` /
+ * \`rows_written\` / \`duration\`) against a low-cardinality \`verb:table\` tag.
+ * Rows READ is rows SCANNED, not returned, so this is the number that explains
+ * a D1 bill and the one a missing index inflates without anything being
+ * deployed; the dashboard's own metric is per-database and can't name the query.
+ * The emit is best-effort — instrumentation must never fail a served query.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes \`withSession\`; guarded the same way as \`batch\`
@@ -1163,6 +1180,13 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
+    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+        try {
+            emitD1QueryCost(sql, meta);
+        } catch {
+            // Best-effort: never let cost accounting fail the query it measures.
+        }
+    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -1183,6 +1207,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // bookmark only ever moves forward, and the sink takes the last
             // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
+            meter(sql, result.meta);
 
             return result.results;
         },
@@ -1200,18 +1225,34 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         // \`const fn = target.batch; fn(...)\` capture would.
         batch: batchFn
             ? async (statements) => {
-                  await batchFn.call(
+                  const results = await batchFn.call(
                       target,
                       statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
                   );
+
+                  // Meter each leg. D1 returns one result per statement, in
+                  // order, each with its own \`meta\` — and a batch is where the
+                  // expensive writes live (\`@lunora/sql-store\` runs its
+                  // backfills through here), so discarding it left exactly the
+                  // statements worth costing unaccounted. Guarded on the array
+                  // because \`batch\` is optional in the structural type and a
+                  // test double may resolve to anything.
+                  if (Array.isArray(results)) {
+                      for (const [index, statement] of statements.entries()) {
+                          meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
+                      }
+                  }
+
                   onBookmark?.(session?.getBookmark() ?? undefined);
               }
             : undefined,
         run: async (sql, parameters) => {
-            await target
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+
+            meter(sql, result.meta);
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
@@ -1350,6 +1391,7 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
         ...(options.hasAuth ? ["AuthDeclaration"] : []),
         "ComposedApp",
         ...(options.hasGlobal ? ["GlobalDeclaration"] : []),
+        "LunoraConfig",
         ...(options.hasScheduler ? ["SchedulerDeclaration"] : []),
         "Selector",
         ...(options.hasStorage ? ["StorageDeclaration"] : []),
@@ -1595,6 +1637,23 @@ ${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}  
     }
 }
 ${buildGlobalHelpers(options.hasGlobal)}
+/**
+ * Shape of the project's root \`lunora.config.*\`.
+ *
+ * Declared HERE, not in a package, so the \`app\` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = object> {
+    /** Receives this project's \`defineApp()\` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Opt into remote-binding dev without \`--remote\` or \`LUNORA_REMOTE\` on every run. A literal, for the same reason as \`target\`. */
+    remote?: boolean;
+    /** Deploy target id — \`lunora deploy\`/\`verify\` read it when no \`--target\` is passed. Must be a literal: \`runCodegen\` resolves it synchronously by PARSING this file, so a computed value is not seen — \`lunora verify\` reports \`platform_unreadable_target\` rather than defaulting in silence. */
+    target?: string;
+}
+
 /**
  * Start composing the app. Chain the capability methods, then \`.build()\`.
  *

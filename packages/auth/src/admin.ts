@@ -1,4 +1,3 @@
-import { createLocalAccountIssuer } from "@better-auth/core/db";
 import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
@@ -1037,12 +1036,23 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 // `data` carries app-defined `additionalFields`. It is spread last and so
                 // can override `role` (matching the better-auth admin plugin's `createUser`);
                 // this is acceptable because the whole plane is admin-token gated.
+                //
+                // `isAnonymous` is the exception, and it is dropped rather than trusted:
+                // `inviteOnly()` reads that flag to decide a row is a throwaway identity
+                // rather than a registration, so letting it through here would make the
+                // studio's create-user action the one path that skips the invitation
+                // requirement. better-auth keeps it out of every request-parsed payload
+                // for the same reason (`input: false`); this plane parses nothing.
+                const safeData = { ...data };
+
+                delete safeData["isAnonymous"];
+
                 const user = await context_.internalAdapter.createUser(
                     {
                         email: normalizedEmail,
                         name,
                         role: role === undefined ? undefined : serializeRole(role),
-                        ...data,
+                        ...safeData,
                     } as Parameters<typeof context_.internalAdapter.createUser>[0],
                     // better-auth 1.7 takes the caller's provenance as a second argument
                     // (it reaches database hooks); this whole plane is admin-token gated,
@@ -1054,14 +1064,11 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     const hashed = await context_.password.hash(password);
 
                     await context_.internalAdapter.linkAccount({
-                        // 1.7 made `issuer` required and scoped an account by
-                        // `(issuer, accountId)` rather than `accountId` alone; for a local
-                        // password account the issuer is derived from the provider id
-                        // rather than being a remote IdP. (1.7.0's prereleases also
-                        // renamed the column to `providerAccountId`; GA reverted that, so
-                        // `accountId` is the field name again.)
+                        // An account is scoped by `accountId` alone. 1.7.0 briefly added a
+                        // required `issuer` and scoped by `(issuer, accountId)`, and its
+                        // prereleases briefly renamed this field to `providerAccountId`;
+                        // 1.7.3 reverted both, so neither appears here.
                         accountId: user.id,
-                        issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
                         providerId: "credential",
                         userId: user.id,
@@ -1303,11 +1310,10 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await context_.internalAdapter.updatePassword(userId, hashed);
                 } else {
                     await context_.internalAdapter.linkAccount({
-                        // `accountId`, not the `providerAccountId` 1.7.0's prereleases
-                        // briefly used — GA reverted that rename. Same shape as the
-                        // create-user path above.
+                        // Same shape as the create-user path above: `accountId`, no
+                        // `issuer`, and not the `providerAccountId` 1.7.0's prereleases
+                        // briefly used.
                         accountId: userId,
-                        issuer: createLocalAccountIssuer("credential"),
                         password: hashed,
                         providerId: "credential",
                         userId,

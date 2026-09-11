@@ -556,3 +556,95 @@ Re-exported from `@lunora/db` — signature tracked in that section.
 ### `initMutators` (const)
 
 Re-exported from `@lunora/db` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AnyDef` (type)
+
+```ts
+type AnyDef = CollectionDef<any, any>;
+```
+
+### `AnyMutatorMap` (type)
+
+```ts
+type AnyMutatorMap = Record<string, ClientMutatorDef<any, any>>;
+```
+
+### `ArgsOf` (type)
+
+```ts
+type ArgsOf<M> = M extends ClientMutatorDef<infer A, infer _C> ? A : never;
+```
+
+### `Element` (type)
+
+```ts
+type Element<T> = T extends ReadonlyArray<infer E> ? E : never;
+```
+
+### `InputOf` (type)
+
+```ts
+type InputOf<C> = C extends {
+    insert: {
+        optimistic: (input: infer I, id: string) => unknown;
+    };
+} ? I : never;
+```
+
+### `IsAny` (type)
+
+```ts
+type IsAny<T> = 0 extends 1 & T ? true : false;
+```
+
+### `MutatorMapFor` (type)
+
+```ts
+type MutatorMapFor<TCollections extends CollectionMap> = Record<string, ClientMutatorDef<any, TCollections>>;
+```
+
+### `OutboxTransaction` (interface)
+
+```ts
+interface OutboxTransaction {
+    commit?: () => Promise<unknown>;
+    mutate: (callback: () => void) => unknown;
+}
+```
+
+### `RowOf` (type)
+
+```ts
+type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, infer _A, infer R> ? Element<R> : never;
+```
+
+### `RowOfList` (type)
+
+```ts
+type RowOfList<TList> = IsAny<TList> extends true ? Row : TList extends FunctionReference<infer _K, infer _A, infer R> ? Element<R> & Row : never;
+```
+
+### `ShapeSource` (interface)
+
+```ts
+interface ShapeSource {
+    args?: Record<string, unknown>;
+    name: string;
+    shardKey?: string;
+}
+```
+
+### `WriteProvenance` (interface)
+
+```ts
+interface WriteProvenance extends Record<string, unknown> {
+    identity: string | null;
+    shardKey?: string;
+}
+```

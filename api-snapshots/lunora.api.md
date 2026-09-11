@@ -3597,6 +3597,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `VectorValues` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `VectorizeDeleteMutation` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -4266,6 +4270,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `QueryCoordinatorOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardBatch` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardHandler` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardMessage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardResult` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -7692,6 +7712,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `ValidatorMap` (type)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `acceptsAbsent` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

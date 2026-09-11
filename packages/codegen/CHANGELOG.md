@@ -1,3 +1,186 @@
+## @lunora/codegen [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.176...@lunora/codegen@1.0.0-alpha.177) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.126
+* **@lunora/agent:** upgraded to 1.0.0-alpha.106
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/codegen [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.175...@lunora/codegen@1.0.0-alpha.176) (2026-09-11)
+
+### Bug Fixes
+
+* **codegen:** emit v.any() args as optional keys ([#693](https://github.com/anolilab/lunora/issues/693)) ([cb2e4ca](https://github.com/anolilab/lunora/commit/cb2e4ca895ee4ac4bc2d510ff8cf53f5d5345839))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.125
+* **@lunora/agent:** upgraded to 1.0.0-alpha.105
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.68
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
+## @lunora/codegen [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.174...@lunora/codegen@1.0.0-alpha.175) (2026-09-10)
+
+### Features
+
+* **d1,codegen:** record what every D1 query actually scanned ([#680](https://github.com/anolilab/lunora/issues/680)) ([7d5340a](https://github.com/anolilab/lunora/commit/7d5340a216341a03feebc6724b0f2fec33b845f9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.124
+* **@lunora/agent:** upgraded to 1.0.0-alpha.104
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/queue:** upgraded to 1.0.0-alpha.53
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.67
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
+## @lunora/codegen [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.173...@lunora/codegen@1.0.0-alpha.174) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.123
+* **@lunora/agent:** upgraded to 1.0.0-alpha.103
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.66
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/codegen [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.172...@lunora/codegen@1.0.0-alpha.173) (2026-09-08)
+
+### Bug Fixes
+
+* **codegen:** report when the procedure type check cannot run ([#676](https://github.com/anolilab/lunora/issues/676)) ([6bce184](https://github.com/anolilab/lunora/commit/6bce1840182be677f190e13fc5d95b88d42a25c4))
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.122
+* **@lunora/agent:** upgraded to 1.0.0-alpha.102
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.65
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/codegen [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.171...@lunora/codegen@1.0.0-alpha.172) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.121
+* **@lunora/agent:** upgraded to 1.0.0-alpha.101
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.64
+* **@lunora/do:** upgraded to 1.0.0-alpha.129
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/codegen [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.170...@lunora/codegen@1.0.0-alpha.171) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.120
+* **@lunora/agent:** upgraded to 1.0.0-alpha.100
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.63
+* **@lunora/do:** upgraded to 1.0.0-alpha.128
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/codegen [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.169...@lunora/codegen@1.0.0-alpha.170) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.119
+* **@lunora/agent:** upgraded to 1.0.0-alpha.99
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/queue:** upgraded to 1.0.0-alpha.52
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+
+## @lunora/codegen [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.168...@lunora/codegen@1.0.0-alpha.169) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.118
+* **@lunora/agent:** upgraded to 1.0.0-alpha.98
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.61
+* **@lunora/do:** upgraded to 1.0.0-alpha.126
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
+## @lunora/codegen [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.167...@lunora/codegen@1.0.0-alpha.168) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.117
+* **@lunora/agent:** upgraded to 1.0.0-alpha.97
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.125
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/codegen [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.166...@lunora/codegen@1.0.0-alpha.167) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.116
+* **@lunora/agent:** upgraded to 1.0.0-alpha.96
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.59
+* **@lunora/do:** upgraded to 1.0.0-alpha.124
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
+## @lunora/codegen [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.165...@lunora/codegen@1.0.0-alpha.166) (2026-09-07)
+
+### Bug Fixes
+
+* **codegen:** resolve a spread in an args or column map instead of dropping its fields ([#654](https://github.com/anolilab/lunora/issues/654)) ([6c23d4f](https://github.com/anolilab/lunora/commit/6c23d4f592bb5960b2b1d98442a7ac05b663c998))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+
+## @lunora/codegen [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.164...@lunora/codegen@1.0.0-alpha.165) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.115
+* **@lunora/agent:** upgraded to 1.0.0-alpha.95
+* **@lunora/container:** upgraded to 1.0.0-alpha.48
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/queue:** upgraded to 1.0.0-alpha.51
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.58
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.49
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/codegen [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.163...@lunora/codegen@1.0.0-alpha.164) (2026-09-06)
 
 ### Features

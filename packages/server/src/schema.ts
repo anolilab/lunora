@@ -167,7 +167,12 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * table stays reactive — live queries re-run on write.
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
-    /** Add a secondary index. */
+
+    /**
+     * Add a secondary index. `fields` are top-level columns (plus the system
+     * fields) — a dotted path into a `v.object()` column is not accepted;
+     * denormalise the field you query. See `concepts/indexes` for why.
+     */
     index: (
         name: string,
         fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,

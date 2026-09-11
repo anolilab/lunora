@@ -582,11 +582,16 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // `[TAG,"error","E","m","ab"]` would decode there with the invented
             // props {0:"a",1:"b"} while quietly substituting an empty map
             // accepted the same frame here.
-            let props = match items.get(4) {
-                Some(Value::Object(fields)) => fields
-                    .iter()
-                    .map(|(key, item)| Ok((key.clone(), decode_at(item, depth + 1)?)))
-                    .collect::<WireResult<Vec<_>>>()?,
+            // The slot is decoded as one VALUE at depth+1, which puts its own
+            // fields at depth+2 — what the reference does with a single
+            // `decodeWire(value[4], depth + 1)` before it touches a field.
+            // Walking the raw fields here charged a level too few, so a props
+            // value nested one past the cap re-encoded happily out of this port
+            // and out of no other (`error-props-past-cap`).
+            let slot = items.get(4).ok_or(WireError::Malformed("error"))?;
+
+            let props = match decode_at(slot, depth + 1)? {
+                WireValue::Object(fields) => fields,
                 _ => return Err(WireError::Malformed("error")),
             };
 

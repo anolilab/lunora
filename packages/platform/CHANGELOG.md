@@ -1,3 +1,15 @@
+## @lunora/platform [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.28...@lunora/platform@1.0.0-alpha.29) (2026-09-10)
+
+### Features
+
+* **d1,codegen:** record what every D1 query actually scanned ([#680](https://github.com/anolilab/lunora/issues/680)) ([7d5340a](https://github.com/anolilab/lunora/commit/7d5340a216341a03feebc6724b0f2fec33b845f9))
+
+## @lunora/platform [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.27...@lunora/platform@1.0.0-alpha.28) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
 ## @lunora/platform [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.26...@lunora/platform@1.0.0-alpha.27) (2026-09-05)
 
 ### ⚠ BREAKING CHANGES

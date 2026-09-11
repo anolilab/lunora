@@ -1,3 +1,110 @@
+## @lunora/server [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.118...@lunora/server@1.0.0-alpha.119) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.72
+
+## @lunora/server [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.117...@lunora/server@1.0.0-alpha.118) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.68
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/observability:** upgraded to 1.0.0-alpha.71
+
+## @lunora/server [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.116...@lunora/server@1.0.0-alpha.117) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.67
+* **@lunora/observability:** upgraded to 1.0.0-alpha.70
+
+## @lunora/server [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.115...@lunora/server@1.0.0-alpha.116) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.66
+* **@lunora/observability:** upgraded to 1.0.0-alpha.69
+
+## @lunora/server [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.114...@lunora/server@1.0.0-alpha.115) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.68
+
+## @lunora/server [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.113...@lunora/server@1.0.0-alpha.114) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.64
+* **@lunora/observability:** upgraded to 1.0.0-alpha.67
+
+## @lunora/server [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.112...@lunora/server@1.0.0-alpha.113) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.63
+* **@lunora/observability:** upgraded to 1.0.0-alpha.66
+
+## @lunora/server [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.111...@lunora/server@1.0.0-alpha.112) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.62
+* **@lunora/observability:** upgraded to 1.0.0-alpha.65
+
+## @lunora/server [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.110...@lunora/server@1.0.0-alpha.111) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.61
+* **@lunora/observability:** upgraded to 1.0.0-alpha.64
+
+## @lunora/server [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.109...@lunora/server@1.0.0-alpha.110) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.60
+* **@lunora/observability:** upgraded to 1.0.0-alpha.63
+
+## @lunora/server [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.108...@lunora/server@1.0.0-alpha.109) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.59
+* **@lunora/observability:** upgraded to 1.0.0-alpha.62
+
+## @lunora/server [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.107...@lunora/server@1.0.0-alpha.108) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.58
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/observability:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/server [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.106...@lunora/server@1.0.0-alpha.107) (2026-09-06)
 
 

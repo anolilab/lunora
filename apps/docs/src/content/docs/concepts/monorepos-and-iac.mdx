@@ -42,6 +42,32 @@ worker and Lunora keeps regenerating types and serving Studio:
 `--worker-port` still matters with `--no-worker`: Studio and the printed hints
 need to know where the externally-owned worker is listening.
 
+### Pin the inspector port too
+
+A repo running several Workers side by side has to pin both ports `wrangler dev`
+takes, not just the worker one. The devtools inspector starts at 9229 and climbs
+while ports are busy, so the Lunora worker's inspector walks straight into the
+port a sibling worker pinned — and the one that dies is whichever bound second,
+so the failure moves between runs and names a port that appears in no config
+you can grep.
+
+```jsonc
+// package.json — every worker owns both of its ports
+{
+    "scripts": {
+        "dev": "run-p dev:worker dev:lunora",
+        "dev:worker": "wrangler dev --port 8788 --inspector-port 9230",
+        "dev:lunora": "lunora dev --worker-port 8789 --inspector-port 9231",
+    },
+}
+```
+
+`--inspector-port` mirrors `--worker-port`: the flag wins, then
+`dev.inspector_port` in the project's `wrangler.jsonc`, and with neither set
+wrangler keeps its own default and walks. It applies to the `wrangler dev`
+spawn, so on the Vite flavors pass the port through the plugin instead
+(`lunora({ cloudflare: { inspectorPort: 9231 } })`).
+
 ### Telling the supervisor what to provide
 
 A task runner starting seven Workers needs two things from Lunora before it can

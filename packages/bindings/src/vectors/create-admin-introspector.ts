@@ -99,8 +99,13 @@ export const createVectorAdminIntrospector = (options: VectorAdminIntrospectorOp
                     return {
                         ...entry,
                         dimensions: entry.dimensions ?? details.dimensions,
-                        processedUpToMutation: details.processedUpToMutation,
-                        vectorsCount: details.vectorsCount,
+                        processedUpToMutation: details.processedUpToMutation === undefined ? undefined : String(details.processedUpToMutation),
+                        // Cloudflare renamed the row count between API generations
+                        // (`vectorsCount` on the beta `VectorizeIndex`, `vectorCount`
+                        // on the current `Vectorize`). Reading only the beta spelling
+                        // left the studio's count column empty against every real
+                        // binding.
+                        vectorsCount: details.vectorCount ?? details.vectorsCount,
                     };
                 } catch {
                     // A binding that can't describe itself (transient error, or a

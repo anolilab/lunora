@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.34...@lunora/errors@1.0.0-alpha.35) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
 ## @lunora/errors [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.33...@lunora/errors@1.0.0-alpha.34) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute } from "../../src/commands/add/handler";
 import type { AddOptions } from "../../src/commands/add/index";
+import { setCommandLogger } from "../../src/util/logger";
 import { validateOutputFormat } from "../../src/util/output-format";
 
 // __tests__/commands/ -> package root -> packages/ -> monorepo root -> registry/
@@ -41,14 +42,29 @@ const runExecute = async (workdir: string, options: Partial<AddOptions>, argumen
 };
 
 let workdir: string;
+let logged: string[];
 
 describe("lunora add --format", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-add-format-"));
         seedProject(workdir);
+
+        // `add` logs through the shared pail (and, in json mode, through the
+        // stderr logger) — neither of which this suite can inject via the
+        // toolbox stub. Without the override its whole plan/next-steps
+        // transcript went to the real streams, on top of the test reporter's
+        // own output.
+        logged = [];
+        setCommandLogger({
+            error: (message) => logged.push(message),
+            info: (message) => logged.push(message),
+            success: (message) => logged.push(message),
+            warn: (message) => logged.push(message),
+        });
     });
 
     afterEach(() => {
+        setCommandLogger(undefined);
         rmSync(workdir, { force: true, recursive: true });
         vi.restoreAllMocks();
     });
@@ -76,11 +92,12 @@ describe("lunora add --format", () => {
     });
 
     it("rejects an invalid --format value with exit 1", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const exitCode = await runExecute(workdir, { format: "xml", from: registryRoot, yes: true }, ["email"]);
 
         expect(exitCode).toBe(1);
         expect(validateOutputFormat("add", "xml")).toBe('add: unknown --format "xml" — expected pretty | json');
+        expect(logged).toContain('add: unknown --format "xml" — expected pretty | json');
     });
 });

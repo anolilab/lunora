@@ -1,3 +1,127 @@
+## @lunora/runtime [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.113...@lunora/runtime@1.0.0-alpha.114) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+
+## @lunora/runtime [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.112...@lunora/runtime@1.0.0-alpha.113) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.50
+
+## @lunora/runtime [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.111...@lunora/runtime@1.0.0-alpha.112) (2026-09-10)
+
+### Features
+
+* **runtime:** run crons and queues where the host has neither ([#684](https://github.com/anolilab/lunora/issues/684)) ([4d11b0c](https://github.com/anolilab/lunora/commit/4d11b0c7912f5b781ad4f7a17dfddae229bae0e1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+* **@lunora/observability:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
+## @lunora/runtime [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.110...@lunora/runtime@1.0.0-alpha.111) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+
+## @lunora/runtime [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.109...@lunora/runtime@1.0.0-alpha.110) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.68
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+
+## @lunora/runtime [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.108...@lunora/runtime@1.0.0-alpha.109) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.67
+* **@lunora/do:** upgraded to 1.0.0-alpha.129
+
+## @lunora/runtime [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.107...@lunora/runtime@1.0.0-alpha.108) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.66
+* **@lunora/do:** upgraded to 1.0.0-alpha.128
+
+## @lunora/runtime [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.106...@lunora/runtime@1.0.0-alpha.107) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.55
+* **@lunora/observability:** upgraded to 1.0.0-alpha.65
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+
+## @lunora/runtime [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.105...@lunora/runtime@1.0.0-alpha.106) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.64
+* **@lunora/do:** upgraded to 1.0.0-alpha.126
+
+## @lunora/runtime [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.104...@lunora/runtime@1.0.0-alpha.105) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.63
+* **@lunora/do:** upgraded to 1.0.0-alpha.125
+
+## @lunora/runtime [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.103...@lunora/runtime@1.0.0-alpha.104) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.124
+
+## @lunora/runtime [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.102...@lunora/runtime@1.0.0-alpha.103) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.61
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+
+## @lunora/runtime [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.101...@lunora/runtime@1.0.0-alpha.102) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.54
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/observability:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.49
+
 ## @lunora/runtime [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.100...@lunora/runtime@1.0.0-alpha.101) (2026-09-07)
 
 ### Bug Fixes

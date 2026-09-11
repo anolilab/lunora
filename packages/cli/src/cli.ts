@@ -42,7 +42,8 @@ import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
 import { detectPackageManager } from "./util/detect-package-manager";
-import { createLogger } from "./util/logger";
+import type { Logger } from "./util/logger";
+import { createLogger, setCommandLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
 import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
@@ -256,8 +257,9 @@ interface RunCliOptions {
 
     /**
      * Inject a console-like logger so callers (tests) can capture cerebro's
-     * help / version / usage rendering. Omitted in production, where cerebro
-     * uses its default stdout/stderr logger.
+     * help / version / usage rendering AND the commands' own output. Omitted in
+     * production, where cerebro uses its default stdout/stderr logger and the
+     * commands log through the shared pail.
      */
     logger?: Console;
 }
@@ -331,6 +333,31 @@ const reportRunError = (error: unknown): void => {
 };
 
 /**
+ * Adapt an injected `Console` to the commands' {@link Logger} shape. `success`
+ * has no Console equivalent, so it lands on `info` — the channel a Console-based
+ * caller already reads for it.
+ */
+const asCommandLogger = (console_: Console): Logger => {
+    return {
+        debug: (message) => {
+            console_.debug(message);
+        },
+        error: (message) => {
+            console_.error(message);
+        },
+        info: (message) => {
+            console_.info(message);
+        },
+        success: (message) => {
+            console_.info(message);
+        },
+        warn: (message) => {
+            console_.warn(message);
+        },
+    };
+};
+
+/**
  * Run the CLI and resolve to the process exit code. cerebro handles help,
  * version, usage, and unknown commands (the latter throws, caught here as 1).
  * `shouldExitProcess: false` keeps the process alive so callers/tests read the
@@ -339,12 +366,23 @@ const reportRunError = (error: unknown): void => {
 const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     const { cli, exitCode } = buildCli(options);
 
+    // An injected logger has to reach the command bodies too, not just cerebro's
+    // own rendering: they log through the shared pail, so without this a
+    // command's output went to the real stdout/stderr regardless — unassertable,
+    // and interleaved with the caller's own output. Cleared afterwards so one
+    // call cannot leave the override installed for the next.
+    if (options.logger !== undefined) {
+        setCommandLogger(asCommandLogger(options.logger));
+    }
+
     try {
         await cli.run({ shouldExitProcess: false });
     } catch (error: unknown) {
         reportRunError(error);
 
         return 1;
+    } finally {
+        setCommandLogger(undefined);
     }
 
     // Best-effort "update available" notice. A no-op for the unpublished dev

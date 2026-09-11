@@ -1,3 +1,41 @@
+## @lunora/shard-engine [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.62...@lunora/shard-engine@1.0.0-alpha.63) (2026-09-10)
+
+### Features
+
+* **observability,do:** stamp the deploy onto every request-log row ([#681](https://github.com/anolilab/lunora/issues/681)) ([925dbda](https://github.com/anolilab/lunora/commit/925dbda2479e258aa71582170dd20f2d85ffece8))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+
+## @lunora/shard-engine [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.61...@lunora/shard-engine@1.0.0-alpha.62) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.55
+
+## @lunora/shard-engine [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.60...@lunora/shard-engine@1.0.0-alpha.61) (2026-09-07)
+
+### Bug Fixes
+
+* **sql-store:** order an untyped global column's numbers numerically ([#656](https://github.com/anolilab/lunora/issues/656)) ([9acccd6](https://github.com/anolilab/lunora/commit/9acccd69060a2049610a1ed9a3de90fc914ed6fa))
+
+## @lunora/shard-engine [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.59...@lunora/shard-engine@1.0.0-alpha.60) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.54
+
 ## @lunora/shard-engine [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.58...@lunora/shard-engine@1.0.0-alpha.59) (2026-09-06)
 
 ### Bug Fixes

@@ -37,81 +37,85 @@
  * which is why `project-config.test.ts` keeps the relaxed assertion.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import type { PlatformCapabilities } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
-import type { ParseError } from "jsonc-parser";
-import { parse as parseJsonc } from "jsonc-parser";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
+import { readProjectConfigLiterals } from "./project-config-file";
 
 /** The default codegen target — today's behavior, byte-identical goldens. */
 const DEFAULT_TARGET = "cloudflare";
 
-/** The project-config file the target is declared in. Same file `@lunora/config` reads for `remote`. */
-const PROJECT_CONFIG_FILE = "lunora.json";
-
 /**
- * Read `target` from `<projectRoot>/lunora.json`.
+ * Read `target` from the project's `lunora.config.*`.
  *
- * This lives in `@lunora/codegen` rather than `@lunora/config` — where the rest
- * of the `lunora.json` reading lives — because `@lunora/config` depends on
- * `@lunora/codegen`, not the reverse. Putting it there and importing it here
- * would invert that edge, so config delegates to this instead and there is
- * still exactly one parser for the key.
- *
- * Best-effort and deliberately unvalidated: a missing file, malformed JSONC, or
- * a non-string value all collapse to `undefined`, because those are shape
- * errors rather than a name the user meant. An unrecognized *name* is returned
- * as-is so the caller's registry lookup rejects it — swallowing a typo into the
- * default would ship an app to the wrong provider.
- * @param projectRoot Directory containing `lunora.json`.
+ * Read as a LITERAL rather than by evaluating the config: `runCodegen` is
+ * synchronous and resolves the target inside itself, and `jiti`'s
+ * non-deprecated entry point is async — see `project-config-file`'s header.
+ * Best-effort and deliberately unvalidated: a missing file, a computed value, or
+ * a non-string one all collapse to `undefined`, because those are shape errors
+ * rather than a name the user meant. An unrecognized *name* is
+ * returned as-is so the caller's registry lookup rejects it — swallowing a typo
+ * into the default would ship an app to the wrong provider.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @returns the declared target, or `undefined` when none is usable.
  */
 const readProjectTarget = (projectRoot: string): string | undefined => {
-    const configPath = join(projectRoot, PROJECT_CONFIG_FILE);
+    const { target } = readProjectConfigLiterals(projectRoot);
 
-    if (!existsSync(configPath)) {
-        return undefined;
-    }
-
-    let text: string;
-
-    try {
-        text = readFileSync(configPath, "utf8");
-    } catch {
-        return undefined;
-    }
-
-    const parseErrors: ParseError[] = [];
-    const parsed: unknown = parseJsonc(text, parseErrors, { allowTrailingComma: true });
-
-    if (parseErrors.length > 0 || parsed === null || typeof parsed !== "object") {
-        return undefined;
-    }
-
-    const { target } = parsed as { target?: unknown };
-
-    return typeof target === "string" && target.length > 0 ? target : undefined;
+    return target !== undefined && target.length > 0 ? target : undefined;
 };
 
 /**
  * The target codegen should emit for: an explicit option wins, then
- * `lunora.json`, then the default.
+ * `lunora.config.*`, then the default.
  *
  * `runCodegen` applies this itself so a caller that forgets to pass a target
  * still emits the surface the project declared. That default matters more than
  * it looks: a call site that silently omits the target emits the *default*
  * surface with no diagnostic to notice, and the mismatch only shows up at
  * runtime on the deployed app.
- * @param projectRoot Directory containing `lunora.json`.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @returns the resolved target id — not guaranteed to be registered.
  */
 const resolveCodegenTarget = (projectRoot: string, explicit?: string): string => explicit ?? readProjectTarget(projectRoot) ?? DEFAULT_TARGET;
+
+/**
+ * The diagnostic for a `lunora.config.*` whose `target` the synchronous reader
+ * could not parse — a computed value, a getter, a spread, `module.exports`.
+ *
+ * Without it, "no `target` declared" and "a `target` I could not read" were the
+ * same silence, and both fell through to `cloudflare`: codegen emits the
+ * Cloudflare `ctx.*` surface and `lunora deploy` runs the wrangler toolchain for
+ * a project that asked for something else. A WARNING, not an error, because the
+ * config may legitimately declare no target at all and `--target` still wins —
+ * but a silent wrong provider is exactly what this stack refuses elsewhere.
+ *
+ * Skipped when the caller passed `--target`: the file's value is then moot.
+ */
+const readTargetDiagnostics = (projectRoot: string, explicit?: string): PlatformDiagnostic[] => {
+    if (explicit !== undefined) {
+        return [];
+    }
+
+    const { target, unreadable } = readProjectConfigLiterals(projectRoot);
+
+    if (unreadable !== true || target !== undefined) {
+        return [];
+    }
+
+    return [
+        {
+            level: "warn",
+            message: `lunora.config declares a \`target\` that codegen cannot read without evaluating it, so the "${DEFAULT_TARGET}" surface was emitted. \`runCodegen\` resolves the target synchronously, which means it reads literals only.`,
+            name: "platform_unreadable_target",
+            remediation: `Write \`target\` as a string literal on the config's default export (\`export default { target: "${DEFAULT_TARGET}" }\`), or pass \`--target\`.`,
+            target: DEFAULT_TARGET,
+        },
+    ];
+};
 
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
@@ -300,7 +304,7 @@ interface PlatformDiagnostic {
     /** Human-readable explanation of the gap. */
     message: string;
     /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, or `platform_unknown_target`. */
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
     /** How to resolve it. */
     remediation: string;
     /** The requested deploy target. */
@@ -517,7 +521,7 @@ export {
     gateAgainstMatrix,
     gatePlatformFeatures,
     platformMatrixIds,
-    PROJECT_CONFIG_FILE,
     readProjectTarget,
+    readTargetDiagnostics,
     resolveCodegenTarget,
 };

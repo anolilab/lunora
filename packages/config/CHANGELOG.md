@@ -1,3 +1,152 @@
+## @lunora/config [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.213...@lunora/config@1.0.0-alpha.214) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.177
+* **@lunora/seed:** upgraded to 1.0.0-alpha.125
+* **@lunora/studio:** upgraded to 1.0.0-alpha.175
+
+## @lunora/config [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.212...@lunora/config@1.0.0-alpha.213) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.176
+* **@lunora/seed:** upgraded to 1.0.0-alpha.124
+* **@lunora/studio:** upgraded to 1.0.0-alpha.174
+
+## @lunora/config [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.211...@lunora/config@1.0.0-alpha.212) (2026-09-10)
+
+### Features
+
+* **config,cli:** flag a missing CPU cap and R2 lifecycle rule ([#683](https://github.com/anolilab/lunora/issues/683)) ([b3efd19](https://github.com/anolilab/lunora/commit/b3efd196d475b61175a24da6704a2d43999392d3))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.175
+* **@lunora/seed:** upgraded to 1.0.0-alpha.123
+* **@lunora/studio:** upgraded to 1.0.0-alpha.173
+
+## @lunora/config [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.210...@lunora/config@1.0.0-alpha.211) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.174
+* **@lunora/seed:** upgraded to 1.0.0-alpha.122
+* **@lunora/studio:** upgraded to 1.0.0-alpha.172
+
+## @lunora/config [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.209...@lunora/config@1.0.0-alpha.210) (2026-09-08)
+
+### Bug Fixes
+
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.173
+* **@lunora/seed:** upgraded to 1.0.0-alpha.121
+* **@lunora/studio:** upgraded to 1.0.0-alpha.171
+
+## @lunora/config [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.208...@lunora/config@1.0.0-alpha.209) (2026-09-08)
+
+### Bug Fixes
+
+* **config:** decide the unchained .vectors() check from the project, not the entry ([#673](https://github.com/anolilab/lunora/issues/673)) ([0dbc943](https://github.com/anolilab/lunora/commit/0dbc94391b61a3a1493be5daeaa40cadca3c3cb6)), closes [#666](https://github.com/anolilab/lunora/issues/666)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.172
+* **@lunora/seed:** upgraded to 1.0.0-alpha.120
+* **@lunora/studio:** upgraded to 1.0.0-alpha.170
+
+## @lunora/config [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.207...@lunora/config@1.0.0-alpha.208) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.171
+* **@lunora/seed:** upgraded to 1.0.0-alpha.119
+* **@lunora/studio:** upgraded to 1.0.0-alpha.169
+
+## @lunora/config [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.206...@lunora/config@1.0.0-alpha.207) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.170
+* **@lunora/seed:** upgraded to 1.0.0-alpha.118
+* **@lunora/studio:** upgraded to 1.0.0-alpha.168
+
+## @lunora/config [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.205...@lunora/config@1.0.0-alpha.206) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.169
+* **@lunora/seed:** upgraded to 1.0.0-alpha.117
+* **@lunora/studio:** upgraded to 1.0.0-alpha.167
+
+## @lunora/config [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.204...@lunora/config@1.0.0-alpha.205) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.168
+* **@lunora/seed:** upgraded to 1.0.0-alpha.116
+* **@lunora/studio:** upgraded to 1.0.0-alpha.166
+
+## @lunora/config [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.203...@lunora/config@1.0.0-alpha.204) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.167
+* **@lunora/seed:** upgraded to 1.0.0-alpha.115
+* **@lunora/studio:** upgraded to 1.0.0-alpha.165
+
+## @lunora/config [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.202...@lunora/config@1.0.0-alpha.203) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.166
+* **@lunora/seed:** upgraded to 1.0.0-alpha.114
+* **@lunora/studio:** upgraded to 1.0.0-alpha.164
+
+## @lunora/config [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.201...@lunora/config@1.0.0-alpha.202) (2026-09-07)
+
+### Bug Fixes
+
+* **config:** fail validation on a Durable Object class the worker entry does not export ([#653](https://github.com/anolilab/lunora/issues/653)) ([b7ddc20](https://github.com/anolilab/lunora/commit/b7ddc2091e362ee4c592e3113f01e4fe5e89d378))
+
+## @lunora/config [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.200...@lunora/config@1.0.0-alpha.201) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.165
+* **@lunora/container:** upgraded to 1.0.0-alpha.48
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/seed:** upgraded to 1.0.0-alpha.113
+* **@lunora/studio:** upgraded to 1.0.0-alpha.163
+
 ## @lunora/config [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.199...@lunora/config@1.0.0-alpha.200) (2026-09-07)
 
 ### Bug Fixes

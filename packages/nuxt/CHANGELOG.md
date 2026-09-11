@@ -1,3 +1,115 @@
+## @lunora/nuxt [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.126...@lunora/nuxt@1.0.0-alpha.127) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.114
+
+## @lunora/nuxt [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.125...@lunora/nuxt@1.0.0-alpha.126) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.113
+
+## @lunora/nuxt [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.124...@lunora/nuxt@1.0.0-alpha.125) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.112
+
+## @lunora/nuxt [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.123...@lunora/nuxt@1.0.0-alpha.124) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.111
+
+## @lunora/nuxt [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.122...@lunora/nuxt@1.0.0-alpha.123) (2026-09-08)
+
+### Bug Fixes
+
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.110
+
+## @lunora/nuxt [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.121...@lunora/nuxt@1.0.0-alpha.122) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.109
+
+## @lunora/nuxt [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.120...@lunora/nuxt@1.0.0-alpha.121) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.108
+
+## @lunora/nuxt [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.119...@lunora/nuxt@1.0.0-alpha.120) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.107
+
+## @lunora/nuxt [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.118...@lunora/nuxt@1.0.0-alpha.119) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.106
+
+## @lunora/nuxt [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.117...@lunora/nuxt@1.0.0-alpha.118) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.90
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.105
+
+## @lunora/nuxt [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.116...@lunora/nuxt@1.0.0-alpha.117) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.89
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.104
+
+## @lunora/nuxt [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.115...@lunora/nuxt@1.0.0-alpha.116) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.88
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.103
+
+## @lunora/nuxt [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.114...@lunora/nuxt@1.0.0-alpha.115) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.87
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.102
+
 ## @lunora/nuxt [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.113...@lunora/nuxt@1.0.0-alpha.114) (2026-09-07)
 
 
