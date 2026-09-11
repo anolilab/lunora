@@ -216,15 +216,15 @@ The kit targets Cloudflare in v1. `@lunora/platform-node` exists, but nothing he
 
 ## 7. Phasing & ordering
 
-| Phase | Work    | Gate                                                                                                       |
-| ----- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| 0     | A       | A scripted scaffold composes auth + payment + mail + storage and typechecks with zero hand edits           |
-| 1     | B       | `registry add saas` composes into all 13 templates; each typechecks in `test:templates`                    |
-| 2     | C, D, E | One runnable React kit: sign up → create org → invite → accept, green in `tests/e2e`                       |
-| 3     | F, G, H | Stripe test-mode checkout flips a gated route; admin lists a seeded user; two contexts see one live change |
-| 4     | I       | Every view mirrors clean under `lint:registry:sync`; each `templates/saas-*` typechecks                    |
-| 5     | L, M, N | Demo URL green in CI live mode; bundle under budget                                                        |
-| 6     | J, K    | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                                |
+| Phase | Work    | Gate                                                                                                          |
+| ----- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| 0     | A       | **Met.** `registry add saas --yes` composes and typechecks with zero hand edits. Re-scoped to `payment` alone |
+| 1     | B       | **Done for one project.** Still to prove: composes into all 13 templates under `test:templates`               |
+| 2     | C, D, E | One runnable React kit: sign up → create org → invite → accept, green in `tests/e2e`                          |
+| 3     | F, G, H | Stripe test-mode checkout flips a gated route; admin lists a seeded user; two contexts see one live change    |
+| 4     | I       | Every view mirrors clean under `lint:registry:sync`; each `templates/saas-*` typechecks                       |
+| 5     | L, M, N | Demo URL green in CI live mode; bundle under budget                                                           |
+| 6     | J, K    | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                                   |
 
 ## 8. Risks & STOP conditions
 
