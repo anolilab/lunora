@@ -1,101 +1,214 @@
+/**
+ * `schemaDeclaresRelationGraph` — the `relationGraph` platform signal.
+ *
+ * Two things are pinned here. First the answer itself, per declaration shape.
+ * Second, and the reason this file matters: that the answer AGREES with
+ * `@lunora/shard-engine`'s `deriveRelationEdges`, which is the derivation the
+ * runtime traversal actually walks.
+ *
+ * The two read different inputs — static AST IR here, live `defineSchema`
+ * validators there — so they cannot share code, and before this they did not
+ * share a fixture either: each had its own, and nothing compared them. That is
+ * exactly how a gate desyncs from the runtime with every test green (teach one
+ * side to unwrap `v.union` and the codegen gate starts claiming a graph the
+ * traversal cannot walk, or the reverse). So every case below is written ONCE as
+ * a column spec and projected into both worlds.
+ */
+import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { deriveRelationEdges } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import type { SchemaIR, TableIR, ValidatorIR } from "../src/ir";
-import { deriveRelationEdges } from "../src/relation-graph";
+import schemaDeclaresRelationGraph from "../src/relation-graph";
 
-/** Build a minimal `TableIR` with the given field shape. */
-const table = (name: string, shape: TableIR["shape"]): TableIR => {
+/** One column, described once for both projections below. */
+type ColumnSpec =
+    | { inner: ColumnSpec; kind: "array" | "optional" }
+    | { kind: "id"; target: string }
+    | { kind: "object"; shape: Record<string, ColumnSpec> }
+    | { kind: "text" }
+    | { kind: "union"; members: ColumnSpec[] };
+
+interface TableSpec {
+    columns: Record<string, ColumnSpec>;
+    name: string;
+}
+
+/** The column spec as `@lunora/codegen`'s discovered IR sees it. */
+const toValidatorIr = (column: ColumnSpec): ValidatorIR => {
+    switch (column.kind) {
+        case "array":
+        case "optional": {
+            return { inner: toValidatorIr(column.inner), kind: column.kind };
+        }
+        case "id": {
+            return { kind: "id", tableName: column.target };
+        }
+        case "object": {
+            return { kind: "object", shape: Object.fromEntries(Object.entries(column.shape).map(([field, spec]) => [field, toValidatorIr(spec)])) };
+        }
+        case "union": {
+            return { kind: "union", members: column.members.map((member) => toValidatorIr(member)) };
+        }
+        default: {
+            return { kind: "string" };
+        }
+    }
+};
+
+/**
+ * The same column as `@lunora/values` leaves it on a live validator at runtime.
+ *
+ * An object or a union projects OPAQUELY, and that is the fixture being faithful
+ * rather than lazy: `ValidatorLike._meta` carries `column`, `inner` and
+ * `tableName` and nothing else, so an id nested in one is genuinely unreachable
+ * from the runtime derivation. The IR side above keeps the nesting, so a codegen
+ * copy that learned to descend into either would light up the cross-pin.
+ */
+const toValidatorLike = (column: ColumnSpec): ValidatorLike => {
+    switch (column.kind) {
+        case "array":
+        case "optional": {
+            return { _meta: { inner: toValidatorLike(column.inner) }, kind: column.kind };
+        }
+        case "id": {
+            return { _meta: { tableName: column.target }, kind: "id" };
+        }
+        case "object":
+        case "union": {
+            return { kind: column.kind };
+        }
+        default: {
+            return { kind: "string" };
+        }
+    }
+};
+
+const toSchemaIr = (tables: ReadonlyArray<TableSpec>): SchemaIR => {
     return {
-        indexes: [],
-        name,
-        rankIndexes: [],
-        relations: [],
-        searchIndexes: [],
-        shape,
-        shardMode: "root",
+        tables: tables.map((table): TableIR => {
+            return {
+                indexes: [],
+                name: table.name,
+                rankIndexes: [],
+                relations: [],
+                searchIndexes: [],
+                shape: Object.fromEntries(Object.entries(table.columns).map(([column, spec]) => [column, toValidatorIr(spec)])),
+                shardMode: "root",
+                vectorIndexes: [],
+            };
+        }),
         vectorIndexes: [],
     };
 };
 
-const schema = (tables: TableIR[]): SchemaIR => {
-    return { tables, vectorIndexes: [] };
+const toSchemaLike = (tables: ReadonlyArray<TableSpec>): SchemaLike => {
+    return {
+        tables: Object.fromEntries(
+            tables.map((table) => [
+                table.name,
+                {
+                    indexes: [],
+                    shape: Object.fromEntries(Object.entries(table.columns).map(([column, spec]) => [column, toValidatorLike(spec)])),
+                },
+            ]),
+        ),
+    };
 };
 
-const idOf = (tableName: string): ValidatorIR => {
-    return { kind: "id", tableName };
+const text: ColumnSpec = { kind: "text" };
+const id = (target: string): ColumnSpec => {
+    return { kind: "id", target };
 };
-const optionalOf = (inner: ValidatorIR): ValidatorIR => {
+const optional = (inner: ColumnSpec): ColumnSpec => {
     return { inner, kind: "optional" };
 };
-const arrayOf = (inner: ValidatorIR): ValidatorIR => {
+const array = (inner: ColumnSpec): ColumnSpec => {
     return { inner, kind: "array" };
 };
-const text: ValidatorIR = { kind: "string" };
 
-describe("deriveRelationEdges", () => {
-    it("derives one named edge per v.id column, in declaration order", () => {
+/** Every declaration shape that decides the signal, each written once. */
+const CASES: ReadonlyArray<{ declares: boolean; name: string; tables: TableSpec[] }> = [
+    {
+        declares: true,
+        name: "a plain v.id column",
+        tables: [
+            { columns: { name: text }, name: "customers" },
+            { columns: { customerId: id("customers"), subject: text }, name: "tickets" },
+        ],
+    },
+    {
+        declares: true,
+        name: "an optional v.id column",
+        tables: [
+            { columns: { name: text }, name: "users" },
+            { columns: { authorId: optional(id("users")) }, name: "posts" },
+        ],
+    },
+    {
+        declares: true,
+        name: "an array of ids",
+        tables: [
+            { columns: { label: text }, name: "tags" },
+            { columns: { tagIds: array(id("tags")) }, name: "posts" },
+        ],
+    },
+    {
+        declares: true,
+        name: "an optional array of ids",
+        tables: [
+            { columns: { label: text }, name: "tags" },
+            { columns: { tagIds: optional(array(id("tags"))) }, name: "posts" },
+        ],
+    },
+    {
+        declares: true,
+        name: "a self-referential id",
+        tables: [{ columns: { parentId: optional(id("nodes")), title: text }, name: "nodes" }],
+    },
+    {
+        declares: false,
+        name: "an id whose target table the schema does not declare",
+        tables: [{ columns: { archiveId: id("archive"), body: text }, name: "notes" }],
+    },
+    {
+        declares: false,
+        name: "an id buried in a structure the query layer cannot filter on",
+        tables: [
+            { columns: { name: text }, name: "users" },
+            {
+                columns: {
+                    meta: { kind: "object", shape: { ownerId: id("users") } },
+                    tagged: { kind: "union", members: [id("users"), text] },
+                },
+                name: "notes",
+            },
+        ],
+    },
+    {
+        declares: false,
+        name: "no foreign key at all",
+        tables: [{ columns: { line: text }, name: "logs" }],
+    },
+    {
+        declares: false,
+        name: "no tables at all",
+        tables: [],
+    },
+];
+
+describe("schemaDeclaresRelationGraph", () => {
+    it.each(CASES)("answers $declares for $name", ({ declares, tables }) => {
         expect.assertions(1);
 
-        const ir = schema([
-            table("customers", { name: text }),
-            table("tickets", { customerId: idOf("customers"), subject: text }),
-            table("messages", { body: text, ticketId: idOf("tickets") }),
-        ]);
-
-        expect(deriveRelationEdges(ir)).toStrictEqual([
-            { array: false, column: "customerId", name: "tickets.customerId", sourceTable: "tickets", targetTable: "customers" },
-            { array: false, column: "ticketId", name: "messages.ticketId", sourceTable: "messages", targetTable: "tickets" },
-        ]);
+        expect(schemaDeclaresRelationGraph(toSchemaIr(tables))).toBe(declares);
     });
 
-    it("treats an optional id as an edge", () => {
+    // The cross-pin. Codegen's gate and the runtime's edge set read different
+    // inputs for the same fact, so nothing but this stops them diverging.
+    it.each(CASES)("agrees with the runtime edge set for $name", ({ tables }) => {
         expect.assertions(1);
 
-        const ir = schema([table("users", { name: text }), table("posts", { authorId: optionalOf(idOf("users")) })]);
-
-        expect(deriveRelationEdges(ir)).toStrictEqual([
-            { array: false, column: "authorId", name: "posts.authorId", sourceTable: "posts", targetTable: "users" },
-        ]);
-    });
-
-    it("treats an array of ids as a to-many edge and marks it", () => {
-        expect.assertions(1);
-
-        const ir = schema([table("tags", { label: text }), table("posts", { tagIds: arrayOf(idOf("tags")) })]);
-
-        expect(deriveRelationEdges(ir)).toStrictEqual([{ array: true, column: "tagIds", name: "posts.tagIds", sourceTable: "posts", targetTable: "tags" }]);
-    });
-
-    it("marks an optional array of ids as an array edge", () => {
-        expect.assertions(1);
-
-        const ir = schema([table("tags", { label: text }), table("posts", { tagIds: optionalOf(arrayOf(idOf("tags"))) })]);
-
-        expect(deriveRelationEdges(ir)?.[0]?.array).toBe(true);
-    });
-
-    it("drops an edge whose target table the schema does not declare", () => {
-        expect.assertions(1);
-
-        const ir = schema([table("notes", { archiveId: idOf("archive"), body: text })]);
-
-        expect(deriveRelationEdges(ir)).toStrictEqual([]);
-    });
-
-    it("ignores an id nested in a structure the query layer cannot filter on", () => {
-        expect.assertions(1);
-
-        const ir = schema([
-            table("users", { name: text }),
-            table("notes", { meta: { kind: "object", shape: { ownerId: idOf("users") } }, tagged: { kind: "union", members: [idOf("users"), text] } }),
-        ]);
-
-        expect(deriveRelationEdges(ir)).toStrictEqual([]);
-    });
-
-    it("returns no edges for a schema with no foreign keys", () => {
-        expect.assertions(1);
-
-        expect(deriveRelationEdges(schema([table("logs", { line: text })]))).toStrictEqual([]);
+        expect(schemaDeclaresRelationGraph(toSchemaIr(tables))).toBe(deriveRelationEdges(toSchemaLike(tables)).length > 0);
     });
 });

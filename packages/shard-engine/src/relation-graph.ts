@@ -26,11 +26,15 @@
  * asking for depth 9 has a wrong mental model of the cost, and quietly serving
  * them depth 4 hides it.
  *
- * `@lunora/codegen` derives the same edge set from the static schema IR
- * (its own `relation-graph.ts`) to answer a question the runtime cannot —
- * whether the app declares a relation graph at all, which is the
- * `PlatformSignals` input gating the `relationGraph` capability. The two name
- * edges identically and both are pinned by tests.
+ * **This is the only derivation of the edge set.** `@lunora/codegen` answers a
+ * question the runtime cannot — whether the app declares a relation graph AT
+ * ALL, the `PlatformSignals` input gating the `relationGraph` capability — but
+ * it answers only that, off the static schema IR, as a boolean
+ * (`schemaDeclaresRelationGraph`). It used to derive a whole parallel edge set
+ * and discard everything but `.length > 0`; two derivations of one fact, pinned
+ * by independent fixtures, drift silently. Codegen's own
+ * `relation-graph.test.ts` now cross-pins its boolean against this function over
+ * a shared fixture.
  */
 import { LunoraError } from "@lunora/errors";
 

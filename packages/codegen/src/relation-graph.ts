@@ -1,118 +1,72 @@
 /**
- * Schema-derived relation EDGES — the directed graph a `v.id("target")` column
- * already describes but that nothing used to read.
+ * Does the app's schema declare a relation graph at all?
  *
- * `v.id("tickets")` records its target table in the validator's metadata bag
- * (`@lunora/values`' `v.id`), and `schema-drift` already reads it to notice a
- * retargeted foreign key. This module turns the same information into a
- * traversable edge SET: one directed edge per `v.id` column, from the table
- * that HOLDS the column to the table the id points at.
+ * That single boolean is the whole job here. It is the `relationGraph`
+ * `PlatformSignals` input, which lets `gateAgainstMatrix` refuse a target
+ * whose matrix rates the traversal `unsupported` instead of emitting a
+ * `ctx.db.related` that fails on the first hop.
  *
- * Each edge is addressable by name — `"tickets.customerId"`, the holder table
- * plus its column — because the name is what a caller passes to
- * `ctx.db.related({ edges: [...] })` to restrict a traversal to the hops it
- * cares about. A column name is unique within its table, so the pair is unique
- * within the schema.
+ * **Why it is not the edge SET.** `@lunora/shard-engine` derives the real edge
+ * set at runtime, off the live `defineSchema` validators — that is what
+ * `ctx.db.related` walks, and it is the only derivation whose output anything
+ * consumes. This side used to derive its own, identically-named-and-shaped copy
+ * (118 lines, a public `RelationEdge` export, an api-snapshot entry) and then
+ * throw all of it away but `.length > 0`. Two derivations of the same fact, each
+ * pinned by its own independent fixtures, with nothing comparing them: adding
+ * `v.union` unwrapping to one would have silently desynced the codegen gate from
+ * the runtime with every test green. So this keeps the QUESTION and drops the
+ * duplicate answer, and `relation-graph.test.ts` cross-pins what remains against
+ * `deriveRelationEdges` over one shared fixture.
  *
- * **Why this exists at codegen time.** `@lunora/shard-engine` derives the same
- * edge set at runtime off the live `defineSchema` validators — that is what
- * `ctx.db.related` walks. This IR-side twin answers a question the runtime
- * cannot: whether the app declares a relation graph AT ALL, which is the
- * `PlatformSignals` input that lets `gateAgainstMatrix` refuse a target whose
- * matrix rates `relationGraph` unsupported. Both sides name edges identically
- * (`${sourceTable}.${column}`) and both are pinned by tests; they read
- * different inputs (static AST IR vs runtime validators) for the same reason
- * every `*Like` structural mirror in `@lunora/shard-engine` does.
+ * The inputs still differ — static AST IR here, runtime validators there — for
+ * the same reason every `*Like` structural mirror in `@lunora/shard-engine`
+ * does; only the DERIVATION is now single.
  */
 import type { SchemaIR, ValidatorIR } from "./ir";
 
 /**
- * One directed foreign-key edge: `sourceTable.column` → `targetTable`.
- *
- * The direction is the one the DATA points in — the row carrying the column is
- * the source — which is also the direction `ctx.db.related`'s `"out"` follows.
- */
-interface RelationEdge {
-    /**
-     * `true` when the column is a `v.array(v.id(...))` — one row holds MANY
-     * target ids rather than one.
-     */
-    array: boolean;
-    /** The `v.id(...)` column on {@link RelationEdge.sourceTable}. */
-    column: string;
-    /** The addressable edge-type name: `` `${sourceTable}.${column}` ``. */
-    name: string;
-    /** The table whose rows carry the foreign key. */
-    sourceTable: string;
-    /** The table the foreign key points at — the `v.id("…")` argument. */
-    targetTable: string;
-}
-
-/**
- * The `v.id` target of a column validator, unwrapping the wrappers a foreign
- * key is legitimately declared under, or `undefined` when the column is not a
- * foreign key.
+ * The `v.id` target of a column validator, unwrapping the wrappers a foreign key
+ * is legitimately declared under, or `undefined` when the column is not one.
  *
  * `v.optional(v.id("t"))` and `v.array(v.id("t"))` (and the two nested either
  * way) are as much an edge as a bare `v.id("t")` — the first is a nullable FK,
  * the second a to-many one — so both wrappers are traversed. Anything else
  * (`v.object`, `v.union`, `v.record`) is deliberately NOT: an id buried in a
- * union is not a column the query layer can filter on, so an edge derived from
- * one would name a hop no traversal could actually take.
+ * union is not a column the query layer can filter on, so a graph derived from
+ * one would claim hops no traversal could take.
  */
-const foreignKeyTargetOf = (validator: ValidatorIR): { array: boolean; targetTable: string } | undefined => {
+const foreignKeyTargetOf = (validator: ValidatorIR): string | undefined => {
     if (validator.kind === "id") {
-        return validator.tableName === undefined ? undefined : { array: false, targetTable: validator.tableName };
+        return validator.tableName;
     }
 
     if (validator.kind !== "array" && validator.kind !== "optional") {
         return undefined;
     }
 
-    const inner = validator.inner === undefined ? undefined : foreignKeyTargetOf(validator.inner);
-
-    if (inner === undefined) {
-        return undefined;
-    }
-
-    return { array: inner.array || validator.kind === "array", targetTable: inner.targetTable };
+    return validator.inner === undefined ? undefined : foreignKeyTargetOf(validator.inner);
 };
 
 /**
- * Derive every foreign-key edge the schema declares, in a deterministic order
- * (declaration order of tables, then of columns within a table).
+ * Whether `schema` declares at least one RESOLVABLE foreign key — a `v.id(...)`
+ * column whose target table this schema also declares.
  *
- * An edge whose target table is not declared in this schema is DROPPED. That is
- * not a lost edge but an unreachable one: `v.id("archive")` with no `archive`
- * table names a hop no read could serve, and keeping it would put an
- * unresolvable edge name in the surface a caller picks `edges` from.
+ * The resolvability test is not incidental: `v.id("archive")` with no `archive`
+ * table names a hop no read could serve, so a schema whose only `v.id` is
+ * dangling declares no graph and must not be gated as if it did.
  * @param schema The discovered schema IR.
- * @returns Every declared, resolvable foreign-key edge.
+ * @returns `true` when at least one foreign-key edge is declared and resolvable.
  */
-const deriveRelationEdges = (schema: SchemaIR): RelationEdge[] => {
+const schemaDeclaresRelationGraph = (schema: SchemaIR): boolean => {
     const declared = new Set(schema.tables.map((table) => table.name));
-    const edges: RelationEdge[] = [];
 
-    for (const table of schema.tables) {
-        for (const [column, validator] of Object.entries(table.shape)) {
+    return schema.tables.some((table) =>
+        Object.values(table.shape).some((validator) => {
             const target = foreignKeyTargetOf(validator);
 
-            if (target === undefined || !declared.has(target.targetTable)) {
-                continue;
-            }
-
-            edges.push({
-                array: target.array,
-                column,
-                name: `${table.name}.${column}`,
-                sourceTable: table.name,
-                targetTable: target.targetTable,
-            });
-        }
-    }
-
-    return edges;
+            return target !== undefined && declared.has(target);
+        }),
+    );
 };
 
-export type { RelationEdge };
-export { deriveRelationEdges };
+export default schemaDeclaresRelationGraph;

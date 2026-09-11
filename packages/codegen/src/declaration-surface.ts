@@ -55,7 +55,7 @@ import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
-import { deriveRelationEdges } from "./relation-graph";
+import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
  * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
@@ -288,7 +288,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // makes it meaningful — a `v.id("target")` column — is a schema
         // declaration. A schema with no foreign key declares no graph, so a host
         // that cannot serve the traversal only refuses apps that would use one.
-        relationGraph: deriveRelationEdges(schema).length > 0,
+        relationGraph: schemaDeclaresRelationGraph(schema),
         secrets: codeSignals.secrets,
         // Read off the schema for the same reason `globalTables` is — and it has
         // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`

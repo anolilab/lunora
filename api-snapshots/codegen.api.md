@@ -649,18 +649,6 @@ interface QueueIR {
 }
 ```
 
-### `RelationEdge` (interface)
-
-```ts
-interface RelationEdge {
-    array: boolean;
-    column: string;
-    name: string;
-    sourceTable: string;
-    targetTable: string;
-}
-```
-
 ### `RelationSnapshot` (interface)
 
 ```ts
@@ -1040,12 +1028,6 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 
 ```ts
 const createCodegenProject: (lunoraDirectory: string) => Project;
-```
-
-### `deriveRelationEdges` (const)
-
-```ts
-const deriveRelationEdges: (schema: SchemaIR) => RelationEdge[];
 ```
 
 ### `describeErrorLevelFindings` (const)
