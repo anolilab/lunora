@@ -175,7 +175,7 @@ Six views cover eleven templates, and `packages/auth-ui` already ships all six. 
 
 **D4. The kit's substance lives in registry items; `templates/saas-*` is a shell.** Over fat per-framework templates, which would duplicate the backend thirteen times and drift twelve ways.
 
-**D5. Free, in-repo, no licence gate.** Over selling it: packages are `1.0.0-alpha.*` and `CLAUDE.md` makes breaking changes without deprecation the _policy_ on `alpha` — "lifetime updates" against that is a support liability — and Lunora's recurring revenue naturally lives in `apps/cloud`, where a free kit is the funnel rather than the competitor.
+**D5. Free, in-repo, no licence gate.** _Settled 2026-09-11._ Over selling it: packages are `1.0.0-alpha.*` and `CLAUDE.md` makes breaking changes without deprecation the _policy_ on `alpha` — "lifetime updates" against that is a support liability — and Lunora's recurring revenue naturally lives in `apps/cloud`, where a free kit is the funnel rather than the competitor.
 
 **D6. The kit ships its own app admin; Studio stays dev-only.** Over exposing Studio in production — it is a schema/SQL/log console, and the blast radius is wrong at any auth level. The app admin is built on better-auth's `admin()` plugin plus the payment tables.
 
@@ -183,7 +183,7 @@ Six views cover eleven templates, and `packages/auth-ui` already ships all six. 
 
 **D8. No i18n in v1.** Over next-intl parity. A real gap against supastarter, boxyhq, ixartz and the CF template — state it in the kit README rather than pretending. Note that i18n in a core/view architecture belongs in `core/`, which makes it cheaper later than it looks.
 
-**D9. Multi-tenancy is `.shardBy("organizationId")`.** Over one shared shard with an `organizationId` column filter. The decision no competitor gets to make: a Lunora shard _is_ a tenant boundary — isolation, per-tenant OCC and per-tenant reactive fan-out fall out of it. It has consequences (cross-org admin reads become cross-shard), which is why it is open question 5 rather than settled here.
+**D9. Multi-tenancy is `.shardBy("organizationId")`.** _Settled 2026-09-11._ Over one shared shard with an `organizationId` column filter. The decision no competitor gets to make: a Lunora shard _is_ a tenant boundary — isolation, per-tenant OCC and per-tenant reactive fan-out fall out of it. It has consequences (cross-org admin reads become cross-shard), which is why it is open question 5 rather than settled here.
 
 **D10. The content surface is a separate docs/blog app, not an in-app CMS.** Over Wave's in-app blog/pages and the CF template's TipTap CMS (§2.4.7). `apps/docs` already proves that answer here; an in-app CMS is a second product with its own editor, media library and versioning. The kit gets a marketing home, `/pricing` and a markdown-fed changelog.
 
@@ -242,8 +242,6 @@ The kit targets Cloudflare in v1. `@lunora/platform-node` exists, but nothing he
 1. **Which views ship in v1?** React is settled (D2). All six at once, or React plus one structurally different view (Svelte or Angular) to prove the core, with the rest in phase 4?
 2. **Which template shells ship in v1?** Six React-serving templates exist; shipping all of them is cheap once one works, but each is another `test:templates` entry and another thing to keep green.
 3. **Does `@lunora/saas-ui` want to be a package at all**, or should the core live in `registry/saas-ui-core` directly? `auth-ui` chose a package because it type-checks and tests against real workspace deps there — confirm the same reasoning holds.
-4. **Free kit vs paid** — D5 assumes free. Does that change how `apps/cloud` is positioned, and does the kit's `/pricing` page sell Cloud or nothing?
-5. **Is a tenant a shard?** `.shardBy("organizationId")` (D9) versus one shard with an `organizationId` column. Measure the cross-org admin read cost before committing; load-bearing for G and for anything enterprise later.
-6. **Should the app admin ship as its own registry item** so every Lunora app gets it, not only the kit?
-7. **Does D10 hold once someone wants to publish a post?** If kit users immediately want in-app authoring, the decision to revisit is _which_ of the three answers in §2.4.7 — not whether to grow a fourth.
-8. **Which analytics/error-tracking story?** `ctx.analytics` exists via `@lunora/bindings`; every competitor ships Sentry or PostHog.
+4. **Should the app admin ship as its own registry item** so every Lunora app gets it, not only the kit?
+5. **Does D10 hold once someone wants to publish a post?** If kit users immediately want in-app authoring, the decision to revisit is _which_ of the three answers in §2.4.7 — not whether to grow a fourth.
+6. **Which analytics/error-tracking story?** `ctx.analytics` exists via `@lunora/bindings`; every competitor ships Sentry or PostHog.
