@@ -78,6 +78,46 @@ test("machine release commits are dropped, not quoted back into the changelog", 
     assert.ok(!entry.includes("chore(release)"), entry);
 });
 
+test("every shape of generated release-job commit is dropped", () => {
+    const entry = render([
+        {
+            body: [
+                // vis's own version commit — the default `release(<channel>): …` template.
+                "- release(alpha): @lunora/browser@1.0.0-alpha.44, @lunora/client@1.0.0-alpha.90 [skip ci]",
+                "- release(main): version 52 packages [skip ci]",
+                // vis's bookkeeping commits.
+                "- chore(release): record wave [skip ci]",
+                "- chore(release): open publish lock [skip ci]",
+                "- chore(release): record pending change file [skip ci]",
+                // The release workflow's lockfile sync.
+                "- chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]",
+                "- fix(browser): stop the leak",
+            ].join("\n"),
+        },
+    ]);
+
+    assert.deepEqual(sectionsOf(entry), ["Bug Fixes"]);
+    assert.ok(!entry.includes("[skip ci]"), entry);
+});
+
+test("a hand-written commit is kept even when it carries [skip ci]", () => {
+    const entry = render([
+        {
+            body: [
+                "- feat(client): add pdf() [skip ci]",
+                // Both of these are real commits from this repo's history.
+                "- chore(studio): drop stale alpha.82 changelog [skip ci]",
+                "- chore(deps): pin typescript to 6.0.3 so the lint toolchain runs again",
+            ].join("\n"),
+        },
+    ]);
+
+    assert.deepEqual(sectionsOf(entry), ["Features", "Miscellaneous Chores"]);
+    assert.match(entry, /\* \*\*client:\*\* add pdf\(\) \[skip ci]/);
+    assert.match(entry, /\* \*\*studio:\*\* drop stale alpha\.82 changelog \[skip ci]/);
+    assert.match(entry, /\* \*\*deps:\*\* pin typescript to 6\.0\.3 so the lint toolchain runs again/);
+});
+
 test("a github-release body omits the version heading", () => {
     const entry = render([{ body: "- fix(browser): stop the leak" }], [], "github-release");
 

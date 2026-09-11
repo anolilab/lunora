@@ -16,8 +16,8 @@
  *      releases into a single row. Without it, the ~80% of releases that are pure
  *      cascade bumps each get a full entry and bury the substantive ones.
  *
- * It also drops the machine `chore(release): … [skip ci]` commits that
- * `vis release generate` transcribes verbatim (upstream visulima#864), so a
+ * It also drops the machine release commits that `vis release generate`
+ * transcribes verbatim (upstream visulima#864) — see `RELEASE_COMMIT` below — so a
  * changelog entry never quotes an older changelog entry back at itself.
  *
  * Wired up in vis.config.ts as `release.changelog`.
@@ -64,9 +64,24 @@ const SECTION_ORDER = [
 
 const BULLET = /^\s*[*-]\s+/;
 const CONVENTIONAL = /^(?<type>[a-z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:\s*(?<subject>.+)$/i;
-// A release commit this repo's own release job wrote. Its subject carries the
-// whole previous changelog entry, so quoting it produces nested changelogs.
-const RELEASE_COMMIT = /^\s*[*-]?\s*chore\(release\):|\[skip ci]/;
+// A commit this repo's release job wrote. `vis release generate` transcribes commit
+// subjects verbatim, and a release commit's subject carries the whole previous
+// changelog entry, so quoting one produces nested changelogs.
+//
+// Anchored on the machine-written type/scope, NOT on `[skip ci]`: hand-written
+// commits carry that marker too (`chore(studio): drop stale alpha.82 changelog
+// [skip ci]`, `feat: add export [skip ci]`) and belong in the changelog.
+//
+//   release(<channel>):  vis's version commit, whose subject lists the whole wave.
+//   chore(release):      vis's bookkeeping commits (publish lock, stage registry,
+//                        wave, pre-mode, dedupe) plus the ~4,900 historical
+//                        `chore(release): <pkg>@<version> [skip ci]` commits
+//                        semantic-release wrote. Machine-only by convention — see
+//                        "Never author `release` commits by hand" in AGENTS.md.
+//   chore(deps): sync pnpm-lock.yaml …
+//                        the release workflow's lockfile sync, pinned to that subject
+//                        so Renovate's other `chore(deps):` commits still render.
+const RELEASE_COMMIT = /^\s*[*-]?\s*(?:release\([^)]+\):|chore\(release\):|chore\(deps\):\s*sync pnpm-lock\.yaml)/i;
 const ISSUE_REFERENCE = /\(#(?<number>\d+)\)\s*$/;
 
 const tagFor = (name, version) => `${name}@${version}`;
