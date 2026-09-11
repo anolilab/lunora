@@ -1,6 +1,7 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
+import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
 import { callObservabilityTool, OBSERVABILITY_TOOL_DEFINITIONS, OBSERVABILITY_TOOL_NAMES } from "./observability-tools";
 import { errorResult, ok } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
@@ -131,6 +132,7 @@ const toolDefinitions = (allowWrites: boolean, allowObservability = false): Read
     /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
     [
         ...READ_ONLY_TOOL_DEFINITIONS,
+        ...ERROR_TOOL_DEFINITIONS,
         ...(allowObservability === true ? OBSERVABILITY_TOOL_DEFINITIONS : []),
         ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : []),
     ];
@@ -319,6 +321,12 @@ const callTool = async (
     allowObservability = false,
 ): Promise<ToolResult> => {
     try {
+        // Static catalog content — no client, no gate, and reachable on a server
+        // whose deployment is unreachable.
+        if (ERROR_TOOL_NAMES.has(name)) {
+            return callErrorTool(name, input);
+        }
+
         /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
         if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
             return errorResult(`tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`);

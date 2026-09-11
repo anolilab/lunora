@@ -6,7 +6,9 @@
  * The deployment server: It registers tools for introspecting a deployment
  * (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions
  * (`lunora_run_query`, plus `lunora_run_mutation` and `lunora_run_action` when
- * writes are enabled), each backed by `LunoraClient` over HTTP RPC. It also
+ * writes are enabled), each backed by `LunoraClient` over HTTP RPC, plus
+ * `lunora_explain_error` — a credential-free read of the static error catalog
+ * (status, title, hint, matched solution) that needs no deployment at all. It also
  * exposes the deployment's observability reads (`lunora_get_logs`,
  * `lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
  * `lunora_get_migration_status`) when `allowObservability` (or the

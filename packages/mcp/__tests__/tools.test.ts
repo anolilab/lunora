@@ -1,7 +1,7 @@
 import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ToolResult } from "../src/tools";
+import { ERROR_TOOL_DEFINITIONS } from "../src/error-tools";
 import { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "../src/tools";
 
 const MOCK_FUNCTIONS: FunctionDescriptor[] = [
@@ -101,12 +101,12 @@ const proposeAndConfirm = async (client: LunoraClient, name: string, input: Reco
 };
 
 describe("toolDefinitions", () => {
-    it("exposes only the four read-only tools by default (writes disabled, no admin token)", () => {
+    it("exposes only the read-only and error tools by default (writes disabled, no admin token)", () => {
         expect.assertions(2);
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
         expect(toolDefinitions(false).every((tool) => tool.inputSchema.type === "object")).toBe(true);
     });
 
@@ -120,10 +120,11 @@ describe("toolDefinitions", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
-        expect(names).toHaveLength(READ_ONLY_TOOL_DEFINITIONS.length + WRITE_TOOL_DEFINITIONS.length);
+        expect(names).toHaveLength(READ_ONLY_TOOL_DEFINITIONS.length + ERROR_TOOL_DEFINITIONS.length + WRITE_TOOL_DEFINITIONS.length);
     });
 });
 

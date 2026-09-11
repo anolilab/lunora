@@ -897,6 +897,12 @@ const findSolutionByMessage: (message: string) => Solution | undefined;
 const flattenHint: (hint: ErrorHint) => string;
 ```
 
+### `getCatalogEntry` (const)
+
+```ts
+const getCatalogEntry: (code: string) => ErrorCatalogEntry | undefined;
+```
+
 ### `invariant` (const)
 
 ```ts

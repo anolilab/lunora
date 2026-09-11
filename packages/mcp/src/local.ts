@@ -31,6 +31,7 @@ import { createRemoteDocsIndex } from "./docs/remote-index";
 import { docsResources } from "./docs/resources";
 import { docsTools } from "./docs/tools";
 import type { DocsIndex } from "./docs/types";
+import { callErrorTool, ERROR_TOOL_NAMES } from "./error-tools";
 import type { ToolResult } from "./tool-types";
 import { callTool, toolDefinitions } from "./tools";
 
@@ -187,6 +188,13 @@ const lazyDeploymentTools = (
         return {
             definition,
             handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
+                // `lunora_explain_error` answers from the compiled-in error
+                // catalog, so it must not be refused for want of a dev server —
+                // explaining the error is exactly what you want when nothing is up.
+                if (ERROR_TOOL_NAMES.has(definition.name)) {
+                    return callErrorTool(definition.name, input);
+                }
+
                 const deployment = resolve();
 
                 if (deployment === undefined) {
