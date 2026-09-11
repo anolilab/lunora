@@ -25,3 +25,16 @@ export const purge = internalMutation({
         return { channelId: args.channelId, purged: 0 };
     },
 });
+
+// Issue #688: a `v.optional(...)` wrapping an object that holds a bare `v.any()`.
+// `v.any()` returns its input unchanged, so the runtime parses an absent field and
+// `Infer` types the key `data?: unknown`; the emitted reference has to render the
+// same optional key or a handler's own `args` stops being assignable to the
+// reference of a procedure declaring the identical validator. Internal on purpose:
+// the advisor's `public_arg_uses_any` lint skips internal functions.
+export const probeSink = internalMutation({
+    args: { shape: v.optional(v.object({ data: v.any(), id: v.string() })) },
+    handler: async () => {
+        return null;
+    },
+});

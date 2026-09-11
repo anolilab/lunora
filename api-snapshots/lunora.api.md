@@ -7715,6 +7715,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `acceptsAbsent` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `argsToJsonSchema` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.

@@ -206,13 +206,19 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
 
 /**
  * True when the parser accepts this node's field ABSENT — the only honest test
- * for whether a key belongs in `required`.
+ * for whether a key is optional.
  *
- * `kind === "optional"` used to be the whole test, which put two kinds in
- * `required` that parse `{}` happily: `v.any()` (its parser returns `undefined`
+ * `kind === "optional"` used to be the whole test, which called two kinds
+ * required that parse `{}` happily: `v.any()` (its parser returns `undefined`
  * unchanged) and a `v.union(...)` with an optional or `any` member (the union
- * tries members, one of which accepts `undefined`). A spec that requires a field
- * the server does not cannot be satisfied by a generated client.
+ * tries members, one of which accepts `undefined`). A contract that requires a
+ * field the server does not cannot be satisfied by a generated client.
+ *
+ * Shared beyond JSON Schema's `required`: `@lunora/codegen`'s api emitter runs it
+ * over the build-time validator IR to decide `key?: T` vs `key: T`, so the
+ * generated `_generated/api.ts` argument types, the emitted OpenAPI/OpenRPC
+ * specs, and `Infer`'s `undefined extends …` optionality rule all answer this
+ * one question the same way.
  * @returns `true` when an absent value parses.
  */
 const acceptsAbsent = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>): boolean => {
@@ -253,4 +259,4 @@ const objectSchemaFromNodes = <TNode>(shape: Record<string, TNode>, reader: Sche
 };
 
 export type { JsonSchema, SchemaNodeReader };
-export { jsonSchemaFromNode, objectSchemaFromNodes };
+export { acceptsAbsent, jsonSchemaFromNode, objectSchemaFromNodes };
