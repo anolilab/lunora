@@ -490,6 +490,14 @@
             - "name": "Check peerDependencies for catalog: refs"
               "run": "pnpm run lint:peer-catalog-refs"
 
+            # The react-doctor action installs the tool from its `version` input; the
+            # repo installs it from `catalog:lint`. Nothing tied the two together and
+            # they drifted twice — CI then reports findings a local run cannot
+            # reproduce, on every `.tsx` PR. Same class as the catalog checks above:
+            # two copies of one pin with no comparison between them.
+            - "name": "Check the react-doctor pin matches catalog:lint"
+              "run": "pnpm run lint:react-doctor-pin"
+
             # The PR-title gate is a REQUIRED check and a squash merge turns the title
             # into the commit message, with no `commit-msg` hook server-side — so its
             # hand-kept type list is the real type gate, and it had drifted from

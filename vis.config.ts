@@ -193,6 +193,21 @@ export default defineConfig({
                         description: "Error-type name quoted in a plan document, misread as a generic secret by kingfisher.generic.4",
                         regexes: ["^`LunoraAuthAdminError`$"],
                     },
+                    // `kingfisher.cypress.2` (Cypress Project ID) matches whatever
+                    // follows `projectId:` and treats it as a dashboard id. In
+                    // `apps/cloud` that is a TypeScript field — `projectId: ProjectId`
+                    // in an interface, `projectId: PROJECT` in a test fixture — so the
+                    // rule extracts a type or constant NAME, not a value. There is no
+                    // Cypress anywhere in this repo (nothing depends on it, nothing in
+                    // the lockfile), so the rule can only ever fire this way here.
+                    //
+                    // Scoped to the three names it actually extracts rather than
+                    // excluding the rule outright: if a real Cypress id is ever
+                    // committed, it still gets caught.
+                    {
+                        description: "TypeScript `projectId` field misread as a Cypress project id by kingfisher.cypress.2",
+                        regexes: ["^PROJECT$", "^ProjectI$", "^string$"],
+                    },
                 ],
             },
         },
@@ -215,6 +230,16 @@ export default defineConfig({
                 ".claude/skills/**",
                 "registry/**",
                 "api-snapshots/**",
+                // `lunora/.lunora-registry.json` is the registry lockfile
+                // `lunora registry add` writes (`packages/cli/src/util/registry-lock.ts`):
+                // a map of copied-file paths to their SHA-256 content hashes. A
+                // path like `.../core/reset-password.ts` puts a credential-shaped
+                // word next to 64 hex characters, which is exactly the shape
+                // `kingfisher.generic.5` looks for — but the hash is a digest of a
+                // file in this repo, not a value anyone could authenticate with.
+                // Same wholesale-generated, cannot-carry-a-hand-committed-secret
+                // class as `api-snapshots/**` above.
+                "**/.lunora-registry.json",
             ],
         },
     },

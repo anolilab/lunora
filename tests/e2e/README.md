@@ -96,6 +96,38 @@ pnpm --filter @lunora/e2e exec playwright show-trace test-results/**/trace.zip
 - **`/test/reset`** is called before every test so they are
   order-independent.
 
+## The control-plane suite (`apps/cloud`)
+
+```bash
+pnpm --filter @lunora/e2e run e2e:cloud
+```
+
+A second config (`playwright.cloud.config.ts` + `cloud/`) for the Lunora Cloud
+control plane, split out for the same reason `playwright.examples.config.ts` is:
+it drives a different app on a different origin, so Playwright's own `webServer`
+boots `apps/cloud` on **:5374** (its own port — a developer's `pnpm dev` owns the
+app's default 5174) and the only setup left is seeding.
+
+- `cloud-setup.ts` writes a deterministic `.dev.vars` **only if the app has
+  none** (`AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, `MAIL_FROM` — the worker 500s on
+  every route without the first, and cannot register a cell without the second),
+  and reports why the suite cannot run when it still can't.
+- `cloud-seed.ts` runs `apps/cloud`'s own idempotent `pnpm run seed` once the
+  server answers (`webServer` starts before `globalSetup`). A cold control plane
+  has no **cell**, and with no cell an organization cannot be created at all.
+- `cloud/control-plane.spec.ts` signs in as the seeded dev account, checks the
+  org picker and the sidebar switcher (both reads of `organizations.list`), a
+  project's Deployments table, and that the server-rendered Traffic tab hydrates
+  with no hydration error on the console.
+
+Unlike the playground suite this one **skips rather than fails** when the app is
+absent from the checkout or its `.dev.vars` is missing a required secret: those
+are inputs the harness cannot manufacture for a developer who already has that
+file. Everything past boot still fails loudly, seeding included.
+
+It needs built packages (`pnpm run build:packages`) like the rest of the suite,
+and is not wired into CI — the control plane is not on the default branch yet.
+
 ## CI gate
 
 The `e2e` job in `.github/workflows/test.yml` runs the suite on pull requests
