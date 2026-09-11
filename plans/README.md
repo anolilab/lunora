@@ -1801,15 +1801,18 @@ originally reported.
 
 ## SaaS Kit (2026-09-08)
 
-A competitive audit of the SaaS starter-kit market (Zero To Shipped, supastarter,
-ShipFast, `LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`, boxyhq,
-ixartz, open-saas, `nextjs/saas-starter`, `Kiranism/next-shadcn-dashboard-starter`)
-against what this repo already ships. Finding: every ingredient exists as a
-registry item or package and **none of them are composed** — the richest template
-is `templates/expo` at 26 files. Realtime is an empty column across every
-competitor surveyed, and six payment providers is a headline nobody else can
-print; the genuine gaps are an app-level admin, an in-app marketing/CMS surface,
-and i18n.
+A competitive audit of 21 SaaS starter kits — read first-hand from their own
+repositories, across JS/TS (`LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`,
+`wasp-lang/open-saas`, `boxyhq`, `ixartz`, `saasfly`, `nextacular`,
+`nextjs/saas-starter`, `Kiranism/next-shadcn-dashboard-starter` and others),
+Laravel (`thedevdojo/wave`), Rails (`bullet_train`), Go (`go-saas/kit`) and
+Django (`apptension/saas-boilerplate`) — against what this repo already ships.
+Finding: every ingredient exists as a registry item or package and **none of them
+are composed**; the richest template is `templates/expo` at 26 files. No kit
+surveyed makes live data the default read path, and six payment providers is a
+breadth none of them match. The real gaps are an app-level admin, a content
+surface, i18n, and the small finishing features (impersonation, changelog,
+cookie consent, waitlist) whose absence makes a kit read as a demo.
 
 | Plan | Title                                                                | Pri | Cat     | Status |
 | ---- | -------------------------------------------------------------------- | --- | ------- | ------ |

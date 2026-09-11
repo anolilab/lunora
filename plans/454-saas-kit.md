@@ -39,11 +39,17 @@ The closest competitor sits on the same substrate: `LubomirGeorgiev/cloudflare-w
 
 ## 2. Competitive audit
 
-Sources read directly (READMEs via `raw.githubusercontent.com`): `nextjs/saas-starter`, `boxyhq/saas-starter-kit`, `ixartz/SaaS-Boilerplate`, `LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`, `t3-oss/create-t3-turbo`, `vercel/platforms`, `Kiranism/next-shadcn-dashboard-starter`, `midday-ai/midday`, `cloudflare/templates`, `razikus/supabase-nextjs-template`, `wasp-lang/open-saas`.
+### 2.1 What was read
 
-**Caveat:** the commercial kits' own sites (`zerotoshipped.com`, `makerkit.dev`, `supastarter.dev`, `saashub.com`) are blocked by this environment's network egress policy. Their rows below are **secondhand**, assembled from search-result summaries, and should be re-verified by someone who can open the pages before any of them is used to justify scope.
+Twenty-one kits. Read first-hand from their own repositories (READMEs, manifests and, where it mattered, the source tree) via `raw.githubusercontent.com` and GitHub's file listings:
 
-### 2.1 Feature matrix
+**JS/TS:** `nextjs/saas-starter`, `boxyhq/saas-starter-kit`, `ixartz/SaaS-Boilerplate`, `LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`, `wasp-lang/open-saas`, `saasfly/saasfly`, `nextacular/nextacular`, `michaelshimeles/nextjs-starter-kit`, `async-labs/saas`, `t3-oss/create-t3-turbo`, `vercel/platforms`, `Kiranism/next-shadcn-dashboard-starter`, `Blazity/next-enterprise`, `cloudflare/templates`, `razikus/supabase-nextjs-template`, `midday-ai/midday`.
+
+**Other ecosystems:** `thedevdojo/wave` (Laravel), `bullet-train-co/bullet_train` (Rails), `go-saas/kit` (Go), `apptension/saas-boilerplate` (Django + React + AWS CDK).
+
+**Caveat:** the commercial kits' own sites — `zerotoshipped.com`, `makerkit.dev`, `supastarter.dev`, `opensaas.sh`, `saashub.com` — are all blocked by this environment's network egress policy (403 at the CONNECT tunnel). Their rows are **secondhand**, from search-result summaries, and want re-verifying by someone who can open the pages. Open SaaS is the exception: the site is blocked but the repo is not, so its column is first-hand.
+
+### 2.2 Feature matrix — the JS/TS kits
 
 Legend: ● shipped · ◐ partial · ○ absent
 
@@ -78,13 +84,30 @@ Legend: ● shipped · ◐ partial · ○ absent
 
 † secondhand — site blocked, see caveat.
 
-### 2.2 What the audit actually tells us
+### 2.3 What the other ecosystems ship that the JS kits do not
 
-1. **Realtime is an empty column.** Not one competitor's dashboard is live. Every team-member list, seat counter, invite state and subscription badge in every kit above is a page reload. This is the one row where Lunora is not catching up but alone.
-2. **The CF Workers template is the bar for scope, and it is high** — team subscription billing with embedded Stripe Elements and webhook-driven lifecycle, a versioned public REST API with generated OpenAPI, API keys with scopes, an OAuth 2.1 server with PKCE and dynamic client registration, a remote MCP server whose tools derive from the OpenAPI document, a TipTap-based CMS with drafts/scheduling/version history, i18n, admin, D1 + KV + R2. It hand-built the agent platform Lunora **generates** (`@lunora/mcp`, `lunora/_generated/openapi.json`).
-3. **Multi-tenancy is the paid tier's differentiator.** supastarter's stated edge over ShipFast is orgs + team billing + RBAC + an admin dashboard. boxyhq's whole pitch is the enterprise ladder above that (SAML, SCIM, audit logs, webhooks).
-4. **Six payment providers is a headline nobody else can print.**
-5. **Dashboard craft is a product in itself** — `Kiranism/next-shadcn-dashboard-starter` sells nothing but the shell: server-prefetched tables with URL-synced filter/sort/pagination, composable Zod forms, ⌘K, RBAC-filtered nav, theme switcher. Whatever the kit does here, it should copy that bar, not invent one.
+| Kit                            | Stack                                 | What it uniquely brings                                                                                                                                                                                              |
+| ------------------------------ | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `thedevdojo/wave`              | Laravel + Filament + Livewire + Folio | **Themes and plugins** as product features; in-app **blog, pages and changelog**; **user impersonation** (`lab404/laravel-impersonate`); roles via `spatie/laravel-permission`; JWT API. No teams/orgs, no realtime. |
+| `bullet-train-co/bullet_train` | Rails + Postgres + Redis              | Teams, roles, API, webhooks and onboarding as framework conventions ("super scaffolding") rather than hand-written screens.                                                                                          |
+| `go-saas/kit`                  | Go microservices + Kratos             | **Tenant management, tenant plans and subscription as first-class modules**, alongside ACL/RBAC, localisation, distributed eventbus and distributed transactions.                                                    |
+| `apptension/saas-boilerplate`  | Django + GraphQL + React + AWS CDK    | The infrastructure is the product: provisioning, workers, CI/CD and environments shipped with the app.                                                                                                               |
+
+### 2.4 Findings
+
+1. **Live queries are still an empty column.** One qualifier on the earlier claim: `async-labs/saas` does ship websockets (socket.io v3), and `bullet_train` carries Redis for Action Cable. But no kit surveyed makes _live data the default read path_ — those are hand-wired sockets for one feature beside an otherwise request/response app. Every team-member list, seat counter, invite state and subscription badge in all 21 kits is a page reload.
+2. **`LubomirGeorgiev/cloudflare-workers-nextjs-saas-template` is the scope bar** — same substrate (Workers + D1 + KV + R2), built on **Vinext**, which this repo already templates twice. Team subscription billing with embedded Stripe Elements, a versioned public REST API with generated OpenAPI, scoped API keys, an OAuth 2.1 server with PKCE and dynamic client registration, an MCP server derived from the OpenAPI document, a TipTap CMS with drafts/scheduling/version history, i18n, admin. It hand-built the agent platform Lunora **generates**.
+3. **Multi-tenancy is the differentiator, and outside JS it is the architecture.** supastarter's stated edge over ShipFast is orgs + team billing + RBAC + admin. `go-saas/kit` goes further and makes _tenant plans and subscription_ a module of the framework; `bullet_train` bakes teams/roles/API/webhooks into scaffolding. Bolting tenancy on later is what every JS kit does and what nobody recommends.
+4. **Payment-provider breadth is ours.** Open SaaS has three (Stripe, Lemon Squeezy, Polar), `michaelshimeles/nextjs-starter-kit` is Polar-only, every other kit read is Stripe-only. `packages/payment/src/providers/` has six behind one adapter contract.
+5. **The dashboard shell is a product by itself** — `Kiranism/next-shadcn-dashboard-starter` sells nothing else: server-prefetched tables with URL-synced filter/sort/pagination, composable Zod forms, ⌘K, RBAC-filtered nav. Copy that bar rather than inventing one.
+6. **Even popular kits ship an unfinished admin.** `saasfly` (Next + Clerk + Stripe + i18n + Turborepo) documents its admin as "in alpha… only provide static page now". The exception is Open SaaS, whose admin is good precisely because it is fed by real analytics (Google Analytics Data API / Plausible, charted with ApexCharts) and demo-seeded with `@faker-js/faker`. We have `@lunora/seed` (schema-driven, deterministic) and `ctx.analytics` — the good version of that screen is unusually cheap here.
+7. **The content surface is part of the product, and there are three answers to it.** Wave puts blog + pages + changelog _inside_ the app behind a Filament admin; the CF template ships an in-app TipTap CMS with drafts, scheduling and version history; Open SaaS keeps a _separate_ Astro Starlight blog/docs app next to the Wasp app (`template/{app,blog,e2e-tests}`). Three defensible answers — the failure mode is drifting into a half-built fourth.
+8. **Wave sells as features what Lunora already has and does not market.** Wave's headline list includes **themes** and **plugins**; that is `registry/` with 26 items and a design-token package, unnamed. Open SaaS's headline includes "Custom Plugins, Skills, & Rules for AI-assisted coding with Claude Code" — that is `AGENTS.md` + the 15 first-party skills + `/mcp` + `llms.txt`, also unnamed.
+9. **Small recurring features we have none of:** user impersonation (Wave, boxyhq, Clerk-based kits), a changelog page (Wave), cookie consent / GDPR (Open SaaS ships `vanilla-cookieconsent`), and a waitlist. Each is hours, not weeks, and their absence is what makes a kit read as a demo.
+
+### 2.5 The layout convention worth stealing
+
+Open SaaS's app is organised by feature, not by layer — `src/{admin,analytics,auth,client,demo-ai-app,file-upload,landing-page,payment,server,shared,user}`. `Kiranism` independently arrives at the same ("feature-based folder structure"). `templates/saas` should ship that shape from the first commit; it is also the shape that makes workstream A's per-item composition land cleanly, since a registry item maps to a folder.
 
 ## 3. The behavioural contract to preserve
 
@@ -109,6 +132,10 @@ Legend: ● shipped · ◐ partial · ○ absent
 
 **D7. Multi-tenancy is `.shardBy("organizationId")`.** Over one shared shard with an `orgId` column filter. This is the decision no competitor gets to make: a Lunora shard _is_ a tenant boundary — isolation, per-tenant OCC, and per-tenant reactive fan-out fall out of it. It also has consequences (cross-org admin queries become cross-shard reads), which is why it is open question 4 rather than settled here.
 
+**D8. The content surface is a separate docs/blog app, not an in-app CMS.** Over Wave's in-app blog/pages and the CF template's TipTap CMS (§2.4.7). `apps/docs` already proves the separate-app answer in this repo, and an in-app CMS is a second product with its own editor, media library and versioning. The kit gets a marketing home, `/pricing` and a changelog page fed from markdown; anything richer is v2.
+
+**D9. The admin is seeded, not empty.** `@lunora/seed` fills the kit's admin with deterministic demo data on `lunora seed`, the way Open SaaS uses faker (§2.4.6). Over shipping an admin that looks broken until the user has real customers — which is how `saasfly`'s static-page admin reads.
+
 ## 5. Workstreams
 
 Sized S/M/L, status recorded inline as each lands.
@@ -117,12 +144,13 @@ Sized S/M/L, status recorded inline as each lands.
 - **B — `templates/saas` app shell (M).** Routes: marketing home, `/pricing`, sign-in/sign-up, `/dashboard`, `/settings/profile`, `/settings/team`, `/settings/billing`, `/admin`. Sidebar + header + ⌘K + data tables, built on `registry/auth-ui-react`, at the `Kiranism/next-shadcn-dashboard-starter` bar (§2.2.5).
 - **C — Billing UI + entitlement gating (M).** Plans declared in code; pricing table; checkout (embedded Elements as reference); customer portal link; a `<Gated plan=…>` component and hook over `payment/check`; seat counting against the org member list.
 - **D — Organisations end to end (S).** `organization()` wired through create/switch/settings/invite/roles, invites delivered by `registry/auth-emails`.
-- **E — App admin (S).** Users, organisations, subscriptions — list/search/impersonate/suspend on the `admin()` plugin. Consider shipping it as `registry add admin` so non-kit apps get it (open question 5).
+- **E — App admin (S).** Users, organisations, subscriptions — list/search/impersonate/suspend on the `admin()` plugin, seeded by `@lunora/seed` (D9) and charted from `ctx.analytics`. Consider shipping it as `registry add admin` so non-kit apps get it (open question 5).
 - **F — The realtime wedge (S).** Make the live column visible: presence on the team page, seat and subscription state updating across tabs without a reload, an activity feed. This is the demo, not a nicety — §2.2.1.
 - **G — Public API surface (S, optional v1).** API keys with scopes + serve the generated `lunora/_generated/openapi.json` + expose `@lunora/mcp`. Cheap only because it is generated; do not hand-write what the CF template hand-wrote.
 - **H — Expo client on the same backend (M, v2).** `templates/expo` + `@lunora/react-native` against the same app — the "web + mobile, one backend" story ZTS leads with.
 - **I — Surface (S).** Deploy a public demo, add a gallery entry + `/examples` row, a docs page, and a `/pricing` route in `apps/docs` pointing at Cloud (there is none today).
 - **J — Gates (S).** Enrol the kit in `pnpm run test:templates`, add a Playwright smoke to `tests/e2e`, and check the kit's worker bundle against `worker-size.json`.
+- **K — The finishing touches (S).** The four features whose absence makes a kit read as a demo (§2.4.9): user impersonation (part of E), a changelog page, cookie consent, and a waitlist capture on the marketing home.
 
 ## 6. Platform parity
 
@@ -132,14 +160,14 @@ The kit's own target is Cloudflare only in v1. `@lunora/platform-node` exists, b
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate                                                                                             |
-| ----- | ---- | ------------------------------------------------------------------------------------------------ |
-| 0     | A    | A scripted scaffold composes auth + payment + mail + storage and typechecks with zero hand edits |
-| 1     | B, D | E2E: sign up → create org → invite a member → member accepts, green in `tests/e2e`               |
-| 2     | C    | E2E against Stripe test mode: checkout completes → webhook lands → a gated route flips open      |
-| 3     | E, F | Admin lists a seeded user; two browser contexts observe one team change with no reload           |
-| 4     | I, J | `pnpm run test:templates` covers the kit; demo URL green in CI live mode; bundle under budget    |
-| 5     | G, H | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                      |
+| Phase | Work    | Gate                                                                                             |
+| ----- | ------- | ------------------------------------------------------------------------------------------------ |
+| 0     | A       | A scripted scaffold composes auth + payment + mail + storage and typechecks with zero hand edits |
+| 1     | B, D    | E2E: sign up → create org → invite a member → member accepts, green in `tests/e2e`               |
+| 2     | C       | E2E against Stripe test mode: checkout completes → webhook lands → a gated route flips open      |
+| 3     | E, F    | Admin lists a seeded user; two browser contexts observe one team change with no reload           |
+| 4     | I, J, K | `pnpm run test:templates` covers the kit; demo URL green in CI live mode; bundle under budget    |
+| 5     | G, H    | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                      |
 
 ## 8. Risks & STOP conditions
 
@@ -157,4 +185,5 @@ The kit's own target is Cloudflare only in v1. `@lunora/platform-node` exists, b
 3. **`templates/` or `examples/`?** `templates/*` is fetched remotely by `lunora init` and gated by `test:templates`; `examples/*` is in-workspace and appears in the gallery. The kit plausibly wants both surfaces — decide whether that means two copies (drift) or one home plus a gallery link.
 4. **Is a tenant a shard?** `.shardBy("organizationId")` (D7) versus one shard with an `organizationId` column. Measure the cross-org admin read cost before committing; this decision is load-bearing for E and for anything enterprise later.
 5. **Should the app admin ship as `registry add admin`** so every Lunora app gets it, rather than living only inside the kit?
-6. **Which analytics/error-tracking story?** `ctx.analytics` (Analytics Engine) exists via `@lunora/bindings`; every competitor ships Sentry or PostHog. Decide whether the kit wires a third party or stays on `@lunora/observability`.
+6. **Does D8 hold once someone wants to publish a post?** The separate-app answer is right for v1; if the kit's users immediately want in-app authoring, the decision to revisit is _which_ of the three answers in §2.4.7, not whether to grow a fourth.
+7. **Which analytics/error-tracking story?** `ctx.analytics` (Analytics Engine) exists via `@lunora/bindings`; every competitor ships Sentry or PostHog. Decide whether the kit wires a third party or stays on `@lunora/observability`.
