@@ -36,11 +36,10 @@
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.svelte.json",
+        "sync:registry": "node ../../scripts/sync-saas-ui-registry.mjs",
+        "sync:registry:check": "node ../../scripts/sync-saas-ui-registry.mjs --check",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
-    },
-    "dependencies": {
-        "@lunora/errors": "workspace:*"
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "catalog:frontend",

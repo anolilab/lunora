@@ -1,0 +1,317 @@
+/*
+ * Minimal, dependency-free styling for the Lunora SaaS kit screens.
+ *
+ * Consumes the Lunora design tokens (marketing/design-tokens/tokens.css — the
+ * shadcn-shaped `--background`/`--foreground`/`--border`/… custom properties)
+ * via `var(--token, <fallback>)`, so it inherits an app's theme (including the
+ * `.dark` night mode) when present and still looks correct standalone. No
+ * Tailwind, no build step — copy it in and `@import` once.
+ *
+ * One stylesheet serves every port. That is not a convenience: the React and
+ * Svelte components render the same elements with the same class names on
+ * purpose, so a restyle lands once instead of once per framework. A port that
+ * needs its own CSS has diverged.
+ */
+
+.lu-saas-card {
+    box-sizing: border-box;
+    width: 100%;
+    margin-block-end: 1.5rem;
+    padding: 1.5rem;
+    border: 1px solid var(--border, hsl(228 16% 88%));
+    border-radius: var(--radius, 0.5rem);
+    background: var(--card, hsl(0 0% 100%));
+    color: var(--card-foreground, hsl(240 14% 10%));
+    font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+}
+
+.lu-saas-card *,
+.lu-saas-card *::before,
+.lu-saas-card *::after {
+    box-sizing: border-box;
+}
+
+.lu-saas-card__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-block-end: 1rem;
+}
+
+.lu-saas-card__title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.lu-saas-card__subtitle {
+    margin: 0.25rem 0 0;
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.8125rem;
+}
+
+/*
+ * One focus ring for every interactive control, so keyboard users see the same
+ * indicator wherever they are (WCAG 2.4.7).
+ */
+.lu-saas-button:focus-visible,
+.lu-saas-input:focus-visible,
+.lu-saas-select:focus-visible,
+.lu-saas-checkbox input:focus-visible {
+    outline: 2px solid var(--ring, hsl(240 14% 10%));
+    outline-offset: 2px;
+}
+
+.lu-saas-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 1rem;
+    margin-block-end: 1.5rem;
+}
+
+/* The loading placeholders reserve the row's height so nothing jumps on arrival. */
+.lu-saas-stats--loading,
+.lu-saas-list--loading,
+.lu-saas-feed--loading {
+    min-height: 4.5rem;
+    border-radius: var(--radius, 0.5rem);
+    background: var(--muted, hsl(240 5% 96%));
+}
+
+.lu-saas-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 1rem;
+    border: 1px solid var(--border, hsl(228 16% 88%));
+    border-radius: var(--radius, 0.5rem);
+}
+
+.lu-saas-stat__value {
+    font-size: 1.75rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.lu-saas-stat__label {
+    font-size: 0.8125rem;
+}
+
+.lu-saas-stat__note {
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.75rem;
+}
+
+.lu-saas-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-block-end: 1rem;
+}
+
+.lu-saas-newproject {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-block-end: 1rem;
+}
+
+.lu-saas-label {
+    flex-basis: 100%;
+    font-size: 0.8125rem;
+    font-weight: 500;
+}
+
+.lu-saas-input,
+.lu-saas-select {
+    flex: 1 1 12rem;
+    min-width: 0;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--border, hsl(228 16% 88%));
+    border-radius: calc(var(--radius, 0.5rem) - 0.125rem);
+    background: var(--background, hsl(0 0% 100%));
+    color: inherit;
+    font: inherit;
+}
+
+.lu-saas-input[aria-invalid="true"] {
+    border-color: var(--destructive, hsl(0 72% 51%));
+}
+
+.lu-saas-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.8125rem;
+}
+
+.lu-saas-button {
+    padding: 0.5rem 0.875rem;
+    border: 1px solid transparent;
+    border-radius: calc(var(--radius, 0.5rem) - 0.125rem);
+    background: var(--primary, hsl(240 14% 10%));
+    color: var(--primary-foreground, hsl(0 0% 100%));
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.lu-saas-button[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.lu-saas-button--quiet {
+    background: transparent;
+    border-color: var(--border, hsl(228 16% 88%));
+    color: inherit;
+}
+
+.lu-saas-error {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--destructive, hsl(0 72% 51%));
+    font-size: 0.8125rem;
+}
+
+.lu-saas-empty {
+    padding: 2rem 1rem;
+    border: 1px dashed var(--border, hsl(228 16% 88%));
+    border-radius: var(--radius, 0.5rem);
+    text-align: center;
+}
+
+.lu-saas-empty__title {
+    margin: 0;
+    font-weight: 500;
+}
+
+.lu-saas-empty__body {
+    margin-block-start: 0.5rem;
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.8125rem;
+}
+
+.lu-saas-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lu-saas-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0;
+    border-block-start: 1px solid var(--border, hsl(228 16% 88%));
+}
+
+.lu-saas-row:first-child {
+    border-block-start: 0;
+}
+
+.lu-saas-row--archived {
+    opacity: 0.55;
+}
+
+.lu-saas-row__name {
+    flex: 1 1 auto;
+    font-weight: 500;
+}
+
+.lu-saas-row__slug {
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+}
+
+.lu-saas-feed__day {
+    margin: 1rem 0 0.5rem;
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.lu-saas-feed__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lu-saas-feed__entry {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.375rem 0;
+}
+
+.lu-saas-feed__text {
+    flex: 1 1 auto;
+    font-size: 0.875rem;
+}
+
+.lu-saas-feed__when {
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.lu-saas-avatar {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    background: var(--muted, hsl(240 5% 96%));
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+
+.lu-saas-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.lu-saas-table th {
+    padding: 0.5rem 0.5rem 0.5rem 0;
+    border-block-end: 1px solid var(--border, hsl(228 16% 88%));
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: start;
+}
+
+.lu-saas-table td {
+    padding: 0.625rem 0.5rem 0.625rem 0;
+    border-block-end: 1px solid var(--border, hsl(228 16% 88%));
+}
+
+.lu-saas-table td:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .lu-saas-stats--loading,
+    .lu-saas-list--loading,
+    .lu-saas-feed--loading {
+        animation: lu-saas-pulse 1.4s ease-in-out infinite;
+    }
+}
+
+@keyframes lu-saas-pulse {
+    50% {
+        opacity: 0.55;
+    }
+}
