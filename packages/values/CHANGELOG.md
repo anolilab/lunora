@@ -1,3 +1,9 @@
+## @lunora/values [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.43...@lunora/values@1.0.0-alpha.44) (2026-09-11)
+
+### Bug Fixes
+
+* **codegen:** emit v.any() args as optional keys ([#693](https://github.com/anolilab/lunora/issues/693)) ([cb2e4ca](https://github.com/anolilab/lunora/commit/cb2e4ca895ee4ac4bc2d510ff8cf53f5d5345839))
+
 ## @lunora/values [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.42...@lunora/values@1.0.0-alpha.43) (2026-09-07)
 
 
