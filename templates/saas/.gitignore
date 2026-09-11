@@ -1,0 +1,15 @@
+node_modules
+.output
+.vinxi
+dist
+.wrangler
+.env
+.env.*
+!.env.example
+.lunora/
+.lunora-cache
+lunora/_generated
+src/routeTree.gen.ts
+
+# local env files
+.dev.vars
