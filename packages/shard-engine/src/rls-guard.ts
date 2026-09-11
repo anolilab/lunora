@@ -180,7 +180,7 @@ type WriterGating =
  * `"ungated"` entries are an explicit allowlist WITH a reason, never an
  * omission: each one either touches no rows or is a pure string helper.
  */
-const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGating>> = {
+const WRITER_METHOD_GATING = {
     aggregate: "loop-gated",
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
@@ -223,7 +223,7 @@ const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGati
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
     system: "ungated",
     wipeShard: "sweep-gated",
-};
+} as const satisfies Readonly<Record<keyof DatabaseWriterLike, WriterGating>>;
 
 /**
  * Every method the uniform table-level loop below gates — DERIVED from
@@ -243,24 +243,62 @@ const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entri
     .filter(([, gating]) => gating === "loop-gated")
     .map(([name]) => name as keyof DatabaseWriterLike);
 
+/** Every method gated by re-binding — DERIVED, for the reason {@link REBINDERS} gives. */
+type ReboundMethod = {
+    [K in keyof typeof WRITER_METHOD_GATING]: (typeof WRITER_METHOD_GATING)[K] extends "rebound" ? K : never;
+}[keyof typeof WRITER_METHOD_GATING];
+
+/** Builds the guarded replacement for one `"rebound"` method. */
+type Rebinder = (guarded: Record<string, unknown>, relationEdges: ReadonlyArray<RelationEdge>) => (...args: never[]) => unknown;
+
 /**
- * Install the `"rebound"` gate for `related` on an already-loop-gated `guarded`.
+ * The replacement each `"rebound"` method gets, keyed by method name.
  *
- * Re-bound, not delegated: `findRelated` holds no SQL, so running it over
- * `guarded` makes every hop a `findMany` / `lookupById` the uniform loop already
- * gates. Delegating to `base.related` instead would walk through the writer's
- * own unguarded closure — the exact bypass the `...raw` spread exists to
- * prevent. A base with no `related` (the `.global()` twin) is left alone.
+ * `Record<ReboundMethod, Rebinder>` is the exhaustiveness control for this
+ * gating mode, and it is the half that was missing. {@link LOOP_GATED_METHODS}
+ * is derived from {@link WRITER_METHOD_GATING} so the two can never drift, but
+ * `"rebound"` had no derived counterpart — the install was hard-coded for
+ * `related` alone. A second `"rebound"` entry therefore compiled, fell out of
+ * the loop-gated filter, got no rebinder, and arrived on the guarded writer
+ * UNGATED through the `...raw` spread below: exactly the bypass that spread's
+ * own comments warn about. Now a new `"rebound"` entry widens `ReboundMethod`
+ * and fails to compile until it has a rebinder here.
  */
+const REBINDERS: Readonly<Record<ReboundMethod, Rebinder>> = {
+    /**
+     * Re-bound, not delegated: `findRelated` holds no SQL, so running it over
+     * `guarded` makes every hop a `findMany` / `lookupById` the uniform loop
+     * already gates. Delegating to `base.related` instead would walk through the
+     * writer's own unguarded closure.
+     */
+    related:
+        (guarded, relationEdges) =>
+        (...args: never[]) => {
+            const [start, options] = args as unknown as [RelatedStart, RelatedOptions | undefined];
 
-const installGuardedRelated = (guarded: Record<string, unknown>, base: GuardableWriter, relationEdges: ReadonlyArray<RelationEdge>): void => {
-    if (typeof (base as { related?: unknown }).related !== "function") {
-        return;
+            return findRelated(guarded as unknown as Parameters<typeof findRelated>[0], relationEdges, start, options);
+        },
+};
+
+/** The `"rebound"` method names, derived exactly as {@link LOOP_GATED_METHODS} is. */
+const REBOUND_METHODS: ReadonlyArray<ReboundMethod> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "rebound")
+    .map(([name]) => name as ReboundMethod);
+
+/**
+ * Install every `"rebound"` gate on an already-loop-gated `guarded`.
+ *
+ * A base without the method (the `.global()` twin has no `related`) is left
+ * alone, so it stays absent on the guarded writer exactly as the `...raw` spread
+ * left it — the same rule the loop-gated optional members follow.
+ */
+const installReboundMethods = (guarded: Record<string, unknown>, base: GuardableWriter, relationEdges: ReadonlyArray<RelationEdge>): void => {
+    for (const name of REBOUND_METHODS) {
+        if (typeof (base as unknown as Record<string, unknown>)[name] === "function") {
+            // eslint-disable-next-line no-param-reassign -- the guarded writer is built by mutation, as above
+            guarded[name] = REBINDERS[name](guarded, relationEdges);
+        }
     }
-
-    // eslint-disable-next-line no-param-reassign -- see above
-    guarded["related"] = (start: RelatedStart, options?: RelatedOptions) =>
-        findRelated(guarded as unknown as Parameters<typeof findRelated>[0], relationEdges, start, options);
 };
 
 /**
@@ -464,7 +502,7 @@ const guardWriter = <W>(
         }
     }
 
-    installGuardedRelated(guarded, base, relationEdges);
+    installReboundMethods(guarded, base, relationEdges);
 
     if (base.wipeShard) {
         const { wipeShard } = base;

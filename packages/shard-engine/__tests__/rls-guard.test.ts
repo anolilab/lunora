@@ -505,10 +505,23 @@ describe("guardWriter — related is re-bound over the guarded writer", () => {
         };
     };
 
-    it("classifies related as rebound rather than table-gated", () => {
-        expect.assertions(1);
+    it("replaces every rebound method, so none reaches the caller as the raw one", () => {
+        expect.assertions(2);
 
-        expect(WRITER_METHOD_GATING.related).toBe("rebound");
+        // The gate the old assertion only looked like. Reading one entry out of
+        // the gating map and comparing it to "rebound" restated the map literal,
+        // and would have stayed green while a rebound method arrived UNGATED
+        // through the `...raw` spread. This walks the classification instead, so
+        // a method classified as rebound but not actually re-bound fails here.
+        const reboundNames = Object.entries(WRITER_METHOD_GATING)
+            .filter(([, gating]) => gating === "rebound")
+            .map(([name]) => name);
+
+        const raw = createTraversingWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, unknown>;
+
+        expect(reboundNames).not.toStrictEqual([]);
+        expect(reboundNames.filter((name) => guarded[name] === raw[name])).toStrictEqual([]);
     });
 
     it("denies a traversal whose start table is protected", async () => {
