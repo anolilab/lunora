@@ -1,3 +1,16 @@
+## @lunora/platform-node [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.64...@lunora/platform-node@1.0.0-alpha.65) (2026-09-11)
+
+### Bug Fixes
+
+* **platform-node:** serialize writes on one lock ([#696](https://github.com/anolilab/lunora/issues/696)) ([00c3c35](https://github.com/anolilab/lunora/commit/00c3c35d59d5aca62e05846a9ee739dc278db878))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.114
+* **@lunora/storage:** upgraded to 1.0.0-alpha.66
+
 ## @lunora/platform-node [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.63...@lunora/platform-node@1.0.0-alpha.64) (2026-09-11)
 
 
