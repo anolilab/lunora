@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { AssistantProvider, useAssistant } from "../../../src/components/assistant-provider";
 import { SqlEditorPanel } from "../../../src/features/sql/sql-editor-panel";
 import type { SqlConsoleResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -33,6 +34,9 @@ const schemaMock = (): MockClientHooks =>
             return { columns: [], rowCount: 0, rows: [], truncated: false };
         },
     });
+
+/** Renders whatever question the panel seeded, so a test can read it out of the DOM. */
+const AskProbe = (): ReactElement => <span data-testid="sql-seeded-ask">{useAssistant()?.pendingAsk?.text ?? ""}</span>;
 
 describe("sqlEditorPanel", () => {
     afterEach(() => {
@@ -668,5 +672,61 @@ describe("sqlEditorPanel", () => {
         });
 
         expect(screen.getByTestId("sql-rows").textContent).toContain("slow-result");
+    });
+
+    /*
+     * The statement an Explain run is ABOUT is captured when the run starts and
+     * read when "Read this plan" is clicked — a ref, because nothing renders it.
+     *
+     * This is the test that pins WHICH statement the prompt is built from, which
+     * nothing covered while it was state. The hazard a ref invites is exactly the
+     * one asserted against here: a ref is not reactive, so "just read the draft"
+     * looks like the equivalent simplification — and it silently sends the model a
+     * statement the plan on screen does not describe. Verified by mutation: point
+     * the prompt at `draft.trim()` and this fails, while every other test here
+     * still passes.
+     */
+    it("asks about the statement the plan was run for, not whatever the editor holds now", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return { columns: ["detail"], rowCount: 1, rows: [{ detail: "SCAN TABLE messages" }], truncated: false };
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <SqlEditorPanel />
+                    <AskProbe />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        typeInEditor("SELECT explained FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+
+        // The plan landed, so the Explain pane offers "Read this plan".
+        const readPlan = await screen.findByTestId("sql-explain-plan");
+
+        // The operator moves on — the editor no longer holds the explained statement.
+        typeInEditor("SELECT moved-on FROM messages");
+        fireEvent.click(readPlan);
+
+        const ask = await screen.findByTestId("sql-seeded-ask");
+
+        expect(ask.textContent).toContain("SELECT explained FROM messages");
+        expect(ask.textContent).not.toContain("moved-on");
+        // The plan ROWS travel with it — they are what the operator is asking about.
+        expect(ask.textContent).toContain("SCAN TABLE messages");
     });
 });

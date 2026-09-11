@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAssistant } from "../../components/assistant-provider";
 import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
@@ -115,12 +115,37 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      */
     const t = useT();
     const assistantShell = useAssistant();
-    /** The statement behind the plan currently shown, or `undefined` before any Explain run. */
-    const [explained, setExplained] = useState<string | undefined>(undefined);
+    /*
+     * The statement behind the plan currently shown, or `undefined` before any
+     * Explain run.
+     *
+     * A ref, not state: nothing renders it. It is written when an Explain run
+     * starts and read only inside `explainPlan` — an event handler the results pane
+     * invokes on a click, never a render-time derivation — so the read always
+     * happens after the write and a re-render would buy nothing. State made every
+     * Explain run repaint the whole console for a value no pixel depends on.
+     */
+    const explained = useRef<string | undefined>(undefined);
 
     const { probe, schema } = useSqlSchema(shardKey);
 
-    // Set the active tab's draft and keep the linked saved query in sync (auto-save).
+    /*
+     * Set the active tab's draft and keep the linked saved query in sync (auto-save).
+     *
+     * The `useCallback` is INERT, and kept anyway. React Compiler does run over
+     * this file — `packem.config.ts` wires `babel-plugin-react-compiler` through
+     * `createReactPreset` with no `sources` filter, and the standalone app's
+     * `vite.config.ts` mirrors it over the same source — and it erases this
+     * wrapper, emitting its own cache keyed on exactly `[activeId,
+     * patchActiveTab, updateQuerySql]`. Deleting it produces byte-identical
+     * compiled output (verified), and uncompiled it never memoized anything
+     * either: both deps are plain closures their hooks re-create every render.
+     *
+     * What keeps it here is `react-hooks/exhaustive-deps`, which has no
+     * compiler-aware mode for this hint and fails `lint:eslint --max-warnings=0`
+     * the moment the wrapper goes. Removing it needs that gate taught about the
+     * compiler, not a suppression here.
+     */
     const setDraft = useCallback(
         (value: string): void => {
             patchActiveTab({ sql: value });
@@ -228,7 +253,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // describing what actually ran — so "Read this plan" must send this, not
         // whatever is in the editor now.
         if (mode === "explain") {
-            setExplained(draft.trim());
+            explained.current = draft.trim();
         }
 
         if (draft.trim() === "") {
@@ -429,14 +454,18 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
      * this carries no end-user rows regardless of the deployment's opt-in level.
      */
     const explainPlan = (): void => {
-        if (result === null || result.rows.length === 0 || explained === undefined) {
+        // Read at CLICK time, which is the point of the ref: the statement written
+        // when the run started, never the draft the operator has typed since.
+        const statement = explained.current;
+
+        if (result === null || result.rows.length === 0 || statement === undefined) {
             return;
         }
 
         const plan = result.rows.map((row) => result.columns.map((column) => formatCell(row[column])).join(" | ")).join("\n");
 
         assistantShell?.openAssistant({
-            ask: t("SQLite planned this query:\n{statement}\n\nas:\n{plan}\n\nWhat is it doing, and is anything here slow?", { plan, statement: explained }),
+            ask: t("SQLite planned this query:\n{statement}\n\nas:\n{plan}\n\nWhat is it doing, and is anything here slow?", { plan, statement }),
             schema: groundingFacts(schema),
             shardKey,
             title: t("Read plan"),
