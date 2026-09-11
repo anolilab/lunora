@@ -17,15 +17,19 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions, Impo
     const file = argument[0];
 
     if (!file) {
-        logger.error("import requires a path. Usage: lunora import <file.ndjson | convex-export-dir> [--table <name>]");
+        const error = "import requires a path. Usage: lunora import <file.ndjson | convex-export-dir> [--table <name>]";
 
-        return { code: EXIT_CODE.USAGE };
+        logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, error };
     }
 
     if (options.from !== undefined && !IMPORT_SOURCE_NAMES.includes(options.from as ImportSourceName)) {
-        logger.error(`--from ${options.from} is not a known source. Expected one of: ${IMPORT_SOURCE_NAMES.join(", ")}.`);
+        const error = `--from ${options.from} is not a known source. Expected one of: ${IMPORT_SOURCE_NAMES.join(", ")}.`;
 
-        return { code: EXIT_CODE.USAGE };
+        logger.error(error);
+
+        return { code: EXIT_CODE.USAGE, error };
     }
 
     return runImportCommand({

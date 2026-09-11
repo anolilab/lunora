@@ -134,6 +134,15 @@ const readRelatedArguments = (input: Record<string, unknown>): { args: Record<st
 
     assertTraversalOptions(input);
 
+    // Refused, not coerced. A present-but-invalid `shardKey` used to fall through
+    // to `undefined`, which does not mean "no shard" to the caller — it selects
+    // the DEFAULT shard. On a `.shardBy()` deployment that silently answers from
+    // the wrong partition, and this tool returns raw rows past RLS, so the wrong
+    // partition is the wrong tenant's data.
+    if (shardKey !== undefined && (typeof shardKey !== "string" || shardKey.trim() === "")) {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `shardKey` must be a non-empty string when given");
+    }
+
     return {
         args: {
             id,
@@ -144,7 +153,7 @@ const readRelatedArguments = (input: Record<string, unknown>): { args: Record<st
             ...(edges === undefined ? {} : { edges }),
             ...(limit === undefined ? {} : { limit }),
         },
-        shardKey: typeof shardKey === "string" && shardKey.length > 0 ? shardKey : undefined,
+        shardKey,
     };
 };
 

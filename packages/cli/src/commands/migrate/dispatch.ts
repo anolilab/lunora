@@ -45,6 +45,7 @@ const dispatchGenerate = (context: MigrateDispatchContext): CommandResult<Migrat
         code: result.code,
         // `migrationFile` is omitted when nothing was written (an empty diff, or a failure).
         data: { empty: result.empty, migrationFile: result.migrationFile === "" ? undefined : result.migrationFile, subcommand: "generate" },
+        ...(result.error === undefined ? {} : { error: result.error }),
     };
 };
 
@@ -67,6 +68,7 @@ const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<Co
     return {
         code: result.code,
         data: { bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" },
+        ...(result.error === undefined ? {} : { error: result.error }),
     };
 };
 

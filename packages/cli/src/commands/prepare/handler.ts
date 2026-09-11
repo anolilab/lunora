@@ -88,7 +88,10 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
 
     if (pipeline.error !== undefined) {
         return {
-            code: EXIT_CODE.USAGE,
+            // The shared pipeline classifies its own refusals — Docker missing is
+            // MISSING_DEPENDENCY, not a usage error — so keep its code and fall
+            // back only when it resolved none.
+            code: pipeline.code ?? EXIT_CODE.USAGE,
             error: pipeline.error,
             ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
             validation: pipeline.validation,

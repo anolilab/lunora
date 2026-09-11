@@ -223,6 +223,9 @@ const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: str
     }
 };
 
+/** The one refusal `resolveExportOutput` and the envelope must agree on, verbatim. */
+const EXPORT_JSON_NEEDS_FILE = "export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.";
+
 /**
  * Resolve where the dump lands, before anything is fetched. Returns the file
  * destination (`destination: undefined` means stdout), or `undefined` — having
@@ -235,7 +238,7 @@ const resolveExportOutput = (options: ExportCommandOptions): { destination: stri
     // A result document there would be spliced into the NDJSON, so this is
     // refused rather than interleaved.
     if (options.format === "json" && destination === undefined) {
-        options.logger.error("export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.");
+        options.logger.error(EXPORT_JSON_NEEDS_FILE);
 
         return undefined;
     }
@@ -303,8 +306,9 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
     if (resolvedOutput === undefined) {
         // `--format json` without the `--out <file>` it needs: the invocation
-        // asks for two things on one stdout, which is a usage error.
-        return { bytes: 0, code: EXIT_CODE.USAGE, rows: 0 };
+        // asks for two things on one stdout, which is a usage error. The reason
+        // travels with it, or a machine consumer sees exit 2 and no cause.
+        return { bytes: 0, code: EXIT_CODE.USAGE, error: EXPORT_JSON_NEEDS_FILE, rows: 0 };
     }
 
     const { destination } = resolvedOutput;

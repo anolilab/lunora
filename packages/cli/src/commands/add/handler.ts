@@ -68,6 +68,8 @@ interface AddFeatureOptions {
 
 interface AddFeatureResult {
     code: number;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Registry items applied (for tests / callers). May be a bare passthrough name. */
     items: ReadonlyArray<string>;
 }
@@ -403,7 +405,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions, AddFeature
 
     // `code` is the envelope's, not the payload's: two fields answering the same
     // question is how they end up disagreeing.
-    return { code: result.code, data: { items: result.items } };
+    return { code: result.code, data: { items: result.items }, ...(result.error === undefined ? {} : { error: result.error }) };
 });
 
 export { execute, runAddFeature };

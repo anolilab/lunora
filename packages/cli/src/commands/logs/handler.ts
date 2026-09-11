@@ -127,7 +127,12 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(async ({
             userId: options.userId,
         });
 
-        return { ...durable, delegated: true };
+        // `delegated` means "a child already wrote the document", which is only
+        // true once the durable stream produced rows. Its early refusals (missing
+        // config, bad option) write nothing, so claiming delegation there made
+        // `--format json` suppress the envelope and leave stdout empty — the one
+        // outcome the envelope exists to prevent.
+        return { ...durable, ...(durable.rows === undefined ? {} : { delegated: true }) };
     }
 
     return runLogsCommand({

@@ -1323,7 +1323,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // lone leg is returned as it stands: `hybridRank` would replace its
             // cosine scores with RRF ones, and with nothing to fuse them against
             // that only moves `score` off the scale `minScore` is documented on.
-            let chunks = legs.length === 1 ? searched : [...hybridRank(legs)];
+            // Empty legs are dropped BEFORE the decision: a lexical store that
+            // matched nothing, or an extra query that returned nothing, still
+            // pushes a leg, and counting it made a one-signal retrieval take the
+            // fusion path — replacing cosine scores with RRF ones with nothing to
+            // fuse them against, which is exactly what the single-leg path exists
+            // to avoid.
+            const scoring = legs.filter((leg) => leg.chunks.length > 0);
+            let chunks = scoring.length > 1 ? [...hybridRank(scoring)] : [...(scoring[0]?.chunks ?? [])];
 
             // Importance weighting can reorder; re-rank on the adjusted score.
             // This is the single-leg path's sort — it carries importance-adjusted

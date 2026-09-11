@@ -166,7 +166,14 @@ const insertSeedRows = async (ndjson: string, generated: number, tables: number,
             );
         }
 
-        return { code: result.code, data: { conflicts, generated, inserted: result.inserted, tables }, ndjson };
+        // The nested import's REASON travels with its code; without it the seed
+        // envelope reported a nonzero exit with nothing explaining it.
+        return {
+            code: result.code,
+            data: { conflicts, generated, inserted: result.inserted, tables },
+            ndjson,
+            ...(result.error === undefined ? {} : { error: result.error }),
+        };
     } finally {
         await rm(scratchDirectory, { force: true, recursive: true }).catch(() => {});
     }

@@ -60,6 +60,8 @@ interface MigrateGenerateCommandResult {
     code: number;
     /** Whether the diff was empty (no changes detected). */
     empty: boolean;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Absolute path to the migration file (empty string when nothing was written). */
     migrationFile: string;
 }
@@ -125,9 +127,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     const schemaPath = join(cwd, "lunora", "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
+        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
 
-        return { code: EXIT_CODE.NOT_FOUND, empty: true, migrationFile: "" };
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
     }
 
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
@@ -143,9 +147,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     try {
         previousSnapshot = loadSnapshot(snapshotPath);
     } catch (error: unknown) {
-        options.logger.error(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
 
-        return { code: EXIT_CODE.USAGE, empty: true, migrationFile: "" };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
     }
 
     const diff = diffSnapshots(previousSnapshot, nextSnapshot);
@@ -728,6 +734,8 @@ interface MigrateToHyperdriveResult {
     /** Bytes in the intermediate NDJSON dump (0 when the run failed before exporting). */
     bytes: number;
     code: number;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Rows read out of the D1 source. */
     exported: number;
     /** Rows the Hyperdrive target accepted. Short of `exported` means the remainder already existed there. */
@@ -768,11 +776,12 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     // `undefined` and both default to the SAME worker, which is exactly the
     // self-migration this refuses — the guard used to skip that case.
     if (fromUrl === toUrl) {
-        logger.error(
-            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
-        );
+        const error =
+            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database";
 
-        return { bytes: 0, code: EXIT_CODE.USAGE, exported: 0, imported: 0 };
+        logger.error(error);
+
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -794,7 +803,13 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         });
 
         if (exportResult.code !== 0) {
-            return { bytes: exportResult.bytes, code: exportResult.code, exported: exportResult.rows, imported: 0 };
+            return {
+                bytes: exportResult.bytes,
+                code: exportResult.code,
+                exported: exportResult.rows,
+                imported: 0,
+                ...(exportResult.error === undefined ? {} : { error: exportResult.error }),
+            };
         }
 
         logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
@@ -812,7 +827,13 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         });
 
         if (importResult.code !== 0) {
-            return { bytes: exportResult.bytes, code: importResult.code, exported: exportResult.rows, imported: importResult.inserted };
+            return {
+                bytes: exportResult.bytes,
+                code: importResult.code,
+                exported: exportResult.rows,
+                imported: importResult.inserted,
+                ...(importResult.error === undefined ? {} : { error: importResult.error }),
+            };
         }
 
         if (importResult.inserted === exportResult.rows) {

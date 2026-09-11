@@ -266,8 +266,16 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
         }
 
         // --- Confirm package.json mutation (if any item adds deps) ---
-        if (!(await confirmDepMutation(items, options))) {
-            return { ...empty, code: 1, data, error: "registry add: the package.json change was not confirmed" };
+        const confirmation = await confirmDepMutation(items, options);
+
+        if (!confirmation.ok) {
+            // The two cases differ: a non-TTY run without `--yes` is a wrong
+            // invocation (USAGE), a declined prompt is a deliberate abort
+            // (CANCELLED). Collapsing them told automation a user said no when
+            // nobody was ever asked.
+            return confirmation.reason === "declined"
+                ? { ...empty, code: EXIT_CODE.CANCELLED, data, error: "registry add: the package.json change was declined" }
+                : { ...empty, code: EXIT_CODE.USAGE, data, error: "registry add: stdin is not a TTY — re-run with --yes to confirm" };
         }
 
         // --- Reconcile ---
@@ -367,15 +375,19 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     const root = options.from;
 
     if (root === undefined) {
-        options.logger.error("registry build requires --from <registry root>");
+        const error = "registry build requires --from <registry root>";
 
-        return { ...empty, code: EXIT_CODE.USAGE };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error };
     }
 
     if (!existsSync(root)) {
-        options.logger.error(`registry root not found: ${root}`);
+        const error = `registry root not found: ${root}`;
 
-        return { ...empty, code: EXIT_CODE.NOT_FOUND };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.NOT_FOUND, error };
     }
 
     const index = buildRegistryIndex(root);
@@ -387,9 +399,11 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
         const drift = JSON.stringify(current.items ?? []) !== JSON.stringify(index.items);
 
         if (drift) {
-            options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
+            const error = `registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`;
 
-            return { ...empty, code: EXIT_CODE.USAGE };
+            options.logger.error(error);
+
+            return { ...empty, code: EXIT_CODE.USAGE, error };
         }
 
         options.logger.success(`registry: ${outputPath} is up to date (${String(index.items.length)} items)`);

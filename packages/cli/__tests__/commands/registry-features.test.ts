@@ -187,7 +187,8 @@ describe("lunora add — shadcn-parity features", () => {
         });
 
         expect(prompts).toHaveLength(1);
-        expect(result.code).toBe(1);
+        // Prompt shown and declined — CANCELLED, not a generic failure.
+        expect(result.code).toBe(EXIT_CODE.CANCELLED);
         expect(existsSync(destination())).toBe(false);
     });
 

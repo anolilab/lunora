@@ -120,7 +120,8 @@ describe("runAddFeature", () => {
         });
 
         expect(prompts).toHaveLength(1);
-        expect(result.code).toBe(1);
+        // The prompt was shown and declined — a deliberate abort, not a failure.
+        expect(result.code).toBe(EXIT_CODE.CANCELLED);
         expect(existsSync(join(workdir, "lunora", "mail", "index.ts"))).toBe(false);
     });
 
