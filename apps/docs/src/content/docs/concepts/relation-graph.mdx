@@ -38,6 +38,97 @@ From a customer, depth 2 reaches its tickets and those tickets' messages — a
 walk you would otherwise hand-write as a chain of `findMany` calls with the join
 columns typed in yourself.
 
+<Callout type="info">
+    **This is not [`.relations()`](/docs/concepts/relations).** A relation *descriptor* is something you **declare** — a named, typed `one` / `many` accessor
+    that [`with`](/docs/concepts/relations#querying-across-a-relation) hydrates one hop at a time, carrying cardinality and `onDelete` behaviour. The relation
+    *graph* is **derived**: it reads every `v.id(...)` column in the schema whether or not a descriptor names it, and walks several hops at once. Reach for
+    `with` when you know which relationship you want and want it typed; reach for `related` when the question is "what is connected to this" and the answer
+    spans tables you did not name up front.
+</Callout>
+
+## A worked example
+
+A support desk: a customer has tickets, and a ticket has messages. Two
+`v.id(...)` columns declare the entire graph — there is no join table and no
+relation descriptor.
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    customers: defineTable({ email: v.string(), name: v.string() }),
+
+    tickets: defineTable({
+        customerId: v.id("customers"),
+        status: v.union(v.literal("open"), v.literal("closed")),
+        subject: v.string(),
+    }).index("by_customer", ["customerId"]),
+
+    messages: defineTable({
+        authorId: v.id("customers"),
+        body: v.string(),
+        ticketId: v.id("tickets"),
+    }).index("by_ticket", ["ticketId"]),
+});
+```
+
+That is three edges — `tickets.customerId`, `messages.ticketId` and
+`messages.authorId`. Walking two hops _inward_ from a customer reaches its
+tickets at depth 1 and those tickets' messages at depth 2:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const customerContext = query.input({ customerId: v.id("customers") }).query(async ({ ctx, args: { customerId } }) => {
+    const { isDone, nodes } = await ctx.db.related(
+        { table: "customers", id: customerId },
+        { depth: 2, direction: "in", edges: ["tickets.customerId", "messages.ticketId"], limit: 100 },
+    );
+
+    return {
+        hasMore: !isDone,
+        messages: nodes.filter((node) => node.table === "messages").map((node) => node.document),
+        tickets: nodes.filter((node) => node.table === "tickets").map((node) => node.document),
+    };
+});
+```
+
+Each option is load-bearing:
+
+- **`direction: "in"`** — both edges point _inward_ toward the start row: a
+  ticket holds `customerId`, a message holds `ticketId`. `"in"` is the
+  "children of" direction. `"out"` would walk the other way — from a message to
+  its ticket, and from that ticket to its customer.
+- **`edges`** — pins the walk to the two hops this feature wants.
+  `messages.authorId` is an edge too, so without the allow-list depth 1 would
+  _also_ pull in every message this customer authored anywhere — rows that then
+  compete with the tickets for the same `limit`.
+- **`limit: 100`** — one page, not the whole history. `isDone` says whether
+  there is more; see [Cycles and paging](#cycles-and-paging).
+
+Every node says how it was reached, which is what makes the result usable as
+model context rather than an unattributed bag of rows:
+
+```ts
+{
+    table: "messages",
+    depth: 2,
+    score: 0.5,
+    path: ["tickets.customerId", "messages.ticketId"],
+    pathIds: ["c_1", "t_9", "m_42"],
+    document: { _id: "m_42", body: "…", ticketId: "t_9", authorId: "c_1" },
+}
+```
+
+You can also start from a row you already have in hand — pass the document
+itself instead of `{ table, id }`, and its table is resolved from the `_id` it
+carries. A `.global()` row is the exception: its table lives in D1, out of reach
+of that lookup, so pass `{ table, id }` for those.
+
+```ts
+const ticket = await ctx.db.get(ticketId);
+const { nodes } = await ctx.db.related(ticket, { depth: 1, direction: "out" });
+```
+
 ## The edge set
 
 One edge per `v.id("target")` column, named `` `<table>.<column>` `` so it is
@@ -159,6 +250,17 @@ of the framework applying to it:
 - **Realtime** — a live query running a traversal re-runs when the rows it
   walked change.
 
+{/* limitation:related-rls-required — the ONE place the stopgap is described. Delete this comment and the Callout below when per-hop policy routing lands in packages/server/src/rls/middleware.ts. */}
+
+<Callout type="warn">
+    **Not yet supported under a `.rls("required")` schema.** There, `ctx.db.related` throws `NOT_IMPLEMENTED` rather than walking. The [secure-by-default
+    guard](/docs/concepts/rls) denies every read of a table that is not `.public()` *whether or not a policy covers it*, and a traversal is the one read that
+    cannot ask the router which policy applies — it discovers its tables as it walks instead of naming one in an argument. Refusing is the honest stopgap: every
+    shortcut considered instead turns an engine-internal seam that can only *narrow* a read into one that can *widen* it. Until per-hop routing lands, read the
+    relationship with explicit policy-scoped queries — `withIndex` over the foreign key, or a `with` hop. Policy-based RLS **without** `.rls("required")` is
+    unaffected: the per-table filter described above applies normally.
+</Callout>
+
 ## Fusing the graph into retrieval
 
 A relation graph is a third retrieval signal, alongside the vector (semantic)
@@ -225,10 +327,19 @@ signal is recoverable, a leaked tenant is not.
 
 ## From an AI agent
 
-The `@lunora/mcp` server exposes the same traversal as the read-only
-`lunora_find_related` tool, so an agent can follow relationships without your
-app writing a query for it. It takes `table` and `id` plus the same `depth`,
-`direction`, `edges`, `limit` and `cursor` options, and returns the same nodes.
+The `@lunora/mcp` server exposes the same traversal as the `lunora_find_related`
+tool, so an agent can follow relationships without your app writing a query for
+it. It takes `table` and `id` plus the same `depth`, `direction`, `edges`,
+`limit` and `cursor` options — plus a `shardKey` to pick the shard on a
+`.shardBy()` deployment — and returns the same nodes.
+
+<Callout type="warn">
+    **The MCP tool does not inherit the guarantees above.** It is off by default and needs its own gate, `LUNORA_MCP_ALLOW_DATA_READS`, because it does not run
+    one of your declared functions the way `lunora_run_query` does — it reaches the shard through the deployment's **admin** writer, with RLS policies and
+    column masks **bypassed**. So it returns raw rows out of arbitrary tables, plus everything reachable within `depth` hops of them, straight into a model's
+    context. Holding the admin bearer already confers that authority; enabling this gate is the separate decision to hand it to a model. Leave it off unless the
+    rows in question are ones you would paste into the chat yourself. See [`@lunora/mcp`](/docs/packages/mcp).
+</Callout>
 
 ## Platform support
 
