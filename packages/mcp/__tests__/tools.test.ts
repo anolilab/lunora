@@ -135,6 +135,108 @@ describe("toolDefinitions", () => {
     });
 });
 
+/**
+ * One row per gated tool family, so every gate is held to the SAME contract
+ * rather than whichever half of it its own test happened to cover.
+ *
+ * `flag` is the position of that family's opt-in in the
+ * `(allowWrites, allowObservability, allowDataReads)` triple both exported
+ * helpers take.
+ */
+const GATED_FAMILIES = [
+    { envVariable: "LUNORA_MCP_ALLOW_WRITES", flag: 0, tool: "lunora_run_mutation" },
+    { envVariable: "LUNORA_MCP_ALLOW_OBSERVABILITY", flag: 1, tool: "lunora_get_logs" },
+    { envVariable: "LUNORA_MCP_ALLOW_DATA_READS", flag: 2, tool: "lunora_find_related" },
+] as const;
+
+/** The opt-in triple with `flag` set to `value` and every other gate closed. */
+const gates = (flag: number, value: unknown): [boolean, boolean, boolean] => {
+    const triple: unknown[] = [false, false, false];
+
+    triple[flag] = value;
+
+    return triple as [boolean, boolean, boolean];
+};
+
+/** Nothing reached the deployment — a refusal must not even resolve the function registry. */
+const expectDeploymentUntouched = (mock: ReturnType<typeof mockClient>): void => {
+    expect(mock.listFunctions).not.toHaveBeenCalled();
+    expect(mock.query).not.toHaveBeenCalled();
+    expect(mock.mutation).not.toHaveBeenCalled();
+    expect(mock.action).not.toHaveBeenCalled();
+};
+
+/**
+ * The gate contract, per family.
+ *
+ * Each gate must do BOTH halves: omit its tools from the advertised list, and
+ * refuse them at dispatch. Omission alone is not the guarantee — a client that
+ * ignores the advertised list must still be refused — and a refusal alone would
+ * put a tool an agent cannot use in front of it on every turn.
+ */
+describe("tool family gates", () => {
+    it.each(GATED_FAMILIES)("omits $tool from the advertised list until $envVariable opts in", ({ flag, tool }) => {
+        expect.assertions(2);
+
+        expect(toolDefinitions(...gates(flag, false)).map((definition) => definition.name)).not.toContain(tool);
+        expect(toolDefinitions(...gates(flag, true)).map((definition) => definition.name)).toContain(tool);
+    });
+
+    it.each(GATED_FAMILIES)(
+        "refuses $tool at dispatch without $envVariable, naming it, and never reaches the deployment",
+        async ({ envVariable, flag, tool }) => {
+            expect.assertions(6);
+
+            const mock = mockClient();
+            const result = await callTool(mock.asClient, tool, { functionPath: "messages:send", id: "c1", table: "customers" }, ...gates(flag, false));
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0]!.text).toContain(envVariable);
+
+            expectDeploymentUntouched(mock);
+        },
+    );
+
+    /**
+     * Fail closed: only the boolean `true` opts in. These flags are plumbed from
+     * env vars through exported helpers, so a caller that forwarded the RAW
+     * string would otherwise open every gate with `"false"` — the single value
+     * most likely to be forwarded by someone meaning the opposite.
+     */
+    it.each(GATED_FAMILIES)("keeps $tool closed for a truthy non-boolean opt-in ($envVariable)", async ({ flag, tool }) => {
+        expect.assertions(10);
+
+        for (const truthy of ["false", "0", 1]) {
+            expect(toolDefinitions(...gates(flag, truthy)).map((definition) => definition.name)).not.toContain(tool);
+        }
+
+        const mock = mockClient();
+
+        for (const truthy of ["false", "0", 1]) {
+            // eslint-disable-next-line no-await-in-loop -- three sequential probes over one mock; concurrency would only obscure which value leaked.
+            const result = await callTool(mock.asClient, tool, { functionPath: "messages:send", id: "c1", table: "customers" }, ...gates(flag, truthy));
+
+            expect(result.isError).toBe(true);
+        }
+
+        expectDeploymentUntouched(mock);
+    });
+
+    it("keeps lunora_explain_error exposed and dispatchable with every gate closed", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+
+        expect(toolDefinitions(false).map((definition) => definition.name)).toContain("lunora_explain_error");
+
+        const result = await callTool(mock.asClient, "lunora_explain_error", { code: "CONFLICT" }, false, false, false);
+
+        expect(result.isError).toBeUndefined();
+        // Answered from the compiled-in catalog: no deployment is consulted.
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+});
+
 describe("callTool", () => {
     it("lunora_list_functions returns the function list as JSON text", async () => {
         expect.assertions(3);
