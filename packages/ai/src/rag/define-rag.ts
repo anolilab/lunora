@@ -231,6 +231,15 @@ const partitionByScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: numbe
     return { kept, rejectedIds };
 };
 
+/**
+ * Whether a retrieval is actually scoped by anything.
+ *
+ * An empty object narrows nothing, so it must not count: treating `{}` as a
+ * filter would skip the graph leg on every unscoped retrieval of an app that
+ * merely declares an `rlsFilter` returning `{}` for an admin.
+ */
+const hasFilter = (filter: Record<string, unknown> | undefined): boolean => filter !== undefined && Object.keys(filter).length > 0;
+
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     if (!metadata) {
@@ -1267,9 +1276,20 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // text. Seeded from the source documents the search legs already
             // found, so it widens a ranking rather than replacing it, and fused
             // by the same RRF with each hit's depth decay scaling its term.
-            if (config.graphStore && chunks.length > 0) {
+            //
+            // The filter reaches this leg too, and a store that does not enforce
+            // it is skipped rather than trusted. The vector and lexical legs both
+            // narrow to `effectiveFilter` (the caller's filter with `rlsFilter`
+            // merged over it); a graph leg that ignored it would hand back the
+            // neighbours of a document the caller may see even when those
+            // neighbours are another tenant's — a filter honoured by two legs and
+            // dropped by the third is not a filter. `enforcesFilter` is the
+            // store's own answer because nothing here can derive it, and the
+            // fail-closed reading of "no" is to lose the signal, not the scoping.
+            if (config.graphStore && chunks.length > 0 && (config.graphStore.enforcesFilter || !hasFilter(effectiveFilter))) {
                 const seedSourceIds = [...new Set(chunks.map((chunk) => chunk.sourceId))];
                 const graphMatches = await config.graphStore.related(seedSourceIds, {
+                    filter: effectiveFilter,
                     namespace: effectiveNamespace,
                     topK: config.graphTopK ?? candidateK,
                 });

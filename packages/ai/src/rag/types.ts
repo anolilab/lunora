@@ -272,14 +272,45 @@ export interface GraphMatch {
  */
 export interface RagGraphStore {
     /**
+     * Whether {@link RagGraphStore.related} applies the `filter` it is handed to
+     * every document it returns.
+     *
+     * Required, and asked rather than assumed, because the honest answer is not
+     * derivable: `related` is somebody else's traversal and this package cannot
+     * see whether it narrows. `retrieve()` passes the SAME effective filter to
+     * all three legs — the caller's filter with `RagConfig.rlsFilter` merged
+     * over it — and the vector and lexical stores enforce it. A graph store that
+     * ignored it would return the neighbours of a document the caller may see
+     * even when those neighbours belong to another tenant, which is a leak the
+     * other two legs are specifically built to prevent. So a store that answers
+     * `false` is SKIPPED whenever a filter is in play, rather than trusted:
+     * retrieval loses its third signal and keeps its isolation. With no filter
+     * (no `rlsFilter`, no `RetrieveOptions.filter`) there is nothing to enforce
+     * and `false` costs nothing.
+     *
+     * Answer `true` only if every returned chunk's document really is matched
+     * against the filter — `ctx.db.related` under a schema with RLS policies
+     * does not count on its own, because the filter here is RAG metadata, not a
+     * row policy. The stricter reading is the safe one: if in doubt, `false`.
+     */
+    enforcesFilter: boolean;
+
+    /**
      * Expand from the SOURCE document ids the search legs found and return
      * chunks of the documents they connect to, best (nearest) first.
      *
      * Seeded rather than queried: the graph has no notion of a query string, so
      * it widens a ranking the other legs produced instead of ranking on its own.
      * A seed id that is not a graph node simply contributes nothing.
+     *
+     * `options.filter` is the effective metadata filter for this retrieval, and
+     * is present only for stores that declared {@link RagGraphStore.enforcesFilter}
+     * — see there for what declaring it commits you to.
      */
-    related: (sourceIds: ReadonlyArray<string>, options: { namespace?: string; topK: number }) => Promise<ReadonlyArray<GraphMatch>>;
+    related: (
+        sourceIds: ReadonlyArray<string>,
+        options: { filter?: Record<string, unknown>; namespace?: string; topK: number },
+    ) => Promise<ReadonlyArray<GraphMatch>>;
 }
 
 /**

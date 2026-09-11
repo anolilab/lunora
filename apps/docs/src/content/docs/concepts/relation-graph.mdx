@@ -175,14 +175,24 @@ const docs = defineRag({
     index: "docs",
     lexicalStore: bm25LexicalStore(),
     graphStore: {
+        // Every returned document is matched against the effective filter below,
+        // so this store may declare that it enforces it. See the note that follows.
+        enforcesFilter: true,
         // The RAG source ids ARE document ids here, so a seed is a start node.
-        related: async (sourceIds, { topK }) => {
+        related: async (sourceIds, { filter, topK }) => {
             const hits = [];
 
             for (const id of sourceIds) {
                 const { nodes } = await ctx.db.related({ table: "tickets", id }, { depth: 2, limit: topK });
 
-                hits.push(...nodes.map((node) => ({ id: `${node.document._id}#0`, score: node.score, text: String(node.document.body) })));
+                for (const node of nodes) {
+                    // The filter `retrieve()` applied to the vector and lexical
+                    // legs, applied here too — otherwise a neighbour outside it
+                    // rides in on a document that was inside it.
+                    if (Object.entries(filter ?? {}).every(([key, value]) => node.document[key] === value)) {
+                        hits.push({ id: `${node.document._id}#0`, score: node.score, text: String(node.document.body) });
+                    }
+                }
             }
 
             return hits.slice(0, topK);
@@ -195,6 +205,23 @@ The graph leg **widens a ranking rather than producing one**: it has no notion
 of a query string, so it is seeded from what the search legs already found. A
 chunk the vector leg rejected for `minScore` stays rejected — being
 graph-adjacent does not re-admit it.
+
+### The filter reaches the graph leg too
+
+`retrieve()` hands all three legs the same effective filter — the caller's
+`filter` with `rlsFilter` merged over it. The vector and lexical stores enforce
+it; a graph store has to say whether it does, because nothing in `defineRag` can
+tell by looking. That is what `enforcesFilter` is for, and it is **required**:
+
+- `enforcesFilter: true` — `related` receives `options.filter` and is trusted to
+  apply it to every document it returns.
+- `enforcesFilter: false` — the graph leg is **skipped entirely** whenever a
+  filter is in play. Retrieval keeps its vector and lexical legs and loses its
+  third signal, rather than returning a neighbour the filter would have excluded.
+
+With no filter at all there is nothing to enforce and `false` costs nothing. If
+you are unsure whether your traversal really narrows, answer `false`: a missing
+signal is recoverable, a leaked tenant is not.
 
 ## From an AI agent
 

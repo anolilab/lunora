@@ -38,14 +38,27 @@ const stubVectors = (matches: ReadonlyArray<RagVectorMatch>, records: Record<str
     };
 };
 
-/** A graph store that records its seeds and answers with fixed matches. */
-const stubGraphStore = (matches: ReadonlyArray<GraphMatch>): { seeds: string[][]; store: RagGraphStore } => {
+/**
+ * A graph store that records its seeds and the filter it was handed, and answers
+ * with fixed matches.
+ *
+ * `enforcesFilter` defaults to `true` so the existing fusion cases still exercise
+ * the leg; the isolation cases below pass `false` on purpose.
+ */
+const stubGraphStore = (
+    matches: ReadonlyArray<GraphMatch>,
+    enforcesFilter = true,
+): { filters: (Record<string, unknown> | undefined)[]; seeds: string[][]; store: RagGraphStore } => {
+    const filters: (Record<string, unknown> | undefined)[] = [];
     const seeds: string[][] = [];
 
     return {
+        filters,
         seeds,
         store: {
-            related: (sourceIds) => {
+            enforcesFilter,
+            related: (sourceIds, options) => {
+                filters.push(options.filter);
                 seeds.push([...sourceIds]);
 
                 return Promise.resolve(matches);
@@ -140,5 +153,97 @@ describe("rag graph leg", () => {
         // `weak` failed the caller's explicit threshold on the leg that scored
         // it; being graph-adjacent must not re-admit it.
         expect(result.chunks.map((entry) => entry.id)).toStrictEqual(["strong#0"]);
+    });
+});
+
+/**
+ * Filter isolation across the third leg.
+ *
+ * `retrieve()` narrows the vector and lexical legs to the caller's filter with
+ * `rlsFilter` merged over it. The graph leg used to be handed nothing, so a
+ * traversal seeded from a document the caller may see could return that
+ * document's neighbours from any other tenant — a filter two legs honour and the
+ * third ignores is not a filter.
+ */
+describe("rag graph leg filter isolation", () => {
+    it("passes the effective filter (caller filter + rlsFilter) to the graph store", async () => {
+        expect.assertions(2);
+
+        const graph = stubGraphStore([{ id: "ticket-9#0", score: 1, text: "the connected ticket" }]);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            graphStore: graph.store,
+            index: "docs",
+            // RLS keys win over the caller's, exactly as on the other two legs.
+            rlsFilter: () => {
+                return { orgId: "org-a" };
+            },
+        });
+        const rag = docs({ vectors: stubVectors([vectorMatch("customer-1#0", 0.9, "the customer record")]) });
+
+        const result = await rag.retrieve("who is this", { filter: { status: "open" }, topK: 5 });
+
+        expect(graph.filters).toStrictEqual([{ orgId: "org-a", status: "open" }]);
+        expect(result.chunks.map((entry) => entry.sourceId)).toContain("ticket-9");
+    });
+
+    it("skips a graph store that does not enforce the filter, rather than trusting it", async () => {
+        expect.assertions(2);
+
+        const graph = stubGraphStore([{ id: "other-tenant-doc#0", score: 1, text: "another tenant's row" }], false);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            graphStore: graph.store,
+            index: "docs",
+            rlsFilter: () => {
+                return { orgId: "org-a" };
+            },
+        });
+        const rag = docs({ vectors: stubVectors([vectorMatch("customer-1#0", 0.9, "the customer record")]) });
+
+        const result = await rag.retrieve("who is this", { topK: 5 });
+
+        // Not called at all — the leg is dropped, not called and post-filtered,
+        // because this package cannot tell which of its hits were in scope.
+        expect(graph.seeds).toStrictEqual([]);
+        expect(result.chunks.map((entry) => entry.sourceId)).toStrictEqual(["customer-1"]);
+    });
+
+    it("still runs a non-enforcing graph store when nothing is filtered", async () => {
+        expect.assertions(2);
+
+        const graph = stubGraphStore([{ id: "ticket-9#0", score: 1, text: "the connected ticket" }], false);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, graphStore: graph.store, index: "docs" });
+        const rag = docs({ vectors: stubVectors([vectorMatch("customer-1#0", 0.9, "the customer record")]) });
+
+        const result = await rag.retrieve("who is this", { topK: 5 });
+
+        // No `rlsFilter`, no caller filter: there is nothing to enforce, so the
+        // declaration costs the retrieval nothing.
+        expect(graph.filters).toStrictEqual([undefined]);
+        expect(result.chunks.map((entry) => entry.sourceId)).toContain("ticket-9");
+    });
+
+    it("treats an empty rlsFilter as no filter, so the leg is not lost to a no-op", async () => {
+        expect.assertions(1);
+
+        const graph = stubGraphStore([{ id: "ticket-9#0", score: 1, text: "the connected ticket" }], false);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            graphStore: graph.store,
+            index: "docs",
+            // What an admin identity resolves to: scoped by nothing.
+            rlsFilter: () => {
+                return {};
+            },
+        });
+        const rag = docs({ vectors: stubVectors([vectorMatch("customer-1#0", 0.9, "the customer record")]) });
+
+        await rag.retrieve("who is this", { topK: 5 });
+
+        expect(graph.seeds).toStrictEqual([["customer-1"]]);
     });
 });
