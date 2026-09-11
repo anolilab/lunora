@@ -43,6 +43,16 @@ const Workbench = (): JSX.Element => {
         (event) => {
             event.preventDefault();
 
+            // `chats` is `undefined` while the subscription is still loading, and
+            // `activeChat === undefined` then means "not known yet", not "there
+            // is no chat". Submitting on that reading calls `chats.start`, which
+            // always INSERTS — so a project that already has a thread gets a
+            // second one, and the transcript the user is looking at is not the
+            // one their message landed in. Wait for the list.
+            if (chats === undefined) {
+                return;
+            }
+
             const trimmed = prompt.trim();
 
             if (trimmed.length === 0) {
@@ -63,7 +73,7 @@ const Workbench = (): JSX.Element => {
                 console.error("Could not send the message", error);
             });
         },
-        [activeChat, projectId, prompt, sendMessage, startChat],
+        [activeChat, chats, projectId, prompt, sendMessage, startChat],
     );
 
     return (
@@ -73,7 +83,7 @@ const Workbench = (): JSX.Element => {
 
                 <form className="composer" onSubmit={onSubmit}>
                     <textarea aria-label="Message the builder" onChange={onPromptChange} placeholder="Describe a change…" rows={3} value={prompt} />
-                    <button disabled={prompt.trim().length === 0} type="submit">
+                    <button disabled={chats === undefined || prompt.trim().length === 0} type="submit">
                         Send
                     </button>
                 </form>

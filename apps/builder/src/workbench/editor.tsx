@@ -20,6 +20,9 @@ interface EditorProperties {
  * The local draft is deliberately NOT synced back from the live query while the
  * user is typing. The file row is a live subscription, so an agent write during
  * an edit would otherwise yank the buffer out from under them mid-keystroke.
+ * That is also why a save is a compare-and-swap: the draft was taken from one
+ * `revision`, the agent may have written several since, and `files.write` rejects
+ * the stale save rather than silently overwriting work the user never saw.
  *
  * The draft is reset by REMOUNTING on a path change — the parent passes
  * `key={path}` — rather than by an effect that calls `setDraft(undefined)`.
@@ -27,25 +30,37 @@ interface EditorProperties {
  * where the identity actually changes.
  */
 const Editor = ({ path, projectId }: EditorProperties): JSX.Element => {
-    const file = useQuery(api.files.read, { path: path ?? "", projectId });
+    // `"skip"` rather than `{ path: "" }`: an empty path is a real argument the
+    // server would open a live subscription for, and it can never match a row —
+    // a subscription held open to watch for a file that cannot exist.
+    const file = useQuery(api.files.read, path === undefined ? "skip" : { path, projectId });
     const { mutate: writeFile } = useMutation(api.files.write);
 
     const [draft, setDraft] = useState<string | undefined>(undefined);
+    const [conflict, setConflict] = useState(false);
 
     const onChange: ChangeEventHandler<HTMLTextAreaElement> = useCallback((event) => {
+        setConflict(false);
         setDraft(event.target.value);
     }, []);
 
     const onSave = useCallback(() => {
-        if (path === undefined || draft === undefined) {
+        if (path === undefined || draft === undefined || file === undefined) {
             return;
         }
 
-        writeFile({ content: draft, path, projectId }).catch((error: unknown) => {
+        // The revision the draft was edited against. The server compares it to
+        // the row's current one and refuses the write when they differ, so two
+        // writers cannot silently overwrite each other.
+        writeFile({ content: draft, expectedRevision: file.revision, path, projectId }).catch((error: unknown) => {
+            // Only a compare-and-swap rejection means "the file moved"; a rate
+            // limit or a network failure is a different story and must not be
+            // reported as one.
+            setConflict((error as { code?: string } | undefined)?.code === "CONFLICT");
             // eslint-disable-next-line no-console -- the workbench has no error surface yet; silence would look like a successful save
             console.error("Could not save the file", error);
         });
-    }, [draft, path, projectId, writeFile]);
+    }, [draft, file, path, projectId, writeFile]);
 
     if (path === undefined) {
         return <p className="muted">Select a file to read it.</p>;
@@ -62,6 +77,7 @@ const Editor = ({ path, projectId }: EditorProperties): JSX.Element => {
         <div className="editor">
             <header className="editor-header">
                 <span className="file-path">{path}</span>
+                {conflict ? <span className="muted">{path} changed while you were editing — copy your changes and reselect the file.</span> : undefined}
                 <button disabled={!dirty} onClick={onSave} type="button">
                     {dirty ? "Save" : "Saved"}
                 </button>

@@ -10,21 +10,59 @@ interface ChatPaneProperties {
     projectId: string;
 }
 
-/** Human labels for the three roles the transcript renders differently. */
+/** Human labels for the roles the transcript renders differently. */
 const ROLE_LABEL: Readonly<Record<string, string>> = {
     assistant: "Builder",
+    system: "System",
     tool: "Tool",
     user: "You",
+};
+
+/** One rendered turn, whichever table it came from. */
+interface Turn {
+    content: string;
+    id: string;
+    role: string;
+    sortKey: number;
+}
+
+/**
+ * Read one row of the agent's durable thread.
+ *
+ * `agents:agentMessages` is a framework query typed as a bag of unknowns (it
+ * serves every app's agent), so the fields this pane renders are narrowed here
+ * rather than trusted. A row with no usable text is dropped instead of rendering
+ * an empty bubble.
+ */
+const toAgentTurn = (row: Record<string, unknown>, index: number): Turn | undefined => {
+    const role = typeof row["role"] === "string" ? row["role"] : "assistant";
+
+    // The user's own turns are already on screen from the app's `messages`
+    // table; the agent thread carries a copy of each, and rendering both would
+    // show every prompt twice.
+    if (role === "user") {
+        return undefined;
+    }
+
+    const content = typeof row["content"] === "string" ? row["content"] : "";
+
+    if (content.length === 0) {
+        return undefined;
+    }
+
+    const seq = typeof row["seq"] === "number" ? row["seq"] : index;
+
+    return { content, id: `agent:${String(seq)}`, role, sortKey: typeof row["createdAt"] === "number" ? row["createdAt"] : Number.MAX_SAFE_INTEGER };
 };
 
 /**
  * The transcript.
  *
- * `useQuery` here is the whole streaming story (plan 335 §D18): the agent
- * appends message rows, and this subscription re-renders. There is no SSE
- * endpoint, no polling interval, and no second wire format to keep in sync with
- * the durable thread — which is the reason the plan rejected a bolt-style
- * artifact envelope.
+ * Two live subscriptions, no bespoke stream and no SSE endpoint (plan 335 §D18):
+ * `chats.messages` carries the user's own turns from the app's `messages` table,
+ * and `agents:agentMessages` carries the assistant and tool turns straight off
+ * the durable thread the agent loop persists — which is the source of truth for
+ * the generation, so the pane needs no second projection of it to stay in sync.
  */
 const ChatPane = ({ chatId, projectId }: ChatPaneProperties): JSX.Element => {
     // Hooks cannot be called conditionally, so an absent chat still subscribes —
@@ -32,6 +70,10 @@ const ChatPane = ({ chatId, projectId }: ChatPaneProperties): JSX.Element => {
     // without issuing a query. Casting a `""` into an `Id<"chats">` would have
     // compiled and then queried a row id that cannot exist.
     const transcript = useQuery(api.chats.messages, chatId === undefined ? "skip" : { chatId, projectId });
+
+    // The thread key comes from the server rather than being rebuilt here: it is
+    // the agent's addressing contract, and two spellings of it would diverge.
+    const agentTurns = useQuery(api.agents.agentMessages, transcript === undefined ? "skip" : { key: transcript.threadKey });
 
     if (chatId === undefined) {
         return (
@@ -45,12 +87,19 @@ const ChatPane = ({ chatId, projectId }: ChatPaneProperties): JSX.Element => {
         return <p className="muted">Loading the conversation…</p>;
     }
 
+    const turns: Turn[] = [
+        ...transcript.messages.map((message) => {
+            return { content: message.content, id: message._id, role: message.role, sortKey: message.createdAt };
+        }),
+        ...(agentTurns ?? []).map((row, index) => toAgentTurn(row, index)).filter((turn): turn is Turn => turn !== undefined),
+    ].toSorted((left, right) => left.sortKey - right.sortKey);
+
     return (
         <ol className="transcript">
-            {transcript.messages.map((message) => (
-                <li className={`turn turn-${message.role}`} key={message._id}>
-                    <span className="turn-role">{ROLE_LABEL[message.role] ?? message.role}</span>
-                    <pre className="turn-body">{message.content}</pre>
+            {turns.map((turn) => (
+                <li className={`turn turn-${turn.role}`} key={turn.id}>
+                    <span className="turn-role">{ROLE_LABEL[turn.role] ?? turn.role}</span>
+                    <pre className="turn-body">{turn.content}</pre>
                 </li>
             ))}
         </ol>
