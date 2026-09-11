@@ -14,7 +14,11 @@
  * production user data, so they are omitted entirely without it. The server is
  * read-only by default — the write tools are exposed only when `allowWrites`
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
- * allowlisted against the deployment's discovered public functions. It can also
+ * allowlisted against the deployment's discovered public functions. Past that
+ * gate the two write tools run a two-step confirmation handshake: the first
+ * call writes nothing and returns the proposed action plus a self-verifying
+ * `actionDigest`, and only a second call carrying `confirmed: true` and that
+ * digest executes (see `./write-confirmation`). It can also
  * front durable `@lunora/agent` runs as `agent_<name>` tools when `allowAgents`
  * (or `LUNORA_MCP_ALLOW_AGENTS` + `LUNORA_MCP_AGENTS`) is set. Run the
  * `lunora-mcp` binary (configured via the `LUNORA_URL`, `LUNORA_ADMIN_TOKEN`,

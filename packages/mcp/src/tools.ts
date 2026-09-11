@@ -4,6 +4,7 @@ import { LunoraError } from "@lunora/errors";
 import { callObservabilityTool, OBSERVABILITY_TOOL_DEFINITIONS, OBSERVABILITY_TOOL_NAMES } from "./observability-tools";
 import { errorResult, ok } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
+import { readConfirmation, screenWriteConfirmation, WRITE_CONFIRMATION_PROPERTIES } from "./write-confirmation";
 
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
@@ -66,14 +67,30 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     },
 ];
 
+/**
+ * The write tools' input schema: the shared run-tool triple plus the
+ * confirmation handshake fields (`confirmed`, `actionDigest`, `idempotencyKey`).
+ * Only `functionPath` stays required — the first call is the one that PROPOSES
+ * the write, so a schema demanding a digest up front would be unsatisfiable.
+ */
+const WRITE_RUN_INPUT_SCHEMA: ToolInputSchema = {
+    properties: { ...RUN_INPUT_SCHEMA.properties, ...WRITE_CONFIRMATION_PROPERTIES },
+    required: ["functionPath"],
+    type: "object",
+};
+
+/** The two-step handshake, restated in every write tool's description because that is what the model actually reads. */
+const HANDSHAKE_DESCRIPTION =
+    'TWO-STEP: the first call does NOT execute. It returns status "action_required" with the proposed action and an actionDigest; show that to a human, then call again with the IDENTICAL functionPath/args/shardKey plus confirmed: true and that actionDigest. Any change to the target or the arguments produces a different digest and needs a fresh review.';
+
 /** The write tool surface (mutations + actions). Exposed ONLY when writes are enabled. */
 const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         // Not idempotent and not read-only: this is the distinction the whole
         // `allowWrites` gate exists for, now legible to a client's UI.
         annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false, title: "Run a mutation (writes data)" },
-        description: "Run a mutation and return its result. Writes data — use with care.",
-        inputSchema: RUN_INPUT_SCHEMA,
+        description: `Run a mutation. Writes data. ${HANDSHAKE_DESCRIPTION}`,
+        inputSchema: WRITE_RUN_INPUT_SCHEMA,
         name: "lunora_run_mutation",
     },
     {
@@ -84,8 +101,8 @@ const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             readOnlyHint: false,
             title: "Run an action (may call external services)",
         },
-        description: "Run an action and return its result. May call external services.",
-        inputSchema: RUN_INPUT_SCHEMA,
+        description: `Run an action. May call external services — send mail, charge a card, hit a third-party API — so the confirmation is the only thing between a proposal and a real-world side effect. ${HANDSHAKE_DESCRIPTION}`,
+        inputSchema: WRITE_RUN_INPUT_SCHEMA,
         name: "lunora_run_action",
     },
 ];
@@ -257,6 +274,29 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
 };
 
 /**
+ * The confirmation handshake in front of one write. Returns the result to hand
+ * back — the `action_required` proposal on an unconfirmed call, or a refusal
+ * when the supplied digest does not verify — and `undefined` when the call is
+ * confirmed and may execute. See `./write-confirmation`.
+ *
+ * Runs AFTER {@link assertRunnable}, so a proposal only ever describes a
+ * function the deployment really exposes at the kind the tool claims: the
+ * proposal a human reviews states that kind, and asking someone to approve a
+ * call that would have failed anyway is worse than the error.
+ */
+const screenWrite = async (
+    client: LunoraClient,
+    tool: string,
+    kind: "action" | "mutation",
+    run: { args: Record<string, unknown>; functionPath: string; shardKey: string | undefined },
+    input: Record<string, unknown>,
+): Promise<ToolResult | undefined> => {
+    const confirmation = readConfirmation(input);
+
+    return screenWriteConfirmation(client, { ...run, idempotencyKey: confirmation.idempotencyKey, kind, tool }, confirmation);
+};
+
+/**
  * Dispatch a tool call against `client`. Unknown tools and thrown errors are
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
@@ -265,6 +305,11 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
  * the observability tools: when either is false a call to the gated tool is
  * refused even if the client somehow names it, so both guarantees hold at
  * dispatch, not just in the advertised tool list.
+ *
+ * `allowWrites` is a gate on the SURFACE, not on any one write. Past it, every
+ * mutation/action call additionally goes through {@link screenWrite}'s two-step
+ * confirmation, so "this server may write" and "this write was reviewed" stay
+ * separate questions.
  */
 const callTool = async (
     client: LunoraClient,
@@ -313,12 +358,24 @@ const callTool = async (
 
                 await assertRunnable(client, functionPath, "action");
 
+                const gate = await screenWrite(client, name, "action", { args, functionPath, shardKey }, input);
+
+                if (gate !== undefined) {
+                    return gate;
+                }
+
                 return ok(await client.action(reference(functionPath), args, { shardKey }));
             }
             case "lunora_run_mutation": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
                 await assertRunnable(client, functionPath, "mutation");
+
+                const gate = await screenWrite(client, name, "mutation", { args, functionPath, shardKey }, input);
+
+                if (gate !== undefined) {
+                    return gate;
+                }
 
                 return ok(await client.mutation(reference(functionPath), args, { shardKey }));
             }

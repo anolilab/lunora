@@ -51,8 +51,8 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 | `lunora_list_tables`          | List the deployment's `.global()` tables with their row counts.                                                                                               |
 | `lunora_get_function_schema`  | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
 | `lunora_run_query`            | Run a query and return its result. Read-only.                                                                                                                 |
-| `lunora_run_mutation`         | Run a mutation and return its result. Writes data — use with care.                                                                                            |
-| `lunora_run_action`           | Run an action and return its result. May call external services.                                                                                              |
+| `lunora_run_mutation`         | Run a mutation. Writes data. Two-step: propose, then confirm with the returned `actionDigest`.                                                                |
+| `lunora_run_action`           | Run an action. May call external services. Two-step: propose, then confirm with the returned `actionDigest`.                                                  |
 | `lunora_get_logs`             | Read the deployment's recent log entries (newest first). Requires an admin token.                                                                             |
 | `lunora_get_issues`           | List errors grouped into Issues by fingerprint, with counts and triage status. Requires an admin token.                                                       |
 | `lunora_get_advisories`       | List the deployment's schema/query advisories. Requires an admin token.                                                                                       |
@@ -68,7 +68,51 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 2. lunora_get_function_schema     → retrieve the argument descriptors for a specific path
 3. lunora_run_query / lunora_run_mutation / lunora_run_action
                                   → call the function with a well-formed arguments object
+                                    (the two write tools take a second, confirming call)
 ```
+
+### Write confirmation (the two-step handshake)
+
+`LUNORA_MCP_ALLOW_WRITES` decides whether this server may write at **all**. It
+never said anything about whether a _particular_ write was reviewed, so past that
+gate `lunora_run_mutation` and `lunora_run_action` each take two calls.
+
+The first call **executes nothing**. It returns the proposed action and a digest:
+
+```jsonc
+{
+    "status": "action_required",
+    "actionDigest": "0ZR2…",
+    "proposedAction": {
+        "tool": "lunora_run_mutation",
+        "kind": "mutation",
+        "functionPath": "messages:send",
+        "args": { "roomId": "r1", "text": "hi" },
+    },
+    "nextStep": "Show proposedAction to a human. To execute, call …",
+}
+```
+
+Render `proposedAction` for a human, then call the same tool again with the
+identical `functionPath` / `args` / `shardKey` / `idempotencyKey`, plus
+`confirmed: true` and that `actionDigest`. Only then does the write happen.
+
+The digest is an HMAC over a canonical (sorted-key) encoding of the tool name,
+function path, arguments, shard key and idempotency key, keyed by the
+deployment's own identity. So:
+
+- **Argument key order is irrelevant** — re-serializing `args` does not invalidate a confirmation.
+- **Any real edit invalidates it.** A different target, argument, or shard key produces a different digest, and the confirmation is refused with nothing written. That is the guarantee: what executes is exactly what was reviewed.
+- **No server state is involved.** The HTTP handler serves statelessly (a fresh server per request), so a confirmation is revalidated by recomputation on whichever instance receives it, not looked up in a store.
+
+`idempotencyKey` is optional and is folded into the digest. It guarantees that a
+retry under the same key and arguments yields the same digest (so a client that
+timed out can resubmit the confirmation it already holds without a second
+review), and that a deliberately-repeated identical write under a **new** key
+gets its own review instead of riding the first one. It does **not** deduplicate
+the write: this server keeps no state between requests and never forwards the key
+to your function, so a resubmitted confirmed call executes again. Make the
+function itself idempotent if the write must happen at most once.
 
 ### Observability tools (privileged)
 
