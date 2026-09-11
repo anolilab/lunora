@@ -32,134 +32,27 @@ foreign one that happens to have a `code`/`status` pair, so
 Matching on the shape rather than on `instanceof` is what lets it also
 recognise errors rebuilt from the wire, where the prototype is lost.
 
-## Request errors
+Client helpers exist for the ones you branch on most: `isUnauthorizedError`,
+`isForbiddenError`, `isRateLimitedError` (plus `getRetryAfterMs`), and
+`isConflictError`, all from `@lunora/client`.
 
-| Code                | Status | Meaning                                       |
-| ------------------- | ------ | --------------------------------------------- |
-| `BAD_REQUEST`       | 400    | The request was malformed                     |
-| `VALIDATION_ERROR`  | 400    | Arguments or a return value failed validation |
-| `UNAUTHORIZED`      | 401    | No usable identity on the request             |
-| `FORBIDDEN`         | 403    | Authenticated, but not allowed                |
-| `NOT_FOUND`         | 404    | The addressed resource does not exist         |
-| `UNPROCESSABLE`     | 422    | Well-formed, but semantically rejected        |
-| `TOO_MANY_REQUESTS` | 429    | Rate limited; check `Retry-After`             |
-| `NOT_IMPLEMENTED`   | 501    | The operation exists but is not implemented   |
+## Redacted codes
 
-Client helpers exist for the ones you branch on most:
-`isUnauthorizedError`, `isForbiddenError`, `isRateLimitedError` (plus
-`getRetryAfterMs`), and `isConflictError`, all from `@lunora/client`.
-
-## Data errors
-
-| Code                        | Status | Meaning                                                |
-| --------------------------- | ------ | ------------------------------------------------------ |
-| `CONFLICT`                  | 409    | A concurrent write changed the row mid-mutation        |
-| `NOT_UNIQUE`                | 400    | `.unique()` matched more than one document             |
-| `UNKNOWN_TABLE`             | 404    | No such table in the schema                            |
-| `GLOBAL_TABLE_NOT_EDITABLE` | 400    | A `.global()` table cannot be edited through this path |
-| `MIGRATION_NOT_FOUND`       | 404    | No data migration with that id                         |
-
-### `CONFLICT`
-
-Another write changed the row while your mutation was running. Re-read the row
-and retry with the fresh value.
-
-Because Lunora serializes a DO's mutations, a _persistent_ conflict usually means
-the handler conflicts **with itself**: a trigger or cascade touching the same
-row. Split that work rather than adding a retry loop. See
-[OCC & atomicity](/docs/concepts/occ).
-
-A unique-index breach on the write path also surfaces as `CONFLICT`, with the
-message `unique constraint violation on <table>`. That one is different: either
-upsert (or `patch` the existing row) instead of inserting, or pick a value that
-is not taken.
-
-### `NOT_UNIQUE`
-
-`.unique()` expects the query to identify at most one row. If several matches
-are legitimate, use `.first()` or `.collect()` instead; otherwise tighten the
-query so it can only match one row.
-
-## Authorization and privacy errors
-
-| Code                             | Status | Meaning                                               |
-| -------------------------------- | ------ | ----------------------------------------------------- |
-| `RLS_REQUIRED`                   | 403    | The table is secure-by-default and no policy resolved |
-| `COUNT_RLS_UNSUPPORTED`          | 422    | `count()` is unsupported under an RLS policy          |
-| `MASK_UNSUPPORTED`               | 422    | Aggregation over a masked column is unsupported       |
-| `RELATION_PREDICATE_UNSUPPORTED` | 422    | A relation predicate is unsupported in a write policy |
-
-### `RLS_REQUIRED`
-
-The table has no `.public()` marker and no [RLS](/docs/concepts/rls) policy
-resolved for this caller, so the read fails closed. Add a read policy with
-`.rls(...)`, or mark the table `.public()` if it is genuinely world-readable.
-
-## Dispatch errors
-
-| Code                 | Status | Meaning                             |
-| -------------------- | ------ | ----------------------------------- |
-| `FUNCTION_NOT_FOUND` | 404    | No function at that path            |
-| `METHOD_NOT_ALLOWED` | 405    | Wrong HTTP method for this endpoint |
-| `PAYLOAD_TOO_LARGE`  | 413    | The request body exceeded the limit |
-
-## Infrastructure errors
-
-| Code                       | Status | Meaning                                          |
-| -------------------------- | ------ | ------------------------------------------------ |
-| `SHARD_ERROR`              | 503    | The owning shard returned an error               |
-| `SHARD_UNAVAILABLE`        | 503    | The owning shard could not be reached            |
-| `OFFLINE_IDENTITY_CHANGED` | 409    | The identity changed while offline writes queued |
-| `ANALYTICS_SQL_ERROR`      | 502    | Analytics Engine SQL API failure                 |
-| `R2_SQL_ERROR`             | 502    | R2 SQL API failure                               |
-| `WORKFLOWS_REST_ERROR`     | 502    | Cloudflare Workflows REST API failure            |
-
-The three `*_ERROR` codes carry Cloudflare's own error text (trusted
-infrastructure rather than user input), so the upstream message is echoed rather
-than redacted, and the actual upstream HTTP status is passed through.
-
-## Auth and email errors
-
-| Code                   | Status | Meaning                                                   |
-| ---------------------- | ------ | --------------------------------------------------------- |
-| `EMAIL_DOMAIN_BLOCKED` | 400    | The address's domain is disposable or on your deny-list   |
-| `EMAIL_UNDELIVERABLE`  | 400    | The domain publishes no MX records, so mail cannot arrive |
-| `AUTH_HEADERS_MISSING` | 500    | Auth is not wired up correctly (redacted on the wire)     |
-
-Tune the domain policy with `blockDisposable` / `allowDomains` / `denyDomains`
-on `emailGate(...)` in `@lunora/auth/email-guard`. MX verification is opt-in
-(`mx: true`) and needs DNS, so leave it off on an edge path where DNS is not
-available.
-
-## Internal errors
-
-These are **redacted on the wire**: their messages may carry SQL fragments, file
-paths, or internal identifiers, so the transport emits a generic message and logs
-the real one server-side.
-
-| Code                    | Status | Meaning                                           |
-| ----------------------- | ------ | ------------------------------------------------- |
-| `INTERNAL`              | 500    | Free-form internal failure                        |
-| `INTERNAL_SERVER_ERROR` | 500    | Alias of `INTERNAL`                               |
-| `RPC_FAILED`            | 500    | A non-mappable throw crossed the RPC boundary     |
-| `RUN_DEPTH_EXCEEDED`    | 500    | Too many nested function invocations              |
-| `ENV_INVALID`           | 500    | Environment validation failed; names failing keys |
+A handful of codes are **internal**. Their messages may carry SQL fragments,
+file paths, or internal identifiers, so the transport emits a generic message
+and logs the real one server-side — which means there is nothing for a client to
+branch on, and they are deliberately absent from the reference below.
 
 Throwing a `LunoraError` with any **non**-internal code is your vouch that its
-message is safe to show a client. `invariant(...)` and `unreachable(...)` throw
-`INTERNAL`, so "should never happen" assertions are redacted automatically.
+message is safe to show a client. `invariant(...)` and `unreachable(...)` throw a
+redacted code, so "should never happen" assertions are redacted automatically.
 
 ## Build-time errors
 
-These never cross the RPC wire.
-
-| Code                    | Meaning                           |
-| ----------------------- | --------------------------------- |
-| `CODEGEN_DIAGNOSTIC`    | Codegen rejected your source      |
-| `SCHEMA_SNAPSHOT_PARSE` | The migration snapshot is corrupt |
-
-Codegen errors are thrown as plain messages rather than codes, so Lunora matches
-them by message text and attaches a solution. The ones with dedicated guidance:
+Codegen rejects your source before anything is deployed, so these never cross
+the RPC wire. They are thrown as plain messages rather than codes, and Lunora
+matches them by message text to attach a solution. The ones with dedicated
+guidance:
 
 | Situation                                           | What to do                                                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -184,3 +77,633 @@ throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 
 Explicit options override the catalog defaults. For errors you expect the client
 to branch on, see [Error handling](/docs/concepts/error-handling).
+
+{/* generated:error-codes — written from packages/errors/src/catalog.ts. Do not edit by hand. */}
+
+## Error codes
+
+All 141 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
+
+### `ADMIN_FORBIDDEN`
+
+`403` — Admin access forbidden
+
+### `ADMIN_TOKEN_NOT_CONFIGURED`
+
+`400` — Admin token not configured
+
+### `ANALYTICS_SQL_ERROR`
+
+`502` — Analytics Engine SQL API error
+
+### `AUTH_AUDIT_NOT_CONFIGURED`
+
+`400` — Auth audit reader not configured
+
+### `AUTH_MIGRATOR_UNSUPPORTED`
+
+`500` — Auth migrator cannot drive the configured database
+
+better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.
+
+Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.
+
+To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.
+
+### `AUTH_NOT_CONFIGURED`
+
+`400` — Auth admin not configured
+
+### `AUTH_OP_NOT_SUPPORTED`
+
+`400` — Auth admin operation not supported
+
+### `BACKUP_NOT_CONFIGURED`
+
+`500` — Scheduled backup not configured
+
+### `BACKUP_RETENTION_NOT_CONFIGURED`
+
+`400` — Backup retention window not configured
+
+`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.
+
+Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace.
+
+### `BACKUP_TOO_LARGE`
+
+`507` — Backup too large to assemble in a Worker
+
+The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.
+
+The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.
+
+Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot.
+
+### `BAD_REQUEST`
+
+`400` — Bad request
+
+### `BAD_ROW`
+
+`400` — Malformed import row
+
+### `BAD_SUBSCRIPTION_ARGS`
+
+`400` — Invalid subscription arguments
+
+### `BATCH_LIMIT_EXCEEDED`
+
+`400` — Batch limit exceeded
+
+### `BROWSER_TIMEOUT`
+
+`504` — Browser operation timed out
+
+### `CDC_LOG_TRIMMED`
+
+`409` — CDC log trimmed
+
+### `CDC_PAYLOAD_COMPACTED`
+
+`409` — CDC payloads compacted
+
+### `CLIENT_CLOSED`
+
+`400` — Client is closed
+
+### `CODEGEN_DIAGNOSTIC`
+
+`500` — Codegen diagnostic
+
+### `CONFLICT`
+
+`409` — Conflict
+
+Another write changed this row while your mutation was running (optimistic concurrency conflict).
+
+Re-read the row and retry the mutation with the fresh value. Lunora serializes a DO's mutations, so a persistent conflict usually means the handler conflicts **with itself** (e.g. a trigger or cascade touching the same row) — split that work rather than adding a retry loop.
+
+### `COUNT_RLS_UNSUPPORTED`
+
+`422` — count() is unsupported under an RLS policy
+
+### `CRON_EXPR_INVALID`
+
+`500` — Invalid cron expression
+
+### `CRON_EXPR_NOT_STATIC`
+
+`500` — Cron expression is not statically analyzable
+
+### `CRON_JOB_NOT_FOUND`
+
+`404` — Cron job not found
+
+### `CRON_JOBS_NOT_CONFIGURED`
+
+`400` — Cron jobs not configured
+
+### `CRON_NAME_NOT_STATIC`
+
+`500` — Cron job name is not statically analyzable
+
+### `CRON_NON_STATIC_FN`
+
+`500` — Cron function reference is not statically analyzable
+
+### `CRON_NON_STATIC_VALUE`
+
+`500` — Cron value is not statically analyzable
+
+### `CRON_SCHEDULE_INVALID`
+
+`500` — Invalid cron schedule
+
+### `CRON_SCHEDULE_NOT_STATIC`
+
+`500` — Cron schedule is not statically analyzable
+
+### `CROSS_SHARD_RANK_UNSUPPORTED`
+
+`400` — Cross-shard rank() is unsupported
+
+### `CURRENCY_MISMATCH`
+
+`400` — Currency mismatch
+
+### `DISPATCH_UNAUTHENTICATED`
+
+`403` — Dispatch caller not authenticated
+
+The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.
+
+### `DUPLICATE_AGENT_BINDING`
+
+`500` — Duplicate agent binding
+
+### `DUPLICATE_AGENT_CLASS`
+
+`500` — Duplicate agent generated class name
+
+### `DUPLICATE_AGENT_NAME`
+
+`500` — Duplicate agent name
+
+### `DUPLICATE_CRON_NAME`
+
+`500` — Duplicate cron job name
+
+### `DUPLICATE_MIGRATION_ID`
+
+`500` — Duplicate migration id
+
+### `DUPLICATE_QUEUE_BINDING`
+
+`500` — Duplicate queue binding
+
+### `DUPLICATE_QUEUE_NAME`
+
+`500` — Duplicate queue name
+
+### `DUPLICATE_WORKFLOW_CLASS`
+
+`500` — Duplicate workflow generated class name
+
+### `EMAIL_DOMAIN_BLOCKED`
+
+`400` — Email domain not allowed
+
+This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).
+
+Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`).
+
+### `EMAIL_UNDELIVERABLE`
+
+`400` — Email domain cannot receive mail
+
+The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.
+
+Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable.
+
+### `EXPIRED`
+
+`404` — Session expired
+
+### `EXPORT_TAP_NOT_CONFIGURED`
+
+`400` — Export tap not configured
+
+### `FORBIDDEN`
+
+`403` — Forbidden
+
+### `FORBIDDEN_FANOUT`
+
+`403` — Fan-out forbidden
+
+### `FORBIDDEN_ORIGIN`
+
+`403` — Origin forbidden
+
+### `FORBIDDEN_SHARD`
+
+`403` — Shard access forbidden
+
+### `FUNCTION_NOT_FOUND`
+
+`404` — Function not found
+
+### `FUNCTIONS_NOT_CONFIGURED`
+
+`400` — Functions registry not configured
+
+### `GLOBAL_NOT_CONFIGURED`
+
+`400` — Global table import not configured
+
+### `GLOBAL_SEARCH_SCORES_UNSUPPORTED`
+
+`400` — collectWithScores() is unsupported on a global table
+
+### `GLOBAL_TABLE_NOT_EDITABLE`
+
+`400` — Global table is not editable
+
+### `GLOBALS_NOT_CONFIGURED`
+
+`400` — Global-table introspector not configured
+
+### `HTTP_STREAM_BAD_CHUNK`
+
+`502` — Malformed HTTP stream chunk
+
+### `HTTP_STREAM_INTERRUPTED`
+
+`502` — HTTP stream interrupted
+
+### `HTTP_STREAM_MISSING_PARAM`
+
+`400` — HTTP stream missing path parameter
+
+### `HTTP_STREAM_NO_BODY`
+
+`502` — HTTP stream response has no body
+
+### `HTTP_STREAM_STATUS`
+
+`502` — HTTP stream request failed
+
+### `HTTP_STREAM_TRANSPORT`
+
+`502` — HTTP stream transport error
+
+### `INVALID_INPUT`
+
+`400` — Invalid input
+
+### `INVALID_SCHEDULE_ID`
+
+`400` — Invalid schedule id
+
+### `KV_NOT_CONFIGURED`
+
+`400` — KV introspector not configured
+
+### `LUNORA_RUNTIME_UNAVAILABLE`
+
+`500` — Lunora runtime unavailable
+
+### `MASK_UNSUPPORTED`
+
+`422` — Aggregation over a masked column is unsupported
+
+### `METHOD_NOT_ALLOWED`
+
+`405` — Method not allowed
+
+### `MIGRATION_ID_NOT_STATIC`
+
+`500` — Migration id is not statically analyzable
+
+### `MIGRATION_ID_REQUIRED`
+
+`400` — Migration id required
+
+### `MIGRATION_NOT_FOUND`
+
+`404` — Data migration not found
+
+### `NAMESPACE_COLLISION`
+
+`500` — Function namespace collision
+
+### `NOT_FOUND`
+
+`404` — Not found
+
+### `NOT_IMPLEMENTED`
+
+`501` — Not implemented
+
+### `NOT_UNIQUE`
+
+`400` — Query matched more than one document
+
+`.unique()` matched more than one document — it expects the query to identify at most one row.
+
+- If several matches are legitimate, use `.first()` (take one) or `.collect()` (take all) instead.
+- Otherwise tighten the query (e.g. filter on a unique/indexed field) so it can only match one row.
+
+### `OFFLINE_IDENTITY_CHANGED`
+
+`409` — Offline identity changed
+
+### `OUT_OF_ORDER`
+
+`409` — Out-of-order mutation
+
+### `PAYLOAD_TOO_LARGE`
+
+`413` — Payload too large
+
+### `PITR_UNAVAILABLE`
+
+`409` — Point-in-time recovery unavailable
+
+### `PROVIDER_ERROR`
+
+`502` — Payment provider error
+
+### `R2_SQL_ERROR`
+
+`502` — R2 SQL API error
+
+### `RAG_DIMENSION_MISMATCH`
+
+`409` — Embedding dimension mismatch
+
+A stored vector and the query embedding have different widths, so they cannot be compared.
+
+This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths.
+
+### `RATE_LIMITED`
+
+`429` — Rate limited
+
+### `RELATION_PREDICATE_UNSUPPORTED`
+
+`422` — Relation predicate is unsupported in a write policy
+
+### `RELAY_CANNOT_SEED`
+
+`500` — Relay cannot seed
+
+### `RELAY_MISCONFIGURED`
+
+`500` — Relay misconfigured
+
+### `RELAY_SEED_FAILED`
+
+`502` — Relay seed failed
+
+### `RELAY_SHAPE_UNROUTABLE`
+
+`500` — Relay shape unroutable
+
+### `REPLICA_NOT_READY`
+
+`421` — Replica not caught up
+
+### `REPLICA_READ_ONLY`
+
+`421` — Replica is read-only
+
+### `RLS_REQUIRED`
+
+`403` — RLS policy required
+
+This table is secure-by-default: it has no `.public()` marker and no RLS policy resolved for the caller, so the read fails closed.
+
+Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable.
+
+### `RUN_KIND_FORBIDDEN`
+
+`500` — Function kind may not be composed from a query
+
+### `SCHEDULER_NOT_CONFIGURED`
+
+`400` — Scheduler not configured
+
+### `SCHEMA_SNAPSHOT_PARSE`
+
+`500` — Schema snapshot parse error
+
+### `SEARCH_INDEX_BUILDING`
+
+`503` — Search index is still building
+
+### `SERVICE_UNAVAILABLE`
+
+`503` — Service unavailable
+
+### `SHAPE_CROSS_SHARD_JOIN`
+
+`400` — Shape cross-shard join is unsupported
+
+### `SHAPE_GLOBAL_TOO_LARGE`
+
+`413` — Global shape too large
+
+### `SHAPE_MEMORY_TABLE`
+
+`400` — Shape over a memory table is unsupported
+
+### `SHAPE_NOT_FOUND`
+
+`404` — Shape not found
+
+### `SHAPE_REQUIRES_CDC`
+
+`409` — Shape requires change-data-capture
+
+### `SHARD_ERROR`
+
+`503` — Shard error
+
+### `SHARD_HTTP_ERROR`
+
+`502` — Shard HTTP error
+
+### `SHARD_TIMEOUT`
+
+`504` — Shard timeout
+
+### `SHARD_UNAVAILABLE`
+
+`503` — Shard unavailable
+
+### `SOCKET_TAG_BUDGET_EXCEEDED`
+
+`400` — Socket tag budget exceeded
+
+### `STORAGE_CHECKSUM_MISMATCH`
+
+`400` — Storage checksum mismatch
+
+The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.
+
+Re-read the bytes from the source export and retry the transfer. A persistent mismatch means the source blob is corrupt or truncated; fix the export rather than bypassing the check.
+
+### `STORAGE_DELETE_NOT_CONFIGURED`
+
+`400` — Storage delete not configured
+
+### `STORAGE_DOWNLOAD_NOT_CONFIGURED`
+
+`400` — Storage download not configured
+
+`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.
+
+Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`.
+
+### `STORAGE_NOT_CONFIGURED`
+
+`400` — Storage not configured
+
+### `STORAGE_OBJECT_NOT_FOUND`
+
+`404` — Storage object not found
+
+### `STORAGE_UPLOAD_NOT_CONFIGURED`
+
+`400` — Storage upload not configured
+
+### `STORAGE_URL_NOT_CONFIGURED`
+
+`400` — Storage signed URL not configured
+
+### `STREAM_BACKPRESSURE`
+
+`429` — Stream backpressure
+
+### `STREAM_DISCONNECTED`
+
+`503` — Stream disconnected
+
+### `STREAM_ID_IN_USE`
+
+`409` — Stream id already in use
+
+### `STREAM_INTERRUPTED`
+
+`503` — Durable stream interrupted
+
+### `STREAM_QUEUE_OVERFLOW`
+
+`429` — Stream queue overflow
+
+### `STREAM_TOO_LONG`
+
+`507` — Durable stream exceeded its chunk ceiling
+
+### `SUBSCRIPTION_PERSIST_FAILED`
+
+`500` — Subscription persist failed
+
+### `TOKEN_EXPIRED`
+
+`401` — Authentication token expired
+
+### `TOO_MANY_REQUESTS`
+
+`429` — Too many requests
+
+### `TOO_MANY_STREAMS`
+
+`429` — Too many streams
+
+### `TOO_MANY_SUBSCRIPTIONS`
+
+`429` — Too many subscriptions
+
+### `TRANSACTION_LIMIT_EXCEEDED`
+
+`413` — Transaction limit exceeded
+
+A single mutation may only read and write a bounded amount before it is stopped.
+
+Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.
+
+The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.
+
+### `UNAUTHENTICATED`
+
+`401` — Unauthenticated
+
+### `UNAUTHORIZED`
+
+`401` — Unauthorized
+
+### `UNKNOWN_ADMIN_OP`
+
+`404` — Unknown admin operation
+
+### `UNKNOWN_COLUMN`
+
+`404` — Unknown column
+
+### `UNKNOWN_MUTATION_FN`
+
+`404` — Unknown mutation function
+
+### `UNKNOWN_TABLE`
+
+`404` — Unknown table
+
+### `UNPROCESSABLE`
+
+`422` — Unprocessable
+
+### `VALIDATION_ERROR`
+
+`400` — Validation failed
+
+### `VECTOR_QUERY_UNSUPPORTED`
+
+`400` — Vector index querying not enabled
+
+### `VECTORS_NOT_CONFIGURED`
+
+`400` — Vector index introspector not configured
+
+### `WEBHOOK_EVENT_ID_MISSING`
+
+`400` — Webhook event id missing
+
+### `WEBHOOK_SIGNATURE_INVALID`
+
+`400` — Webhook signature invalid
+
+### `WEBHOOK_TIMESTAMP_INVALID`
+
+`400` — Webhook timestamp outside tolerance
+
+### `WIRE_DECODE_FAILED`
+
+`502` — Could not decode a server frame
+
+### `WIRE_ENCODE_FAILED`
+
+`500` — Could not encode a return value
+
+### `WORKFLOWS_NOT_CONFIGURED`
+
+`501` — Workflows not configured
+
+### `WORKFLOWS_REST_ERROR`
+
+`502` — Cloudflare Workflows REST API error
+
+{/* /generated:error-codes */}
