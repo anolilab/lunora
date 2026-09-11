@@ -83,6 +83,13 @@ Configuration comes from the environment, so the spawn config stays a plain
   metadata, grouped error messages — is user data that lands in the model's
   context and therefore at its provider, so holding the admin bearer (which
   every tool needs) is not by itself consent to ship it.
+- `LUNORA_MCP_ALLOW_DATA_READS` (optional): set to `1`/`true`/`yes`/`on` to
+  expose `lunora_find_related`. Default: **disabled**. It returns **raw table
+  rows** read through the deployment's admin writer, so RLS policies and column
+  masks do **not** apply to what it hands the model — and it returns everything
+  reachable within `depth` hops of the start row, not just that row. Separate
+  from the observability gate on purpose: log lines and table rows are different
+  data classes, and enabling one must not silently enable the other.
 - `LUNORA_MCP_ALLOW_AGENTS` (optional): set to `1`/`true`/`yes`/`on` to expose
   the [agent tools](#expose-an-agent). Default: **agents disabled**.
 - `LUNORA_MCP_AGENTS` (optional): a `;`-separated list of `name:description`
@@ -111,9 +118,8 @@ Configuration comes from the environment, so the spawn config stays a plain
 Each tool maps onto a method `LunoraClient` already provides.
 `toolDefinitions(allowWrites, allowObservability, allowDataReads)` returns the
 advertised tool surface for a given set of gates (the tiers are also exported on
-their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS`,
-`ROW_READ_TOOL_DEFINITIONS` and `WRITE_TOOL_DEFINITIONS`); `callTool` dispatches
-a call against a client.
+their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS` and
+`WRITE_TOOL_DEFINITIONS`); `callTool` dispatches a call against a client.
 
 | Tool                          | Input                                                                                  | What it does                                                                                                                                                                                          |
 | ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
