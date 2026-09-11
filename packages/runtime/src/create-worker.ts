@@ -29,7 +29,7 @@ import type { AuthAuditReader } from "./auth-audit-rpc";
 import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
-import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
+import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
@@ -88,16 +88,6 @@ interface RpcEnvelope {
 }
 
 type Route = (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> | Response;
-
-/**
- * Routes whose reader declares a body budget above the shared {@link MAX_BODY_BYTES}
- * JSON cap. The entry-point `Content-Length` fast-reject reads this table so the
- * header check agrees with the reader that actually enforces the limit.
- */
-const ROUTE_BODY_BUDGETS: Record<string, number> = {
-    [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
-    [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
-};
 
 /**
  * Context handed to HTTP-action handlers. Built per request by the worker; its
@@ -1744,6 +1734,29 @@ const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
 // WfP Workers can't be queue consumers, so a platform-owned consumer forwards
 // batches here, where the app's `queueHandler` runs.
 const QUEUE_DISPATCH_PATH = "/_lunora/queue";
+
+/**
+ * Body budget for a forwarded queue batch, declared by this route the way the KV
+ * value PUT declares `KV_VALUE_MAX_BODY_BYTES`. Derived from what Cloudflare
+ * Queues can hand a consumer: `max_batch_size` tops out at 100 messages and a
+ * message may carry 128 KiB, so a full batch is 12.5 MiB of message bodies
+ * before the forwarding envelope (`queue`, per-message `id`) and JSON string
+ * escaping. 16 MiB covers that with the same ~1.3× headroom the KV cap allows
+ * its 25 MiB value, and stays under the 32 MiB the KV and storage routes already
+ * buffer, so it is not a new memory ceiling for the isolate.
+ */
+const QUEUE_DISPATCH_MAX_BODY_BYTES: number = 16 * 1_048_576;
+
+/**
+ * Routes whose reader declares a body budget above the shared {@link MAX_BODY_BYTES}
+ * JSON cap. The entry-point `Content-Length` fast-reject reads this table so the
+ * header check agrees with the reader that actually enforces the limit.
+ */
+const ROUTE_BODY_BUDGETS: Record<string, number> = {
+    [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
+    [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
+    [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
+};
 
 /**
  * The reserved cross-shard relation reader's function-path prefix. Inlined as a
@@ -5139,7 +5152,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const body = (await request.json().catch(() => undefined)) as { cron?: unknown } | undefined;
+        const body = (await readLooseJsonBody(request, "Scheduled tick")) as { cron?: unknown } | undefined;
         const cron = typeof body?.cron === "string" ? body.cron : "";
 
         if (cron === "") {
@@ -5168,7 +5181,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const body = (await request.json().catch(() => undefined)) as { messages?: unknown; queue?: unknown } | undefined;
+        const body = (await readLooseJsonBody(request, "Queue dispatch", QUEUE_DISPATCH_MAX_BODY_BYTES)) as { messages?: unknown; queue?: unknown } | undefined;
         const queue = typeof body?.queue === "string" ? body.queue : "";
         const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
         const messages = rawMessages

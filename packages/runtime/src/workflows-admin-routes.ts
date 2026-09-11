@@ -22,6 +22,7 @@
  */
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
+import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
 
@@ -167,7 +168,7 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await request.json().catch(() => undefined)) as { action?: unknown; id?: unknown; name?: unknown } | undefined;
+        const body = (await readLooseJsonBody(request, "Workflows status")) as { action?: unknown; id?: unknown; name?: unknown } | undefined;
 
         if (typeof body?.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
             throw new LunoraError("Workflows status action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });

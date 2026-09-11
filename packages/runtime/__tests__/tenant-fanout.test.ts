@@ -185,3 +185,120 @@ describe("createWorker — the tenant queue fan-out endpoint", () => {
         expect(response.status).toBe(400);
     });
 });
+
+/**
+ * Both endpoints take an admin-supplied JSON body, so both need the byte budget
+ * the rest of the reserved surface reads under. `Content-Length` is forgeable
+ * and absent on a chunked body, so the entry-point header check is a fast path,
+ * not the cap — only a reader counting bytes as they arrive is. And the cap the
+ * reader applies has to be the one the header check applies, or an identical
+ * batch is accepted or rejected depending on how the platform consumer framed it.
+ */
+describe("createWorker — the fan-out endpoints' body budget", () => {
+    /** A chunked body streaming at least `bytes` of padding inside a valid JSON object, with no `Content-Length`. */
+    const chunkedJson = (prefix: string, bytes: number): ReadableStream<Uint8Array> => {
+        const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
+        const encoder = new TextEncoder();
+        const padChunks = Math.ceil(bytes / chunk.byteLength);
+        let sent = 0;
+
+        return new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (sent === 0) {
+                    controller.enqueue(encoder.encode(prefix));
+                } else if (sent > padChunks) {
+                    controller.enqueue(encoder.encode(`"}`));
+                    controller.close();
+
+                    return;
+                } else {
+                    controller.enqueue(chunk);
+                }
+
+                sent += 1;
+            },
+        });
+    };
+
+    /** POST a chunked (length-less) body carrying the admin bearer. */
+    const postChunked = (url: string, body: ReadableStream<Uint8Array>): Request =>
+        new Request(url, {
+            body,
+            // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
+            duplex: "half",
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("rejects an oversized chunked cron tick at the reader, not only at the Content-Length header (413)", async () => {
+        expect.assertions(2);
+
+        const cron = vi.fn<CronHandler>();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, crons: { "*/5 * * * *": cron }, shardDO: shardNamespace() });
+
+        const response = await worker.fetch(postChunked(SCHEDULED_PATH, chunkedJson(String.raw`{"cron":"*/5 * * * *","pad":"`, 1_048_576)), {}, fakeContext);
+
+        expect(response.status).toBe(413);
+        // The tick must be refused before it fires, not after the oversized body
+        // has been buffered in full and dispatched.
+        expect(cron).not.toHaveBeenCalled();
+    });
+
+    it("rejects a chunked queue batch over the route's own budget (413)", async () => {
+        expect.assertions(2);
+
+        const queueHandler = vi.fn<QueueForwardHandler>();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queueHandler, shardDO: shardNamespace() });
+
+        const response = await worker.fetch(
+            postChunked(QUEUE_PATH, chunkedJson(String.raw`{"queue":"jobs","messages":[],"pad":"`, 16 * 1_048_576)),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+        expect(queueHandler).not.toHaveBeenCalled();
+    });
+
+    it("accepts a forwarded batch above the shared 1 MiB JSON cap", async () => {
+        expect.assertions(3);
+
+        const seen: QueueForwardBatch[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queueHandler: (batch) => {
+                seen.push(batch);
+            },
+            shardDO: shardNamespace(),
+        });
+
+        // 2 MiB of message bodies: a fraction of what a full 100 × 128 KiB batch
+        // weighs, and over the shared 1 MiB cap this endpoint used to inherit.
+        const messages = Array.from({ length: 16 }, (_, index) => {
+            return { body: "x".repeat(128 * 1024), id: `m${String(index)}` };
+        });
+        const body = JSON.stringify({ messages, queue: "jobs" });
+
+        // Declared explicitly: a real forwarded POST carries a `Content-Length`,
+        // and it is the entry-point header check — not the reader — that a batch
+        // over the shared cap used to die on. `Request` does not synthesize the
+        // header, so without it this asserts only half the path.
+        const response = await worker.fetch(
+            new Request(QUEUE_PATH, {
+                body,
+                headers: {
+                    authorization: `Bearer ${ADMIN_TOKEN}`,
+                    "content-length": String(new TextEncoder().encode(body).byteLength),
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ retry: [] });
+        expect(seen[0]?.messages).toHaveLength(16);
+    });
+});
