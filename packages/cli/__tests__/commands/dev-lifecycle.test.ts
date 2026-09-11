@@ -322,6 +322,38 @@ describe("lunora dev lifecycle", () => {
             expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
         });
 
+        it("forwards --inspector-port to the daemon, and omits it when unset", async () => {
+            expect.assertions(3);
+
+            const seen: ReadonlyArray<string>[] = [];
+
+            const run = (options: { command: { args: ReadonlyArray<string> } }): Promise<{ code: number }> => {
+                seen.push(options.command.args);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { inspectorPort: 9235 } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({ cwd: workdir, jsonLogs: false, logger: recordingLogger().logger, options: {} as DevOptions, remote: false, run });
+
+            // The daemon re-parses argv, so the flag has to be spelled out here —
+            // `--background` is the automatic path for an AI agent, which makes
+            // this the default way the pinned inspector port gets lost.
+            expect(seen[0]).toContain("--inspector-port");
+            expect(seen[0]?.[(seen[0]?.indexOf("--inspector-port") ?? 0) + 1]).toBe("9235");
+            expect(seen[1]).not.toContain("--inspector-port");
+        });
+
         it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", async () => {
             expect.assertions(2);
 

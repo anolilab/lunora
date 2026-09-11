@@ -1,3 +1,4 @@
+import CREATION_TIME_COLUMN from "./framework-columns";
 import type { AuthRow, AuthStore, AuthWhereClause } from "./store";
 
 /** Double-quote a table/column identifier, escaping embedded quotes. */
@@ -7,9 +8,6 @@ interface SqlFragment {
     params: unknown[];
     sql: string;
 }
-
-/** The framework column `defineTable` puts on every Lunora table, and better-auth knows nothing about. */
-const CREATION_TIME_COLUMN = "_creationTime";
 
 /**
  * "This table has no such column", in the wording of every engine a

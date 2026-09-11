@@ -21,6 +21,7 @@ const devCommand: Command = {
         ["lunora dev --emit-bindings dev-manifest.json", "Write what this worker needs + where it serves, for a task runner"],
         ["lunora dev --no-studio", "Skip the embedded studio server"],
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
+        ["lunora dev --inspector-port 9235", "Pin wrangler's devtools inspector port instead of letting it walk up from 9229"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
     ],
     group: "Develop",
@@ -37,6 +38,12 @@ const devCommand: Command = {
             description: "Write the binding manifest (plus the dev origin) to <file>, for a supervisor that owns the rest of the graph",
             name: "emit-bindings",
             type: String,
+        },
+        {
+            description:
+                "wrangler dev inspector port, for `wrangler dev` only (defaults to `dev.inspector_port` in wrangler.jsonc; unset, wrangler probes upward from 9229 and can take a sibling worker's pinned port)",
+            name: "inspector-port",
+            type: Number,
         },
         { description: "Studio server port (default 6173)", name: "port", type: Number },
         TARGET_OPTION,
@@ -79,6 +86,7 @@ export type DevOptions = CreateOptions<{
     // side — every reader treats that as "on" via `!== false`.
     codegen: boolean | undefined;
     "emit-bindings": string | undefined;
+    "inspector-port": number | undefined;
     json: boolean | undefined;
     lines: number | undefined;
     port: number | undefined;

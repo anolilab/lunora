@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
+import type { SchemaFinding } from "@better-auth/core/db/internal";
+import { createSchemaCheck, SchemaMismatchError } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
@@ -274,6 +276,36 @@ describe("ensureMigrated", () => {
         const database = fakeD1();
 
         await expect(ensureMigrated({ options: { database } })).resolves.toBeUndefined();
+    });
+
+    it("invalidates a schema verdict cached for this database, so the migration's fix is seen", async () => {
+        // `lunoraD1Adapter` caches its verdict per database — a mismatch is kept and
+        // rethrown without asking the store again. `ensureMigrated` is the thing that
+        // can make that verdict wrong, so it bumps the revision better-auth keys the
+        // cache on. Both instances name the SAME raw binding (`lunoraD1Adapter(env.DB)`
+        // for requests, `createAuth({ database: env.DB })` for migrating), which is what
+        // makes one invalidate the other.
+        expect.assertions(3);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1();
+        let findings: SchemaFinding[] = [{ kind: "missing-table", table: "apikey" }];
+        const find = vi.fn<() => Promise<SchemaFinding[]>>(async () => findings);
+        const check = createSchemaCheck(find, "database", database);
+
+        await expect(check()).rejects.toThrow(SchemaMismatchError);
+        // Cached: the store is not asked a second time.
+        await expect(check()).rejects.toThrow(SchemaMismatchError);
+
+        findings = [];
+
+        await ensureMigrated({ options: { database } });
+
+        await check();
+
+        expect(find).toHaveBeenCalledTimes(2);
     });
 
     it("leaves a non-D1 database alone, since the remedy there is to relax the constraint", async () => {
