@@ -235,6 +235,54 @@ export interface RagLexicalStore {
 }
 
 /**
+ * One graph hit returned by {@link RagGraphStore.related}.
+ * @experimental
+ */
+export interface GraphMatch {
+    /** The chunk vector id — the same id scheme the other legs use, so RRF can fuse the three. */
+    id: string;
+
+    /**
+     * Depth-decaying PROXIMITY, not relevance: `1` for a direct neighbour,
+     * halving per hop — exactly what `ctx.db.related` puts on each node. `hybridRank`
+     * scales this leg's RRF term by it, so a leg of distant hits weighs less than
+     * a leg of direct ones even when the two rank identically among themselves.
+     * Values outside `[0, 1]` are clamped.
+     */
+    score: number;
+    /** The chunk text, returned so a graph-only hit needs no extra hydration round-trip. */
+    text: string;
+}
+
+/**
+ * Pluggable relation-graph store — the third retrieval signal, alongside the
+ * vector (semantic) and lexical (keyword) legs.
+ *
+ * Keyword and embedding search both answer "which passages look like this
+ * question". Neither can answer "what is this connected to" when the connecting
+ * fact lives in a foreign key rather than in the text — a ticket's customer, a
+ * customer's other tickets, those tickets' messages. `ctx.db.related` walks
+ * exactly that graph, and this is the seam that feeds its result into retrieval.
+ *
+ * Implement it over a Lunora app whose RAG source ids ARE document ids: expand
+ * from the seed ids with `ctx.db.related`, then return the indexed chunks of the
+ * documents it reached, each carrying that node's `score`. Mirrors the
+ * {@link RagLexicalStore} shape (namespace-partitioned, `topK`-bounded).
+ * @experimental
+ */
+export interface RagGraphStore {
+    /**
+     * Expand from the SOURCE document ids the search legs found and return
+     * chunks of the documents they connect to, best (nearest) first.
+     *
+     * Seeded rather than queried: the graph has no notion of a query string, so
+     * it widens a ranking the other legs produced instead of ranking on its own.
+     * A seed id that is not a graph node simply contributes nothing.
+     */
+    related: (sourceIds: ReadonlyArray<string>, options: { namespace?: string; topK: number }) => Promise<ReadonlyArray<GraphMatch>>;
+}
+
+/**
  * A pre-defined, reusable filter expression. Declared on `RagConfig.filters`
  * (keyed by name) and referenced by name from `RetrieveOptions.filter` — avoids
  * repeating the same tenant/RBAC filter shape across every retrieval site.
@@ -363,6 +411,17 @@ export interface RagConfig {
      * name is not found here — catches spelling mistakes early.
      */
     filters?: Record<string, RagNamedFilter>;
+
+    /**
+     * Pluggable relation-graph store — the third retrieval signal. When set,
+     * `retrieve()` seeds a traversal from the source documents the vector and
+     * lexical legs found and fuses the connected documents' chunks into the same
+     * RRF ranking, weighted by how far away they are. See {@link RagGraphStore}.
+     */
+    graphStore?: RagGraphStore;
+
+    /** Retrieval depth for the graph leg. Defaults to the effective candidate pool. */
+    graphTopK?: number;
 
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;

@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
+    readonly findRelated: "__lunora_admin__:findRelated";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
     readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
@@ -688,6 +689,7 @@ interface DatabaseWriterLike {
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
+    related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;
@@ -1659,6 +1661,30 @@ const RANK_TIEBREAK = "__id__";
 const REACTOR_STATE_TABLE = "__reactor_state";
 ```
 
+### `RELATED_DEFAULT_LIMIT` (const)
+
+```ts
+const RELATED_DEFAULT_LIMIT = 50;
+```
+
+### `RELATED_DEPTH_DECAY` (const)
+
+```ts
+const RELATED_DEPTH_DECAY = 0.5;
+```
+
+### `RELATED_MAX_DEPTH` (const)
+
+```ts
+const RELATED_MAX_DEPTH = 4;
+```
+
+### `RELATED_MAX_LIMIT` (const)
+
+```ts
+const RELATED_MAX_LIMIT = 200;
+```
+
 ### `RELATION_EXISTS_KEY` (const)
 
 ```ts
@@ -1965,6 +1991,64 @@ interface RecordQueueMessageInput {
 }
 ```
 
+### `RelatedDirection` (type)
+
+```ts
+type RelatedDirection = "both" | "in" | "out";
+```
+
+### `RelatedNode` (interface)
+
+```ts
+interface RelatedNode {
+    depth: number;
+    document: Record<string, unknown>;
+    path: ReadonlyArray<string>;
+    pathIds: ReadonlyArray<string>;
+    score: number;
+    table: string;
+}
+```
+
+### `RelatedOptions` (interface)
+
+```ts
+interface RelatedOptions {
+    cursor?: null | string;
+    depth?: number;
+    direction?: RelatedDirection;
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
+}
+```
+
+### `RelatedPage` (interface)
+
+```ts
+interface RelatedPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode[];
+}
+```
+
+### `RelatedStart` (type)
+
+```ts
+type RelatedStart = Record<string, unknown> | RelatedStartReference;
+```
+
+### `RelatedStartReference` (interface)
+
+```ts
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+```
+
 ### `RelationDefinitionLike` (interface)
 
 ```ts
@@ -1977,6 +2061,18 @@ interface RelationDefinitionLike {
 }
 ```
 
+### `RelationEdge` (interface)
+
+```ts
+interface RelationEdge {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+```
+
 ### `RelationExistsMarker` (interface)
 
 ```ts
@@ -1986,6 +2082,12 @@ interface RelationExistsMarker {
     parentTable: string;
     relation: RelationDefinitionLike;
 }
+```
+
+### `RelationGraphReader` (type)
+
+```ts
+type RelationGraphReader = Pick<DatabaseWriterLike, "findMany"> & Pick<Partial<DatabaseWriterLike>, "lookupById">;
 ```
 
 ### `RelayAttach` (interface)
@@ -3154,6 +3256,8 @@ const UNVOUCHABLE_DEP = "!unvouchable";
 interface ValidatorLike {
     readonly _meta?: {
         readonly column?: ColumnMetaLike;
+        readonly inner?: ValidatorLike;
+        readonly tableName?: string;
     };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
@@ -3702,6 +3806,12 @@ const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
 const depKey: (table: string, idOrScan: string) => string;
 ```
 
+### `deriveRelationEdges` (const)
+
+```ts
+const deriveRelationEdges: (schema: SchemaLike) => RelationEdge[];
+```
+
 ### `diffExternalSource` (const)
 
 ```ts
@@ -3807,6 +3917,12 @@ const facetColumn: (sql: SqlExec, options: FacetColumnOptions) => FacetColumnRes
 const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => Promise<number>, tableName: string, whereField: string, values: unknown[], policyWhere: WhereInput | undefined) => Promise<Map<unknown, number>>;
 ```
 
+### `findRelated` (const)
+
+```ts
+const findRelated: (reader: RelationGraphReader, edges: ReadonlyArray<RelationEdge>, start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+```
+
 ### `findStorageReferences` (const)
 
 ```ts
@@ -3858,7 +3974,7 @@ const globalShapeReadKey: (resolved: ResolvedShape, identity: {
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds, relationEdges?: ReadonlyArray<RelationEdge>) => W;
 ```
 
 ### `handleReplicaControl` (const)

@@ -18,7 +18,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { DatabaseWriterLike } from "./schema-types";
+import { findRelated } from "./relation-graph";
+import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
 
 /**
  * Well-known symbol the guard hangs the unwrapped writer off of. `Symbol.for`
@@ -158,6 +159,8 @@ type WriterGating =
     | "inline-table-gated"
     /** First argument is the table name AND the one uniform loop below gates it. Says how the method is gated, not what its arguments look like — `inline-table-gated` methods also take the table first. */
     | "loop-gated"
+    /** Re-bound over the GUARDED writer, so every table it reaches is gated by that writer's own methods rather than by anything here (`related`). */
+    | "rebound"
     /** Whole-shard sweep: every table in range is gated (`guardShardSweep`). */
     | "sweep-gated"
     /** Deliberately NOT gated — see the reason on each entry. */
@@ -207,6 +210,14 @@ const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGati
     rankBefore: "loop-gated",
     rankPage: "loop-gated",
     rankPageRows: "loop-gated",
+
+    /**
+     * A traversal, so its table set is DISCOVERED as it walks rather than named
+     * in an argument — gating `arguments[0]` would gate the start node and let
+     * the hops out of it reach anything. Re-bound below over the guarded writer
+     * instead, so every hop is a `findMany` this map already gates.
+     */
+    related: "rebound",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
@@ -233,6 +244,26 @@ const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entri
     .map(([name]) => name as keyof DatabaseWriterLike);
 
 /**
+ * Install the `"rebound"` gate for `related` on an already-loop-gated `guarded`.
+ *
+ * Re-bound, not delegated: `findRelated` holds no SQL, so running it over
+ * `guarded` makes every hop a `findMany` / `lookupById` the uniform loop already
+ * gates. Delegating to `base.related` instead would walk through the writer's
+ * own unguarded closure — the exact bypass the `...raw` spread exists to
+ * prevent. A base with no `related` (the `.global()` twin) is left alone.
+ */
+
+const installGuardedRelated = (guarded: Record<string, unknown>, base: GuardableWriter, relationEdges: ReadonlyArray<RelationEdge>): void => {
+    if (typeof (base as { related?: unknown }).related !== "function") {
+        return;
+    }
+
+    // eslint-disable-next-line no-param-reassign -- see above
+    guarded["related"] = (start: RelatedStart, options?: RelatedOptions) =>
+        findRelated(guarded as unknown as Parameters<typeof findRelated>[0], relationEdges, start, options);
+};
+
+/**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
  * unless the schema is `.rls("required")` — so non-secure schemas pay nothing
  * and keep identical behavior. The returned writer is the SAME runtime shape as
@@ -246,7 +277,13 @@ const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entri
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds): W => {
+const guardWriter = <W>(
+    raw: W,
+    schema: GuardableSchema,
+    tableOfId: TableOfId,
+    tablesOfIds?: TablesOfIds,
+    relationEdges: ReadonlyArray<RelationEdge> = [],
+): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -426,6 +463,8 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
             };
         }
     }
+
+    installGuardedRelated(guarded, base, relationEdges);
 
     if (base.wipeShard) {
         const { wipeShard } = base;

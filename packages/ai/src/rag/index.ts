@@ -18,6 +18,7 @@ export { sqliteVectorStore } from "./sqlite-vector-store";
 export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions } from "./sync";
 export { ragSyncTriggers } from "./sync";
 export type {
+    GraphMatch,
     IndexInput,
     IndexResult,
     LexicalMatch,
@@ -25,6 +26,7 @@ export type {
     RagConfig,
     RagContext,
     RagEmbedder,
+    RagGraphStore,
     RagLexicalStore,
     RagNamedFilter,
     RagQueryTransform,

@@ -1,5 +1,6 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 
 import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
 import { callObservabilityTool, OBSERVABILITY_TOOL_DEFINITIONS, OBSERVABILITY_TOOL_NAMES } from "./observability-tools";
@@ -36,6 +37,30 @@ const FUNCTION_PATH_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+const FIND_RELATED_INPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        cursor: { description: "Opaque cursor from a previous call's continueCursor, to fetch the next page.", type: "string" },
+        depth: { description: "How many hops to follow. 1 (default) is the direct neighbourhood; maximum 4.", type: "number" },
+        direction: {
+            description:
+                'Which way to follow foreign keys: "out" follows the ids this row holds (ticket → customer), "in" the rows that point at it (customer → tickets), "both" (default) does both.',
+            type: "string",
+        },
+        edges: {
+            description:
+                'Restrict the walk to these edge names, each "<table>.<column>" (e.g. "tickets.customerId"). Omit to follow every declared foreign key.',
+            items: { type: "string" },
+            type: "array",
+        },
+        id: { description: "Document id of the row to start from.", type: "string" },
+        limit: { description: "Maximum related rows to return (default 50, maximum 200).", type: "number" },
+        shardKey: { description: "Shard to read from on a .shardBy()-partitioned deployment. Omit for the default (unsharded) shard.", type: "string" },
+        table: { description: 'Table the start row lives in, e.g. "customers".', type: "string" },
+    },
+    required: ["table", "id"],
+    type: "object",
+};
+
 /** Introspection and queries touch no state; every call goes to the deployment. */
 const READ_ONLY_ANNOTATIONS = { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true } as const;
 
@@ -65,6 +90,13 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         description: "Run a query and return its result. Read-only.",
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_query",
+    },
+    {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Find rows related to a row" },
+        description:
+            "Follow the schema's foreign keys out of one row and return the rows it is connected to, each with its hop distance, the edge names walked to reach it, and a depth-decaying score. Use this to answer 'what is connected to this' — a customer's tickets, those tickets' messages — which keyword and semantic search cannot, because the connection lives in a foreign key rather than in the text. Read-only.",
+        inputSchema: FIND_RELATED_INPUT_SCHEMA,
+        name: "lunora_find_related",
     },
 ];
 
@@ -214,6 +246,38 @@ const reference = (functionPath: string): FunctionReference => {
 };
 
 /**
+ * Coerce an MCP `arguments` bag into the `findRelated` admin payload.
+ *
+ * Only SHAPE is enforced here. The range checks that matter (`depth` 1-4,
+ * `limit` 1-200, a known edge name) belong to `ctx.db.related` itself, and its
+ * refusals name the cap — a second copy here would drift from them.
+ */
+const readRelatedArguments = (input: Record<string, unknown>): { args: Record<string, unknown>; shardKey: string | undefined } => {
+    const { cursor, depth, direction, edges, id, limit, shardKey, table } = input;
+
+    if (typeof table !== "string" || table.length === 0) {
+        throw new LunoraError("BAD_REQUEST", '"table" is required and must be a non-empty string');
+    }
+
+    if (typeof id !== "string" || id.length === 0) {
+        throw new LunoraError("BAD_REQUEST", '"id" is required and must be a non-empty string');
+    }
+
+    return {
+        args: {
+            id,
+            table,
+            ...(typeof cursor === "string" ? { cursor } : {}),
+            ...(typeof depth === "number" ? { depth } : {}),
+            ...(typeof direction === "string" ? { direction } : {}),
+            ...(Array.isArray(edges) ? { edges } : {}),
+            ...(typeof limit === "number" ? { limit } : {}),
+        },
+        shardKey: typeof shardKey === "string" && shardKey.length > 0 ? shardKey : undefined,
+    };
+};
+
+/**
  * The deployment's public-function registry is static per deploy, but every run
  * tool (via {@link assertRunnable}) and `lunora_get_function_schema` needs it —
  * two sequential admin round trips per tool call without caching. Memoize
@@ -344,6 +408,15 @@ const callTool = async (
         /* eslint-enable @typescript-eslint/no-unnecessary-boolean-literal-compare */
 
         switch (name) {
+            case "lunora_find_related": {
+                // Served by the shard's `__lunora_admin__:findRelated` op, over
+                // the same `client.query` transport the observability tools use:
+                // the traversal needs the app's schema-derived edge set, which
+                // only the deployment has.
+                const { args, shardKey } = readRelatedArguments(input);
+
+                return ok(await client.query(reference(ADMIN_FUNCTIONS.findRelated), args, { ...(shardKey === undefined ? {} : { shardKey }) }));
+            }
             case "lunora_get_function_schema": {
                 const functionPath = readFunctionPath(input);
                 const functions = await listFunctionsCached(client);

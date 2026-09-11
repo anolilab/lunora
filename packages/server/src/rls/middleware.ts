@@ -143,6 +143,30 @@ interface RankPageArgs {
     where?: WhereInput;
 }
 
+/** Structural mirror of `@lunora/shard-engine`'s `RelatedOptions` — only the fields the wrapper forwards or fills. */
+interface RelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+}
+
+/** Structural mirror of `@lunora/shard-engine`'s `RelatedPage`. */
+interface RelatedPageLike {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: {
+        depth: number;
+        document: Record<string, unknown>;
+        path: ReadonlyArray<string>;
+        pathIds: ReadonlyArray<string>;
+        score: number;
+        table: string;
+    }[];
+}
+
 interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
@@ -249,6 +273,14 @@ interface DatabaseWriterLike {
      * policy for the identical reason (see `rankPage` above).
      */
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
+
+    /**
+     * Relation-graph traversal. Carries no `where` of its own — every read it
+     * makes is filtered through the `relationBaseWhere` hook, which the wrapper
+     * fills with the same per-table read filter a `with` hop gets, so the start
+     * row AND every hop out of it are policy-scoped.
+     */
+    related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 
@@ -1445,6 +1477,18 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // We compile the predicate once into a JS-side checker.
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
+
+        // A traversal reads many tables, and which ones is only known while it
+        // walks — so it is filtered by the per-table `relationBaseWhere` hook
+        // rather than by a `baseWhere` this wrapper could resolve up front. That
+        // is the same hook a `with` hop rides, applied here to the start row as
+        // well, so both ends of every edge are policy-scoped. The caller's own
+        // `relationBaseWhere` is deliberately NOT spread through: a handler
+        // cannot widen past its policy.
+        related: base.related
+            ? async (start: Record<string, unknown>, options?: RelatedArgs) =>
+                  await (base.related as NonNullable<RlsDatabase["related"]>)(start, { ...options, relationBaseWhere: relationReadFilter })
+            : undefined,
 
         // Restore clears the soft-delete marker — a by-id un-delete, gated as an
         // "update" (the policy that governs patch). No post-image check: the

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "../src/rls-guard";
+import { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError, WRITER_METHOD_GATING } from "../src/rls-guard";
 
 /** A spy writer: every gated method records its table/id and returns a sentinel. */
 const createFakeWriter = () => {
@@ -486,6 +486,55 @@ describe("guardWriter — erase primitives under .rls('required')", () => {
 
         // Excluding `stats` leaves the protected `posts` in the sweep.
         expect(() => guarded.wipeShard({ exclude: ["stats"] })).toThrow(RlsRequiredError);
+    });
+});
+
+describe("guardWriter — related is re-bound over the guarded writer", () => {
+    /** A writer whose own `related` would bypass the guard if the `...raw` spread published it. */
+    const createTraversingWriter = (): Record<string, unknown> => {
+        return {
+            ...(createFakeWriter() as unknown as Record<string, unknown>),
+            findMany: vi.fn<(tableName: string) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>>(
+                (tableName: string) => Promise.resolve({ continueCursor: null, isDone: true, page: [{ _id: `${tableName}_1` }] }),
+            ),
+            // Reads through the writer's own closure — exactly the bypass the
+            // re-bind exists to prevent, so it must never be reached.
+            related: vi.fn<() => Promise<{ continueCursor: null | string; isDone: boolean; nodes: unknown[] }>>(() =>
+                Promise.resolve({ continueCursor: null, isDone: true, nodes: [] }),
+            ),
+        };
+    };
+
+    it("classifies related as rebound rather than table-gated", () => {
+        expect.assertions(1);
+
+        expect(WRITER_METHOD_GATING.related).toBe("rebound");
+    });
+
+    it("denies a traversal whose start table is protected", async () => {
+        expect.assertions(2);
+
+        const raw = createTraversingWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as {
+            related: (start: unknown, options?: unknown) => Promise<unknown>;
+        };
+
+        await expect(guarded.related({ id: "post_1", table: "posts" })).rejects.toThrow(RlsRequiredError);
+        expect(raw["related"]).not.toHaveBeenCalled();
+    });
+
+    it("denies a hop into a protected table even when the start table is public", async () => {
+        expect.assertions(1);
+
+        const raw = createTraversingWriter();
+        const edges = [{ array: false, column: "statId", name: "posts.statId", sourceTable: "posts", targetTable: "stats" }];
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId, undefined, edges) as unknown as {
+            related: (start: unknown, options?: unknown) => Promise<unknown>;
+        };
+
+        // `stats` is `.public()`, so the start read passes; the in-edge then
+        // reads `posts`, which the guarded `findMany` denies.
+        await expect(guarded.related({ id: "stat_1", table: "stats" }, { direction: "in" })).rejects.toThrow(RlsRequiredError);
     });
 });
 

@@ -15,6 +15,7 @@ import type {
     QueueMetadata,
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
+    RelatedPage,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -41,6 +42,7 @@ import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
+    RunShardFindRelatedArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
@@ -3927,5 +3929,132 @@ describe("shardDO admin schema-history reads", () => {
 
         expect(response.status).not.toBe(200);
         await expect(response.text()).resolves.not.toContain("[object Object]");
+    });
+});
+
+/**
+ * The schema-derived relation graph behind `__lunora_admin__:findRelated`:
+ * `messages.authorId → users`, so the traversal has one edge to walk in both
+ * directions.
+ */
+const relationGraphSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [{ fields: ["authorId"], name: "by_author" }],
+            shape: { authorId: { _meta: { tableName: "users" }, kind: "id" }, body: { kind: "string" } },
+        },
+        users: { indexes: [], shape: { name: { kind: "string" } } },
+    },
+};
+
+/** Mirrors the codegen-generated subclass's `runShardFindRelated` override. */
+class RelatedShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+        const writer = createShardContextDatabase({ schema: relationGraphSchema, sql: this.sql as SqlExec });
+
+        return writer.related!(
+            { id: args.id, table: args.table },
+            { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+        );
+    }
+}
+
+describe("shardDO admin findRelated", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, relationGraphSchema);
+
+        const seed = createShardContextDatabase({ schema: relationGraphSchema, sql: database.sql });
+
+        await seed.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m1", authorId: "u1", body: "hello" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", authorId: "u1", body: "again" }, { allowExplicitId: true });
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const findRelatedRequest = (args: Record<string, unknown>, token = ADMIN_TOKEN): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.findRelated }),
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("walks the schema's foreign keys out of a row", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ direction: "in", id: "u1", table: "users" }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { depth: number; document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => [node.document._id, node.depth])).toStrictEqual([
+            ["m1", 1],
+            ["m2", 1],
+        ]);
+    });
+
+    it("forwards the traversal's own refusal for an out-of-range depth", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ depth: 99, id: "u1", table: "users" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("refuses a payload with no table", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("is admin-gated like every other admin op", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }, "wrong-token"));
+
+        expect(response.status).toBe(403);
+    });
+
+    it("base ShardDO rejects findRelated as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
     });
 });

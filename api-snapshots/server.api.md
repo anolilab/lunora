@@ -264,6 +264,7 @@ interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     readonly system: SystemDatabaseReader;
 }
 ```
@@ -1792,6 +1793,62 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
+}
+```
+
+### `RelatedDirection` (type)
+
+```ts
+type RelatedDirection = "both" | "in" | "out";
+```
+
+### `RelatedNode` (interface)
+
+```ts
+interface RelatedNode<T = Record<string, unknown>> {
+    depth: number;
+    document: T;
+    path: ReadonlyArray<string>;
+    pathIds: ReadonlyArray<string>;
+    score: number;
+    table: string;
+}
+```
+
+### `RelatedOptions` (interface)
+
+```ts
+interface RelatedOptions {
+    cursor?: null | string;
+    depth?: number;
+    direction?: RelatedDirection;
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+}
+```
+
+### `RelatedPage` (interface)
+
+```ts
+interface RelatedPage<T = Record<string, unknown>> {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode<T>[];
+}
+```
+
+### `RelatedStart` (type)
+
+```ts
+type RelatedStart = Record<string, unknown> | RelatedStartReference;
+```
+
+### `RelatedStartReference` (interface)
+
+```ts
+interface RelatedStartReference {
+    id: string;
+    table: string;
 }
 ```
 
@@ -4816,6 +4873,30 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RelationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5328,6 +5409,7 @@ interface DatabaseWriterLike {
     }>;
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
+    related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     wipeShard?: (options?: {
@@ -5618,6 +5700,15 @@ interface MaskDatabase {
     }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+    related?: (start: Record<string, unknown>, options?: {
+        relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+    }) => Promise<{
+        continueCursor: null | string;
+        isDone: boolean;
+        nodes: {
+            document: Record<string, unknown>;
+        }[];
+    }>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 ```
@@ -5743,6 +5834,36 @@ interface RankPageRowKeyLike {
 interface RankPageRowLike {
     doc: Record<string, unknown>;
     key: RankPageRowKeyLike;
+}
+```
+
+### `RelatedArgs` (interface)
+
+```ts
+interface RelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+}
+```
+
+### `RelatedPageLike` (interface)
+
+```ts
+interface RelatedPageLike {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: {
+        depth: number;
+        document: Record<string, unknown>;
+        path: ReadonlyArray<string>;
+        pathIds: ReadonlyArray<string>;
+        score: number;
+        table: string;
+    }[];
 }
 ```
 

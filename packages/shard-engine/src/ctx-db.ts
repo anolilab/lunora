@@ -104,6 +104,7 @@ import type { ReactiveCache } from "./reactive-cache";
 import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { buildIndexRange, indexKeysForRow } from "./read-write-set";
+import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
@@ -2197,6 +2198,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
+
+    /**
+     * The schema's foreign-key edge set, derived once per writer rather than per
+     * `related()` call: a dispatch builds a fresh writer, and the walk is
+     * already the expensive part.
+     */
+    const relationEdges = deriveRelationEdges(schema);
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every
@@ -4297,6 +4305,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { patched: patches.length };
         },
 
+        async related(start, relatedOptions) {
+            // The edge set is derived ONCE per writer (see `relationEdges`) and
+            // every hop routes back through this same `writer`, so a traversal
+            // inherits read-dependency stamping, soft-delete scoping, global
+            // routing, and the RLS/mask filters its caller injected — the same
+            // reasons `findRelated` holds no SQL of its own.
+            return findRelated(writer, relationEdges, start, relatedOptions);
+        },
+
         query(tableName) {
             const global = globalWriterFor(tableName, "query");
 
@@ -4734,6 +4751,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
               schema,
               (id, expectedTable) => locateRowById(id, expectedTable)?.tableName,
               (ids, expectedTable) => locateTablesByIds(ids, expectedTable),
+              relationEdges,
           )
         : writer;
 };

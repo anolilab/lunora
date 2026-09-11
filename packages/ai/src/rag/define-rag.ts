@@ -1113,6 +1113,46 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             });
         };
 
+        /**
+         * Turn a NON-vector leg's `{ id, score, text }` matches into
+         * `RetrievedChunk`s ready for fusion. Shared by the lexical and graph
+         * legs, which differ only in what their `score` means.
+         *
+         * `importance` and the caller `metadata` live on the VECTOR record —
+         * neither leg carries them, and `StoredRagChunk.metadata` deliberately
+         * excludes the internal `__rag*` keys that hold importance. Hard-coding
+         * `importance: 1` gave a source demoted to `importance: 0` full weight on
+         * every keyword hit (the case hybrid retrieval exists to create) and
+         * blanked `sources[].metadata`. One `getByIds` over the ids the vector
+         * leg did NOT already return recovers both from the single source of
+         * truth; ids it did return need no round trip.
+         */
+        const hydrateFusionLeg = async (
+            matches: ReadonlyArray<{ id: string; score: number; text: string }>,
+            alreadyFused: ReadonlySet<string>,
+            namespace: string | undefined,
+        ): Promise<RetrievedChunk[]> => {
+            const unhydratedIds = matches.map((match) => match.id).filter((id) => !alreadyFused.has(id));
+            const records = unhydratedIds.length === 0 ? [] : await store.getByIds(unhydratedIds, namespace);
+            const metadataById = new Map(records.map((record) => [record.id, record.metadata]));
+
+            return matches.map((match) => {
+                const parsed = parseChunkVectorId(match.id, namespace);
+                const fullMetadata = metadataById.get(match.id);
+                const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
+
+                return {
+                    chunkIndex: parsed.chunkIndex,
+                    id: match.id,
+                    importance: typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1,
+                    metadata: userMetadataOf(fullMetadata),
+                    score: match.score,
+                    sourceId: parsed.sourceId,
+                    text: match.text,
+                };
+            });
+        };
+
         const retrieve = async (query: string, options?: RetrieveOptions): Promise<RetrieveResult> => {
             checkNamespace(options?.namespace);
 
@@ -1140,7 +1180,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // lexical leg entirely: its job is to surface a chunk the vector leg
             // ranked below `topK`.
             const rerankActive = reranker !== undefined && options?.rerank !== false;
-            const widenPool = rerankActive || config.lexicalStore !== undefined || searchQueries.length > 1;
+            const widenPool = rerankActive || config.lexicalStore !== undefined || config.graphStore !== undefined || searchQueries.length > 1;
             const candidateK = widenPool ? Math.min(config.candidates ?? topK * CANDIDATE_POOL_FACTOR, topKCeiling) : topK;
 
             const minScore = options?.minScore;
@@ -1216,36 +1256,31 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // `chunks` and this is only an RRF boost. See `belowMinScore`.
                 const admissible = lexicalMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                // `importance` and the caller `metadata` live on the VECTOR record —
-                // `LexicalMatch` carries neither, and `StoredRagChunk.metadata`
-                // deliberately excludes the internal `__rag*` keys that hold
-                // importance. Hard-coding `importance: 1, metadata: undefined` gave a
-                // source demoted to `importance: 0` full weight on every keyword hit
-                // (the case hybrid retrieval exists to create) and blanked
-                // `sources[].metadata`. One `getByIds` over the lexical-only ids
-                // recovers both from the single source of truth; ids the vector leg
-                // already returned need no round trip.
-                const unhydratedIds = admissible.map((match) => match.id).filter((id) => !fusedIds.has(id));
-                const lexicalRecords = unhydratedIds.length === 0 ? [] : await store.getByIds(unhydratedIds, effectiveNamespace);
-                const metadataById = new Map(lexicalRecords.map((record) => [record.id, record.metadata]));
+                chunks = [...hybridRank(chunks, await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace))];
+            }
 
-                const lexicalChunks: RetrievedChunk[] = admissible.map((match) => {
-                    const parsed = parseChunkVectorId(match.id, effectiveNamespace);
-                    const fullMetadata = metadataById.get(match.id);
-                    const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
-
-                    return {
-                        chunkIndex: parsed.chunkIndex,
-                        id: match.id,
-                        importance: typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1,
-                        metadata: userMetadataOf(fullMetadata),
-                        score: match.score,
-                        sourceId: parsed.sourceId,
-                        text: match.text,
-                    };
+            // Graph search: the third signal. The search legs answer "which
+            // passages look like this question"; the graph answers "what is this
+            // connected to" — the customer's tickets, those tickets' messages —
+            // which no amount of keyword or embedding similarity can recover
+            // when the connecting fact lives in a foreign key rather than in the
+            // text. Seeded from the source documents the search legs already
+            // found, so it widens a ranking rather than replacing it, and fused
+            // by the same RRF with each hit's depth decay scaling its term.
+            if (config.graphStore && chunks.length > 0) {
+                const seedSourceIds = [...new Set(chunks.map((chunk) => chunk.sourceId))];
+                const graphMatches = await config.graphStore.related(seedSourceIds, {
+                    namespace: effectiveNamespace,
+                    topK: config.graphTopK ?? candidateK,
                 });
 
-                chunks = [...hybridRank(chunks, lexicalChunks)];
+                const fusedIds = new Set(chunks.map((chunk) => chunk.id));
+                // Same rule as the lexical leg: a chunk the vector leg rejected
+                // for `minScore` stays rejected unless another leg already kept
+                // it, in which case this is only an RRF boost.
+                const admissible = graphMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
+
+                chunks = [...hybridRank(chunks, [], await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace))];
             }
 
             // Importance weighting can reorder; re-rank on the adjusted score.

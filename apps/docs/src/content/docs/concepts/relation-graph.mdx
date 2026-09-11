@@ -1,0 +1,207 @@
+---
+title: Relation graph
+description: Traverse the foreign-key graph your schema already declares with ctx.db.related — depth-bounded, cycle-safe, scored by proximity, and fusable into hybrid retrieval.
+related:
+    - to: /docs/concepts/relations
+      note: "declaring `one` / `many` accessors and loading them with `with`"
+    - to: /docs/concepts/schema
+      note: '`v.id("table")` — the foreign-key column the graph is derived from'
+    - to: /docs/concepts/vector-search
+      note: "the vector leg of hybrid retrieval"
+    - to: /docs/concepts/search
+      note: "the keyword leg of hybrid retrieval"
+    - to: /docs/concepts/rls
+      note: "how a traversal stays inside the caller's row policy"
+    - to: /docs/concepts/ai-tooling
+      note: "the `lunora_find_related` MCP tool"
+---
+
+Every `v.id("customers")` column in your schema is an edge: it says a ticket
+points at a customer. Collect all of them and you have a directed graph, and
+your schema already declares it — you do not add anything to opt in.
+
+`ctx.db.related(...)` walks that graph. It answers **"what is this connected
+to"**, which neither keyword nor semantic search can: the connection lives in a
+foreign key, not in the text.
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const customerContext = query.input({ customerId: v.id("customers") }).query(async ({ ctx, args: { customerId } }) => {
+    const { nodes } = await ctx.db.related({ table: "customers", id: customerId }, { depth: 2 });
+
+    return nodes.map((node) => ({ depth: node.depth, id: node.document._id, path: node.path, table: node.table }));
+});
+```
+
+From a customer, depth 2 reaches its tickets and those tickets' messages — a
+walk you would otherwise hand-write as a chain of `findMany` calls with the join
+columns typed in yourself.
+
+## The edge set
+
+One edge per `v.id("target")` column, named `` `<table>.<column>` `` so it is
+addressable:
+
+| Column declaration                           | Edge name            | Direction of the data |
+| -------------------------------------------- | -------------------- | --------------------- |
+| `tickets: { customerId: v.id("customers") }` | `tickets.customerId` | ticket → customer     |
+| `messages: { ticketId: v.id("tickets") }`    | `messages.ticketId`  | message → ticket      |
+| `tickets: { tagIds: v.array(v.id("tags")) }` | `tickets.tagIds`     | ticket → many tags    |
+
+`v.optional(v.id(...))` (a nullable foreign key) and `v.array(v.id(...))` (a
+to-many one) are both edges. An id nested inside a `v.object`, `v.union` or
+`v.record` is **not**: it is not a column the query layer can filter on, so an
+edge named for it would describe a hop no read could take. An edge whose target
+table the schema does not declare is dropped for the same reason.
+
+## Directions
+
+`direction` picks which way the edges are followed out of each visited row:
+
+- **`"out"`** — follow the ids this row _holds_. From a ticket: its customer, its
+  tags.
+- **`"in"`** — follow the rows that _point at_ it. From a customer: its tickets.
+- **`"both"`** (the default) — the union of the two.
+
+```ts
+// Just this customer's tickets, nothing else.
+await ctx.db.related({ table: "customers", id }, { direction: "in", edges: ["tickets.customerId"] });
+```
+
+`edges` restricts the walk to the named edge types. A name the schema does not
+declare is **refused**, not ignored — a typo that silently widened a traversal
+is worse than one that fails.
+
+<Callout type="warn">
+    An array foreign key (`v.array(v.id("tags"))`) is followed **outward only**. `where` has no array-containment operator, so finding the rows whose array
+    column *contains* an id would mean scanning the holder table and filtering in memory, per node, per hop. An unbounded scan is worse than a missing hop. To
+    walk that direction, model the join as its own table with two scalar `v.id(...)` columns — which gives you two ordinary edges.
+</Callout>
+
+## Depth, limit and score
+
+The walk is breadth-first, so every depth-1 neighbour is emitted before any
+depth-2 one, and the page is already ordered by the score it carries.
+
+| Option  | Default | Cap | Meaning                    |
+| ------- | ------- | --- | -------------------------- |
+| `depth` | `1`     | `4` | How many hops to expand.   |
+| `limit` | `50`    | 200 | Maximum nodes in one page. |
+
+Both caps are **refusals, not silent clamps**. A caller asking for depth 9 has a
+wrong mental model of the cost, and quietly serving them depth 4 hides it.
+
+Each node carries a depth-decaying `score`: `1` at depth 1, halving per hop
+(`0.5 ** (depth - 1)`). Halving rather than `1 / depth` because the useful
+property is that distant evidence cannot out-weigh a direct neighbour.
+
+```ts
+for (const node of nodes) {
+    node.table; // "tickets"
+    node.document; // the row itself
+    node.depth; // 1
+    node.score; // 1
+    node.path; // ["tickets.customerId"]      — the edge names walked
+    node.pathIds; // ["c_1", "t_9"]           — the ids along the way, start included
+}
+```
+
+`path` and `pathIds` are what make a result explainable: they say _why_ a row
+came back, which is the difference between a citation and a guess when the
+consumer is a model.
+
+## Cycles and paging
+
+A `visited` set makes a cyclic schema terminate at the first revisit, so
+`customers.primaryTicketId → tickets` paired with `tickets.customerId →
+customers` expands once and stops rather than forever. Each row is returned at
+most once, by its **shortest** path.
+
+Paging uses the same `{ isDone, continueCursor }` envelope as every other
+`ctx.db` read:
+
+```ts
+let cursor: null | string = null;
+
+do {
+    const page = await ctx.db.related({ table: "customers", id }, { cursor, depth: 2, limit: 25 });
+
+    consume(page.nodes);
+    cursor = page.continueCursor;
+} while (cursor !== null);
+```
+
+The cursor is an **offset**, not a keyset: a breadth-first expansion has no
+single ordered column to seek on, so page N+1 re-walks deterministically and
+skips what page N returned. The re-walk is bounded by the same depth and limit
+caps as the first page.
+
+## It is an ordinary read
+
+`related` emits no SQL of its own. Every hop goes back through `ctx.db`'s own
+reads — one batched `findMany` per edge per hop — which is what keeps the rest
+of the framework applying to it:
+
+- **Row-level security** — the caller's per-table read policy filters the start
+  row _and_ every hop, through the same seam a `with` hop rides. A start row the
+  policy hides reads as absent.
+- **Column masking** — each hop's rows are masked with that hop's table policy.
+- **Soft delete** — deleted rows stay hidden.
+- **`.global()` tables** — a hop into one is routed to the global backend.
+- **Realtime** — a live query running a traversal re-runs when the rows it
+  walked change.
+
+## Fusing the graph into retrieval
+
+A relation graph is a third retrieval signal, alongside the vector (semantic)
+and lexical (keyword) legs of [`defineRag`](/docs/packages/ai). Set
+`graphStore` and `retrieve()` seeds a traversal from the source documents the
+search legs found, then fuses the connected documents' chunks into the same
+Reciprocal Rank Fusion ranking — each hit's contribution scaled by its depth
+decay, so a direct neighbour weighs more than a distant one at the same rank.
+
+```ts
+import { defineRag } from "@lunora/ai/rag";
+
+const docs = defineRag({
+    index: "docs",
+    lexicalStore: bm25LexicalStore(),
+    graphStore: {
+        // The RAG source ids ARE document ids here, so a seed is a start node.
+        related: async (sourceIds, { topK }) => {
+            const hits = [];
+
+            for (const id of sourceIds) {
+                const { nodes } = await ctx.db.related({ table: "tickets", id }, { depth: 2, limit: topK });
+
+                hits.push(...nodes.map((node) => ({ id: `${node.document._id}#0`, score: node.score, text: String(node.document.body) })));
+            }
+
+            return hits.slice(0, topK);
+        },
+    },
+});
+```
+
+The graph leg **widens a ranking rather than producing one**: it has no notion
+of a query string, so it is seeded from what the search legs already found. A
+chunk the vector leg rejected for `minScore` stays rejected — being
+graph-adjacent does not re-admit it.
+
+## From an AI agent
+
+The `@lunora/mcp` server exposes the same traversal as the read-only
+`lunora_find_related` tool, so an agent can follow relationships without your
+app writing a query for it. It takes `table` and `id` plus the same `depth`,
+`direction`, `edges`, `limit` and `cursor` options, and returns the same nodes.
+
+## Platform support
+
+`relationGraph` is rated in the [capability
+matrix](/docs/packages/platform-node) — `emulated` on both Cloudflare and Node,
+because the traversal is Lunora's own expansion over reads the host already
+serves rather than a graph engine being consumed. It rides the `ShardHost`
+contract (the shard's SQL handle) and needs nothing beyond it. A target that
+rates it `unsupported` makes codegen refuse an app whose schema declares any
+`v.id(...)` column, rather than emitting a `related` that fails on the first hop.

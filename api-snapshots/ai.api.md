@@ -207,6 +207,10 @@ interface ChunkerOptions {
 }
 ```
 
+### `GraphMatch` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `IndexInput` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -240,6 +244,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 type RagExtractor = (raw: string, object: RagSourceObject) => Promise<string | undefined> | string | undefined;
 ```
+
+### `RagGraphStore` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `RagLexicalStore` (interface)
 

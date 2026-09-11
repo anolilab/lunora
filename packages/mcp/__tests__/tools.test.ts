@@ -1,4 +1,5 @@
 import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { ERROR_TOOL_DEFINITIONS } from "../src/error-tools";
@@ -101,12 +102,12 @@ const proposeAndConfirm = async (client: LunoraClient, name: string, input: Reco
 };
 
 describe("toolDefinitions", () => {
-    it("exposes only the read-only and error tools by default (writes disabled, no admin token)", () => {
+    it("exposes only the read-only tools by default (writes disabled, no admin token)", () => {
         expect.assertions(2);
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_find_related"]);
         expect(toolDefinitions(false).every((tool) => tool.inputSchema.type === "object")).toBe(true);
     });
 
@@ -120,7 +121,7 @@ describe("toolDefinitions", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
-            "lunora_explain_error",
+            "lunora_find_related",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
@@ -392,6 +393,52 @@ describe("callTool", () => {
         ]);
 
         expect(mock.listFunctions).toHaveBeenCalledTimes(1);
+    });
+
+    it("lunora_find_related calls the findRelated admin op with the traversal options", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_find_related", {
+            depth: 2,
+            direction: "in",
+            edges: ["tickets.customerId"],
+            id: "c1",
+            limit: 10,
+            shardKey: "org-1",
+            table: "customers",
+        });
+
+        expect(result.isError).toBeUndefined();
+        expect(mock.query).toHaveBeenCalledWith(
+            { __lunoraRef: ADMIN_FUNCTIONS.findRelated },
+            { depth: 2, direction: "in", edges: ["tickets.customerId"], id: "c1", limit: 10, table: "customers" },
+            { shardKey: "org-1" },
+        );
+        // The read is advertised as read-only, so a client UI can offer it
+        // without the write gate.
+        expect(READ_ONLY_TOOL_DEFINITIONS.find((tool) => tool.name === "lunora_find_related")?.annotations?.readOnlyHint).toBe(true);
+    });
+
+    it("lunora_find_related omits absent options rather than sending undefined", async () => {
+        expect.assertions(1);
+
+        const mock = mockClient();
+
+        await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" });
+
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.findRelated }, { id: "c1", table: "customers" }, {});
+    });
+
+    it("lunora_find_related refuses a call with no table or id", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const noTable = await callTool(mock.asClient, "lunora_find_related", { id: "c1" });
+        const noId = await callTool(mock.asClient, "lunora_find_related", { table: "customers" });
+
+        expect(noTable.isError).toBe(true);
+        expect(noId.isError).toBe(true);
     });
 
     it("does not cache a failed listFunctions fetch (a later call retries)", async () => {

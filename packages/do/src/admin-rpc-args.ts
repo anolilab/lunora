@@ -208,6 +208,26 @@ interface RunShardRankBeforeArgs {
 }
 
 /**
+ * Arguments accepted by the `__lunora_admin__:findRelated` admin RPC — a
+ * read-only `ctx.db.related(...)` traversal from `{ table, id }`, exposed so an
+ * AI agent (`@lunora/mcp`'s `lunora_find_related`) can follow the schema's
+ * foreign keys without the app having to write a query for it.
+ *
+ * Every optional field is the same option `related` takes; nothing here widens
+ * the surface, and the writer refuses an out-of-range `depth`/`limit` or an
+ * unknown edge name itself, so this parser only enforces SHAPE.
+ */
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
+    table: string;
+}
+
+/**
  * Arguments accepted by the `__lunora_admin__:rankPage` admin RPC. The query
  * coordinator (`orchestrateRankPage`) fans this out to every live shard of a
  * `.shardBy(...)` table to gather each shard's local ranked slice, then k-way
@@ -1000,6 +1020,37 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
 };
 
+/**
+ * Validate the `__lunora_admin__:findRelated` payload. `table` and `id` are
+ * required; the traversal options are passed through only when they have the
+ * right SHAPE, so a bad `depth` reaches `ctx.db.related`'s own range check and
+ * fails with the message that names the cap rather than one invented here.
+ */
+const parseFindRelatedArgs = (args: Record<string, unknown>): RunShardFindRelatedArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+
+    if (table.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `table` is required");
+    }
+
+    if (id.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `id` is required");
+    }
+
+    const { direction, edges } = args;
+
+    return {
+        cursor: typeof args["cursor"] === "string" ? args["cursor"] : undefined,
+        depth: typeof args["depth"] === "number" ? args["depth"] : undefined,
+        direction: direction === "both" || direction === "in" || direction === "out" ? direction : undefined,
+        edges: Array.isArray(edges) ? edges.filter((entry): entry is string => typeof entry === "string") : undefined,
+        id,
+        limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+        table,
+    };
+};
+
 /** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
 const badRequest = (message: string): never => {
     throw new LunoraError("BAD_REQUEST", message);
@@ -1340,6 +1391,7 @@ export {
     parseClientSeqHeader,
     parseCreateWorkflowInstanceArgs,
     parseEmit,
+    parseFindRelatedArgs,
     parseGetWorkflowInstanceStatusArgs,
     parseIdentityHeader,
     parseIssueHash,
@@ -1377,6 +1429,7 @@ export type {
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,

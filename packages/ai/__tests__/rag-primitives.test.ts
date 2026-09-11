@@ -432,7 +432,7 @@ describe(hybridRank, () => {
 
         // A tiny k sharpens ranks: a's vector rank 0 (1/1) now beats c's two
         // mid ranks (1/3 + 1/2) — same lists, different fusion.
-        const sharp = hybridRank([first, second, third], [second, third], 1);
+        const sharp = hybridRank([first, second, third], [second, third], [], 1);
 
         expect(sharp.map((entry) => entry.id)).toStrictEqual(["b#0", "a#0", "c#0"]);
     });
@@ -440,6 +440,59 @@ describe(hybridRank, () => {
     it("returns an empty list when both legs are empty", () => {
         expect.assertions(1);
         expect(hybridRank([], [])).toStrictEqual([]);
+    });
+
+    it("fuses the graph leg as a third signal", () => {
+        expect.assertions(1);
+
+        const vectorOnly = chunk("a#0");
+        const shared = chunk("b#0");
+
+        // `shared` is rank 1 in the vector leg (1/61) and rank 0 in the graph
+        // leg at full proximity (1/60), so the graph connection lifts it over a
+        // chunk the vector leg ranked first.
+        const fused = hybridRank([vectorOnly, shared], [], [chunk("b#0", { score: 1 })]);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["b#0", "a#0"]);
+    });
+
+    it("scales the graph leg's contribution by each hit's depth decay", () => {
+        expect.assertions(2);
+
+        const near = hybridRank([], [], [chunk("a#0", { score: 1 })]);
+        const far = hybridRank([], [], [chunk("a#0", { score: 0.25 })]);
+
+        // Same rank in the same leg — only the depth decay differs, and a
+        // rank-only fusion would score the two identically.
+        expect(near[0]?.score).toBeCloseTo(1 / 60, 10);
+        expect(far[0]?.score).toBeCloseTo(0.25 / 60, 10);
+    });
+
+    it("orders a graph-only ranking by depth, nearest first", () => {
+        expect.assertions(1);
+
+        const fused = hybridRank([], [], [chunk("a#0", { score: 1 }), chunk("b#0", { score: 0.5 }), chunk("c#0", { score: 0.25 })]);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["a#0", "b#0", "c#0"]);
+    });
+
+    it("clamps a graph score outside [0, 1] so a leg cannot out-weigh the search legs", () => {
+        expect.assertions(2);
+
+        const huge = hybridRank([], [], [chunk("a#0", { score: 1000 })]);
+        const negative = hybridRank([], [], [chunk("a#0", { score: -5 })]);
+
+        expect(huge[0]?.score).toBeCloseTo(1 / 60, 10);
+        expect(negative[0]?.score).toBe(0);
+    });
+
+    it("adds the graph contribution to a chunk the search legs already found", () => {
+        expect.assertions(1);
+
+        const [entry] = hybridRank([chunk("a#0")], [chunk("a#0")], [chunk("a#0", { score: 1 })]);
+
+        // Rank 0 in all three legs: 1/60 + 1/60 + 1/60.
+        expect(entry?.score).toBeCloseTo(3 / 60, 10);
     });
 });
 
