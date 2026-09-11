@@ -31,6 +31,7 @@ describe("exit-code taxonomy", () => {
         [409, EXIT_CODE.CONFLICT],
         [429, EXIT_CODE.RATE_LIMITED],
         [503, EXIT_CODE.UNAVAILABLE],
+        [507, EXIT_CODE.USAGE],
         [500, EXIT_CODE.FAILURE],
         [501, EXIT_CODE.FAILURE],
     ])("maps status %s to exit %s", (status, expected) => {
@@ -65,6 +66,36 @@ describe("exit-code taxonomy", () => {
         expect(exitCodeForCode("CODEGEN_DIAGNOSTIC")).toBe(EXIT_CODE.USAGE);
         expect(exitCodeForCode("NAMESPACE_COLLISION")).toBe(EXIT_CODE.USAGE);
         expect(exitCodeForCode("SCHEMA_SNAPSHOT_PARSE")).toBe(EXIT_CODE.USAGE);
+    });
+
+    /**
+     * `UNAVAILABLE`'s documented contract is "retryable", and a CI step or agent
+     * reading it will retry. A ceiling is not retryable: the same backup, or the
+     * same stream, fails identically every time until a human narrows it.
+     */
+    it("does not tell automation to retry a ceiling it can never get under", () => {
+        expect.assertions(4);
+
+        expect(ERROR_CATALOG.BACKUP_TOO_LARGE.status).toBe(507);
+        expect(ERROR_CATALOG.STREAM_TOO_LONG.status).toBe(507);
+        expect(exitCodeForCode("BACKUP_TOO_LARGE")).toBe(EXIT_CODE.USAGE);
+        expect(exitCodeForCode("STREAM_TOO_LONG")).toBe(EXIT_CODE.USAGE);
+    });
+
+    /**
+     * The other side of the same question: the statuses that ARE transient must
+     * keep telling automation to retry, or the fix above has overreached.
+     */
+    it("keeps the genuinely transient statuses retryable", () => {
+        expect.assertions(4);
+
+        // A replica that has not caught up, and a write that reached one:
+        // routing resolves both on the next attempt.
+        expect(exitCodeForCode("REPLICA_NOT_READY")).toBe(EXIT_CODE.UNAVAILABLE);
+        expect(exitCodeForCode("REPLICA_READ_ONLY")).toBe(EXIT_CODE.UNAVAILABLE);
+        // An index still building finishes building.
+        expect(exitCodeForCode("SEARCH_INDEX_BUILDING")).toBe(EXIT_CODE.UNAVAILABLE);
+        expect(exitCodeForCode("SHARD_TIMEOUT")).toBe(EXIT_CODE.UNAVAILABLE);
     });
 
     it("gives a missing local tool its own bucket", () => {

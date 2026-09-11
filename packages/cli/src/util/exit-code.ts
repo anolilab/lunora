@@ -66,7 +66,16 @@ const EXIT_CODE_BY_STATUS: ReadonlyMap<number, ExitCode> = new Map<number, ExitC
     [502, EXIT_CODE.UNAVAILABLE],
     [503, EXIT_CODE.UNAVAILABLE],
     [504, EXIT_CODE.UNAVAILABLE],
-    [507, EXIT_CODE.UNAVAILABLE],
+    // 507 is a CEILING, not a transient — and `UNAVAILABLE`'s contract tells
+    // automation to retry. Every 507 this system raises reports that the thing
+    // asked for is too big for the place it has to fit: `BACKUP_TOO_LARGE` (the
+    // snapshot exceeds what a Worker isolate will assemble — its own hint says
+    // "backing up more often does not help", the fix is `backupTables` or
+    // `--bucket`) and `STREAM_TOO_LONG` (a durable stream past its chunk
+    // ceiling). Both fail identically on every retry until a human narrows the
+    // input, which is exit 2. A genuinely transient 507 added later belongs in
+    // {@link EXIT_CODE_BY_CODE}, not here.
+    [507, EXIT_CODE.USAGE],
 ]);
 
 /**
