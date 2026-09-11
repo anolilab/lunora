@@ -115,6 +115,9 @@ export default createConfig(
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "off",
             "react-perf/jsx-no-new-object-as-prop": "off",
+            // Passing rows to a component is the test; hoisting every fixture to
+            // module scope to satisfy a perf rule would obscure what each asserts.
+            "react-perf/jsx-no-new-array-as-prop": "off",
             // Its autofix rewrites `toHaveBeenCalled()` → `toHaveBeenCalledWith()` (no
             // args), which inverts the assertion. Asserting "was called" is valid.
             "vitest/prefer-called-with": "off",
