@@ -56,11 +56,26 @@ const app = defineApp<Env>()
                 return null;
             }
 
+            /*
+             * `organization()` and `admin()` add these three fields at runtime,
+             * but `createAuth` is declared to return the erased `LunoraAuth`, so
+             * better-auth's plugin inference never reaches a consumer — the
+             * fields are invisible to TypeScript however the instance is
+             * annotated downstream.
+             *
+             * Reading them through one narrow shape at this single boundary is
+             * the containment: the claims are validated against the contract in
+             * `lunora/identity.ts` immediately afterwards, and a claim set that
+             * does not match is rejected with a 401 rather than trusted.
+             */
+            const scoped = session.session as { activeOrganizationId?: string; activeOrganizationRole?: string };
+            const user = session.user as { id: string; role?: string };
+
             return {
-                activeOrganizationId: session.session.activeOrganizationId ?? undefined,
-                appRole: session.user.role ?? undefined,
-                orgRole: session.session.activeOrganizationRole ?? undefined,
-                userId: session.user.id,
+                activeOrganizationId: scoped.activeOrganizationId ?? undefined,
+                appRole: user.role ?? undefined,
+                orgRole: scoped.activeOrganizationRole ?? undefined,
+                userId: user.id,
             };
         },
     }))

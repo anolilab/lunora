@@ -36,7 +36,7 @@
  */
 import type { LunoraAuth } from "@lunora/auth";
 import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
-import { uiConfig } from "@lunora/auth/plugins";
+import { admin, organization, uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
 /**
@@ -165,7 +165,24 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
         // themselves — add a social provider here and its button appears, with
         // no second list to keep in sync client-side. Only facts a sign-in page
         // reveals by existing are exposed; drop the plugin to turn it off.
-        plugins: [uiConfig()],
+        plugins: [
+            uiConfig(),
+            /*
+             * The kit's tenancy runs on these two. `organization()` owns the
+             * organizations, members and invitations that `saas_organizations`
+             * projects, and the `activeOrganizationId` claim every org-scoped
+             * function reads comes off the session it manages. `admin()` supplies
+             * the platform-wide `user.role` the admin screens check, and the
+             * impersonation an admin uses to enter a tenant with that tenant's
+             * own authorization applied.
+             *
+             * Both add fields to the session and user that `createAuth`'s erased
+             * `LunoraAuth` return type does not carry — see the cast in
+             * `lunora/server.ts` and the note it points at.
+             */
+            organization(),
+            admin(),
+        ],
         secret: env.BETTER_AUTH_SECRET,
     });
 
