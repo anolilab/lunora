@@ -1,7 +1,7 @@
 import { defineAgent, defineAgentTool } from "@lunora/agent";
 import { jsonSchema } from "@lunora/ai";
 
-import { api, internal } from "#lunora/_generated/api.js";
+import { internal } from "#lunora/_generated/api.js";
 
 import { BUILDER_INSTRUCTIONS, builderSkills } from "./skills";
 
@@ -36,6 +36,11 @@ export const builder = defineAgent({
     instructions: BUILDER_INSTRUCTIONS,
     maxTurns: MAX_TURNS,
     model: MODEL,
+    // A second prompt while a build is still running parks behind the one in
+    // flight instead of being refused. The default `"reject"` is right for a
+    // background agent and wrong for a chat: a user who types again mid-build
+    // would get a `CONFLICT` for the crime of impatience.
+    onConcurrentRun: "queue",
     skills: builderSkills,
     tools: {
         edit: defineAgentTool({
@@ -60,7 +65,7 @@ export const builder = defineAgent({
             // Gated: a command runs code on the project's behalf, and the model
             // chose it. The FS tools are unattended because their blast radius
             // is one project's files; this one's is a process.
-            execute: async ({ args, command, projectId }, { run }) => run(api.commands.run, { args, command, projectId }),
+            execute: async ({ args, command, projectId }, { run }) => run(internal.commands.runInternal, { args, command, projectId }),
             inputSchema: jsonSchema({
                 properties: {
                     args: { description: "Arguments, one per element.", items: { type: "string" }, type: "array" },
@@ -82,7 +87,8 @@ export const builder = defineAgent({
         verify: defineAgentTool({
             description:
                 "Check the project: wrangler config, codegen and types. Run it after a change and fix what it reports. A non-zero code means the project is broken.",
-            execute: async ({ projectId }, { run }) => run(api.commands.run, { args: ["verify", "--format", "json"], command: "lunora", projectId }),
+            execute: async ({ projectId }, { run }) =>
+                run(internal.commands.runInternal, { args: ["verify", "--format", "json"], command: "lunora", projectId }),
             inputSchema: jsonSchema({ properties: { projectId: PROJECT_ID }, required: ["projectId"], type: "object" }),
         }),
 

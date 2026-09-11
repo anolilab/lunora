@@ -25,7 +25,7 @@ const testDirectory = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = join(testDirectory, "..");
 
 /** Tables that must stay sharded by project, with the reason each one is. */
-const SHARDED_BY_PROJECT = ["chats", "messages", "snapshots", "usage"];
+const SHARDED_BY_PROJECT = ["chats", "files", "messages", "snapshots", "usage"];
 
 /** Tables that must stay `.global()` because they are read without a project in hand. */
 const GLOBAL_TABLES = ["projects", "shares", "users"];

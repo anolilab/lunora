@@ -40,6 +40,7 @@
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
         "@lunora/studio": "workspace:*",
+        "@lunora/testing": "workspace:*",
         "@lunora/vite": "workspace:*",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",

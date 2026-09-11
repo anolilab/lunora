@@ -51,7 +51,7 @@ export default createConfig(
             // The plugin's default target range predates this repo's engines
             // (`^22.15.0 || >=24.11.0`), so it flags ES2023 array methods that
             // every runtime here has. Listing them beats lowering the bar.
-            "n/no-unsupported-features/es-syntax": ["error", { ignores: ["array-prototype-tosorted"] }],
+            "n/no-unsupported-features/es-syntax": ["error", { ignores: ["array-prototype-toreversed", "array-prototype-tosorted"] }],
             "n/no-unsupported-features/node-builtins": [
                 "error",
                 {

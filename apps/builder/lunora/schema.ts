@@ -22,10 +22,10 @@ import { ratelimit } from "./ratelimit/schema.js";
  *   table cannot shard by the id it is itself keyed on, and routing the project
  *   list through every shard to answer a dashboard is the fan-out `.global()`
  *   is there to avoid.
- * - `chats`, `messages`, `snapshots` and `usage` `.shardBy("projectId")`. All
- *   four are only ever read with a project already resolved, they are the
- *   high-write tables (a build turn appends messages continuously), and a busy
- *   project must not contend with an unrelated one.
+ * - `chats`, `files`, `messages`, `snapshots` and `usage` `.shardBy("projectId")`.
+ *   All five are only ever read with a project already resolved, they are the
+ *   high-write tables (a build turn appends messages and rewrites files
+ *   continuously), and a busy project must not contend with an unrelated one.
  *
  * The sharded tables carry an explicit `projectId: v.string()` rather than
  * `v.id("projects")`: the shard key is resolved before any lookup, so it has to
@@ -84,6 +84,18 @@ export default defineSchema({
         content: v.string(),
         path: v.string(),
         projectId: v.string(),
+
+        /**
+         * Monotonic per-file write counter — the compare-and-swap token the
+         * editor saves against.
+         *
+         * `updatedAt` cannot serve: two writes inside the same millisecond share
+         * a timestamp, so a save that read at `t` and an agent write that landed
+         * at `t` are indistinguishable. A counter makes "the file moved under
+         * you" exact, and a stale save a `CONFLICT` rather than a silent
+         * overwrite of the agent's work.
+         */
+        revision: v.number(),
         updatedAt: v.number(),
     })
         .shardBy("projectId")
@@ -129,7 +141,30 @@ export default defineSchema({
     projects: defineTable({
         createdAt: v.number(),
         name: v.string(),
-        ownerId: v.optional(v.id("users")),
+
+        /**
+         * The project's owner, and the builder's whole tenancy boundary (see
+         * `lunora/authz.ts`). Holds the verified `ctx.auth.userId` — a
+         * server-trusted column, stamped by `projects.create` from the session
+         * and never accepted from a caller's arguments.
+         *
+         * REQUIRED, not optional: an ownerless project is a row every caller can
+         * read, which is exactly the hole the RLS policies close. And a
+         * `v.string()` rather than `v.id("users")` because the value is the auth
+         * provider's subject, not a row id this app mints — `users` is the
+         * profile mirror, not the identity source.
+         *
+         * `v.string().serverDefault(({ auth }) => auth.userId)` would be the
+         * tighter declaration — the column stamped from the request auth on
+         * every write, overwriting anything a client sent. It is NOT used here
+         * because codegen's schema parser does not know the modifier
+         * (`parse-validator.ts`'s `COLUMN_MODIFIERS` omits it) and throws
+         * `Unsupported validator kind: serverDefault`. Until that gap closes,
+         * the binding is the handler's job: `projects.create` stamps
+         * `requireOwner(ctx)`, and the RLS insert policy re-checks the candidate
+         * row, so the value is server-trusted by two independent guards.
+         */
+        ownerId: v.string(),
         /** Absent until the project has been deployed at least once. */
         deployedUrl: v.optional(v.string()),
         template: v.string(),

@@ -50,6 +50,27 @@ Still missing, deliberately:
   (W8), **share/fork/export** (W9). The rate limits in `lunora/limits.ts` are
   abuse protection, not D17's token budget.
 
+## Ownership, and why the app needs a session
+
+`lunora/authz.ts` is the one ownership model, and it is **fail-closed**: a project
+belongs to the `ctx.auth.userId` that created it, `projects` is guarded by RLS
+policies (read narrowed to the owner, insert/update requiring it), and every
+per-project read or write resolves the caller's `projectId` through
+`authorizeProject` before it routes anything at a shard. An anonymous caller gets
+a `401`; a signed-in caller naming somebody else's project id gets a `404`.
+
+That means **identity has to be wired for the app to do anything** — W7 is now a
+prerequisite rather than a nice-to-have. Wire it with `lunora registry add auth`
+and a `resolveIdentity` on the worker; until then the dashboard answers `401`,
+which is the correct answer for a builder that would otherwise hand every
+visitor every other visitor's source code.
+
+The agent's own tools (`ls`/`view`/`write`/`edit`/`exec`/`verify`) are
+`internal*` and deliberately ungated: the durable loop dispatches with no
+identity, so an owner check there would deny the agent its own project. Their
+trust boundary is the dispatch — the `projectId` a run works on came from
+`authorizeProject` in the mutation that started it.
+
 ## Running it
 
 ```bash
@@ -67,10 +88,14 @@ wrangler d1 create lunora-builder
 
 The one thing worth knowing before touching `lunora/schema.ts`:
 
-| Tier                    | Tables                                    | Why                                                                                                                         |
-| ----------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `.global()` (D1)        | `projects`, `shares`, `users`             | Each is read on a path with **no project in hand** — "list my projects", "resolve this share token", "who is this session". |
-| `.shardBy("projectId")` | `chats`, `messages`, `snapshots`, `usage` | Only ever read with a project already resolved, and the high-write tables. A busy project must not contend with another.    |
+| Tier                    | Tables                                             | Why                                                                                                                         |
+| ----------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `.global()` (D1)        | `projects`, `shares`, `users`                      | Each is read on a path with **no project in hand** — "list my projects", "resolve this share token", "who is this session". |
+| `.shardBy("projectId")` | `chats`, `files`, `messages`, `snapshots`, `usage` | Only ever read with a project already resolved, and the high-write tables. A busy project must not contend with another.    |
+
+`lunora/.lunora-schema.json` is the committed baseline the pre-deploy drift gate
+diffs against — regenerate it (`lunora prepare --update-schema-baseline`) in the
+same change as any `schema.ts` edit, or the next deploy reports drift.
 
 `__tests__/schema.test.ts` pins both lists. Moving a table between tiers is a
 migration once there is data, and neither mistake shows up in a typecheck — a
