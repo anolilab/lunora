@@ -1,3 +1,20 @@
+## @lunora/codegen [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.175...@lunora/codegen@1.0.0-alpha.176) (2026-09-11)
+
+### Bug Fixes
+
+* **codegen:** emit v.any() args as optional keys ([#693](https://github.com/anolilab/lunora/issues/693)) ([cb2e4ca](https://github.com/anolilab/lunora/commit/cb2e4ca895ee4ac4bc2d510ff8cf53f5d5345839))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.125
+* **@lunora/agent:** upgraded to 1.0.0-alpha.105
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.68
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/codegen [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.174...@lunora/codegen@1.0.0-alpha.175) (2026-09-10)
 
 ### Features
