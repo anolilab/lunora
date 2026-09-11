@@ -1021,10 +1021,50 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
 };
 
 /**
+ * Narrow `findRelated`'s optional `edges` allowlist, 400ing on anything that is
+ * not an array of strings.
+ *
+ * A non-array used to fall back to "every edge" and a non-string ENTRY used to
+ * be filtered out, both silently — so `edges: "orders.customerId"` (the string a
+ * model reaches for first) walked the whole graph instead of one relation.
+ * @returns the validated edge names, or `undefined` when the caller named none
+ */
+const parseFindRelatedEdges = (raw: unknown): string[] | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((entry): entry is string => typeof entry === "string")) {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `edges` must be an array of edge-name strings");
+    }
+
+    return raw;
+};
+
+/**
  * Validate the `__lunora_admin__:findRelated` payload. `table` and `id` are
- * required; the traversal options are passed through only when they have the
- * right SHAPE, so a bad `depth` reaches `ctx.db.related`'s own range check and
- * fails with the message that names the cap rather than one invented here.
+ * required; each traversal option is either absent or the right SHAPE, and a
+ * wrong one is a 400 rather than a silent fallback to its default.
+ *
+ * Rejecting matters more here than in the other read parsers because every
+ * default this op has is the WIDEST setting, so dropping a malformed narrowing
+ * option runs a bigger traversal than the caller asked for:
+ *
+ * - `direction: "sideways"` fell back to `"both"` — both directions instead of one.
+ * - `edges: "orders.customerId"` (a string, not an array) fell back to EVERY edge.
+ * - `limit: "1"` and `depth: "1"` fell back to the defaults.
+ *
+ * The caller is an AI agent composing JSON (`@lunora/mcp`'s
+ * `lunora_find_related`), which is exactly the caller most likely to send
+ * `"1"` for a number, and the traversal reads through the ADMIN writer with RLS
+ * and column masks bypassed. Silently widening its blast radius on malformed
+ * input is the wrong direction to fail. Non-string `edges` entries are rejected
+ * for the same reason rather than filtered away: a caller that asked for three
+ * edges and named two of them wrongly gets told, not quietly given one.
+ *
+ * Ranges are still the writer's to enforce — an out-of-range `depth`/`limit` or
+ * an unknown edge name fails there with the message that names the cap, rather
+ * than one invented here.
  */
 const parseFindRelatedArgs = (args: Record<string, unknown>): RunShardFindRelatedArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
@@ -1038,15 +1078,31 @@ const parseFindRelatedArgs = (args: Record<string, unknown>): RunShardFindRelate
         throw new LunoraError("BAD_REQUEST", "findRelated: `id` is required");
     }
 
-    const { direction, edges } = args;
+    const { cursor, depth, direction, edges, limit } = args;
+
+    if (cursor !== undefined && cursor !== null && typeof cursor !== "string") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `cursor` must be a string");
+    }
+
+    if (depth !== undefined && typeof depth !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `depth` must be a number");
+    }
+
+    if (direction !== undefined && direction !== "both" && direction !== "in" && direction !== "out") {
+        throw new LunoraError("BAD_REQUEST", 'findRelated: `direction` must be one of "in", "out" or "both"');
+    }
+
+    if (limit !== undefined && typeof limit !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `limit` must be a number");
+    }
 
     return {
-        cursor: typeof args["cursor"] === "string" ? args["cursor"] : undefined,
-        depth: typeof args["depth"] === "number" ? args["depth"] : undefined,
-        direction: direction === "both" || direction === "in" || direction === "out" ? direction : undefined,
-        edges: Array.isArray(edges) ? edges.filter((entry): entry is string => typeof entry === "string") : undefined,
+        cursor: typeof cursor === "string" ? cursor : undefined,
+        depth,
+        direction,
+        edges: parseFindRelatedEdges(edges),
         id,
-        limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+        limit,
         table,
     };
 };

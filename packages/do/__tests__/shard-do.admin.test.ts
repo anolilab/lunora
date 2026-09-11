@@ -4041,6 +4041,46 @@ describe("shardDO admin findRelated", () => {
         expect(response.status).toBe(403);
     });
 
+    /**
+     * Every default this op has is its WIDEST setting, so a malformed narrowing
+     * option that was silently dropped ran a BIGGER traversal than the caller
+     * asked for — `direction: "sideways"` became both directions,
+     * `edges: "messages.authorId"` became every edge, `limit: "1"` became the
+     * default page. The caller here is an AI agent composing JSON against an
+     * admin writer with RLS and column masks bypassed, so a wrong shape is a 400.
+     */
+    it.each([
+        ["direction", { direction: "sideways", id: "u1", table: "users" }],
+        ["edges as a bare string", { edges: "messages.authorId", id: "u1", table: "users" }],
+        ["a non-string edge entry", { edges: ["messages.authorId", 7], id: "u1", table: "users" }],
+        ["limit as a string", { id: "u1", limit: "1", table: "users" }],
+        ["depth as a string", { depth: "1", id: "u1", table: "users" }],
+        ["a non-string cursor", { cursor: 7, id: "u1", table: "users" }],
+    ])("refuses a malformed %s rather than widening the traversal", async (_label, args) => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest(args));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("still accepts the options it always accepted", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        // `cursor: null` is the wire's "first page", not a malformed cursor.
+        const response = await shard.fetch(
+            findRelatedRequest({ cursor: null, depth: 1, direction: "in", edges: ["messages.authorId"], id: "u1", limit: 1, table: "users" }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => node.document._id)).toStrictEqual(["m1"]);
+    });
+
     it("base ShardDO rejects findRelated as not implemented (no override)", async () => {
         expect.assertions(2);
 
