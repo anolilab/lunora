@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import {
@@ -13,7 +13,26 @@ import {
     runMigrateToHyperdriveCommand,
 } from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** Run `body` with `process.stdout.write` captured, and return what it wrote. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        chunks.push(String(chunk));
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return chunks.join("");
+};
 
 const silentLogger = (): Logger => {
     return {
@@ -43,6 +62,112 @@ describe("lunora migrate", () => {
     };
 
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
+
+    /**
+     * `--format json` across the subcommand dispatch.
+     *
+     * This is the branch's largest single refactor — the if-chain became a
+     * `switch` over four `dispatch*` shells, each owning its own document — and
+     * it landed with no `--format` coverage at all. Two independent signals said
+     * so: the code-quality review, and Codecov reporting 54% patch coverage on
+     * this file. The documents are a contract an agent parses, so they are
+     * pinned here rather than left to the first caller to discover.
+     */
+    describe("--format json", () => {
+        it("generate emits its document on stdout and keeps prose off it", async () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global(),
+});
+`,
+            );
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate", "init"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { empty: boolean; migrationFile?: string; subcommand: string };
+
+            expect(document.subcommand).toBe("generate");
+            expect(document.empty).toBe(false);
+            expect(document.migrationFile).toMatch(/init/u);
+            // Exactly one document — stdout stays pipeable, the human lines go to stderr.
+            expect(
+                stdout
+                    .trimEnd()
+                    .split("\n")
+                    .filter((line) => line === "}"),
+            ).toHaveLength(1);
+        });
+
+        it("create carries the name and the scaffolded file", async () => {
+            expect.assertions(2);
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["create", "backfill_emails"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { file?: string; name: string; subcommand: string };
+
+            expect(document.subcommand).toBe("create");
+            expect(document.name).toBe("backfill_emails");
+        });
+
+        it("refuses an unknown --format with the usage exit code, before dispatching", async () => {
+            expect.assertions(2);
+
+            let exitCode: number | undefined;
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate"],
+                    options: { format: "yaml" },
+                    process: {
+                        cwd: workdir,
+                        exit: (code: number) => {
+                            exitCode = code;
+                        },
+                    },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+            // Refused before anything ran, so no document was written.
+            expect(stdout).toBe("");
+        });
+
+        it("exits USAGE on an unknown subcommand", async () => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: ["nope"],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+        });
+    });
 
     describe("lunora migrate generate", () => {
         it("errors when schema.ts is missing", () => {

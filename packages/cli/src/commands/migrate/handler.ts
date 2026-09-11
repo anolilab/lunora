@@ -972,7 +972,10 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(as
         default: {
             context.logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
 
-            return { code: 1 };
+            // Same class as an unknown top-level command, which `cli.ts` already
+            // exits USAGE for. A misspelled subcommand is a wrong invocation, not
+            // a failed run.
+            return { code: EXIT_CODE.USAGE };
         }
     }
 });
