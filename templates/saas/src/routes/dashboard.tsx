@@ -22,8 +22,10 @@ export const Route = createFileRoute("/dashboard")({
  */
 function DashboardPage() {
     const payload = useQuery(api.saas.overview, {});
-    const createProject = useMutation(api.saas.createProject);
-    const archiveProject = useMutation(api.saas.archiveProject);
+    // `useMutation` returns `{ mutate, pending, … }` rather than a callable —
+    // destructure at the call site so the React linter tracks each field.
+    const { mutate: createProject } = useMutation(api.saas.createProject);
+    const { mutate: archiveProject } = useMutation(api.saas.archiveProject);
 
     // The clock is read once per mount and passed down, so "4m ago" is stable
     // within a render pass and the server render agrees with its hydration.
