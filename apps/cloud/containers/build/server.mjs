@@ -415,11 +415,20 @@ const handleExec = async (request, response) => {
     }
 };
 
-/** The routes this server answers. See the `Map` note in the request handler. */
-const ROUTES = new Map([
-    ["POST /__lunora/build", handleBuild],
-    ["POST /__lunora/exec", handleExec],
-]);
+/**
+ * Answer a request whose handler rejected.
+ * @param {import("node:http").ServerResponse} response Response to close.
+ * @returns {(error: unknown) => void} The rejection handler.
+ */
+const failed = (response) => (error) => {
+    // Headers are already sent on the streaming route, so this can only append
+    // or close — never re-answer.
+    if (!response.headersSent) {
+        response.writeHead(500, { "content-type": "application/json" });
+    }
+
+    response.end(JSON.stringify({ error: clientError(error) }));
+};
 
 const server = createServer((request, response) => {
     const route = `${request.method} ${(request.url ?? "").split("?")[0]}`;
@@ -431,29 +440,36 @@ const server = createServer((request, response) => {
         return;
     }
 
-    // A `Map`, not an object literal. An object lookup keyed on a
-    // user-controlled string walks the prototype chain, so `route` naming an
-    // inherited member resolves to a function that is not a route handler and
-    // is then called — CodeQL's "unvalidated dynamic method call". A `Map` has
-    // no such chain, so an unrecognised route can only ever be `undefined`.
-    const handler = ROUTES.get(route);
-
-    if (handler === undefined) {
-        response.writeHead(404, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: `no route for ${route}` }));
+    // Three explicit branches, no lookup table.
+    //
+    // This started as an object literal indexed by `route`, which CodeQL
+    // flagged as an unvalidated dynamic method call — rightly: an object lookup
+    // on a user-controlled key walks the prototype chain, so a crafted path
+    // resolves to an inherited member that is then invoked. A `Map` removes
+    // that chain, but the call is still "a function fetched with a
+    // user-controlled key", which is the shape the rule matches and a reader
+    // has to reason about the same way.
+    //
+    // With three routes the table bought nothing anyway. Branching on the route
+    // and naming each handler directly means there is no dynamic dispatch left
+    // to reason about, by a person or a scanner.
+    if (route === "POST /__lunora/build") {
+        handleBuild(request, response).catch(failed(response));
 
         return;
     }
 
-    handler(request, response).catch((error) => {
-        // Headers are already sent on the streaming route, so this can only
-        // append or close — never re-answer.
-        if (!response.headersSent) {
-            response.writeHead(500, { "content-type": "application/json" });
-        }
+    if (route === "POST /__lunora/exec") {
+        handleExec(request, response).catch(failed(response));
 
-        response.end(JSON.stringify({ error: clientError(error) }));
-    });
+        return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    // The requested route is deliberately NOT echoed: the caller already knows
+    // what it asked for, and reflecting an unvalidated path into a response
+    // body is a habit worth not having.
+    response.end(JSON.stringify({ error: "no such route" }));
 });
 
 // `PORT=0` binds an ephemeral port and the line below reports which — that is
