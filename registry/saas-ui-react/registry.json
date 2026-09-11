@@ -1,0 +1,30 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "saas-ui-react",
+    "title": "SaaS UI — React",
+    "description": "Copy-in, user-owned React screens for the Lunora SaaS kit: the dashboard stat row, the project list with its create form and search/sort toolbar, the activity feed grouped by day, and the platform admin's organization table. Framework-agnostic view model under lunora/saas-ui/core, thin React views under lunora/saas-ui/react, and token-aligned CSS — no Tailwind, no component library. Edit anything; upgrades are 3-way merged.",
+    "docs": "Import the stylesheet once and render the cards from your dashboard route: `import { OverviewStats, ProjectsCard } from './lunora/saas-ui/react'; import './lunora/saas-ui/styles.css';`. Nothing here subscribes — the route owns the query, because the wiring differs per meta-framework. Pass `useQuery(api.saas.overview)` straight into `payload`, `Date.now()` into `now`, and your mutations into `onCreate`/`onArchive`. Requires the `saas` server item (auto-added). For sign-in and organization screens, add the matching `auth-ui-react` item.",
+    "requires": ["saas"],
+    "deps": {},
+    "files": [
+        { "from": "core/activity.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/activity.ts" },
+        { "from": "core/admin-organizations.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/admin-organizations.ts" },
+        { "from": "core/create-form-controller.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/create-form-controller.ts" },
+        { "from": "core/format.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/format.ts" },
+        { "from": "core/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/index.ts" },
+        { "from": "core/map-error.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/map-error.ts" },
+        { "from": "core/overview.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/overview.ts" },
+        { "from": "core/project-form.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/project-form.ts" },
+        { "from": "core/projects.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/projects.ts" },
+        { "from": "core/store.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/store.ts" },
+        { "from": "core/types.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/types.ts" },
+        { "from": "react/activity.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/activity.tsx" },
+        { "from": "react/admin.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/admin.tsx" },
+        { "from": "react/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/react/index.ts" },
+        { "from": "react/overview.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/overview.tsx" },
+        { "from": "react/primitives.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/primitives.tsx" },
+        { "from": "react/projects.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/projects.tsx" },
+        { "from": "react/use-form.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/react/use-form.ts" },
+        { "from": "styles.css", "merge": "create-or-skip", "to": "lunora/saas-ui/styles.css" }
+    ]
+}
