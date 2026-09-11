@@ -274,31 +274,91 @@ const readHop = async (reader: RelationGraphReader, table: string, where: WhereI
 };
 
 /**
- * Expand a frontier along one OUT edge: load the rows whose ids the frontier's
- * foreign-key columns hold.
+ * How ONE direction of an edge is walked — the four things an out-hop and an
+ * in-hop disagree about, and nothing else. Everything around them (the parent
+ * map, the single batched read, the dedupe, the `FrontierNode` built) is
+ * identical, which is why the two used to be thirty duplicated lines.
+ */
+interface EdgeDirectionPlan {
+    /**
+     * The column on {@link EdgeDirectionPlan.table} carrying the key each row was
+     * reached under: `_id` outward (the frontier already holds the target's id),
+     * the foreign-key column inward (the row holds its parent's id). It is both
+     * what the batched `where` filters on and what recovers a loaded row's parent.
+     */
+    keyColumn: (edge: RelationEdge) => string;
+
+    /** The keys one frontier node contributes; empty when this edge does not leave that node. */
+    keysOf: (node: FrontierNode, edge: RelationEdge) => ReadonlyArray<string>;
+
+    /**
+     * Whether a key already in `visited` is dropped before the read.
+     *
+     * Out-keys are the ids of the rows about to be LOADED, so a visited one is a
+     * row the dedupe below would discard anyway — dropping it early keeps the
+     * `IN (…)` list, and so the hop's budget, tight. In-keys are the ids of the
+     * FRONTIER nodes being expanded from, every one of which is in `visited` by
+     * definition, so the same filter would drop the whole hop.
+     */
+    skipVisitedKeys: boolean;
+
+    /** The table this direction reads — also the table that labels every node it reaches. */
+    table: (edge: RelationEdge) => string;
+}
+
+/**
+ * The two directions, as data.
+ *
+ * **Array foreign keys have no in-direction.** `where` carries no
+ * array-containment operator, so finding the rows whose `v.array(v.id(...))`
+ * column CONTAINS an id would mean scanning the holder table and filtering in
+ * memory — per node, per hop. An unbounded scan is worse than a missing hop, so
+ * an array edge contributes no in-keys and is followed outward only; the docs
+ * page says so too.
+ */
+const EDGE_DIRECTIONS: Readonly<Record<"in" | "out", EdgeDirectionPlan>> = {
+    in: {
+        keyColumn: (edge) => edge.column,
+        keysOf: (node, edge) => (edge.array || node.table !== edge.targetTable ? [] : [node.id]),
+        skipVisitedKeys: false,
+        table: (edge) => edge.sourceTable,
+    },
+    out: {
+        keyColumn: () => "_id",
+        keysOf: (node, edge) => (node.table === edge.sourceTable ? outboundIds(node.document, edge) : []),
+        skipVisitedKeys: true,
+        table: (edge) => edge.targetTable,
+    },
+};
+
+/**
+ * Expand a frontier along ONE edge in one direction: out, the rows whose ids the
+ * frontier's foreign-key columns hold; in, the rows whose foreign key points at
+ * one of the frontier's ids.
  *
  * One batched read for the whole frontier rather than a `get` per id, so the
  * hop's cost is a function of the edge set rather than of the frontier width —
  * and so the policy filter and column mask, which only a `findMany` can carry,
  * apply to an out-hop exactly as they do to an in-hop.
  */
-const expandOutEdge = async (
+const expandEdge = async (
     reader: RelationGraphReader,
     frontier: ReadonlyArray<FrontierNode>,
     edge: RelationEdge,
     hop: HopContext,
+    direction: "in" | "out",
 ): Promise<FrontierNode[]> => {
-    /** First parent to name a target id owns the path to it — the shortest one, since the walk is breadth-first. */
+    const plan = EDGE_DIRECTIONS[direction];
+    const keyColumn = plan.keyColumn(edge);
+    const table = plan.table(edge);
+
+    /** First parent to name a key owns the path to it — the shortest one, since the walk is breadth-first. */
     const parentOf = new Map<string, FrontierNode>();
 
     for (const node of frontier) {
-        if (node.table !== edge.sourceTable) {
-            continue;
-        }
-
-        for (const targetId of outboundIds(node.document, edge)) {
-            if (!hop.visited.has(targetId) && !parentOf.has(targetId)) {
-                parentOf.set(targetId, node);
+        for (const key of plan.keysOf(node, edge)) {
+            if (!parentOf.has(key) && !(plan.skipVisitedKeys && hop.visited.has(key))) {
+                parentOf.set(key, node);
             }
         }
     }
@@ -307,70 +367,20 @@ const expandOutEdge = async (
         return [];
     }
 
-    const rows = await readHop(reader, edge.targetTable, { _id: { in: [...parentOf.keys()] } }, hop);
+    const rows = await readHop(reader, table, { [keyColumn]: { in: [...parentOf.keys()] } }, hop);
     const reached: FrontierNode[] = [];
 
     for (const row of rows) {
         const id = row["_id"];
-        const parent = typeof id === "string" ? parentOf.get(id) : undefined;
+        const key = row[keyColumn];
+        const parent = typeof key === "string" ? parentOf.get(key) : undefined;
 
         if (typeof id !== "string" || parent === undefined || hop.visited.has(id)) {
             continue;
         }
 
         hop.visited.add(id);
-        reached.push({ document: row, id, path: [...parent.path, edge.name], pathIds: [...parent.pathIds, id], table: edge.targetTable });
-    }
-
-    return reached;
-};
-
-/**
- * Expand a frontier along one IN edge: every row of the holder table whose
- * foreign key points at one of the frontier's ids, in a single batched read.
- *
- * **Array foreign keys have no in-direction.** `where` carries no
- * array-containment operator, so finding the rows whose `v.array(v.id(...))`
- * column CONTAINS an id would mean scanning the holder table and filtering in
- * memory — per node, per hop. An unbounded scan is worse than a missing hop, so
- * an array edge is followed outward only; the docs page says so too.
- */
-const expandInEdge = async (
-    reader: RelationGraphReader,
-    frontier: ReadonlyArray<FrontierNode>,
-    edge: RelationEdge,
-    hop: HopContext,
-): Promise<FrontierNode[]> => {
-    if (edge.array) {
-        return [];
-    }
-
-    const parentOf = new Map<string, FrontierNode>();
-
-    for (const node of frontier) {
-        if (node.table === edge.targetTable && !parentOf.has(node.id)) {
-            parentOf.set(node.id, node);
-        }
-    }
-
-    if (parentOf.size === 0) {
-        return [];
-    }
-
-    const rows = await readHop(reader, edge.sourceTable, { [edge.column]: { in: [...parentOf.keys()] } }, hop);
-    const reached: FrontierNode[] = [];
-
-    for (const row of rows) {
-        const id = row["_id"];
-        const foreignKey = row[edge.column];
-        const parent = typeof foreignKey === "string" ? parentOf.get(foreignKey) : undefined;
-
-        if (typeof id !== "string" || parent === undefined || hop.visited.has(id)) {
-            continue;
-        }
-
-        hop.visited.add(id);
-        reached.push({ document: row, id, path: [...parent.path, edge.name], pathIds: [...parent.pathIds, id], table: edge.sourceTable });
+        reached.push({ document: row, id, path: [...parent.path, edge.name], pathIds: [...parent.pathIds, id], table });
     }
 
     return reached;
@@ -397,9 +407,13 @@ const expandFrontier = async (
     },
 ): Promise<FrontierNode[]> => {
     const reached: FrontierNode[] = [];
+
+    /** How many more nodes this hop may pull back. Read directly for the guards, so a boolean test costs no `HopContext`. */
+    const remaining = (): number => options.budget - reached.length;
+
     const hopOf = (): HopContext => {
         return {
-            limit: options.budget - reached.length,
+            limit: remaining(),
             mask: options.mask,
             relationBaseWhere: options.relationBaseWhere,
             visited: options.visited,
@@ -407,14 +421,14 @@ const expandFrontier = async (
     };
 
     for (const edge of edges) {
-        if (options.direction !== "in" && hopOf().limit > 0) {
+        if (options.direction !== "in" && remaining() > 0) {
             // eslint-disable-next-line no-await-in-loop -- see the docblock: `visited` must be authoritative across edges within one hop
-            reached.push(...(await expandOutEdge(reader, frontier, edge, hopOf())));
+            reached.push(...(await expandEdge(reader, frontier, edge, hopOf(), "out")));
         }
 
-        if (options.direction !== "out" && hopOf().limit > 0) {
+        if (options.direction !== "out" && remaining() > 0) {
             // eslint-disable-next-line no-await-in-loop -- same
-            reached.push(...(await expandInEdge(reader, frontier, edge, hopOf())));
+            reached.push(...(await expandEdge(reader, frontier, edge, hopOf(), "in")));
         }
     }
 
