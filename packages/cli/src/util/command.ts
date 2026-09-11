@@ -1,8 +1,11 @@
+import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
 import type { CommandExecute, Toolbox } from "@visulima/cerebro";
 
+import { EXIT_CODE, exitCodeForError } from "./exit-code";
 import type { Logger } from "./logger";
 import { createLogger } from "./logger";
-import { PROMPT_CANCEL_EXIT_CODE, PromptCancelledError } from "./prompt-cancelled";
+import PromptCancelledError from "./prompt-cancelled";
+import { renderLunoraError } from "./render-lunora-error";
 
 /** The context a command body receives — the toolbox bits every command needs. */
 interface CommandContext<TOptions extends Record<string, unknown>> {
@@ -30,8 +33,8 @@ type CommandHandler<TOptions extends Record<string, unknown>> = CommandExecute<T
  * Wrap a command body in the shared `execute` envelope so every command handler
  * stays a thin adapter: build the logger, hand the body the toolbox context, set
  * the exit code it returns via `toolbox.process.exit`, and convert any thrown
- * error into a logged exit 1. The result is a cerebro {@link CommandExecute} — the
- * default a lazy `loader` resolves to.
+ * error into a logged exit through the taxonomy in {@link EXIT_CODE}. The result
+ * is a cerebro {@link CommandExecute} — the default a lazy `loader` resolves to.
  */
 const defineHandler =
     <TOptions extends Record<string, unknown>>(body: CommandBody<TOptions>): CommandExecute<Toolbox<Console, TOptions>> =>
@@ -47,13 +50,19 @@ const defineHandler =
                 // User cancelled an interactive prompt — not a failure. Exit quietly
                 // with the conventional interactive-cancel code and without touching
                 // the red error channel.
-                toolbox.process.exit(PROMPT_CANCEL_EXIT_CODE);
+                toolbox.process.exit(EXIT_CODE.CANCELLED);
 
                 return;
             }
 
-            logger.error(error instanceof Error ? error.message : String(error));
-            toolbox.process.exit(1);
+            const message = error instanceof Error ? error.message : String(error);
+
+            // A Lunora error (or a plain message a solution rule recognises)
+            // renders with its actionable hint block — the same treatment
+            // `cli.ts` gives an error that escapes cerebro itself. Anything else
+            // logs the bare message.
+            logger.error(isLunoraError(error) || findSolutionByMessage(message) !== undefined ? renderLunoraError(error) : message);
+            toolbox.process.exit(exitCodeForError(error));
         }
     };
 

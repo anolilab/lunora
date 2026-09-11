@@ -1,5 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 
+import { LunoraError } from "@lunora/errors";
+
 /**
  * Matches any character that would make cmd.exe re-split, redirect, or otherwise
  * reinterpret an unquoted argument: whitespace (re-split), the command
@@ -182,6 +184,23 @@ export const defaultSpawner: Spawner = (descriptor) =>
         }
 
         child.on("error", (error) => {
+            // The single chokepoint for "that program isn't installed": every
+            // shell-out in the CLI goes through this spawner, and Node reports a
+            // command that isn't on PATH as an `ENOENT` on the child (no PID, no
+            // exit code). Re-coding it gives the failure a machine-readable
+            // identity — and, through the exit-code taxonomy, its own exit code
+            // — instead of a bare `spawn wrangler ENOENT` that exits 1 like
+            // every other failure.
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                reject(
+                    new LunoraError("LOCAL_DEPENDENCY_MISSING", `\`${descriptor.command}\` is not installed or not on your PATH — nothing was run.`, {
+                        cause: error,
+                    }),
+                );
+
+                return;
+            }
+
             reject(error);
         });
 

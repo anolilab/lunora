@@ -102,6 +102,7 @@
         "cloud/monitoring",
         "---Reference---",
         "errors",
+        "exit-codes",
         "concepts/wire-protocol",
         "concepts/non-js-sdks",
         "packages"

@@ -567,6 +567,27 @@ export const ERROR_CATALOG = {
 
     /** `@lunora/db`'s offline outbox: a queued write targeted a collection removed/renamed in a later deploy. */
     UNKNOWN_MUTATION_FN: { status: 404, title: "Unknown mutation function" },
+
+    /**
+     * A local tool the CLI shells out to — `wrangler`, `git`, `docker`, a
+     * package manager — is not on PATH, so the child process never started.
+     *
+     * CLI-only and build-time-like: it never crosses the RPC wire (the same
+     * posture as `CODEGEN_DIAGNOSTIC`), so it is deliberately not `internal` —
+     * the message names the missing command, which IS the fix. The `500` is a
+     * placeholder for a transport that never carries it; `@lunora/cli` maps this
+     * code to its `missing local dependency` exit code BY NAME, because no HTTP
+     * status means "that program isn't installed".
+     */
+    LOCAL_DEPENDENCY_MISSING: {
+        hint: [
+            "The command Lunora tried to run is not on your PATH, so nothing ran.",
+            "",
+            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately.",
+        ],
+        status: 500,
+        title: "Required local tool not found",
+    },
 } as const;
 
 // Shape validation kept as a standalone statement: `as const satisfies …` is not

@@ -157,6 +157,16 @@ Lunora project, relative imports are written without an extension.
     npx lunora seed           deterministic seed data
     npx lunora doctor         diagnose a broken project
 
+## Exit codes
+
+Branch on the code, do not parse stderr. \`0\` success · \`1\` failure ·
+\`2\` usage/validation · \`3\` not authenticated · \`4\` permission denied ·
+\`5\` not found · \`6\` conflict · \`7\` rate limited · \`8\` unavailable/timeout ·
+\`9\` a local tool (wrangler, git, docker) is not installed · \`130\` cancelled.
+
+\`7\` and \`8\` are worth retrying; \`2\`–\`6\` are deterministic. Full table:
+${url}/docs/exit-codes
+
 ## If you are unsure
 
 Search the MCP endpoint above rather than guessing at an API. Lunora is

@@ -17,7 +17,7 @@ import type { PackageManager, PackageManagerProbe } from "../../util/detect-pack
 import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { PromptCancelledError } from "../../util/prompt-cancelled";
+import PromptCancelledError from "../../util/prompt-cancelled";
 import { resolveDistTag, resolvePinnedRepoRef, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";

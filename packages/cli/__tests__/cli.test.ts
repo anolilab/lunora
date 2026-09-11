@@ -102,12 +102,13 @@ describe("lunora CLI entry", () => {
         expect(`${lines.join("")}${stdout}`).toContain(VERSION);
     });
 
-    it("unknown command exits non-zero with a friendly message", async () => {
+    it("unknown command exits with the usage code and a friendly message", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: ["zzz-not-real"] });
 
-        expect(code).toBe(1);
+        // A name the CLI does not have is bad usage (2), not a failed run (1).
+        expect(code).toBe(2);
         // runCli upgrades cerebro's bare "not found" into a friendly message.
         expect(stderr).toContain("Unknown command");
     });
@@ -117,7 +118,7 @@ describe("lunora CLI entry", () => {
 
         const code = await runCli({ argv: ["deployy"] });
 
-        expect(code).toBe(1);
+        expect(code).toBe(2);
         expect(stderr).toContain('Did you mean "deploy"?');
     });
 

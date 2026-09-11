@@ -17,6 +17,8 @@ export type { ResetCommandOptions, ResetCommandResult } from "./commands/reset/h
 export { runResetCommand } from "./commands/reset/handler";
 export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run/handler";
 export { runRpcCommand } from "./commands/run/handler";
+export type { ExitCode } from "./util/exit-code";
+export { EXIT_CODE, exitCodeForCode, exitCodeForError, exitCodeForStatus } from "./util/exit-code";
 export type { InsertSchemaExtensionResult } from "./util/insert-schema-extension";
 export { insertSchemaExtension } from "./util/insert-schema-extension";
 export type { Logger } from "./util/logger";
