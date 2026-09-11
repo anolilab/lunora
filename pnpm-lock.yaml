@@ -4383,10 +4383,6 @@ importers:
         version: 4.129.0(@cloudflare/workers-types@5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30))
 
   packages/saas-ui:
-    dependencies:
-      '@lunora/errors':
-        specifier: workspace:*
-        version: link:../errors
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: catalog:frontend
