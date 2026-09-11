@@ -21,7 +21,7 @@ const deploymentsCommand: Command = {
     name: "deployments",
     options: [
         { description: "Cloudflare environment name", name: "env", type: String },
-        { description: "Display `list` output as JSON", name: "json", type: Boolean },
+        { description: "Output format: pretty (default) or json (`list` only)", name: "format", type: String },
         { description: "Reason/description recorded with a rollback or promote", name: "message", type: String },
         { description: "Confirm a rollback or promote (required — these change live traffic)", name: "yes", type: Boolean },
     ],
@@ -31,7 +31,7 @@ export { deploymentsCommand };
 
 export type DeploymentsOptions = CreateOptions<{
     env: string | undefined;
-    json: boolean | undefined;
+    format: string | undefined;
     message: string | undefined;
     yes: boolean | undefined;
 }>;

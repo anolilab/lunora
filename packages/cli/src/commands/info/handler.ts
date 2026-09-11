@@ -13,13 +13,15 @@ import { deriveBindingManifest, writeBindingManifestFile } from "../../util/bind
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { InfoOptions } from "./index";
 
 interface InfoCommandOptions {
     /** Report only the binding manifest — what this Worker needs provisioned. */
     bindings?: boolean;
     cwd?: string;
-    json?: boolean;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     logger: Logger;
     /** With {@link InfoCommandOptions.bindings}: write the manifest here instead of stdout. */
     out?: string;
@@ -300,8 +302,7 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
     }
 
     if (json) {
-        // Straight to stdout so `| jq` works — Pail prefixes would break it.
-        process.stdout.write(`${JSON.stringify(manifest, undefined, 2)}\n`);
+        printJson(manifest);
 
         return { code: 0 };
     }
@@ -345,29 +346,39 @@ interface InfoCommandResult {
 
 const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     const cwd = options.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("info", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, snapshot: undefined };
+    }
+
+    const json = isJsonFormat(options.format);
+    // In `--format json` mode the human/progress channel moves to stderr so
+    // stdout carries only the JSON document.
+    const logger = loggerForFormat(options.format, options.logger);
 
     // `--bindings` narrows this command to the one question a MACHINE asks: what
     // does this Worker need provisioned. Same document `--emit-bindings` writes
     // and `lunora dev` drops next to its state record, from the same derivation,
     // so a deployer and a task runner cannot be told different things.
     if (options.bindings === true) {
-        return { ...renderBindings({ cwd, json: options.json === true, logger: options.logger, out: options.out }), snapshot: undefined };
+        return { ...renderBindings({ cwd, json, logger, out: options.out }), snapshot: undefined };
     }
 
     if (options.out !== undefined) {
-        options.logger.error("--out only applies with --bindings; the full info snapshot prints to stdout under --json.");
+        logger.error("--out only applies with --bindings; the full info snapshot prints to stdout under --format json.");
 
         return { code: 1, snapshot: undefined };
     }
 
     const snapshot = collectInfo(cwd);
 
-    if (options.json) {
-        // Write straight to stdout so `lunora info --json | jq` works — Pail
-        // prefixes (level + timestamps) would break the parser.
-        process.stdout.write(`${JSON.stringify(snapshot, undefined, 2)}\n`);
+    if (json) {
+        printJson(snapshot);
     } else {
-        renderText(snapshot, options.logger);
+        renderText(snapshot, logger);
     }
 
     return { code: 0, snapshot };
@@ -375,7 +386,7 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
 
 /** `lunora info` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, logger, options }) =>
-    runInfoCommand({ bindings: options.bindings === true, cwd, json: options.json === true, logger, out: options.out }),
+    runInfoCommand({ bindings: options.bindings === true, cwd, format: options.format, logger, out: options.out }),
 );
 
 export { execute };

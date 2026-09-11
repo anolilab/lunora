@@ -26,6 +26,7 @@ const introspectCommand: Command = {
         { description: "Emit only the schema — skip the per-table list/get procedure modules", name: "no-procedures", type: Boolean },
         { description: "Overwrite files that already exist", name: "force", type: Boolean },
         { description: "Print what would be written without writing it", name: "dry-run", type: Boolean },
+        { description: "Output format: pretty (default) or json", name: "format", type: String },
     ],
 };
 
@@ -34,6 +35,7 @@ export { introspectCommand };
 export type IntrospectOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     force: boolean | undefined;
+    format: string | undefined;
     // Declared twice in `options` (`--procedures` and `--no-procedures`, each
     // with its own description); cerebro exposes both under this one positive key.
     procedures: boolean | undefined;

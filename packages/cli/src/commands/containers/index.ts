@@ -16,6 +16,7 @@ const containersCommand: Command = {
         ["lunora containers build ./containers/transcoder --tag transcoder:v1 --push", "Build and push to the Cloudflare Registry in one step"],
         ["lunora containers push transcoder:v1", "Push a locally-tagged image to the Cloudflare Registry"],
         ["lunora containers images list", "List images in your Cloudflare Registry"],
+        ["lunora containers list --format json", "List container instances as JSON (also `info`, `images list`)"],
         ["lunora containers images delete transcoder:v1", "Delete an image to free registry storage"],
     ],
     group: "Deploy",
@@ -28,6 +29,7 @@ const containersCommand: Command = {
         { description: "build: push the image to the Cloudflare Registry after building", name: "push", type: Boolean },
         { description: "build: name:tag for the image (forwarded to wrangler --tag)", name: "tag", type: String },
         { description: "Cloudflare environment name", name: "env", type: String },
+        { description: "Output format: pretty (default) or json (read subcommands: list | info | images list)", name: "format", type: String },
     ],
 };
 
@@ -35,6 +37,7 @@ export { containersCommand };
 
 export type ContainersOptions = CreateOptions<{
     env: string | undefined;
+    format: string | undefined;
     push: boolean | undefined;
     tag: string | undefined;
 }>;

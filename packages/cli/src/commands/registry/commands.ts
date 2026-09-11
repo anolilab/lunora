@@ -9,6 +9,7 @@ import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
 import safe from "./display";
@@ -83,7 +84,7 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     }
 };
 
-/** Emit the `--json` plan snapshot for the resolved items to stdout. */
+/** Emit the `--format json` plan snapshot for the resolved items to stdout. */
 const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): void => {
     const planSnapshot = items.map(({ manifest }) => {
         return {
@@ -109,7 +110,7 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
         };
     });
 
-    process.stdout.write(`${JSON.stringify({ items: planSnapshot }, undefined, 2)}\n`);
+    printJson({ items: planSnapshot });
 };
 
 /**
@@ -164,6 +165,10 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
         return { ...empty, code: 1 };
     }
 
+    // In `--format json` mode the human/progress channel moves to stderr so
+    // stdout carries only the JSON catalog.
+    const logger = loggerForFormat(options.format, options.logger);
+
     let cleanup: () => void = () => {};
 
     try {
@@ -173,23 +178,23 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         const items = collectCatalog(resolved.root);
 
-        if (options.json) {
-            process.stdout.write(`${JSON.stringify(items, undefined, 2)}\n`);
+        if (isJsonFormat(options.format)) {
+            printJson(items);
 
             return empty;
         }
 
-        options.logger.info(`available registry items (${String(items.length)}):`);
+        logger.info(`available registry items (${String(items.length)}):`);
 
         for (const item of items) {
-            options.logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
+            logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
         }
 
         return empty;
     } catch (error) {
         // The message can quote the untrusted manifest back (a rejected env-var
         // name, a bad path), so it is sanitized like every other render site.
-        options.logger.error(safe(`list failed: ${error instanceof Error ? error.message : String(error)}`));
+        logger.error(safe(`list failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -201,13 +206,24 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const empty = emptyResult();
+    const formatError = validateOutputFormat("registry", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { ...empty, code: 1 };
+    }
 
     if (options.list) {
         return runListCommand(options);
     }
 
+    // In `--format json` mode every human line — the plan, the diff preview, the
+    // "add complete" report — moves to stderr so stdout carries only the document.
+    const logger = loggerForFormat(options.format, options.logger);
+
     if (options.names.length === 0) {
-        options.logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
+        logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
 
         return { ...empty, code: 1 };
     }
@@ -215,7 +231,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     const gate = sourceGateError("add", options);
 
     if (gate) {
-        options.logger.error(gate);
+        logger.error(gate);
 
         return { ...empty, code: 1 };
     }
@@ -239,23 +255,23 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         // --- Plan ---
         for (const { manifest } of items) {
-            printPlan(options.logger, manifest);
+            printPlan(logger, manifest);
         }
 
-        if (options.json) {
+        if (isJsonFormat(options.format)) {
             printJsonPlan(items);
         }
 
         if (options.dryRun) {
-            options.logger.info("dry-run: stopping before any files are written");
+            logger.info("dry-run: stopping before any files are written");
 
             return empty;
         }
 
         // --- Diff preview: show file-level changes, mutate nothing ---
         if (options.diff) {
-            reconcileItems(items, cwd, options.logger, { diff: true });
-            options.logger.info("diff: preview only — re-run without --diff to apply");
+            reconcileItems(items, cwd, logger, { diff: true });
+            logger.info("diff: preview only — re-run without --diff to apply");
 
             return empty;
         }
@@ -266,15 +282,15 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
         }
 
         // --- Reconcile ---
-        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, logger, { overwrite: options.overwrite });
 
-        reportAddResult(items, deps, written.length, skipped.length, options.logger, cwd);
+        reportAddResult(items, deps, written.length, skipped.length, logger, cwd);
 
         return { bindings, code: 0, deps, skipped, written };
     } catch (error) {
         // The message can quote the untrusted manifest back (a rejected env-var
         // name, a bad path), so it is sanitized like every other render site.
-        options.logger.error(safe(`add failed: ${error instanceof Error ? error.message : String(error)}`));
+        logger.error(safe(`add failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {

@@ -41,6 +41,7 @@ import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
 import { runExportCommand, runImportCommand } from "../data-transfer";
@@ -717,6 +718,16 @@ interface MigrateToHyperdriveOptions {
     yes?: boolean;
 }
 
+interface MigrateToHyperdriveResult {
+    /** Bytes in the intermediate NDJSON dump (0 when the run failed before exporting). */
+    bytes: number;
+    code: number;
+    /** Rows read out of the D1 source. */
+    exported: number;
+    /** Rows the Hyperdrive target accepted. Short of `exported` means the remainder already existed there. */
+    imported: number;
+}
+
 /** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
 const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
 
@@ -734,7 +745,7 @@ const normalizeOptionalUrl = (url: string | undefined): string | undefined => (u
  * For an in-place switch, export first (this command, same `--from`/`--to`
  * URL before the schema swap is risky) — the skill documents both.
  */
-const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<{ code: number }> => {
+const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<MigrateToHyperdriveResult> => {
     const { logger } = options;
     // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
     // it sends, so the guard below compares what the two legs will actually
@@ -755,7 +766,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
             "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
         );
 
-        return { code: 1 };
+        return { bytes: 0, code: 1, exported: 0, imported: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -777,7 +788,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         });
 
         if (exportResult.code !== 0) {
-            return { code: exportResult.code };
+            return { bytes: exportResult.bytes, code: exportResult.code, exported: exportResult.rows, imported: 0 };
         }
 
         logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
@@ -795,7 +806,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         });
 
         if (importResult.code !== 0) {
-            return { code: importResult.code };
+            return { bytes: exportResult.bytes, code: importResult.code, exported: exportResult.rows, imported: importResult.inserted };
         }
 
         if (importResult.inserted === exportResult.rows) {
@@ -808,7 +819,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
             );
         }
 
-        return { code: 0 };
+        return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted };
     } finally {
         // Always shred the private temp dir (and the plaintext, cross-tenant dump
         // inside it) — even when export/import throws or returns early — unless the
@@ -820,68 +831,148 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
-/** `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
+/** What every `migrate` subcommand shell below needs: the parsed invocation plus the resolved output mode. */
+interface MigrateDispatchContext {
+    argument: string[];
+    cwd: string;
+    /** True when `--format json` selected a result document. */
+    json: boolean;
+    /** Already routed for the format — stderr in json mode. */
+    logger: Logger;
+    options: MigrateOptions;
+}
+
+/** `migrate generate`: diff the schema and emit a SQL migration. */
+const dispatchGenerate = (context: MigrateDispatchContext): { code: number } => {
+    const { argument, cwd, json, logger, options } = context;
+    const result = runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
+
+    if (json) {
+        // `migrationFile` is omitted when nothing was written (an empty diff, or a failure).
+        printJson({ empty: result.empty, migrationFile: result.migrationFile === "" ? undefined : result.migrationFile, subcommand: "generate" });
+    }
+
+    return { code: result.code };
+};
+
+/** `migrate d1-to-hyperdrive`: copy `.global()` data between two deployments. */
+const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
+    const { json, logger, options } = context;
+    const result = await runMigrateToHyperdriveCommand({
+        batchSize: options.batchSize,
+        fromToken: options.fromToken ?? options.token,
+        fromUrl: options.fromUrl ?? options.url,
+        logger,
+        out: options.out,
+        prod: options.prod === true,
+        tables: options.tables,
+        toToken: options.toToken ?? options.token,
+        toUrl: options.toUrl ?? options.url,
+        yes: options.yes === true,
+    });
+
+    if (json) {
+        printJson({ bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" });
+    }
+
+    return { code: result.code };
+};
+
+/** `migrate create`: scaffold a data migration. */
+const dispatchCreate = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
+    const { argument, cwd, json, logger, options } = context;
+    const name = argument[1] ?? options.name;
+
+    if (!name) {
+        logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
+
+        return { code: 1 };
+    }
+
+    const result = await runMigrateCreateCommand({ cwd, logger, name, table: options.table });
+
+    if (json) {
+        printJson({ file: result.file === "" ? undefined : result.file, name, subcommand: "create" });
+    }
+
+    return { code: result.code };
+};
+
+/** `migrate up|down|status`: drive the cross-shard data-migration orchestrator. */
+const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" | "status" | "up"): Promise<{ code: number }> => {
+    const { argument, cwd, json, logger, options } = context;
+    const id = argument[1] ?? options.name;
+
+    if (!id) {
+        logger.error(`migrate ${subcommand} requires a migration id. Usage: lunora migrate ${subcommand} <id>`);
+
+        return { code: 1 };
+    }
+
+    const result = await runMigrateDataCommand({
+        batchSize: options.batchSize,
+        cwd,
+        dryRun: options.dryRun === true,
+        id,
+        logger,
+        maxBatches: options.steps,
+        prod: options.prod === true,
+        subcommand,
+        token: options.token,
+        url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
+        yes: options.yes === true,
+    });
+
+    if (json) {
+        // The orchestrator's own per-shard roll-up is the document.
+        printJson({ id, ok: result.code === 0, result: result.body, subcommand });
+    }
+
+    return { code: result.code };
+};
+
+/**
+ * `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`).
+ *
+ * `--format json` is resolved here rather than inside each `run*` function: the
+ * subcommands are four different operations sharing one command name, and each
+ * already returns the structured result its document is built from.
+ */
+const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(async ({ argument, cwd, logger: rawLogger, options }) => {
     const sub = argument[0];
+    const formatError = validateOutputFormat("migrate", options.format);
 
-    if (sub === "generate") {
-        return runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
+    if (formatError !== undefined) {
+        rawLogger.error(formatError);
+
+        return { code: 1 };
     }
 
-    if (sub === "d1-to-hyperdrive") {
-        return runMigrateToHyperdriveCommand({
-            batchSize: options.batchSize,
-            fromToken: options.fromToken ?? options.token,
-            fromUrl: options.fromUrl ?? options.url,
-            logger,
-            out: options.out,
-            prod: options.prod === true,
-            tables: options.tables,
-            toToken: options.toToken ?? options.token,
-            toUrl: options.toUrl ?? options.url,
-            yes: options.yes === true,
-        });
-    }
+    // In json mode every progress line — including the pretty-printed response
+    // body the data subcommands log — moves to stderr.
+    const context: MigrateDispatchContext = { argument, cwd, json: isJsonFormat(options.format), logger: loggerForFormat(options.format, rawLogger), options };
 
-    if (sub === "create") {
-        const name = argument[1] ?? options.name;
-
-        if (!name) {
-            logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
+    switch (sub) {
+        case "create": {
+            return await dispatchCreate(context);
+        }
+        case "d1-to-hyperdrive": {
+            return await dispatchToHyperdrive(context);
+        }
+        case "down":
+        case "status":
+        case "up": {
+            return await dispatchData(context, sub);
+        }
+        case "generate": {
+            return dispatchGenerate(context);
+        }
+        default: {
+            context.logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
 
             return { code: 1 };
         }
-
-        return runMigrateCreateCommand({ cwd, logger, name, table: options.table });
     }
-
-    if (sub === "up" || sub === "down" || sub === "status") {
-        const id = argument[1] ?? options.name;
-
-        if (!id) {
-            logger.error(`migrate ${sub} requires a migration id. Usage: lunora migrate ${sub} <id>`);
-
-            return { code: 1 };
-        }
-
-        return runMigrateDataCommand({
-            batchSize: options.batchSize,
-            cwd,
-            dryRun: options.dryRun === true,
-            id,
-            logger,
-            maxBatches: options.steps,
-            prod: options.prod === true,
-            subcommand: sub,
-            token: options.token,
-            url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
-            yes: options.yes === true,
-        });
-    }
-
-    logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
-
-    return { code: 1 };
 });
 
 export { execute };

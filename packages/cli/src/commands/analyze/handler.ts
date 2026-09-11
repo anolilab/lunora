@@ -6,15 +6,17 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { AnalyzeOptions } from "./index";
 
 interface AnalyzeCommandOptions {
     cwd?: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     /** Skip the wrangler dry-run (tests inject a pre-built outdir). */
     inspectOnly?: string;
-    json?: boolean;
     logger: Logger;
     spawner?: Spawner;
 }
@@ -121,7 +123,18 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
  */
 const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const { logger } = options;
+    const formatError = validateOutputFormat("analyze", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, descriptor: undefined, report: undefined };
+    }
+
+    const json = isJsonFormat(options.format);
+    // In `--format json` mode the human/progress channel moves to stderr so
+    // stdout carries only the JSON document.
+    const logger = loggerForFormat(options.format, options.logger);
 
     let outdir: string;
     let descriptor: SpawnDescriptor | undefined;
@@ -165,10 +178,8 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
 
         const report = buildReport(outdir);
 
-        if (options.json) {
-            // Write straight to stdout so `lunora analyze --json | jq` works —
-            // Pail prefixes (level + timestamps) would break parsing.
-            process.stdout.write(`${JSON.stringify(report, undefined, 2)}\n`);
+        if (json) {
+            printJson(report);
         } else {
             renderText(report, logger);
         }
@@ -187,7 +198,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
 
 /** `lunora analyze` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions>(({ cwd, logger, options }) =>
-    runAnalyzeCommand({ cwd, json: options.json === true, logger }),
+    runAnalyzeCommand({ cwd, format: options.format, logger }),
 );
 
 export { execute };

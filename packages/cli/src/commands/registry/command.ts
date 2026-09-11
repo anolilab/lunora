@@ -32,7 +32,7 @@ const registryCommand: Command = {
             type: String,
         },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
-        { description: "Emit JSON output (add plan / list)", name: "json", type: Boolean },
+        { description: "Output format: pretty (default) or json (add plan / list)", name: "format", type: String },
         { description: "build: output path for the catalog (default <root>/index.json)", name: "out", type: String },
         { description: "build: verify the index is current instead of rewriting it", name: "check", type: Boolean },
     ],
@@ -45,8 +45,8 @@ export type RegistryOptions = CreateOptions<{
     check: boolean | undefined;
     diff: boolean | undefined;
     "dry-run": boolean | undefined;
+    format: string | undefined;
     from: string | undefined;
-    json: boolean | undefined;
     out: string | undefined;
     overwrite: boolean | undefined;
     ref: string | undefined;

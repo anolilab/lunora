@@ -157,6 +157,9 @@ Lunora project, relative imports are written without an extension.
     npx lunora seed           deterministic seed data
     npx lunora doctor         diagnose a broken project
 
+Add \`--format json\` to any of these for a single JSON document on stdout (human
+output moves to stderr). \`lunora dev --json\` is different — streaming log lines.
+
 ## Exit codes
 
 Branch on the code, do not parse stderr. \`0\` success · \`1\` failure ·

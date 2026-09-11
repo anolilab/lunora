@@ -12,6 +12,7 @@ import { stat } from "node:fs/promises";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
@@ -50,6 +51,8 @@ interface ImportCommandOptions {
     fetchImpl?: StreamingFetchLike;
     /** Source NDJSON file. Required. */
     file: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
 
     /**
      * Which reader to use. Omit to auto-detect between a Convex export snapshot
@@ -612,8 +615,53 @@ const reportImportOutcome = (
     }
 };
 
-const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
+/**
+ * Say what the import did: the summary as human text, then — in `--format json`
+ * — the single result document. The batcher's own summary IS that document
+ * (inserted-per-table, conflicts, row errors, unreached shards, the storage
+ * phase's report), so nothing is re-derived here.
+ */
+const emitImportReport = (
+    options: ImportCommandOptions,
+    outcome: {
+        body: ImportSummary;
+        conflicts: number;
+        errorCount: number;
+        failed: boolean;
+        insertedTotal: number;
+        received: number;
+        warnings: ReadonlyArray<string>;
+    },
+): void => {
+    options.logger.info(JSON.stringify(outcome.body, undefined, 2));
+    reportImportOutcome(options.logger, {
+        conflicts: outcome.conflicts,
+        errorCount: outcome.errorCount,
+        failed: outcome.failed,
+        insertedTotal: outcome.insertedTotal,
+        received: outcome.received,
+        warnings: outcome.warnings,
+    });
+
+    if (isJsonFormat(options.format)) {
+        printJson({ file: options.file, inserted: outcome.insertedTotal, ok: !outcome.failed, summary: outcome.body });
+    }
+};
+
+const runImportCommand = async (rawOptions: ImportCommandOptions): Promise<ImportCommandResult> => {
+    const cwd = rawOptions.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("import", rawOptions.format);
+
+    if (formatError !== undefined) {
+        rawOptions.logger.error(formatError);
+
+        return { body: undefined, code: 1, inserted: 0 };
+    }
+
+    // Route the human/progress channel once, here: every helper below is handed
+    // this same `options`, so in `--format json` mode their output goes to stderr
+    // too and stdout carries only the summary document.
+    const options: ImportCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
     const source = await resolveImportSource(options, cwd);
 
     if (source.kind === "invalid") {
@@ -707,8 +755,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const failed =
         streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
 
-    options.logger.info(JSON.stringify(body, undefined, 2));
-    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
+    emitImportReport(options, { body, conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
 
     return { body, code: failed ? 1 : 0, inserted: insertedTotal };
 };

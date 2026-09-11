@@ -9,9 +9,9 @@ const analyzeCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "analyze",
-    options: [{ description: "Emit a JSON report instead of human text", name: "json", type: Boolean }],
+    options: [{ description: "Output format: pretty (default) or json", name: "format", type: String }],
 };
 
 export { analyzeCommand };
 
-export type AnalyzeOptions = CreateOptions<{ json: boolean | undefined }>;
+export type AnalyzeOptions = CreateOptions<{ format: string | undefined }>;

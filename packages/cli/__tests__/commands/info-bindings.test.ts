@@ -78,7 +78,7 @@ describe("lunora info --bindings", () => {
         expect(output).not.toContain("hunter2");
     });
 
-    it("emits the machine-readable manifest under --json", () => {
+    it("emits the machine-readable manifest under --format json", () => {
         expect.assertions(2);
 
         writeWrangler({ kv_namespaces: [{ binding: "CACHE", id: "abc123" }] });
@@ -92,7 +92,7 @@ describe("lunora info --bindings", () => {
         });
 
         try {
-            runInfoCommand({ bindings: true, cwd: workdir, json: true, logger });
+            runInfoCommand({ bindings: true, cwd: workdir, format: "json", logger });
         } finally {
             spy.mockRestore();
         }

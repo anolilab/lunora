@@ -23,6 +23,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
@@ -40,6 +41,8 @@ interface EnvCommandOptions {
      * compatibility — when both are set, `env` wins.
      */
     env?: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     /** Required for `set`. Required (positional) for `get`/`unset`. */
     key?: string;
     logger: Logger;
@@ -63,8 +66,32 @@ interface EnvCommandOptions {
     yes?: boolean;
 }
 
+/**
+ * The structured result one `env` subcommand produced, for `--format json`.
+ *
+ * Deliberately per-subcommand rather than one flat union of every field: the
+ * eight verbs answer eight different questions, and a document carrying all of
+ * them with most absent would tell a consumer nothing about which one it is
+ * holding. `subcommand` is the discriminant.
+ *
+ * Keys are names throughout, never values — the one exception is `generate`,
+ * whose whole product is the minted values (the pretty path prints the same
+ * `KEY=value` pairs to stdout), and `get`, which the caller asked for by name.
+ */
+type EnvCommandData =
+    | { both: string[]; localOnly: string[]; remoteOnly: string[]; subcommand: "diff" }
+    | { extra: string[]; missing: string[]; ok: boolean; placeholders: string[]; subcommand: "doctor" }
+    | { file: string; keys: string[]; subcommand: "list" }
+    | { key: string; removed: boolean; subcommand: "unset" }
+    | { key: string; subcommand: "set" }
+    | { key: string; subcommand: "get"; value: string }
+    | { pushed: string[]; subcommand: "push"; target?: string }
+    | { secrets: { key: string; value: string }[]; subcommand: "generate"; written?: string[] };
+
 interface EnvCommandResult {
     code: number;
+    /** The structured result `--format json` serializes. Absent when the run failed before producing one. */
+    data?: EnvCommandData;
     /** For `push`, the descriptors that were spawned. */
     descriptors: ReadonlyArray<SpawnDescriptor>;
 }
@@ -117,18 +144,21 @@ const resolveEnvironment = (options: EnvCommandOptions): string | undefined => o
 
 const runEnvList = (context: EnvContext): EnvCommandResult => {
     const map = loadDevVariables(context.devVariablesPath);
+    // Names only, matching the redaction the pretty rendering applies: `list`
+    // enumerates what is set, `get <KEY>` is how a value is asked for.
+    const data: EnvCommandData = { file: DEV_VARS_FILE, keys: [...map.keys()], subcommand: "list" };
 
     if (map.size === 0) {
         context.logger.info(`${DEV_VARS_FILE}: (empty)`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data, descriptors: [] };
     }
 
     for (const entry of map.values()) {
         context.logger.info(`${entry.key}=${redact(entry.value)}`);
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data, descriptors: [] };
 };
 
 const runEnvGet = (context: EnvContext): EnvCommandResult => {
@@ -148,10 +178,13 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    // Get prints the full value (caller asked for it explicitly).
-    process.stdout.write(`${entry.value}\n`);
+    // Get prints the full value (caller asked for it explicitly) — except in
+    // json mode, where it rides the document instead so stdout stays one blob.
+    if (!isJsonFormat(options.format)) {
+        process.stdout.write(`${entry.value}\n`);
+    }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, subcommand: "get", value: entry.value }, descriptors: [] };
 };
 
 const runEnvSet = (context: EnvContext): EnvCommandResult => {
@@ -199,7 +232,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     writeDevVariablesFileAtomically(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value));
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, subcommand: "set" }, descriptors: [] };
 };
 
 const runEnvUnset = (context: EnvContext): EnvCommandResult => {
@@ -222,13 +255,13 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
     if (!parseDevVariables(raw).has(options.key)) {
         logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { key: options.key, removed: false, subcommand: "unset" }, descriptors: [] };
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, removeDevVariableLine(raw, options.key));
     logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, removed: true, subcommand: "unset" }, descriptors: [] };
 };
 
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
@@ -245,7 +278,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     if (map.size === 0) {
         logger.warn(`${DEV_VARS_FILE}: nothing to push (empty)`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { pushed: [], subcommand: "push", target: resolveEnvironment(options) }, descriptors: [] };
     }
 
     const placeholders = [...map.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
@@ -306,7 +339,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
 
     logger.success(`env: pushed ${String(map.size)} secret(s)`);
 
-    return { code: 0, descriptors };
+    return { code: 0, data: { pushed: [...map.keys()], subcommand: "push", target: environment }, descriptors };
 };
 
 /** List the deployed Worker's secret names for `diff` (the resolved --env/--prod target). */
@@ -355,7 +388,7 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
         logger.success("env diff: local and remote secret names match");
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { both, localOnly, remoteOnly, subcommand: "diff" }, descriptors: [] };
 };
 
 /**
@@ -371,7 +404,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     if (!existsSync(examplePath)) {
         logger.info(`env doctor: no ${DEV_VARS_EXAMPLE_FILE} to check against — nothing to validate.`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { extra: [], missing: [], ok: true, placeholders: [], subcommand: "doctor" }, descriptors: [] };
     }
 
     const exampleKeys = parseDevVariableEntries(readFileSync(examplePath, "utf8")).map((entry) => entry.key);
@@ -401,13 +434,16 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
         logger.info(`extra: ${key} is set locally but not listed in ${DEV_VARS_EXAMPLE_FILE}`);
     }
 
-    if (missing.length === 0 && placeholders.length === 0) {
+    const ok = missing.length === 0 && placeholders.length === 0;
+    const data: EnvCommandData = { extra, missing, ok, placeholders, subcommand: "doctor" };
+
+    if (ok) {
         logger.success(`env doctor: ${DEV_VARS_FILE} looks good (${String(current.size)} var(s)).`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data, descriptors: [] };
     }
 
-    return { code: 1, descriptors: [] };
+    return { code: 1, data, descriptors: [] };
 };
 
 /**
@@ -490,7 +526,17 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
     writeDevVariablesFileAtomically(devVariablesPath, raw);
     logger.success(`env: generated ${String(writable.length)} secret(s) into ${DEV_VARS_FILE}: ${writable.map((entry) => entry.key).join(", ")}`);
 
-    return { code: 0, descriptors: [] };
+    return {
+        code: 0,
+        data: {
+            secrets: writable.map((entry) => {
+                return { key: entry.key, value: entry.value };
+            }),
+            subcommand: "generate",
+            written: writable.map((entry) => entry.key),
+        },
+        descriptors: [],
+    };
 };
 
 /**
@@ -511,7 +557,7 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
         if (keys.length === 0) {
             logger.info("env generate: no locally-generatable secrets for this project. Name one explicitly: lunora env generate <KEY>");
 
-            return { code: 0, descriptors: [] };
+            return { code: 0, data: { secrets: [], subcommand: "generate" }, descriptors: [] };
         }
     } else {
         // An explicit key is minted even if it's a provider key — the user named it.
@@ -534,21 +580,19 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
 
     // Print full `KEY=value` lines to stdout (the user asked to generate them —
     // e.g. to pipe into `wrangler secret put`). Not via the logger, which redacts.
-    for (const entry of generated) {
-        process.stdout.write(`${entry.key}=${entry.value}\n`);
+    // In json mode the same values ride the document instead, so stdout stays one blob.
+    if (!isJsonFormat(options.format)) {
+        for (const entry of generated) {
+            process.stdout.write(`${entry.key}=${entry.value}\n`);
+        }
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { secrets: generated, subcommand: "generate" }, descriptors: [] };
 };
 
-const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
-    const context: EnvContext = {
-        cwd,
-        devVariablesPath: join(cwd, DEV_VARS_FILE),
-        logger: options.logger,
-        options,
-    };
+/** Route one validated `env` invocation to its subcommand. */
+const dispatchEnvSubcommand = async (context: EnvContext): Promise<EnvCommandResult> => {
+    const { options } = context;
 
     switch (options.subcommand) {
         case "diff": {
@@ -576,11 +620,38 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
             return runEnvUnset(context);
         }
         default: {
-            options.logger.error(`env: unknown subcommand "${options.subcommand as string}"`);
+            context.logger.error(`env: unknown subcommand "${options.subcommand as string}"`);
 
             return { code: 1, descriptors: [] };
         }
     }
+};
+
+const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("env", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, descriptors: [] };
+    }
+
+    const context: EnvContext = {
+        cwd,
+        devVariablesPath: join(cwd, DEV_VARS_FILE),
+        // In json mode every human line moves to stderr so stdout carries only
+        // the result document.
+        logger: loggerForFormat(options.format, options.logger),
+        options,
+    };
+    const result = await dispatchEnvSubcommand(context);
+
+    if (isJsonFormat(options.format) && result.data !== undefined) {
+        printJson(result.data);
+    }
+
+    return result;
 };
 
 const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generate", "get", "list", "push", "set", "unset"]);
@@ -601,6 +672,7 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
     return runEnvCommand({
         cwd,
         env: options.env,
+        format: options.format,
         key: argument[1],
         logger,
         prod: options.prod === true,
@@ -613,5 +685,5 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
 });
 
 export { execute };
-export type { EnvCommandOptions, EnvCommandResult, EnvSubcommand };
+export type { EnvCommandData, EnvCommandOptions, EnvCommandResult, EnvSubcommand };
 export { runEnvCommand };

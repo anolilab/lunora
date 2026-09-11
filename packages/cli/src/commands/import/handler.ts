@@ -30,6 +30,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ a
         batchSize: options.batchSize,
         cwd,
         file,
+        format: options.format,
         from: options.from as ImportSourceName | undefined,
         logger,
         prod: options.prod === true,

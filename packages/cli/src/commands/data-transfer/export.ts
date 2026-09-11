@@ -12,12 +12,20 @@ import { rename, unlink } from "node:fs/promises";
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
 import { EXPORT_ENDPOINT_PATH } from "./shared";
 
 interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
+
+    /**
+     * Output format: `pretty` (default) or `json`. `json` reports the run as a
+     * single document and therefore requires a file destination — with `--out -`
+     * (or none) stdout already carries the NDJSON stream.
+     */
+    format?: string;
     logger: Logger;
     /** Output file path; `undefined`/`-` streams to stdout. */
     out?: string;
@@ -205,11 +213,82 @@ const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: str
 };
 
 /**
+ * Validate `--format` and resolve where the dump lands, before anything is
+ * fetched. Returns `undefined` (having logged the reason) when the run must not
+ * proceed; otherwise the file destination (`undefined` means stdout) and an
+ * options object whose logger is already routed for the chosen format.
+ */
+const resolveExportOutput = (rawOptions: ExportCommandOptions): { destination: string | undefined; options: ExportCommandOptions } | undefined => {
+    const formatError = validateOutputFormat("export", rawOptions.format);
+
+    if (formatError !== undefined) {
+        rawOptions.logger.error(formatError);
+
+        return undefined;
+    }
+
+    const destination = rawOptions.out === undefined || rawOptions.out === "-" ? undefined : rawOptions.out;
+
+    // The dump itself is the payload, and with no file destination it IS stdout.
+    // A result document there would be spliced into the NDJSON, so this is
+    // refused rather than interleaved.
+    if (isJsonFormat(rawOptions.format) && destination === undefined) {
+        rawOptions.logger.error("export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.");
+
+        return undefined;
+    }
+
+    // Route the human/progress channel once so every line below lands on stderr
+    // in json mode.
+    return { destination, options: { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) } };
+};
+
+/**
+ * Land the dump and say what happened: commit the staged file (when the
+ * destination is one), log the human line, and — in `--format json` — write the
+ * single result document. `--format json` is only reachable with a file
+ * destination, so `destination` is present whenever `json` is.
+ */
+const finishExport = async (parameters: {
+    bytes: number;
+    destination: string | undefined;
+    file: { path: string; stage: string } | undefined;
+    json: boolean;
+    logger: Logger;
+    rows: number;
+    sink: NodeJS.WritableStream;
+    sinkError: () => Error | undefined;
+    tables: string[] | undefined;
+}): Promise<void> => {
+    const { bytes, destination, file, json, logger, rows, sink, sinkError, tables } = parameters;
+
+    if (file !== undefined) {
+        await commitStagedExport(sink, file, sinkError);
+
+        logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
+    }
+
+    if (json) {
+        // `tables` is omitted when the export covered every table.
+        printJson({ bytes, out: destination, rows, tables });
+    }
+};
+
+/**
  * Stream an export. The worker emits NDJSON; we count newlines as we go and
  * pipe straight to the output sink, so a 10M-row export doesn't materialise
  * the body in memory.
  */
-const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
+const runExportCommand = async (rawOptions: ExportCommandOptions): Promise<ExportCommandResult> => {
+    const resolvedOutput = resolveExportOutput(rawOptions);
+
+    if (resolvedOutput === undefined) {
+        return { bytes: 0, code: 1, rows: 0 };
+    }
+
+    const { destination, options } = resolvedOutput;
+    const json = isJsonFormat(options.format);
+
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");
 
@@ -272,8 +351,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     // straight at `--out` truncated whatever was there the moment the request
     // opened, and the mid-stream failure path then unlinked it: refreshing
     // yesterday's dump over itself and losing the connection left neither copy.
-    const out = options.out === undefined || options.out === "-" ? undefined : options.out;
-    const file = out === undefined ? undefined : { path: out, stage: `${out}.${randomUUID()}.partial` };
+    const file = destination === undefined ? undefined : { path: destination, stage: `${destination}.${randomUUID()}.partial` };
     // `mode: 0o600` on the stage: `createWriteStream` defaults to 0o666 before
     // the umask, so under the common `umask 022` the staged file is world-readable
     // for the length of the dump — and a dump is every row of every table. The
@@ -305,11 +383,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         throw error;
     }
 
-    if (file !== undefined) {
-        await commitStagedExport(sink, file, () => sinkError);
-
-        options.logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
-    }
+    await finishExport({ bytes, destination, file, json, logger: options.logger, rows, sink, sinkError: () => sinkError, tables });
 
     return { bytes, code: 0, rows };
 };

@@ -97,7 +97,7 @@ describe("lunora info", () => {
             expect(result.snapshot?.schema?.tables.length).toBeGreaterThan(0);
         });
 
-        it("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
+        it("--format json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
             expect.assertions(3);
 
             const { logger } = recordingLogger();
@@ -119,7 +119,7 @@ describe("lunora info", () => {
             });
 
             try {
-                const result = runInfoCommand({ cwd: workdir, json: true, logger });
+                const result = runInfoCommand({ cwd: workdir, format: "json", logger });
 
                 expect(result.code).toBe(0);
 

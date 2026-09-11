@@ -33,6 +33,7 @@ import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { StreamingFetchLike } from "../data-transfer";
 import { runExportCommand, runImportCommand } from "../data-transfer";
@@ -80,6 +81,8 @@ interface BackupCommandOptions {
     /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
     fetchImpl?: StreamingFetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     logger: Logger;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
@@ -106,13 +109,19 @@ interface BackupCommandOptions {
 }
 
 interface BackupCommandResult {
+    /** Set on `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
+    body?: unknown;
     code: number;
     /** Set on `prune` — the sidecar keys the worker reported it deleted. */
     deleted?: string[];
+    /** Set on `list` — the destination's manifest. */
+    entries?: ReadonlyArray<BackupManifestEntry>;
     /** Set on `create` — the written backup's manifest entry. */
     entry?: BackupManifestEntry;
     /** Set on `retention` — what the worker reported it would delete next. */
     preview?: BackupRetentionPreview;
+    /** Set on `restore` — how many rows the import leg wrote back. */
+    restored?: number;
 }
 
 /**
@@ -219,14 +228,14 @@ const runBackupList = async (options: BackupCommandOptions, destination: BackupD
     if (manifest.length === 0) {
         options.logger.info(`no backups found in ${destination.label}`);
 
-        return { code: 0 };
+        return { code: 0, entries: [] };
     }
 
     for (const entry of manifest) {
         options.logger.info(`${entry.id}  ${entry.rows.toString()} rows  ${entry.bytes.toString()} bytes  ${entry.file}`);
     }
 
-    return { code: 0 };
+    return { code: 0, entries: manifest };
 };
 
 const runBackupRestore = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
@@ -273,7 +282,7 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
         // Plain snapshot import — the off-platform / portable restore. For in-place
         // time-travel to an arbitrary moment in the last 30 days, use native PITR
         // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
-        return { code: result.code };
+        return { code: result.code, entry: matched, restored: result.inserted };
     } finally {
         await snapshot.release().catch((error: unknown) => {
             options.logger.warn(`backup: could not clean up the downloaded snapshot (${error instanceof Error ? error.message : String(error)})`);
@@ -383,9 +392,9 @@ const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupComma
         method: "POST",
     });
 
-    await readAndLogBody(response, options.logger);
+    const body = await readAndLogBody(response, options.logger);
 
-    return { code: response.ok ? 0 : 1 };
+    return { body, code: response.ok ? 0 : 1 };
 };
 
 /**
@@ -695,9 +704,8 @@ const runBackupPrune = async (options: BackupCommandOptions): Promise<BackupComm
     return { code: result.failed.length > 0 ? 1 : 0, deleted: result.deleted, preview };
 };
 
-const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
-
+/** Route one validated `backup` invocation to its subcommand. */
+const dispatchBackupSubcommand = async (options: BackupCommandOptions, cwd: string): Promise<BackupCommandResult> => {
     try {
         // `pitr` is the in-place tier and reads no snapshot at all, and
         // `retention` asks the worker about its own config — neither reads a
@@ -738,12 +746,47 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
     }
 };
 
+const runBackupCommand = async (rawOptions: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const cwd = rawOptions.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("backup", rawOptions.format);
+
+    if (formatError !== undefined) {
+        rawOptions.logger.error(formatError);
+
+        return { code: 1 };
+    }
+
+    // Routed once: the export/import legs `create` and `restore` drive are handed
+    // this same logger, so in json mode every human line lands on stderr and
+    // stdout carries only the result document.
+    const options: BackupCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
+    const result = await dispatchBackupSubcommand(options, cwd);
+
+    if (isJsonFormat(options.format)) {
+        // One shape per verb, discriminated by `subcommand`: the six verbs answer
+        // six different questions and a merged document would say which one it is
+        // only by which fields happened to be null.
+        printJson({
+            subcommand: options.subcommand,
+            ...(result.entries === undefined ? {} : { entries: result.entries }),
+            ...(result.entry === undefined ? {} : { entry: result.entry }),
+            ...(result.restored === undefined ? {} : { restored: result.restored }),
+            ...(result.preview === undefined ? {} : { preview: result.preview }),
+            ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
+            ...(result.body === undefined ? {} : { result: result.body }),
+            ok: result.code === 0,
+        });
+    }
+
+    return result;
+};
+
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
 const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
     value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
 
 /** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(async ({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 
     if (!isBackupSubcommand(sub)) {
@@ -752,12 +795,13 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ a
         return { code: 1 };
     }
 
-    return runBackupCommand({
+    const result = await runBackupCommand({
         at: options.at,
         bookmark: options.bookmark,
         bucket: options.bucket,
         cwd,
         dir: options.dir,
+        format: options.format,
         logger,
         prefix: options.prefix,
         prod: options.prod === true,
@@ -772,6 +816,8 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ a
         verify: options.verify === true,
         yes: options.yes === true,
     });
+
+    return { code: result.code };
 });
 
 export { execute };

@@ -80,10 +80,10 @@ interface AddCommandOptions {
     diff?: boolean;
     /** Print the plan and stop without writing anything. */
     dryRun?: boolean;
+    /** Output format: `pretty` (default) or `json` — a JSON snapshot of the plan/list. */
+    format?: string;
     /** Local registry root (offline / tests). Expects per-item subdirs, each with a `registry.json`. */
     from?: string;
-    /** Emit a JSON snapshot of the plan/result. */
-    json?: boolean;
     /** `--list`: enumerate available items instead of adding. */
     list?: boolean;
     logger: Logger;

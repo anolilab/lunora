@@ -6,6 +6,7 @@ const exportCommand: Command = {
     examples: [
         ["lunora export --out backup.ndjson", "Dump every table to an NDJSON file"],
         ["lunora export --tables messages,users", "Export only specific tables"],
+        ["lunora export --out backup.ndjson --format json", "Write the dump to a file and report rows/bytes as JSON"],
     ],
     group: "Data",
     loader: () =>
@@ -16,6 +17,7 @@ const exportCommand: Command = {
     options: [
         { description: "Output file path (`-` for stdout, default)", name: "out", type: String },
         { description: "Comma-separated table allowlist", name: "tables", type: String },
+        { description: "Output format: pretty (default) or json — json needs --out <file>, since stdout carries the NDJSON", name: "format", type: String },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
         {
@@ -29,6 +31,7 @@ const exportCommand: Command = {
 export { exportCommand };
 
 export type ExportOptions = CreateOptions<{
+    format: string | undefined;
     out: string | undefined;
     prod: boolean | undefined;
     tables: string | undefined;

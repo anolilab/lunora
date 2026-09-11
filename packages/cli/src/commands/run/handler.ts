@@ -5,6 +5,7 @@ import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-ur
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { RunRpcOptions } from "./index";
 
@@ -26,6 +27,8 @@ interface RunCommandOptions {
     claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -195,6 +198,18 @@ const parseRunPayloads = (
 
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("run", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+    }
+
+    // In `--format json` mode every human line — the POST echo, the pretty-printed
+    // body `readAndLogBody` logs, the shard-denial hint — moves to stderr so
+    // stdout carries only the result document.
+    const logger = loggerForFormat(options.format, options.logger);
     const runAs = options.as !== undefined && options.as !== "";
 
     // `--claims` only travels inside the `runAs` envelope. Without a non-empty
@@ -202,7 +217,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     // ANONYMOUS call and exited 0, which is an authoritative-looking wrong answer
     // for exactly the person debugging a claims-gated procedure.
     if (options.claims !== undefined && !runAs) {
-        options.logger.error("--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.");
+        logger.error("--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.");
 
         return { body: undefined, code: 1, requestUrl: options.url ?? "" };
     }
@@ -210,7 +225,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     // full-access admin bearer, which changes how the target may be chosen.
     const needsBearer = runAs || options.functionPath.startsWith(ADMIN_PREFIX);
 
-    const baseUrl = resolveRunTarget({ cwd, logger: options.logger, needsBearer, url: options.url });
+    const baseUrl = resolveRunTarget({ cwd, logger, needsBearer, url: options.url });
 
     if (baseUrl === undefined) {
         return { body: undefined, code: 1, requestUrl: options.url ?? "" };
@@ -224,7 +239,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
     }
 
-    const parsed = parseRunPayloads(options, options.logger);
+    const parsed = parseRunPayloads(options, logger);
 
     if (parsed === undefined) {
         return { body: undefined, code: 1, requestUrl };
@@ -240,13 +255,13 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     const { source, token } = needsBearer ? resolveAdminBearer({ cwd, token: options.token, url: baseUrl }) : {};
 
     if (needsBearer && token === undefined) {
-        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+        logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
         return { body: undefined, code: 1, requestUrl };
     }
 
     if (token !== undefined) {
-        options.logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
+        logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
     }
 
     const headers: Record<string, string> = {
@@ -256,7 +271,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     const payload = buildEnvelope({ args: parsed.args, claims: parsed.claims, options, runAs });
 
-    options.logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
+    logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
 
     const response = await fetchImpl(requestUrl, {
         body: JSON.stringify(payload),
@@ -264,9 +279,16 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         method: "POST",
     });
 
-    const body = await readAndLogBody(response, options.logger);
+    const body = await readAndLogBody(response, logger);
 
-    hintOnShardDenial(options.logger, { body, runAs, status: response.status });
+    hintOnShardDenial(logger, { body, runAs, status: response.status });
+
+    if (isJsonFormat(options.format)) {
+        // The function's own return value is the point; `functionPath` and
+        // `requestUrl` name what produced it so a captured document is
+        // self-describing.
+        printJson({ functionPath: options.functionPath, ok: response.ok, requestUrl, result: body });
+    }
 
     return {
         body,
@@ -290,6 +312,7 @@ const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ a
         as: options.as,
         claims: options.claims,
         cwd,
+        format: options.format,
         functionPath,
         logger,
         shard: options.shard,

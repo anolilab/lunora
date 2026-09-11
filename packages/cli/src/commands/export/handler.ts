@@ -11,6 +11,7 @@ import type { ExportOptions } from "./index";
 const execute: CommandHandler<ExportOptions> = defineHandler<ExportOptions>(({ argument, cwd, logger, options }) =>
     runExportCommand({
         cwd,
+        format: options.format,
         logger,
         out: argument[0] ?? options.out,
         prod: options.prod === true,

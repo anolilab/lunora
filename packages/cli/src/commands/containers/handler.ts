@@ -4,6 +4,7 @@ import { detectPackageManager, execArgsFor } from "../../util/detect-package-man
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ContainersOptions } from "./index";
@@ -18,12 +19,24 @@ const SUBCOMMANDS = new Set(["build", "delete", "images", "info", "list", "push"
 /** Subcommands that drive the local Docker engine and need it running. */
 const NEEDS_DOCKER = new Set(["build", "push"]);
 
+/**
+ * The read subcommands `wrangler containers` can answer as JSON. They write the
+ * document to stdout themselves, so `--format json` forwards `--json` rather than
+ * wrapping wrangler's output in a shape of its own — the same thing
+ * `deployments list` does. The write subcommands (`build`, `push`, `delete`) have
+ * no JSON rendering upstream and nothing structured of Lunora's own to report, so
+ * `--format json` is refused there rather than given an invented shape.
+ */
+const JSON_CAPABLE = new Set(["images list", "info", "list"]);
+
 interface ContainersCommandOptions {
     argument: ReadonlyArray<string>;
     cwd?: string;
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
     dockerAvailable?: DockerProbe;
     env?: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     logger: Logger;
     push?: boolean;
     spawner?: Spawner;
@@ -44,6 +57,13 @@ interface ContainersCommandResult {
  */
 const runContainersCommand = async (options: ContainersCommandOptions): Promise<ContainersCommandResult> => {
     const [subcommand, ...rest] = options.argument;
+    const formatError = validateOutputFormat("containers", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1 };
+    }
 
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
         options.logger.error(
@@ -61,7 +81,24 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
         return { code: 1 };
     }
 
+    const json = isJsonFormat(options.format);
+    // `images` is a namespace, not a verb: `images list` answers as JSON and
+    // `images delete` does not, so the check keys off the full path.
+    const verb = subcommand === "images" ? `images ${rest[0] ?? ""}`.trim() : subcommand;
+
+    if (json && !JSON_CAPABLE.has(verb)) {
+        options.logger.error(
+            `containers ${verb}: --format json is only available for the read subcommands (${[...JSON_CAPABLE].toSorted((a, b) => a.localeCompare(b)).join(" | ")}) — wrangler has no JSON rendering for the rest.`,
+        );
+
+        return { code: 1 };
+    }
+
     const args = ["containers", subcommand, ...rest];
+
+    if (json) {
+        args.push("--json");
+    }
 
     if (options.tag !== undefined) {
         args.push("--tag", options.tag);
@@ -79,7 +116,9 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
     const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
 
-    options.logger.info(`running ${descriptor.command} ${descriptor.args.join(" ")}`);
+    // In json mode the echoed invocation moves to stderr so wrangler's document
+    // is the only thing on stdout.
+    loggerForFormat(options.format, options.logger).info(`running ${descriptor.command} ${descriptor.args.join(" ")}`);
 
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
@@ -93,6 +132,7 @@ const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptio
         argument,
         cwd,
         env: options.env,
+        format: options.format,
         logger,
         push: options.push === true,
         tag: options.tag,

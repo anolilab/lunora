@@ -11,6 +11,7 @@ import { targetsRemoteWorker } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { tuiConfirm } from "../../util/tui-prompts";
 import type { StreamingFetchLike } from "../data-transfer";
@@ -28,6 +29,8 @@ interface SeedCommandOptions {
     /** Print the NDJSON instead of inserting. */
     dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     logger: Logger;
     /** Epoch-ms reference for time-valued columns; pin with `seed` for byte-identical rows. */
     now?: number;
@@ -124,6 +127,9 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
             cwd,
             fetchImpl: options.fetchImpl,
             file: temporaryFile,
+            // `format` is deliberately NOT forwarded: the import leg is an
+            // implementation detail here, and its own summary document would be a
+            // second JSON blob on stdout. Only the logger routing is inherited.
             logger: options.logger,
             prod: options.prod,
             token: options.token,
@@ -208,8 +214,43 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
  * the runtime shape `@lunora/seed` introspects ({@link schemaFromIr}). The plan
  * is pure and deterministic — the same `--seed` always yields identical rows.
  */
-const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
+
+/**
+ * `--dry-run`: emit what WOULD be inserted and stop.
+ *
+ * In `pretty` the NDJSON goes to stdout verbatim (the historical, pipeable
+ * behaviour). In `json` the same lines become one `rows` array inside the result
+ * document, because a stream and a document cannot share stdout.
+ */
+const reportDryRun = (parameters: { json: boolean; lines: string[]; ndjson: string; options: SeedCommandOptions; tables: number }): SeedCommandResult => {
+    const { json, lines, ndjson, options, tables } = parameters;
+    const generated = lines.length;
+
+    if (json) {
+        printJson({ conflicts: 0, generated, inserted: 0, rows: lines.map((line) => JSON.parse(line) as unknown), tables });
+    } else if (ndjson.length > 0) {
+        process.stdout.write(ndjson);
+    }
+
+    options.logger.info(`generated ${String(generated)} row(s) across ${String(tables)} table(s) — dry run, nothing inserted`);
+
+    return { code: 0, conflicts: 0, generated, inserted: 0, ndjson };
+};
+
+const runSeedCommand = async (rawOptions: SeedCommandOptions): Promise<SeedCommandResult> => {
+    const cwd = rawOptions.cwd ?? process.cwd();
+    const formatError = validateOutputFormat("seed", rawOptions.format);
+
+    if (formatError !== undefined) {
+        rawOptions.logger.error(formatError);
+
+        return seedFailure(1);
+    }
+
+    const json = isJsonFormat(rawOptions.format);
+    // Routed once, here: the reset and import legs are handed this same logger,
+    // so in json mode every human line lands on stderr.
+    const options: SeedCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
     const schemaPath = join(cwd, "lunora", "schema.ts");
 
     const guard = guardSeedTargets(options, schemaPath);
@@ -249,13 +290,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
     const generated = lines.length;
 
     if (options.dryRun === true) {
-        if (ndjson.length > 0) {
-            process.stdout.write(ndjson);
-        }
-
-        options.logger.info(`generated ${String(generated)} row(s) across ${String(plan.length)} table(s) — dry run, nothing inserted`);
-
-        return { code: 0, conflicts: 0, generated, inserted: 0, ndjson };
+        return reportDryRun({ json, lines, ndjson, options, tables: plan.length });
     }
 
     // Checked BEFORE the wipe: `--reset --count 0` used to destroy the local dev
@@ -283,7 +318,13 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         return aborted;
     }
 
-    return insertSeedRows(ndjson, generated, cwd, options);
+    const inserted = await insertSeedRows(ndjson, generated, cwd, options);
+
+    if (json) {
+        printJson({ conflicts: inserted.conflicts, generated: inserted.generated, inserted: inserted.inserted, tables: plan.length });
+    }
+
+    return inserted;
 };
 
 /** `lunora seed` handler (lazy-loaded via the command's `loader`). */
@@ -293,6 +334,7 @@ const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({
         count: options.count,
         cwd,
         dryRun: options.dryRun === true,
+        format: options.format,
         logger,
         prod: options.prod === true,
         reset: options.reset === true,

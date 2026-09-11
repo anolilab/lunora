@@ -11,7 +11,7 @@ const insightsCommand: Command = {
     examples: [
         ["lunora insights", "Report against the local dev worker"],
         ["lunora insights --shard channel:demo", "Scope the report to one shard"],
-        ["lunora insights --json", "Emit the raw report as JSON"],
+        ["lunora insights --format json", "Emit the raw report as JSON"],
         ["lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN", "Report against production"],
     ],
     group: "Develop",
@@ -23,7 +23,7 @@ const insightsCommand: Command = {
     options: [
         { description: "Explicit shard key (defaults to the root shard)", name: "shard", type: String },
         { description: "Max rows per section (default 10)", name: "limit", type: String },
-        { description: "Emit a JSON report instead of human text", name: "json", type: Boolean },
+        { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
         { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
@@ -33,7 +33,7 @@ const insightsCommand: Command = {
 export { insightsCommand };
 
 export type InsightsOptions = CreateOptions<{
-    json: boolean | undefined;
+    format: string | undefined;
     limit: string | undefined;
     prod: boolean | undefined;
     shard: string | undefined;

@@ -42,7 +42,7 @@ measured problem, not a suspected one:
 ```bash
 lunora insights                      # against the local dev worker
 lunora insights --shard channel:demo # scope to one shard
-lunora insights --limit 25 --json    # machine-readable, more rows
+lunora insights --limit 25 --format json  # machine-readable, more rows
 lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
 ```
 

@@ -63,7 +63,7 @@ describe("lunora analyze", () => {
             expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("lunora", "_generated", "api.ts")]);
         });
 
-        it("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {
+        it("--format json emits a machine-readable report on stdout (jq-pipeable)", async () => {
             expect.assertions(3);
 
             const { logger } = recordingLogger();
@@ -85,7 +85,7 @@ describe("lunora analyze", () => {
             });
 
             try {
-                const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });
+                const result = await runAnalyzeCommand({ cwd: workdir, format: "json", inspectOnly: buildOut, logger });
 
                 expect(result.code).toBe(0);
 
