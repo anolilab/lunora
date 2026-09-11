@@ -204,7 +204,7 @@ export const createProject = mutation
             }),
         );
 
-        ctx.log.info("project.created", { organizationId, projectId: String(projectId) });
+        ctx.log.info("project.created", { organizationId, project: String(projectId) });
 
         return projectId;
     });
@@ -243,7 +243,7 @@ export const archiveProject = mutation
             }),
         );
 
-        ctx.log.info("project.archived", { organizationId, projectId: String(projectId) });
+        ctx.log.info("project.archived", { organizationId, project: String(projectId) });
     });
 
 /**
