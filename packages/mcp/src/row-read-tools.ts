@@ -65,32 +65,84 @@ const ROW_READ_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
 const ROW_READ_TOOL_NAMES: ReadonlySet<string> = new Set(ROW_READ_TOOL_DEFINITIONS.map((tool) => tool.name));
 
 /**
- * Coerce an MCP `arguments` bag into the `findRelated` admin payload.
+ * Reject a malformed traversal option — the optional half of
+ * {@link readRelatedArguments}' rule set, split out so neither half carries the
+ * whole set's branching. The two are one parser and are read together.
  *
- * Only SHAPE is enforced here. The range checks that matter (`depth` 1-4,
- * `limit` 1-200, a known edge name) belong to `ctx.db.related` itself, and its
- * refusals name the cap — a second copy here would drift from them.
+ * Every default this op has is its WIDEST setting, which is why a malformed
+ * narrowing option is refused rather than dropped: `direction: "sideways"`
+ * falling back to `"both"` walks both directions, and `edges:
+ * "orders.customerId"` (a string, not an array) falls back to EVERY edge.
+ */
+const assertTraversalOptions = (input: Record<string, unknown>): void => {
+    const { cursor, depth, direction, edges, limit } = input;
+
+    if (cursor !== undefined && cursor !== null && typeof cursor !== "string") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `cursor` must be a string");
+    }
+
+    if (depth !== undefined && typeof depth !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `depth` must be a number");
+    }
+
+    if (direction !== undefined && direction !== "both" && direction !== "in" && direction !== "out") {
+        throw new LunoraError("BAD_REQUEST", 'findRelated: `direction` must be one of "in", "out" or "both"');
+    }
+
+    if (limit !== undefined && typeof limit !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `limit` must be a number");
+    }
+
+    if (edges !== undefined && (!Array.isArray(edges) || !edges.every((entry) => typeof entry === "string"))) {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `edges` must be an array of edge-name strings");
+    }
+};
+
+/**
+ * Coerce an MCP `arguments` bag into the `findRelated` admin payload, under the
+ * SAME rules — and with the same refusal text — that `@lunora/do`'s
+ * `parseFindRelatedArgs` applies when the payload reaches the shard.
+ *
+ * The two used to disagree over one payload: this side required only a
+ * non-EMPTY `table`/`id` (so `"   "` travelled to the shard to be rejected
+ * there) and passed `edges` through on `Array.isArray` alone (so
+ * `["tickets.customerId", 7]` left here intact). A pre-check that disagreed
+ * with the real check about which payloads are well-formed is worse than none.
+ *
+ * It is a second copy rather than a shared call, deliberately:
+ * `parseFindRelatedArgs` is module-private to `@lunora/do` (its public entry
+ * re-exports no part of `./admin-rpc-args`), and depending on `@lunora/do` from
+ * here would drag the whole Durable Object runtime — plus
+ * `@lunora/platform-cloudflare` and `drizzle-orm` — into a stdio/HTTP MCP server
+ * that never runs a DO. Keeping the rules and the messages identical is what
+ * keeps the copy honest, and the tests pin exactly that.
+ *
+ * Only SHAPE is enforced, on both sides. The range checks that matter (`depth`
+ * 1-4, `limit` 1-200, a known edge name) belong to `ctx.db.related` itself, and
+ * its refusals name the cap — a third copy here would drift from them.
  */
 const readRelatedArguments = (input: Record<string, unknown>): { args: Record<string, unknown>; shardKey: string | undefined } => {
     const { cursor, depth, direction, edges, id, limit, shardKey, table } = input;
 
-    if (typeof table !== "string" || table.length === 0) {
-        throw new LunoraError("BAD_REQUEST", '"table" is required and must be a non-empty string');
+    if (typeof table !== "string" || table.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `table` is required");
     }
 
-    if (typeof id !== "string" || id.length === 0) {
-        throw new LunoraError("BAD_REQUEST", '"id" is required and must be a non-empty string');
+    if (typeof id !== "string" || id.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `id` is required");
     }
+
+    assertTraversalOptions(input);
 
     return {
         args: {
             id,
             table,
             ...(typeof cursor === "string" ? { cursor } : {}),
-            ...(typeof depth === "number" ? { depth } : {}),
-            ...(typeof direction === "string" ? { direction } : {}),
-            ...(Array.isArray(edges) ? { edges } : {}),
-            ...(typeof limit === "number" ? { limit } : {}),
+            ...(depth === undefined ? {} : { depth }),
+            ...(direction === undefined ? {} : { direction }),
+            ...(edges === undefined ? {} : { edges }),
+            ...(limit === undefined ? {} : { limit }),
         },
         shardKey: typeof shardKey === "string" && shardKey.length > 0 ? shardKey : undefined,
     };

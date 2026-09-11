@@ -590,6 +590,72 @@ describe("callTool", () => {
 });
 
 /**
+ * The `findRelated` payload rules, pinned.
+ *
+ * These are a SECOND copy of `@lunora/do`'s `parseFindRelatedArgs` — that parser
+ * is module-private to a package this one deliberately does not depend on (see
+ * `src/row-read-tools.ts`). The copy is only worth having while it agrees with
+ * the original, and it did not: this side used to accept a blank `table`/`id`
+ * and any array as `edges`. Every case below is a case the shard rejects, so a
+ * divergence shows up here rather than as two different answers to one payload.
+ */
+describe("lunora_find_related payload rules (shared with @lunora/do parseFindRelatedArgs)", () => {
+    const REFUSED = [
+        { input: { id: "c1", table: "   " }, rule: "`table` blank after trim" },
+        { input: { id: " ", table: "customers" }, rule: "`id` blank after trim" },
+        { input: { cursor: 5, id: "c1", table: "customers" }, rule: "`cursor` not a string" },
+        { input: { depth: "2", id: "c1", table: "customers" }, rule: "`depth` not a number" },
+        { input: { direction: "sideways", id: "c1", table: "customers" }, rule: "`direction` outside the enum" },
+        { input: { id: "c1", limit: "10", table: "customers" }, rule: "`limit` not a number" },
+        { input: { edges: "tickets.customerId", id: "c1", table: "customers" }, rule: "`edges` a bare string, not an array" },
+        { input: { edges: ["tickets.customerId", 7], id: "c1", table: "customers" }, rule: "`edges` holding a non-string entry" },
+    ];
+
+    it.each(REFUSED)("refuses $rule without reaching the deployment", async ({ input }) => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_find_related", input, false, false, true);
+
+        expect(result.isError).toBe(true);
+        // The shard's own wording, so one payload gets one answer wherever it is caught.
+        expect(result.content[0]!.text).toContain("findRelated: `");
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("accepts a null cursor the way the shard does, and omits it from the payload", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_find_related", { cursor: null, id: "c1", table: "customers" }, false, false, true);
+
+        expect(result.isError).toBeUndefined();
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.findRelated }, { id: "c1", table: "customers" }, {});
+    });
+
+    it("forwards a well-formed edge list unchanged rather than filtering it", async () => {
+        expect.assertions(1);
+
+        const mock = mockClient();
+
+        await callTool(
+            mock.asClient,
+            "lunora_find_related",
+            { edges: ["tickets.customerId", "messages.ticketId"], id: "c1", table: "customers" },
+            false,
+            false,
+            true,
+        );
+
+        expect(mock.query).toHaveBeenCalledWith(
+            { __lunoraRef: ADMIN_FUNCTIONS.findRelated },
+            { edges: ["tickets.customerId", "messages.ticketId"], id: "c1", table: "customers" },
+            {},
+        );
+    });
+});
+
+/**
  * The write-confirmation handshake.
  *
  * `allowWrites` answers "may this server write at all"; it never answered "was
