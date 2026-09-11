@@ -1486,8 +1486,38 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // `relationBaseWhere` is deliberately NOT spread through: a handler
         // cannot widen past its policy.
         related: base.related
-            ? async (start: Record<string, unknown>, options?: RelatedArgs) =>
-                  await (base.related as NonNullable<RlsDatabase["related"]>)(start, { ...options, relationBaseWhere: relationReadFilter })
+            ? async (start: Record<string, unknown>, options?: RelatedArgs) => {
+                  // Refused up front under `.rls("required")`, because the honest
+                  // alternative is a confusing failure and the tempting one is a
+                  // hole.
+                  //
+                  // `base` is the GUARDED writer there (see the `base`/`raw`
+                  // docblock above), and its `related` is re-bound over that same
+                  // guarded writer — so every hop is `guarded.findMany`, which
+                  // `guardTable` denies for any non-`.public()` table WHETHER OR
+                  // NOT a policy is declared for it. The guard has no notion of
+                  // policy coverage; that is what `route()` exists for, and
+                  // `related` is the one read here that cannot call it: a
+                  // traversal discovers its tables as it walks, so there is no
+                  // `tableName` at this call site to route on.
+                  //
+                  // Routing it properly means handing the traversal a reader that
+                  // resolves per table, which needs both `findRelated` and the
+                  // schema's edge set inside this middleware — neither is reachable
+                  // from `@lunora/server` today. Every shortcut considered instead
+                  // (a reader override, or letting a supplied filter earn guard
+                  // passage) turns an engine-internal seam from one that only
+                  // NARROWS into one that widens, which is a worse bug than this
+                  // one. So this refuses until that routing exists.
+                  if (base !== raw) {
+                      throw new LunoraError(
+                          "NOT_IMPLEMENTED",
+                          'ctx.db.related is not yet supported under a .rls("required") schema: a traversal discovers its tables as it walks, so the guard denies every hop into a protected table even when a policy covers it. Read the relation with explicit policy-scoped queries for now.',
+                      );
+                  }
+
+                  return await (base.related as NonNullable<RlsDatabase["related"]>)(start, { ...options, relationBaseWhere: relationReadFilter });
+              }
             : undefined,
 
         // Restore clears the soft-delete marker — a by-id un-delete, gated as an
