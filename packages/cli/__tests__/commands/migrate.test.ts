@@ -5,13 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import {
-    execute as migrateExecute,
-    runMigrateCreateCommand,
-    runMigrateDataCommand,
-    runMigrateGenerateCommand,
-    runMigrateToHyperdriveCommand,
-} from "../../src/commands/migrate/handler";
+import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
+import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";

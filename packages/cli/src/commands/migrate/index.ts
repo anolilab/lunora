@@ -15,7 +15,7 @@ const migrateCommand: Command = {
     ],
     group: "Data",
     loader: () =>
-        import("./handler").then((m) => {
+        import("./dispatch").then((m) => {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "migrate",

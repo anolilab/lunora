@@ -11,7 +11,8 @@ import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
-import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
@@ -242,25 +243,54 @@ const resolveExportOutput = (options: ExportCommandOptions): { destination: stri
     return { destination };
 };
 
+/** Where the dump is fetched from, and with what. */
+interface ExportRequest {
+    fetchImpl: StreamingFetchLike;
+    requestUrl: string;
+    tables: string[] | undefined;
+    token: string;
+}
+
 /**
- * Land the dump: commit the staged file (when the destination is one) and log
- * the human line.
+ * Resolve the worker this export reads from and the bearer it reads with —
+ * every precondition that has to hold before a byte is fetched. Logs the reason
+ * and returns a {@link Refusal} carrying its exit code when one does not: the
+ * reasons land in different buckets (a flag combination is usage, a missing
+ * bearer is auth). The sibling `import` resolves its request the same way.
  */
-const finishExport = async (parameters: {
-    bytes: number;
-    file: { path: string; stage: string } | undefined;
-    logger: Logger;
-    rows: number;
-    sink: NodeJS.WritableStream;
-    sinkError: () => Error | undefined;
-}): Promise<void> => {
-    const { bytes, file, logger, rows, sink, sinkError } = parameters;
+const resolveExportRequest = (options: ExportCommandOptions): ExportRequest | Refusal => {
+    if (options.prod && options.url === undefined) {
+        options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");
 
-    if (file !== undefined) {
-        await commitStagedExport(sink, file, sinkError);
-
-        logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
+        return { refused: EXIT_CODE.USAGE };
     }
+
+    // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
+    // real destination, and with no `--url` that comes from the dev-server record,
+    // not from the (undefined) flag.
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return { refused: EXIT_CODE.AUTH };
+    }
+
+    const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
+
+    if (typeof fetchImpl !== "function") {
+        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
+    }
+
+    return { fetchImpl, requestUrl: `${baseUrl}${EXPORT_ENDPOINT_PATH}`, tables: resolveTables(options.tables), token };
 };
 
 /**
@@ -278,43 +308,14 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     }
 
     const { destination } = resolvedOutput;
+    const request = resolveExportRequest(options);
 
-    if (options.prod && options.url === undefined) {
-        const message = "--prod requires an explicit --url (refusing to export from the implicit localhost worker)";
-
-        options.logger.error(message);
-
-        return { bytes: 0, code: EXIT_CODE.USAGE, error: message, rows: 0 };
+    if (isRefusal(request)) {
+        // `resolveExportRequest` logged the reason; its code says which kind.
+        return { bytes: 0, code: request.refused, error: "export: could not resolve the worker URL and admin token", rows: 0 };
     }
 
-    // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
-    // real destination, and with no `--url` that comes from the dev-server record,
-    // not from the (undefined) flag.
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
-
-    if (baseUrl === undefined) {
-        // `resolveAdminBaseUrl` logged why the target was refused.
-        return { bytes: 0, code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL", rows: 0 };
-    }
-
-    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
-
-    if (!token) {
-        const message = "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)";
-
-        options.logger.error(message);
-
-        return { bytes: 0, code: EXIT_CODE.AUTH, error: message, rows: 0 };
-    }
-
-    const requestUrl = `${baseUrl}${EXPORT_ENDPOINT_PATH}`;
-    const tables = resolveTables(options.tables);
-
-    const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const { fetchImpl, requestUrl, tables, token } = request;
 
     options.logger.info(`POST ${requestUrl} -> export${tables ? ` (tables: ${tables.join(",")})` : ""}`);
 
@@ -379,7 +380,11 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         throw error;
     }
 
-    await finishExport({ bytes, file, logger: options.logger, rows, sink, sinkError: () => sinkError });
+    if (file !== undefined) {
+        await commitStagedExport(sink, file, () => sinkError);
+
+        options.logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
+    }
 
     // `--format json` is only reachable with a file destination (see
     // `resolveExportOutput`), so `destination` is present whenever the document is.

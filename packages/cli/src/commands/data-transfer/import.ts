@@ -629,35 +629,6 @@ const reportImportOutcome = (
     }
 };
 
-/** Say what the import did, as human text. The document is the caller's to return. */
-const emitImportReport = (
-    options: ImportCommandOptions,
-    outcome: {
-        body: ImportSummary;
-        conflicts: number;
-        errorCount: number;
-        failed: boolean;
-        insertedTotal: number;
-        received: number;
-        warnings: ReadonlyArray<string>;
-    },
-): void => {
-    // Only in pretty mode: in json the same object IS the document's `summary`,
-    // and printing it here too said the whole thing twice per run.
-    if (options.format !== "json") {
-        options.logger.info(JSON.stringify(outcome.body, undefined, 2));
-    }
-
-    reportImportOutcome(options.logger, {
-        conflicts: outcome.conflicts,
-        errorCount: outcome.errorCount,
-        failed: outcome.failed,
-        insertedTotal: outcome.insertedTotal,
-        received: outcome.received,
-        warnings: outcome.warnings,
-    });
-};
-
 /**
  * `--scan`: write the candidate storage-column mapping and import nothing. Its
  * product is the file it wrote, so there is no import summary to hand back.
@@ -769,7 +740,14 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const failed =
         streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
 
-    emitImportReport(options, { body, conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
+    // The batcher's roll-up, spelled out for a human. Pretty mode only: in json
+    // the same object IS the document's `summary`, and printing it here too said
+    // the whole thing twice per run.
+    if (options.format !== "json") {
+        options.logger.info(JSON.stringify(body, undefined, 2));
+    }
+
+    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
 
     const data = { file: options.file, inserted: insertedTotal, summary: body };
 
