@@ -263,7 +263,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, key: "MISSING", logger, subcommand: "get" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(recorded.errors.join("\n")).toContain("MISSING");
         });
 
@@ -359,7 +359,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push", yes: true });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(recorded.errors.join("\n")).toContain("AUTH_SECRET");
             expect(recorded.errors.join("\n")).toContain("env doctor");
@@ -563,7 +563,7 @@ describe("lunora env", () => {
             const { logger, recorded } = recordingLogger();
             const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(recorded.errors.join("\n")).toContain("is missing");
         });
 
@@ -700,7 +700,7 @@ describe("lunora env", () => {
             const { logger, recorded } = recordingLogger();
             const refused = await runEnvCommand({ cwd: workdir, key: "LUNORA_ADMIN_TOKEN", logger, set: true, subcommand: "generate" });
 
-            expect(refused.code).toBe(1);
+            expect(refused.code).toBe(EXIT_CODE.USAGE);
             expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(live);
 
             // …and --yes is the deliberate rotation.

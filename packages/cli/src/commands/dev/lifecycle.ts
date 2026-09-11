@@ -39,6 +39,7 @@ import {
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
@@ -427,7 +428,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             "Check `lunora dev status` and `lunora dev logs`; `lunora dev stop` shuts it down.",
     );
 
-    return { code: 1 };
+    return { code: EXIT_CODE.UNAVAILABLE };
 };
 
 /**
@@ -923,7 +924,7 @@ const runLifecycleSubcommand = (parameters: {
     if (subcommand !== undefined) {
         logger.error(`dev: unknown subcommand "${subcommand}" — expected stop | status | logs (or no subcommand to start the dev server)`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return undefined;

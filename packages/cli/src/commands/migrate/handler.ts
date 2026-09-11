@@ -38,7 +38,8 @@ import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token"
 import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
@@ -131,7 +132,7 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     if (!existsSync(schemaPath)) {
         options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
 
-        return { code: 1, empty: true, migrationFile: "" };
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, migrationFile: "" };
     }
 
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
@@ -149,7 +150,7 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     } catch (error: unknown) {
         options.logger.error(error instanceof Error ? error.message : String(error));
 
-        return { code: 1, empty: true, migrationFile: "" };
+        return { code: EXIT_CODE.USAGE, empty: true, migrationFile: "" };
     }
 
     const diff = diffSnapshots(previousSnapshot, nextSnapshot);
@@ -399,13 +400,13 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
             `invalid migration name: "${options.name}" derives the export \`${exportName}\`, which is not a valid identifier — pick a name that starts with a letter and isn't a reserved word`,
         );
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const table = await resolveCreateTable(cwd, options);
 
     if (table === undefined) {
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
@@ -425,7 +426,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (content.includes(`id: "${slug}"`) || new RegExp(String.raw`\bexport const ${exportName}\b`, "u").test(content)) {
         options.logger.error(`a migration with id "${slug}" (export \`${exportName}\`) already exists in ${file}`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.CONFLICT, file: "" };
     }
 
     const defineMigrationImport = defineMigrationImportFor(cwd);
@@ -549,25 +550,28 @@ const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions):
  * Validate the guards (`--prod`/`--yes`), token, target table, and fetch impl
  * for a data migration. Returns `undefined` after logging when any check fails.
  */
-const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | undefined => {
+const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | Refusal => {
     const cwd = options.cwd ?? process.cwd();
 
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to migrate the implicit localhost worker)");
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const table = resolveValidatedTable(cwd, options);
 
     if (table === undefined) {
-        return undefined;
+        // The migration id names no table in the project's schema.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return undefined;
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     // Resolved after `baseUrl`, and through the shared resolver, because the
@@ -581,7 +585,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     if (!token) {
         options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
-        return undefined;
+        return { refused: EXIT_CODE.AUTH };
     }
 
     // Gated on the RESOLVED destination, not on `--prod`: the flag is the
@@ -590,7 +594,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     if ((options.subcommand === "up" || options.subcommand === "down") && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && !options.yes) {
         options.logger.error(`migrate ${options.subcommand} runs the migration against ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
@@ -674,8 +678,9 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promise<MigrateDataCommandResult> => {
     const request = resolveMigrateDataRequest(options);
 
-    if (request === undefined) {
-        return { body: undefined, code: 1, requestUrl: "" };
+    if (isRefusal(request)) {
+        // `resolveMigrateDataRequest` logged the reason; its code says which kind.
+        return { body: undefined, code: request.refused, requestUrl: "" };
     }
 
     const { fetchImpl, requestUrl, table, token } = request;
@@ -697,7 +702,11 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
         options.logger.error(`migrate ${options.subcommand} "${options.id}": ${rollUpFailure}`);
     }
 
-    return { body, code: response.ok && rollUpFailure === undefined ? 0 : 1, requestUrl };
+    // A transport failure carries the worker's status; a per-shard roll-up
+    // failure came back 200 and is a genuine generic failure.
+    const rollUpCode = rollUpFailure === undefined ? 0 : 1;
+
+    return { body, code: response.ok ? rollUpCode : exitCodeForStatus(response.status), requestUrl };
 };
 
 interface MigrateToHyperdriveOptions {
@@ -768,7 +777,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
             "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
         );
 
-        return { bytes: 0, code: 1, exported: 0, imported: 0 };
+        return { bytes: 0, code: EXIT_CODE.USAGE, exported: 0, imported: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -899,7 +908,7 @@ const dispatchCreate = async (context: MigrateDispatchContext): Promise<CommandR
 
         logger.error(message);
 
-        return { code: 1, error: message };
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const result = await runMigrateCreateCommand({ cwd, logger, name, table: options.table });
@@ -917,7 +926,7 @@ const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" 
 
         logger.error(message);
 
-        return { code: 1, error: message };
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const result = await runMigrateDataCommand({

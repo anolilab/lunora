@@ -287,7 +287,7 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
         if (error !== undefined) {
             logger.error(error);
 
-            return { code: 1, error };
+            return { code: EXIT_CODE.USAGE, error };
         }
 
         return { code: 0 };
@@ -302,7 +302,7 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
 
         logger.error(message);
 
-        return { code: 1, error: message };
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     if (json) {

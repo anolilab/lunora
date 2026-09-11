@@ -2,6 +2,7 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
@@ -210,14 +211,14 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const { logger } = options;
 
     if (options.prod && options.url === undefined) {
-        return insightsFailure(logger, "--prod requires an explicit --url (refusing to report from the implicit localhost worker)", 1);
+        return insightsFailure(logger, "--prod requires an explicit --url (refusing to report from the implicit localhost worker)", EXIT_CODE.USAGE);
     }
 
     const baseUrl = resolveAdminBaseUrl(options.url, logger, options.cwd);
 
     if (baseUrl === undefined) {
         // `resolveAdminBaseUrl` logged the reason it refused the target.
-        return { code: 1, error: "could not resolve a usable worker URL" };
+        return { code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL" };
     }
 
     // Resolved after `baseUrl`, and through the shared resolver: the `.dev.vars`
@@ -227,7 +228,11 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
     if (!token) {
-        return insightsFailure(logger, "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)", 1);
+        return insightsFailure(
+            logger,
+            "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)",
+            EXIT_CODE.AUTH,
+        );
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
@@ -254,7 +259,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const text = await response.text();
 
     if (!response.ok) {
-        return insightsFailure(logger, `insights failed: HTTP ${String(response.status)}: ${text}`, 1);
+        return insightsFailure(logger, `insights failed: HTTP ${String(response.status)}: ${text}`, exitCodeForStatus(response.status));
     }
 
     let parsed: unknown;

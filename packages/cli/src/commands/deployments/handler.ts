@@ -142,7 +142,7 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     if (error !== undefined || args === undefined) {
         options.logger.error(error ?? "deployments: nothing to run");
 
-        return { code: 1, descriptor: undefined, error };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error };
     }
 
     // In json mode the echoed invocation moves to stderr so wrangler's document

@@ -5,6 +5,7 @@ import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { Connection } from "./connect";
@@ -170,7 +171,7 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
         options.logger.error(message);
 
-        return { code: 1, error: message, written: [] };
+        return { code: EXIT_CODE.USAGE, error: message, written: [] };
     }
 
     // With an injected connection there is no URL scheme to read the dialect from,
@@ -197,7 +198,7 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
         options.logger.error(message);
 
-        return { code: 1, error: message, written: [] };
+        return { code: EXIT_CODE.NOT_FOUND, error: message, written: [] };
     }
 
     const { files, warnings } = emitIntrospection(

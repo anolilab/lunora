@@ -105,7 +105,7 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
 
         options.logger.error(message);
 
-        return seedFailure(1, message);
+        return seedFailure(EXIT_CODE.NOT_FOUND, message);
     }
 
     // `--reset` clears local `.wrangler/state` only; it cannot touch a remote
@@ -115,7 +115,7 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
 
         options.logger.error(message);
 
-        return seedFailure(1, message);
+        return seedFailure(EXIT_CODE.USAGE, message);
     }
 
     return undefined;
@@ -210,7 +210,7 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
 
         options.logger.error(message);
 
-        return seedFailure(1, message);
+        return seedFailure(EXIT_CODE.USAGE, message);
     }
 
     const confirmer = options.confirm ?? tuiConfirm;
@@ -219,7 +219,8 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
     if (!confirmed) {
         options.logger.info("seed: aborted");
 
-        return seedFailure(1, "seed: aborted at the confirmation prompt");
+        // A declined prompt is the same intent as the Ctrl-C that bucket stands for.
+        return seedFailure(EXIT_CODE.CANCELLED, "seed: aborted at the confirmation prompt");
     }
 
     return undefined;

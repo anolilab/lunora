@@ -147,7 +147,7 @@ describe("lunora info --bindings", () => {
         const { errors, logger } = recordingLogger();
         const { code } = runInfoCommand({ bindings: true, cwd: workdir, logger });
 
-        expect(code).toBe(1);
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(errors.join(" ")).toContain("no readable wrangler config");
     });
 });

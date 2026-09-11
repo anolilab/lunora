@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -172,7 +173,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
 
             logger.error(message);
 
-            return { code: 1, descriptor, error: message, report: undefined };
+            return { code: EXIT_CODE.NOT_FOUND, descriptor, error: message, report: undefined };
         }
 
         const report = buildReport(outdir);

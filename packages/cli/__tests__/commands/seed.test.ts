@@ -59,7 +59,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger() });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
 
     it("generates deterministic NDJSON with valid foreign keys on --dry-run", async () => {
@@ -201,8 +201,8 @@ describe("lunora seed", () => {
         const prodResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), prod: true, reset: true, url: "https://app.example.com" });
         const remoteResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), reset: true, url: "https://app.example.com" });
 
-        expect(prodResult.code).toBe(1);
-        expect(remoteResult.code).toBe(1);
+        expect(prodResult.code).toBe(EXIT_CODE.USAGE);
+        expect(remoteResult.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("--reset does not wipe when there is nothing to seed", async () => {
@@ -237,7 +237,7 @@ describe("lunora seed", () => {
         // Non-TTY and no --yes: `reset` refuses rather than deleting.
         const result = await runSeedCommand({ count: 2, cwd: workDir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, reset: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
         expect(errors.join("\n")).toContain("--yes");
     });

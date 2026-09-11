@@ -45,6 +45,8 @@ import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
+import type { ExitCode } from "../../util/exit-code";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
@@ -1431,26 +1433,30 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
  * without it: building pushes images, which a command whose whole job is "tell me
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
-const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): string | undefined => {
+const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
     const d1Error = checkD1Placeholder(cwd, options.logger, command, options.env);
 
     if (d1Error !== undefined) {
-        return d1Error;
+        return { code: EXIT_CODE.USAGE, error: d1Error };
     }
 
     const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger, command, options.env);
 
     if (localhostOriginError !== undefined) {
-        return localhostOriginError;
+        return { code: EXIT_CODE.USAGE, error: localhostOriginError };
     }
 
     const sourceError = checkContainerSourcesExist(cwd, options.logger, command);
 
     if (sourceError !== undefined) {
-        return sourceError;
+        return { code: EXIT_CODE.USAGE, error: sourceError };
     }
 
-    return checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command, options.env);
+    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command, options.env);
+
+    // Not a usage error: the project is fine and the machine is not. Same bucket
+    // `lunora containers build` already exits with for the same missing engine.
+    return dockerError === undefined ? undefined : { code: EXIT_CODE.MISSING_DEPENDENCY, error: dockerError };
 };
 
 /**
@@ -1511,10 +1517,16 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     return driver.toolchain.deploy(request);
 };
 
-/** Failed-deploy result with the empty validation shape shared by every pre-wrangler abort. */
+/**
+ * Failed-deploy result with the empty validation shape shared by every
+ * pre-wrangler abort. Exit 2 by default: everything that aborts before wrangler
+ * runs — the pipeline, the `--migrate` preflight, the entry build — refuses
+ * because the project or the invocation is wrong, never because the deploy
+ * itself failed. A check that resolved a different bucket passes `code`.
+ */
 const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
     return {
-        code: 1,
+        code: EXIT_CODE.USAGE,
         descriptor: undefined,
         error,
         validation: { problems: [], wranglerPath: undefined },
@@ -1648,7 +1660,7 @@ const completeDeploy = async ({
     const healthCheck = await runHealthCheckStep(options, cwd, deployment.url);
 
     if (healthCheck?.error !== undefined) {
-        return { code: 1, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
+        return { code: EXIT_CODE.UNAVAILABLE, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
     }
 
     const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
@@ -1684,6 +1696,8 @@ const runPreDeployPipeline = async (
     options: DeployCommandOptions,
     command: PreDeployCommand,
 ): Promise<{
+    /** Set when a check resolved its own exit code — otherwise the caller's default applies. */
+    code?: ExitCode;
     codegen?: CodegenResult;
     error?: string;
     reblessSchemaBaseline?: () => void;
@@ -1777,7 +1791,7 @@ const runPreDeployPipeline = async (
     const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
-        return { error: checkError, target, validation: empty };
+        return { code: checkError.code, error: checkError.error, target, validation: empty };
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only at
@@ -1802,12 +1816,12 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // A validation failure carries its problem list; every earlier abort
         // shares the empty-validation shape, optionally with the drift verdict.
         if (pipeline.validation.problems.length > 0) {
-            return { code: 1, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
+            return { code: EXIT_CODE.USAGE, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
         }
 
         const extra = pipeline.schemaDrift === undefined ? undefined : { schemaDrift: pipeline.schemaDrift };
 
-        return abortResult(pipeline.error, extra);
+        return abortResult(pipeline.error, { ...extra, ...(pipeline.code === undefined ? {} : { code: pipeline.code }) });
     }
 
     const { reblessSchemaBaseline, validation } = pipeline;
@@ -1847,7 +1861,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // and STILL abort (e.g. the second of two mintable keys failed to
         // push) — carry it through so the caller's `error` path doesn't drop
         // the one place that value is now recoverable.
-        return { code: 1, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, target);
@@ -1897,7 +1911,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             if (error !== undefined) {
                 logger.error(error);
 
-                result = { ...result, code: 1 };
+                result = { ...result, code: EXIT_CODE.USAGE };
             }
         }
     } finally {

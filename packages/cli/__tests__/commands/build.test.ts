@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuildCommandResult } from "../../src/commands/build/handler";
 import { runBuildCommand } from "../../src/commands/build/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -237,7 +238,7 @@ describe("lunora build", () => {
 
         const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
     });
 });

@@ -6,6 +6,7 @@ import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import type { TextPrompt } from "../../util/tui-prompts";
@@ -293,14 +294,14 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     if (feature === undefined) {
         options.logger.error("add requires a feature or registry item. Usage: lunora add <auth|email|storage|crons|presence|…>");
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     // Must be inside a Lunora project: a `lunora/` source dir + a wrangler config.
     if (!existsSync(join(cwd, "lunora")) || findWranglerFile(cwd) === undefined) {
         options.logger.error("add: not a Lunora project here (need a lunora/ directory and a wrangler.jsonc). Run `lunora init` first.");
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     // Every auth-UI port renders DOM. On React Native the React payload would
@@ -310,7 +311,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     if (feature.kind === "auth-ui" && isReactNativeProject(readProjectDependencies(cwd))) {
         options.logger.error(`add: ${AUTH_UI_REACT_NATIVE_REFUSAL}`);
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     const items = await resolveFeatureItems(feature, options);

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
@@ -158,7 +159,7 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1, error: gate };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     const { logger } = options;
@@ -213,7 +214,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         logger.error(message);
 
-        return { ...empty, code: 1, error: message };
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("add", options);
@@ -221,7 +222,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     if (gate) {
         logger.error(gate);
 
-        return { ...empty, code: 1, error: gate };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     let cleanups: (() => void)[] = [];
@@ -303,7 +304,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
 
         options.logger.error(message);
 
-        return { ...empty, code: 1, error: message };
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("view", options);
@@ -311,7 +312,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1, error: gate };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     const cleanups: (() => void)[] = [];
@@ -368,13 +369,13 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     if (root === undefined) {
         options.logger.error("registry build requires --from <registry root>");
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE };
     }
 
     if (!existsSync(root)) {
         options.logger.error(`registry root not found: ${root}`);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.NOT_FOUND };
     }
 
     const index = buildRegistryIndex(root);
@@ -388,7 +389,7 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
         if (drift) {
             options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
 
-            return { ...empty, code: 1 };
+            return { ...empty, code: EXIT_CODE.USAGE };
         }
 
         options.logger.success(`registry: ${outputPath} is up to date (${String(index.items.length)} items)`);

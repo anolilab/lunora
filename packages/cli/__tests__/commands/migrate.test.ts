@@ -179,7 +179,7 @@ export const schema = defineSchema({
                 logger: { ...silentLogger(), error: (m) => errors.push(m) },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
 
             const message = errors.join("\n");
 
@@ -569,7 +569,7 @@ export const schema = defineSchema({
                 table: "a",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("already exists");
         });
 
@@ -594,7 +594,7 @@ export const schema = defineSchema({
                 table: "messages",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -615,7 +615,7 @@ export const schema = defineSchema({
                     name: "needs_table",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
             } finally {
                 Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalIsTty });
             }
@@ -666,7 +666,7 @@ export const schema = defineSchema({
                 promptTable: async () => undefined,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("no table selected");
             expect(existsSync(migrationsFile())).toBe(false);
         });
@@ -883,7 +883,7 @@ export const backfillReadBy = defineMigration({
                 },
             } as unknown as Parameters<typeof migrateExecute>[0]);
 
-            expect(exitCode).toBe(1);
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
         });
 
         it("errors when no admin token is available", async () => {
@@ -903,7 +903,7 @@ export const backfillReadBy = defineMigration({
                     subcommand: "up",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;
@@ -927,7 +927,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain('"ghost" not found');
         });
 
@@ -947,7 +947,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
@@ -968,7 +968,7 @@ export const backfillReadBy = defineMigration({
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -1079,7 +1079,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.PERMISSION);
         });
     });
 });
@@ -1207,7 +1207,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             toUrl: "https://new.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("--yes");
     });
 
@@ -1221,7 +1221,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });
@@ -1246,7 +1246,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             yes: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });

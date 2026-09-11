@@ -24,10 +24,18 @@ prose out of stderr to tell "not logged in" from "wrangler is missing" from
 | `6`   | conflict           | The write lost a race, or the name is already taken.                                                     |
 | `7`   | rate limited       | Back off and retry.                                                                                      |
 | `8`   | unavailable        | The far side is unavailable or timed out. Retryable.                                                     |
-| `9`   | missing dependency | A local tool the command shells out to (`wrangler`, `git`, `docker`, …) is not installed.                |
+| `9`   | missing dependency | A local tool the command shells out to (`wrangler`, `git`, `docker`, …) is missing or not running.       |
 | `130` | cancelled          | You hit Ctrl-C at a prompt. The POSIX `128 + SIGINT` convention.                                         |
 
 A value never changes meaning. A new bucket takes the next free number.
+
+`1` and `2` divide along what the command was for. A command that exists to
+**answer a question** about the project — `doctor`, `verify`, `advisor`, `eval` —
+exits `1` when its verdict is negative: it ran, and the answer is no. A command
+that exists to **do something** exits `2` when it refused because the invocation,
+or the project source it read, was wrong and it never started: `deploy` on an
+invalid `wrangler.jsonc`, `migrate up` with no id, `seed --table` naming a table
+the schema does not define.
 
 ## Branching on one
 
@@ -75,16 +83,17 @@ machine-readable `code` that keys into the [error catalog](/docs/errors), and th
 catalog already assigns each code a transport `status`. The CLI maps
 `status → exit code` once:
 
-| Status                            | Exit code             |
-| --------------------------------- | --------------------- |
-| `400`, `405`, `413`, `422`        | `2` usage             |
-| `401`                             | `3` auth              |
-| `403`                             | `4` permission denied |
-| `404`                             | `5` not found         |
-| `409`                             | `6` conflict          |
-| `429`                             | `7` rate limited      |
-| `421`, `502`, `503`, `504`, `507` | `8` unavailable       |
-| anything else (`500`, `501`)      | `1` failure           |
+| Status                       | Exit code             |
+| ---------------------------- | --------------------- |
+| `400`, `405`, `413`, `422`   | `2` usage             |
+| `401`                        | `3` auth              |
+| `403`                        | `4` permission denied |
+| `404`                        | `5` not found         |
+| `409`                        | `6` conflict          |
+| `429`                        | `7` rate limited      |
+| `421`, `502`, `503`, `504`   | `8` unavailable       |
+| `507`                        | `2` usage             |
+| anything else (`500`, `501`) | `1` failure           |
 
 So a new catalog code inherits the right exit code for free. Two kinds of code
 are overridden by name, because their wire status is honest on the wire and
@@ -97,6 +106,11 @@ misleading in a terminal:
   they exit `2`.
 - **`LOCAL_DEPENDENCY_MISSING`** has no HTTP status that means "that program
   isn't installed", so it gets exit `9` outright.
+- **`507`** is a ceiling, not a transient. Every `507` this system raises reports
+  that the thing asked for is too big for the place it has to fit (a snapshot past
+  what a Worker isolate will assemble, a durable stream past its chunk ceiling),
+  and it fails identically on every retry until a human narrows the input — so it
+  is `2`, not the retryable `8` its status would otherwise suggest.
 
 When a coded error is rendered in the terminal, the block names the code and the
 exit code it will carry, so the number your script reads and the text you read

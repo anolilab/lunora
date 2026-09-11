@@ -37,7 +37,7 @@ const EXIT_CODE = {
     RATE_LIMITED: 7,
     /** The far side is unavailable or timed out. Retryable. */
     UNAVAILABLE: 8,
-    /** A local tool the command shells out to (wrangler, git, docker, …) is not installed. */
+    /** A local tool the command shells out to (wrangler, git, docker, …) is missing, or not running. */
     MISSING_DEPENDENCY: 9,
     /** Interactive cancel — the POSIX `128 + SIGINT` convention. */
     CANCELLED: 130,
@@ -136,5 +136,26 @@ const exitCodeForError = (error: unknown): ExitCode => {
     return EXIT_CODE_BY_CODE.get(error.code) ?? exitCodeForStatus(error.status);
 };
 
-export type { ExitCode };
-export { EXIT_CODE, exitCodeForCode, exitCodeForError, exitCodeForStatus };
+/**
+ * A preflight's refusal, carrying the exit code its (already-logged) reason maps
+ * to.
+ *
+ * Returned instead of a bare `undefined` by the resolvers that gather a
+ * command's target and credential: each refuses for several different reasons —
+ * a flag combination it cannot honour (exit 2) and a missing admin token (exit
+ * 3) among them — and a caller handed `undefined` has nothing left to classify
+ * from, so every one of those refusals used to exit 1.
+ */
+interface Refusal {
+    refused: ExitCode;
+}
+
+/**
+ * True when a resolver refused, narrowing the union so the caller can return its
+ * code. Takes `object` rather than `Refusal | T` because the guard's job is to
+ * split the resolved value off, and each resolver resolves to a different shape.
+ */
+const isRefusal = (value: object): value is Refusal => "refused" in value;
+
+export type { ExitCode, Refusal };
+export { EXIT_CODE, exitCodeForCode, exitCodeForError, exitCodeForStatus, isRefusal };

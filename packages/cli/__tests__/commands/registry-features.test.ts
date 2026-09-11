@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "../../src/commands/registry/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { lines: string[]; logger: Logger } => {
@@ -292,6 +293,6 @@ describe("lunora add — shadcn-parity features", () => {
 
         const stale = await runBuildIndexCommand({ check: true, cwd: workdir, from: registryRoot, logger, names: [] });
 
-        expect(stale.code).toBe(1);
+        expect(stale.code).toBe(EXIT_CODE.USAGE);
     });
 });

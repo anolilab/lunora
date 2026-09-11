@@ -6,6 +6,7 @@ import type { EvalItemResult, EvalResult } from "@lunora/testing";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import { discoverEvalFiles, EVAL_FILE_SUFFIX } from "./discover-eval-files";
@@ -135,11 +136,15 @@ const toJsonResult = (result: EvalCommandResult): EvalData => {
     return { evals: result.evals.map((outcome) => toJsonOutcome(outcome)) };
 };
 
-/** Log `message` as the run's single top-level error and build the aborted {@link EvalCommandResult}. */
-const abortWithTopLevelError = (logger: Logger, message: string): EvalCommandResult => {
+/**
+ * Log `message` as the run's single top-level error and build the aborted
+ * {@link EvalCommandResult}. `code` is the caller's: a rejected `--threshold` is
+ * a usage error, while the Node-floor `.ts` gap is the machine's.
+ */
+const abortWithTopLevelError = (logger: Logger, message: string, code: number): EvalCommandResult => {
     logger.error(message);
 
-    return { code: 1, error: message, evals: [] };
+    return { code, error: message, evals: [] };
 };
 
 /**
@@ -313,7 +318,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
     // `average >= NaN` comparison false, reporting every eval as FAIL with no
     // stated cause.
     if (options.threshold !== undefined && !isValidThreshold(options.threshold)) {
-        return abortWithTopLevelError(logger, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`);
+        return abortWithTopLevelError(logger, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`, EXIT_CODE.USAGE);
     }
 
     const directoryOption = options.dir ?? DEFAULT_EVAL_DIR;
@@ -329,13 +334,15 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
             throw error;
         }
 
-        return abortWithTopLevelError(logger, NODE_FLOOR_MESSAGE);
+        // Left generic: the Node build cannot execute `.ts` at all, which is
+        // neither the invocation nor a missing tool this command shells out to.
+        return abortWithTopLevelError(logger, NODE_FLOOR_MESSAGE, 1);
     }
 
     if (options.threshold !== undefined && outcomes.length === 0) {
         const message = `eval: --threshold ${String(options.threshold)} was set but 0 eval files were discovered under "${directoryOption}" — nothing was gated`;
 
-        return abortWithTopLevelError(logger, message);
+        return abortWithTopLevelError(logger, message, EXIT_CODE.USAGE);
     }
 
     for (const line of renderEvalTable(outcomes)) {

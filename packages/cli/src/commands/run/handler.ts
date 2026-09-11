@@ -4,6 +4,7 @@ import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-t
 import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
@@ -226,7 +227,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
         logger.error(message);
 
-        return { body: undefined, code: 1, error: message, requestUrl: options.url ?? "" };
+        return { body: undefined, code: EXIT_CODE.USAGE, error: message, requestUrl: options.url ?? "" };
     }
     // A forged identity and the reserved admin paths both travel with the
     // full-access admin bearer, which changes how the target may be chosen.
@@ -236,7 +237,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     if (baseUrl === undefined) {
         // `resolveRunTarget` logged why the target was refused.
-        return { body: undefined, code: 1, error: "could not resolve a usable worker URL", requestUrl: options.url ?? "" };
+        return { body: undefined, code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL", requestUrl: options.url ?? "" };
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
@@ -251,7 +252,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     if (parsed === undefined) {
         // `parseRunPayloads` logged which flag could not be read.
-        return { body: undefined, code: 1, error: "could not parse --args / --claims as JSON", requestUrl };
+        return { body: undefined, code: EXIT_CODE.USAGE, error: "could not parse --args / --claims as JSON", requestUrl };
     }
 
     // `--as` dispatches through the admin-gated `runAs` op rather than calling the
@@ -268,7 +269,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
         logger.error(message);
 
-        return { body: undefined, code: 1, error: message, requestUrl };
+        return { body: undefined, code: EXIT_CODE.AUTH, error: message, requestUrl };
     }
 
     if (token !== undefined) {
@@ -296,7 +297,9 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     return {
         body,
-        code: response.ok ? 0 : 1,
+        // The worker already said which failure this was — a 403 shard denial and
+        // a 429 are different answers, and the taxonomy maps them.
+        code: response.ok ? 0 : exitCodeForStatus(response.status),
         error: response.ok ? undefined : `${options.functionPath} failed: HTTP ${String(response.status)}`,
         requestUrl,
     };
@@ -311,7 +314,7 @@ const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions, RunC
 
         logger.error(message);
 
-        return { code: 1, error: message };
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const result = await runRpcCommand({

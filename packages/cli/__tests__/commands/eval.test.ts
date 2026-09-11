@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { EvalData } from "../../src/commands/eval/handler";
 import { execute, runEvalCommand } from "../../src/commands/eval/handler";
 import type { EvalOptions } from "../../src/commands/eval/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { runExecute } from "../helpers/execute";
 
@@ -183,7 +184,7 @@ describe("lunora eval", () => {
         // yields NaN rather than a CLI-level parse error.
         const result = await runEvalCommand({ cwd, logger, threshold: Number.NaN });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
     });
 
@@ -195,7 +196,7 @@ describe("lunora eval", () => {
 
         const result = await runEvalCommand({ cwd, logger, threshold: 5 });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
     });
 
@@ -224,7 +225,7 @@ describe("lunora eval", () => {
         // must not report success.
         const result = await runEvalCommand({ cwd: fixtureRoot, logger, threshold: 0.8 });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.evals).toHaveLength(0);
         expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("0 eval files"))).toBe(true);
     });

@@ -166,7 +166,7 @@ describe("lunora CLI entry", () => {
             // `presence` is still added via `registry add`.
             const code = await runCli({ argv: ["add", "presence"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -258,7 +258,7 @@ describe("lunora CLI entry", () => {
                 cwd: workdir,
             });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, "argv_no_template"))).toBe(false);
         });
     });

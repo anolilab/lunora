@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeployCommandResult } from "../../src/commands/deploy/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import type { RecordedSpawn, Spawner } from "../../src/util/spawn";
@@ -197,7 +198,7 @@ describe("lunora deploy", () => {
                 // Deploy used to read only the `--target` flag, so a typo in the
                 // committed config failed `codegen`/`prepare`/`dev` and shipped
                 // fine from here — the one command where the fallback matters.
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toMatch(/unknown deploy target "clouflare"/);
 
                 // And it must abort BEFORE spawning wrangler: the resolution
@@ -306,7 +307,7 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => false, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.MISSING_DEPENDENCY);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("no Docker-compatible engine");
         });
@@ -428,7 +429,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -457,7 +458,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("build directory");
         });
@@ -480,7 +481,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => true, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("Dockerfile");
         });
@@ -566,7 +567,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toBe("wrangler validation failed");
                 // Never reached the wrangler spawn.
                 expect(calls).toHaveLength(0);
@@ -722,7 +723,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(errors.join("\n")).toContain("SchedulerDO");
             });
 
@@ -737,7 +738,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, env: "canary", logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(errors.some((line) => line.includes("names no environment declared"))).toBe(true);
             });
@@ -805,7 +806,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect(written).toContain('"DB"');
 
             // But deploy is blocked on the placeholder — wrangler is never spawned
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("placeholder database_id") || line.includes("wrangler d1 create"))).toBe(true);
         });
@@ -852,7 +853,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
         });
@@ -880,7 +881,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("placeholder database_id"))).toBe(true);
             expect(errors.some((line) => line.includes("wrangler d1 create"))).toBe(true);
@@ -913,7 +914,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             // The validator's own report, not a stack trace out of the gate.
             expect(errors.join(" ")).not.toContain("Cannot read properties");
@@ -1061,7 +1062,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.descriptor).toBeUndefined();
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("--migrate-yes"))).toBe(true);
@@ -1085,7 +1086,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.descriptor).toBeUndefined();
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("--migrate-url"))).toBe(true);
@@ -1287,7 +1288,7 @@ export const backfillNames = defineMigration({
 
                 // The document is `defineHandler`'s; deploy itself writes nothing.
                 expect(stdout).toBe("");
-                expect(result?.code).toBe(1);
+                expect(result?.code).toBe(EXIT_CODE.USAGE);
                 expect(result?.error).toBeDefined();
             });
 
@@ -1416,7 +1417,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
                 expect(result.healthCheck?.error).toContain("returned HTTP 503");
                 // The deploy succeeded and the probe did not — different facts.
                 expect(errors.join("\n")).toContain("the deploy succeeded, but the new version did not answer");
@@ -1465,7 +1466,7 @@ export const backfillNames = defineMigration({
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
                 expect(healthFetch).not.toHaveBeenCalled();
                 expect(errors.join("\n")).toContain("no URL to probe could be resolved");
             });
@@ -1753,7 +1754,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 // Never reached the wrangler deploy spawn — a failed secret push must
                 // not fall through to shipping a worker still missing that secret.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
@@ -1817,7 +1818,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 // Never reached the wrangler deploy spawn.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
@@ -1840,7 +1841,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
             });
         });
@@ -1884,7 +1885,7 @@ export const backfillNames = defineMigration({
 
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(result.error).toContain("ERROR-level");
                 expect(errors.some((line) => line.includes("index_references_unknown_field"))).toBe(true);
@@ -1941,7 +1942,7 @@ export const backfillNames = defineMigration({
                     strictAdvisories: false,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(result.error).toContain("ctx.ai");
                 expect(errors.some((line) => line.includes("platform_unsupported_feature"))).toBe(true);

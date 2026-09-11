@@ -10,6 +10,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
 import { runPreDeployPipeline } from "../deploy/handler";
@@ -87,7 +88,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
 
     if (pipeline.error !== undefined) {
         return {
-            code: 1,
+            code: EXIT_CODE.USAGE,
             error: pipeline.error,
             ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
             validation: pipeline.validation,

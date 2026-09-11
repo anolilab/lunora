@@ -11,7 +11,7 @@ import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
-import { EXIT_CODE } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
@@ -284,7 +284,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
         options.logger.error(message);
 
-        return { bytes: 0, code: 1, error: message, rows: 0 };
+        return { bytes: 0, code: EXIT_CODE.USAGE, error: message, rows: 0 };
     }
 
     // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
@@ -294,7 +294,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
     if (baseUrl === undefined) {
         // `resolveAdminBaseUrl` logged why the target was refused.
-        return { bytes: 0, code: 1, error: "could not resolve a usable worker URL", rows: 0 };
+        return { bytes: 0, code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL", rows: 0 };
     }
 
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
@@ -304,7 +304,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
         options.logger.error(message);
 
-        return { bytes: 0, code: 1, error: message, rows: 0 };
+        return { bytes: 0, code: EXIT_CODE.AUTH, error: message, rows: 0 };
     }
 
     const requestUrl = `${baseUrl}${EXPORT_ENDPOINT_PATH}`;
@@ -330,7 +330,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
         options.logger.error(message);
 
-        return { bytes: 0, code: 1, error: message, rows: 0 };
+        return { bytes: 0, code: exitCodeForStatus(response.status), error: message, rows: 0 };
     }
 
     if (!response.body) {

@@ -1,5 +1,6 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { ImportCommandData } from "../data-transfer";
 import { runImportCommand } from "../data-transfer";
@@ -18,13 +19,13 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions, Impo
     if (!file) {
         logger.error("import requires a path. Usage: lunora import <file.ndjson | convex-export-dir> [--table <name>]");
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     if (options.from !== undefined && !IMPORT_SOURCE_NAMES.includes(options.from as ImportSourceName)) {
         logger.error(`--from ${options.from} is not a known source. Expected one of: ${IMPORT_SOURCE_NAMES.join(", ")}.`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return runImportCommand({

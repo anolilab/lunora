@@ -3,6 +3,7 @@ import { readLinkedProject, resolveDeployDriver } from "@lunora/config";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -70,7 +71,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
 
         options.logger.error(message);
 
-        return { code: 1, descriptor: undefined, error: message };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message };
     }
 
     const tailCommand = driver.toolchain.tail({

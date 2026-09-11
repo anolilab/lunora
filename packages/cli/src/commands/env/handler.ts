@@ -187,7 +187,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
     if (!entry) {
         logger.error(`env: ${options.key} is not set in ${DEV_VARS_FILE}`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
     }
 
     // Get prints the full value (caller asked for it explicitly) — except in
@@ -301,7 +301,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
                 `run \`lunora env doctor\` to review, and \`lunora env generate --set\` (or \`lunora env set <KEY> <VALUE>\`) to fill them, then re-run.`,
         );
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const spawner = options.spawner ?? defaultSpawner;
@@ -322,7 +322,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         if (secretCommand === undefined) {
             logger.error("deploy target has no command-line toolchain; cannot push secrets");
 
-            return { code: 1, descriptors: [] };
+            return { code: EXIT_CODE.USAGE, descriptors: [] };
         }
 
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
@@ -426,7 +426,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
         logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`lunora dev\` to scaffold it, or \`lunora env set <KEY> <VALUE>\`.`);
         logger.info(`expected (from ${DEV_VARS_EXAMPLE_FILE}): ${exampleKeys.join(", ")}`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
     }
 
     const missing = exampleKeys.filter((key) => !current.has(key));
@@ -522,7 +522,7 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
                 `(outstanding signed URLs and bearers stop verifying). Re-run with --yes to rotate anyway.`,
         );
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     if (live.length > 0) {

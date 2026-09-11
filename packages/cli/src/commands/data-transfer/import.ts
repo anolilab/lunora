@@ -11,6 +11,8 @@ import { stat } from "node:fs/promises";
 
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
@@ -158,14 +160,16 @@ interface ImportRequest {
 
 /**
  * Validate `import` preconditions (guardrails, token, source file, fetch) and
- * resolve the request context. Returns `undefined` after logging when any
- * precondition fails, so the caller can exit non-zero.
+ * resolve the request context. Logs the reason and returns a {@link Refusal}
+ * carrying its exit code when any precondition fails — the reasons land in
+ * different buckets (a flag combination is usage, a missing bearer is auth), and
+ * a bare `undefined` left the caller unable to tell them apart.
  */
-const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | undefined> => {
+const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | Refusal> => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to import to the implicit localhost worker)");
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     // Resolved before the token so the `.dev.vars` fallback is gated on the
@@ -173,7 +177,9 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return undefined;
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     // Gated on the RESOLVED destination, not on `--prod`: the flag is a
@@ -182,7 +188,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
     if (targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
         options.logger.error(`import bulk-writes ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
@@ -190,7 +196,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
     if (!token) {
         options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
-        return undefined;
+        return { refused: EXIT_CODE.AUTH };
     }
 
     try {
@@ -202,14 +208,15 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         if (!stats.isFile() && !stats.isDirectory()) {
             options.logger.error(`not a file or directory: ${options.file}`);
 
-            return undefined;
+            return { refused: EXIT_CODE.USAGE };
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
         options.logger.error(`failed to stat ${options.file}: ${message}`);
 
-        return undefined;
+        // The path the invocation named is not readable — most often not there.
+        return { refused: EXIT_CODE.NOT_FOUND };
     }
 
     const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
@@ -659,7 +666,7 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
     const scanned = await runScan(source, cwd, options.logger);
 
     if (scanned === undefined) {
-        return { body: undefined, code: 1, error: "import --scan: the export could not be scanned", inserted: 0 };
+        return { body: undefined, code: EXIT_CODE.USAGE, error: "import --scan: the export could not be scanned", inserted: 0 };
     }
 
     return { body: undefined, code: 0, inserted: 0 };
@@ -674,7 +681,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     if (source.kind === "invalid") {
         // `resolveImportSource` logged which source it could not read.
-        return { body: undefined, code: 1, error: `import: could not read ${options.file}`, inserted: 0 };
+        return { body: undefined, code: EXIT_CODE.USAGE, error: `import: could not read ${options.file}`, inserted: 0 };
     }
 
     // Scan-only: it writes the candidate mapping and imports nothing, so it runs
@@ -686,9 +693,9 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const request = await resolveImportRequest(options);
 
-    if (request === undefined) {
-        // `resolveImportRequest` logged the missing target or credential.
-        return { body: undefined, code: 1, error: "import: could not resolve the worker URL and admin token", inserted: 0 };
+    if (isRefusal(request)) {
+        // `resolveImportRequest` logged the reason; its code says which kind.
+        return { body: undefined, code: request.refused, error: "import: could not resolve the worker URL and admin token", inserted: 0 };
     }
 
     const { baseUrl, fetchImpl, requestUrl, token } = request;
