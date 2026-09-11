@@ -173,7 +173,7 @@ const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOpt
     if (!isDeploymentsSubcommand(sub)) {
         logger.error(`deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return runDeploymentsCommand({

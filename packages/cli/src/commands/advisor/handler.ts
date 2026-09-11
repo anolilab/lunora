@@ -150,7 +150,11 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
     if ("error" in minScore) {
         options.logger.error(minScore.error);
 
-        return { error: minScore.error };
+        // Same bucket as a bad `--format`: the invocation is wrong, not the
+        // project. Anything the taxonomy leaves at the generic failure tells
+        // automation "the advisor ran and something went wrong", which is the
+        // opposite of what a mistyped flag means.
+        return { code: EXIT_CODE.USAGE, error: minScore.error };
     }
 
     const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot });

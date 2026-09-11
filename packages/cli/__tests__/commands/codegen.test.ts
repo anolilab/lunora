@@ -7,6 +7,7 @@ import { inferLunoraBindings } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute, runCodegenCommand } from "../../src/commands/codegen/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the import form type-checks the mock against the module's full type, which this partial re-export doesn't satisfy
@@ -87,7 +88,7 @@ describe("lunora codegen", () => {
         });
 
         it("refuses an unregistered --target instead of emitting an un-gated surface", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const result = runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "aws" });
 
@@ -96,6 +97,9 @@ describe("lunora codegen", () => {
             // target that does not exist, warn, and exit 0 — the silent
             // fallback the driver registry exists to prevent.
             expect(result.error).toMatch(/unknown deploy target "aws"/);
+            // Exit 2, like a bad `--format`: the flag names a driver that does
+            // not exist, so it is the invocation that is wrong, not codegen.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
 
             // Nothing was written: the target is rejected before codegen runs,
             // so a rejected run cannot leave a half-emitted surface behind.

@@ -83,8 +83,12 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (resolvedTarget.target === undefined) {
         options.logger.error(resolvedTarget.error ?? "unknown deploy target");
 
+        // Exit 2 for the same reason a bad `--format` does: an unresolved
+        // `--target` names a driver that does not exist, which is the
+        // invocation being wrong rather than codegen failing.
         return {
             advisories: [],
+            code: EXIT_CODE.USAGE,
             cronTriggers: [],
             error: resolvedTarget.error ?? "unknown deploy target",
             failedAdvisories: 0,

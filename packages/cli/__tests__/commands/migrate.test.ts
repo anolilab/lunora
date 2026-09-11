@@ -579,7 +579,7 @@ export const schema = defineSchema({
             const errors: string[] = [];
             const result = await runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -682,7 +682,7 @@ export const schema = defineSchema({
                 promptTable: async () => 'x", evil: "y',
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid table");
         });
     });

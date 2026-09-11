@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runSeedCommand } from "../../src/commands/seed/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -117,7 +118,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger(), table: "nope" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("streams the generated NDJSON through the import pipeline", async () => {

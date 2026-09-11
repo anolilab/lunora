@@ -794,7 +794,7 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(asyn
     if (!isBackupSubcommand(sub)) {
         logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | retention | prune | pitr`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     const result = await runBackupCommand({

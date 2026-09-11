@@ -385,7 +385,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (slug === "") {
         options.logger.error(`invalid migration name: "${options.name}" — must contain at least one alphanumeric character`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const exportName = camelCase(slug);
@@ -414,7 +414,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (!IDENTIFIER_PATTERN.test(table)) {
         options.logger.error(`invalid table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const lunoraDirectory = join(cwd, "lunora");

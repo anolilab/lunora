@@ -227,7 +227,10 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 
             logger.error(message);
 
-            return { code: 1, error: message, errors: [message], warnings: [], wranglerPath: undefined };
+            // Exit 2, the same bucket the `--format` guard above uses: an
+            // unresolved `--target` is a flag naming a driver that does not
+            // exist, not a verification that found a problem.
+            return { code: EXIT_CODE.USAGE, error: message, errors: [message], warnings: [], wranglerPath: undefined };
         }
 
         const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });

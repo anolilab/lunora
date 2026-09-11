@@ -168,7 +168,9 @@ const validateSeedTable = (options: SeedCommandOptions, ir: { tables: ReadonlyAr
 
     options.logger.error(`unknown table "${options.table}" — schema defines: ${available || "(no tables)"}`);
 
-    return seedFailure(1);
+    // Exit 2: `--table` names something the schema does not define, which is the
+    // invocation being wrong rather than the seed run failing.
+    return seedFailure(EXIT_CODE.USAGE);
 };
 
 /**
