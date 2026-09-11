@@ -255,17 +255,6 @@ of the framework applying to it:
 - **Realtime** — a live query running a traversal re-runs when the rows it
   walked change.
 
-{/* limitation:related-rls-required — the ONE place the stopgap is described. Delete this comment and the Callout below when per-hop policy routing lands in packages/server/src/rls/middleware.ts. */}
-
-<Callout type="warn">
-    **Not yet supported under a `.rls("required")` schema.** There, `ctx.db.related` throws `NOT_IMPLEMENTED` rather than walking. The [secure-by-default
-    guard](/docs/concepts/rls) denies every read of a table that is not `.public()` *whether or not a policy covers it*, and a traversal is the one read that
-    cannot ask the router which policy applies — it discovers its tables as it walks instead of naming one in an argument. Refusing is the honest stopgap: every
-    shortcut considered instead turns an engine-internal seam that can only *narrow* a read into one that can *widen* it. Until per-hop routing lands, read the
-    relationship with explicit policy-scoped queries — `withIndex` over the foreign key, or a `with` hop. Policy-based RLS **without** `.rls("required")` is
-    unaffected: the per-table filter described above applies normally.
-</Callout>
-
 ## Fusing the graph into retrieval
 
 A relation graph is a third retrieval signal, alongside the vector (semantic)

@@ -192,9 +192,9 @@ for (const node of nodes) {
   not. An array FK is followed **outward only**.
 - **It is an ordinary read** — RLS, column masks, soft delete, `.global()`
   routing and reactivity all apply, because every hop goes back through
-  `ctx.db`. One exception: under a `.rls("required")` schema it currently throws
-  `NOT_IMPLEMENTED`; read the relationship with explicit policy-scoped queries
-  there.
+  `ctx.db`. Under a `.rls("required")` schema each hop gets exactly the verdict a
+  direct read of that table would, so declare a read policy for every table the
+  walk can reach — or narrow it with `edges`.
 - Index the foreign keys. Each inward hop is a `WHERE fk IN (…)` read, and
   unindexed it scans — see the `lunora-performance-audit` skill for the cost
   model and the traversal caps.

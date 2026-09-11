@@ -164,8 +164,9 @@ holds, \`"in"\` the rows that point at it.
 
 **The caps refuse, they do not clamp.** \`depth: 9\` throws \`BAD_REQUEST\`, and
 so does an edge name the schema does not declare — do not probe for the ceiling.
-Not yet supported under a \`.rls("required")\` schema, where it throws
-\`NOT_IMPLEMENTED\`: ${url}/docs/concepts/relation-graph
+Under a \`.rls("required")\` schema every hop gets the same verdict a direct read
+of that table would, so declare a read policy for every table the walk reaches:
+${url}/docs/concepts/relation-graph
 
 ## Rules that save you a debugging session
 
