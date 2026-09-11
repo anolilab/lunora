@@ -137,6 +137,11 @@
             "title": "Rate limit"
         },
         {
+            "description": "The framework-independent backend of the Lunora SaaS kit: per-tenant tables sharded by organizationId (projects, activity), a .global() organizations projection for the cross-tenant reads a shard cannot serve, an identity claim contract carrying the caller's active organization, and the queries/mutations the dashboard and admin run on. Identity itself stays in better-auth; this item never becomes a second source of truth for it.",
+            "name": "saas",
+            "title": "SaaS kit — tenancy, activity, admin projection"
+        },
+        {
             "description": "Pauses the Worker when a Cloudflare usage alert fires. A verified billing usage alert posted to /_lunora/spend-alert sets a flag in an R2 bucket; while it is set, user traffic gets 503 and cron jobs are skipped. Nothing resumes the app automatically.",
             "name": "spend-guard",
             "title": "Spend guard"
