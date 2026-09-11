@@ -37,6 +37,7 @@
  * near-copy that drifts.
  */
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 
 import { fromBase64Url, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
 import { stableStringify } from "../../../shared/stable-key";
@@ -84,7 +85,24 @@ const DIGEST_DOMAIN = "lunora-mcp-write-confirmation-v1";
  * never discloses its key, so returning the digest to the model discloses
  * nothing about the token.
  */
-const digestSecret = (client: LunoraClient): string => `${DIGEST_DOMAIN}\u0000${client.url}\u0000${client.getAuthToken() ?? ""}`;
+const digestSecret = (client: LunoraClient): string => {
+    const token = client.getAuthToken();
+
+    // Refused rather than defaulted. `?? ""` made a tokenless client sign with a
+    // key that is a public constant — every input to it is then knowable, so
+    // anyone could mint a digest that verifies and the handshake would still
+    // LOOK like it was working. A tokenless server cannot run a write anyway
+    // (`assertRunnable` reads admin-gated routes), so refusing costs nothing
+    // real and removes a silent downgrade of the only secret in the key.
+    if (token === null || token === "") {
+        throw new LunoraError(
+            "UNAUTHORIZED",
+            "write confirmation needs the deployment's admin token: it is the secret half of the digest key, and without it a digest would be forgeable by anyone.",
+        );
+    }
+
+    return `${DIGEST_DOMAIN}\u0000${client.url}\u0000${token}`;
+};
 
 /**
  * The exact bytes a digest signs. Sorted-key JSON at every depth, so

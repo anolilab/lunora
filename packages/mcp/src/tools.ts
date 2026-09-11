@@ -180,7 +180,7 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(WRITE_TOOL_DEFINITIONS.map
  * see. Dispatch re-checks both in {@link callTool}, so the guarantee does not
  * depend on a client honouring the advertised list.
  */
-const toolDefinitions = (allowWrites: boolean, allowObservability = false): ReadonlyArray<ToolDefinition> =>
+const toolDefinitions = (allowWrites: boolean, allowObservability = false, allowDataReads = false): ReadonlyArray<ToolDefinition> =>
     // Fail closed: only the boolean `true` opts in. These are exported helpers, so
     // an env-plumbed/JS caller could pass a truthy string like `"false"`/`"0"` —
     // the explicit `=== true` guards that despite the declared `boolean` type.
@@ -188,7 +188,8 @@ const toolDefinitions = (allowWrites: boolean, allowObservability = false): Read
     [
         ...READ_ONLY_TOOL_DEFINITIONS,
         ...ERROR_TOOL_DEFINITIONS,
-        ...(allowObservability === true ? [...ROW_READ_TOOL_DEFINITIONS, ...OBSERVABILITY_TOOL_DEFINITIONS] : []),
+        ...(allowDataReads === true ? ROW_READ_TOOL_DEFINITIONS : []),
+        ...(allowObservability === true ? OBSERVABILITY_TOOL_DEFINITIONS : []),
         ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : []),
     ];
 
@@ -397,7 +398,7 @@ const screenWrite = async (
  * Returns the refusal to send back, or `undefined` when `name` is not gated.
  */
 /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
-const refuseGatedTool = (name: string, allowWrites: boolean, allowObservability: boolean): ToolResult | undefined => {
+const refuseGatedTool = (name: string, allowWrites: boolean, allowObservability: boolean, allowDataReads: boolean): ToolResult | undefined => {
     // Fail closed: only the boolean `true` opts in, whatever a JS caller passed.
     if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
         return errorResult(`tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`);
@@ -409,9 +410,9 @@ const refuseGatedTool = (name: string, allowWrites: boolean, allowObservability:
         );
     }
 
-    if (allowObservability !== true && ROW_READ_TOOL_NAMES.has(name)) {
+    if (allowDataReads !== true && ROW_READ_TOOL_NAMES.has(name)) {
         return errorResult(
-            `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+            `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var.`,
         );
     }
 
@@ -440,6 +441,7 @@ const callTool = async (
     input: Record<string, unknown>,
     allowWrites = false,
     allowObservability = false,
+    allowDataReads = false,
 ): Promise<ToolResult> => {
     try {
         // Static catalog content — no client, no gate, and reachable on a server
@@ -448,9 +450,10 @@ const callTool = async (
             return callErrorTool(name, input);
         }
 
-        /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
-        if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
-            return errorResult(`tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`);
+        const refusal = refuseGatedTool(name, allowWrites, allowObservability, allowDataReads);
+
+        if (refusal !== undefined) {
+            return refusal;
         }
 
         if (OBSERVABILITY_TOOL_NAMES.has(name)) {

@@ -65,7 +65,6 @@ describe("observability-tier gating", () => {
             "lunora_get_function_schema",
             "lunora_run_query",
             "lunora_explain_error",
-            "lunora_find_related",
             ...OBSERVABILITY_NAMES,
         ]);
         expect(toolDefinitions(true, true).map((tool) => tool.name)).toStrictEqual([
@@ -74,7 +73,6 @@ describe("observability-tier gating", () => {
             "lunora_get_function_schema",
             "lunora_run_query",
             "lunora_explain_error",
-            "lunora_find_related",
             ...OBSERVABILITY_NAMES,
             "lunora_run_mutation",
             "lunora_run_action",

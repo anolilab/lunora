@@ -87,6 +87,8 @@ interface LunoraMcpServerOptions {
      * without it the tools are omitted from the advertised list AND refused at
      * dispatch. Only takes effect when a `token` resolved.
      */
+    allowDataReads?: boolean;
+
     allowObservability?: boolean;
 
     /**
@@ -183,10 +185,13 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     // fail-closed reading of "unknown" is "no privileged tools".
     const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
     const allowObservability = options.allowObservability === true && hasAdminToken;
+    // Its own gate, not folded into observability: log lines and raw table rows
+    // are different data classes, and one opt-in must not silently grant both.
+    const allowDataReads = options.allowDataReads === true && hasAdminToken;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites, allowObservability), ...agentToolDefinitions(agents, allowAgents)] };
+        return { tools: [...toolDefinitions(allowWrites, allowObservability, allowDataReads), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -202,7 +207,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
                   ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
                   ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
               })
-            : await callTool(client, name, input, allowWrites, allowObservability);
+            : await callTool(client, name, input, allowWrites, allowObservability, allowDataReads);
 
         return result as CallToolResult;
     });

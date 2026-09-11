@@ -416,6 +416,7 @@ describe("callTool", () => {
                 table: "customers",
             },
             false,
+            false,
             true,
         );
 
@@ -436,12 +437,12 @@ describe("callTool", () => {
 
         const mock = mockClient();
 
-        await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" }, false, true);
+        await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" }, false, false, true);
 
         expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.findRelated }, { id: "c1", table: "customers" }, {});
     });
 
-    it("lunora_find_related is refused at dispatch without the observability opt-in", async () => {
+    it("lunora_find_related is refused at dispatch without the data-reads opt-in", async () => {
         expect.assertions(3);
 
         const mock = mockClient();
@@ -450,7 +451,7 @@ describe("callTool", () => {
         const result = await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" });
 
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("LUNORA_MCP_ALLOW_OBSERVABILITY");
+        expect(result.content[0]!.text).toContain("LUNORA_MCP_ALLOW_DATA_READS");
         expect(mock.query).not.toHaveBeenCalled();
     });
 
@@ -458,8 +459,8 @@ describe("callTool", () => {
         expect.assertions(2);
 
         const mock = mockClient();
-        const noTable = await callTool(mock.asClient, "lunora_find_related", { id: "c1" }, false, true);
-        const noId = await callTool(mock.asClient, "lunora_find_related", { table: "customers" }, false, true);
+        const noTable = await callTool(mock.asClient, "lunora_find_related", { id: "c1" }, false, false, true);
+        const noId = await callTool(mock.asClient, "lunora_find_related", { table: "customers" }, false, false, true);
 
         expect(noTable.isError).toBe(true);
         expect(noId.isError).toBe(true);
