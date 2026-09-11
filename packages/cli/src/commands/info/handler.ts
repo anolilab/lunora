@@ -5,6 +5,7 @@ import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema } from "@lunora/codegen";
 import type { LinkedProject } from "@lunora/config";
 import { readLinkedProject } from "@lunora/config";
+import type { BindingManifest } from "@lunora/config/cloudflare";
 import { findWranglerFile } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
@@ -12,9 +13,9 @@ import { Project } from "ts-morph";
 import { deriveBindingManifest, writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { InfoOptions } from "./index";
 
 interface InfoCommandOptions {
@@ -271,7 +272,7 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
  * and `lunora dev` write the same document from the same derivation, so a
  * deployer and a task runner cannot be told different things.
  */
-const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; out?: string }): { code: number } => {
+const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; out?: string }): InfoCommandResult => {
     const { cwd, json, logger, out } = options;
 
     // `--out` goes through the SAME writer `build --emit-bindings` and `lunora dev`
@@ -286,7 +287,7 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
         if (error !== undefined) {
             logger.error(error);
 
-            return { code: 1 };
+            return { code: 1, error };
         }
 
         return { code: 0 };
@@ -297,15 +298,15 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
     if (manifest === undefined) {
         // "No bindings" and "I could not tell" must not look the same: a deployer
         // acts on the first by provisioning nothing.
-        logger.error(error ?? "could not derive the binding manifest");
+        const message = error ?? "could not derive the binding manifest";
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: 1, error: message };
     }
 
     if (json) {
-        printJson(manifest);
-
-        return { code: 0 };
+        return { code: 0, data: manifest };
     }
 
     if (manifest.bindings.length === 0) {
@@ -336,13 +337,18 @@ const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; o
         logger.warn(`not modelled by the manifest: ${manifest.unknown.join(", ")} — anything they bind must be provisioned by hand.`);
     }
 
-    return { code: 0 };
+    return { code: 0, data: manifest };
 };
 
-interface InfoCommandResult {
-    code: number;
+/**
+ * The `--format json` payload: the full snapshot, or — under `--bindings` — the
+ * binding manifest, which is the narrower question that flag asks.
+ */
+type InfoCommandData = BindingManifest | InfoSnapshot;
+
+interface InfoCommandResult extends CommandResult<InfoCommandData> {
     /** Absent in `--bindings` mode, which answers a narrower question than the snapshot. */
-    snapshot: InfoSnapshot | undefined;
+    snapshot?: InfoSnapshot;
 }
 
 const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
@@ -357,31 +363,31 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     // and `lunora dev` drops next to its state record, from the same derivation,
     // so a deployer and a task runner cannot be told different things.
     if (options.bindings === true) {
-        return { ...renderBindings({ cwd, json, logger, out: options.out }), snapshot: undefined };
+        return renderBindings({ cwd, json, logger, out: options.out });
     }
 
     if (options.out !== undefined) {
-        logger.error("--out only applies with --bindings; the full info snapshot prints to stdout under --format json.");
+        const message = "--out only applies with --bindings; the full info snapshot prints to stdout under --format json.";
 
-        return { code: 1, snapshot: undefined };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const snapshot = collectInfo(cwd);
 
-    if (json) {
-        printJson(snapshot);
-    } else {
+    if (!json) {
         renderText(snapshot, logger);
     }
 
-    return { code: 0, snapshot };
+    return { code: 0, data: snapshot, snapshot };
 };
 
 /** `lunora info` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, format, logger, options }) =>
+const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions, InfoCommandData>(({ cwd, format, logger, options }) =>
     runInfoCommand({ bindings: options.bindings === true, cwd, format, logger, out: options.out }),
 );
 
 export { execute };
-export type { InfoCommandOptions, InfoCommandResult, InfoSnapshot };
+export type { InfoCommandData, InfoCommandOptions, InfoCommandResult, InfoSnapshot };
 export { collectInfo, runInfoCommand };

@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import { inferLunoraBindings } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CodegenCommandData } from "../../src/commands/codegen/handler";
 import { execute, runCodegenCommand } from "../../src/commands/codegen/handler";
+import type { CodegenOptions } from "../../src/commands/codegen/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import { runExecute } from "../helpers/execute";
 
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the import form type-checks the mock against the module's full type, which this partial re-export doesn't satisfy
 vi.mock("@lunora/config", async (importOriginal) => {
@@ -16,24 +19,6 @@ vi.mock("@lunora/config", async (importOriginal) => {
 
     return { ...actual, inferLunoraBindings: vi.fn<typeof actual.inferLunoraBindings>(actual.inferLunoraBindings) };
 });
-
-/** Run `body` while capturing everything written to `process.stdout`. */
-const captureStdout = (body: () => void): string => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
 
 /** Build a `lunora/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */
 const cronsFile = (count: number): string => {
@@ -219,19 +204,22 @@ describe("lunora codegen", () => {
         });
 
         describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", () => {
-                expect.assertions(4);
+            // Through `execute`, because the envelope is written by `defineHandler`:
+            // `runCodegenCommand` is the library entry point and writes nothing.
+            it("emits a single parseable JSON envelope with the structured result", async () => {
+                expect.assertions(5);
 
-                const stdout = captureStdout(() => {
-                    runCodegenCommand({ cwd: workdir, format: "json", logger: silentLogger() });
+                const { code, document } = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                    commandName: "codegen",
+                    cwd: workdir,
+                    options: { format: "json" },
                 });
 
-                const parsed = JSON.parse(stdout) as { advisories: unknown[]; cronTriggers: unknown[]; outputDirectory: string };
-
-                expect(parsed).toHaveProperty("outputDirectory");
-                expect(parsed.outputDirectory).toContain("_generated");
-                expect(Array.isArray(parsed.advisories)).toBe(true);
-                expect(Array.isArray(parsed.cronTriggers)).toBe(true);
+                expect(code).toBe(0);
+                expect(document?.code).toBe(0);
+                expect(document?.data?.outputDirectory).toContain("_generated");
+                expect(Array.isArray(document?.data?.advisories)).toBe(true);
+                expect(Array.isArray(document?.data?.cronTriggers)).toBe(true);
             });
         });
     });
@@ -266,7 +254,7 @@ describe("lunora codegen", () => {
         };
 
         /** Drive the real command handler — the warning lives in the `execute` wrapper, not in `runCodegenCommand`. */
-        const runExecute = async (options: Record<string, string> = {}): Promise<string> => {
+        const captureExecuteStderr = async (options: Record<string, string> = {}): Promise<string> => {
             let captured = "";
             const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
                 captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -292,7 +280,7 @@ describe("lunora codegen", () => {
 
             seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
 
-            await expect(runExecute()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
+            await expect(captureExecuteStderr()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
         });
 
         // `runCodegenCommand` returns before generation for an invalid `--format`
@@ -309,7 +297,7 @@ describe("lunora codegen", () => {
 
             seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
 
-            const output = await runExecute(overrides);
+            const output = await captureExecuteStderr(overrides);
 
             expect(output).not.toMatch(/is not exported by the worker entry/u);
             // …and the actual validation error is still reported.
@@ -323,7 +311,7 @@ describe("lunora codegen", () => {
                 'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
             );
 
-            await expect(runExecute()).resolves.not.toMatch(/is not exported by the worker entry/u);
+            await expect(captureExecuteStderr()).resolves.not.toMatch(/is not exported by the worker entry/u);
         });
 
         it("teaches the project's linter to skip the generated output", async () => {
@@ -343,7 +331,7 @@ describe("lunora codegen", () => {
             writeFileSync(join(workdir, ".prettierrc"), JSON.stringify({ semi: true }), "utf8");
             writeFileSync(join(workdir, ".prettierignore"), "dist\n", "utf8");
 
-            await runExecute();
+            await captureExecuteStderr();
 
             const ignored = readFileSync(join(workdir, ".prettierignore"), "utf8");
 
@@ -364,7 +352,7 @@ describe("lunora codegen", () => {
 
             vi.mocked(inferLunoraBindings).mockRejectedValueOnce(new Error("cannot resolve the worker entry"));
 
-            const output = await runExecute();
+            const output = await captureExecuteStderr();
 
             expect(output).toMatch(/could not check whether declared containers\/workflows\/agents are re-exported/u);
             expect(output).toContain("cannot resolve the worker entry");

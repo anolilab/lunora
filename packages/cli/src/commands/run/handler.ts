@@ -6,7 +6,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { RunRpcOptions } from "./index";
 
@@ -41,7 +40,20 @@ interface RunCommandOptions {
 interface RunCommandResult {
     body: unknown;
     code: number;
+    /** Why the call failed before (or at) the RPC, for the `--format json` envelope. */
+    error?: string;
     requestUrl: string;
+}
+
+/**
+ * The `--format json` payload. The function's own return value is the point;
+ * `functionPath` and `requestUrl` name what produced it so a captured document
+ * is self-describing. There is no `ok` — the envelope's `code` is the verdict.
+ */
+interface RunCommandData {
+    functionPath: string;
+    requestUrl: string;
+    result: unknown;
 }
 
 /**
@@ -210,9 +222,11 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     // ANONYMOUS call and exited 0, which is an authoritative-looking wrong answer
     // for exactly the person debugging a claims-gated procedure.
     if (options.claims !== undefined && !runAs) {
-        logger.error("--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.");
+        const message = "--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.";
 
-        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+        logger.error(message);
+
+        return { body: undefined, code: 1, error: message, requestUrl: options.url ?? "" };
     }
     // A forged identity and the reserved admin paths both travel with the
     // full-access admin bearer, which changes how the target may be chosen.
@@ -221,7 +235,8 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     const baseUrl = resolveRunTarget({ cwd, logger, needsBearer, url: options.url });
 
     if (baseUrl === undefined) {
-        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+        // `resolveRunTarget` logged why the target was refused.
+        return { body: undefined, code: 1, error: "could not resolve a usable worker URL", requestUrl: options.url ?? "" };
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
@@ -235,7 +250,8 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     const parsed = parseRunPayloads(options, logger);
 
     if (parsed === undefined) {
-        return { body: undefined, code: 1, requestUrl };
+        // `parseRunPayloads` logged which flag could not be read.
+        return { body: undefined, code: 1, error: "could not parse --args / --claims as JSON", requestUrl };
     }
 
     // `--as` dispatches through the admin-gated `runAs` op rather than calling the
@@ -248,9 +264,11 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     const { source, token } = needsBearer ? resolveAdminBearer({ cwd, token: options.token, url: baseUrl }) : {};
 
     if (needsBearer && token === undefined) {
-        logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+        const message = "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)";
 
-        return { body: undefined, code: 1, requestUrl };
+        logger.error(message);
+
+        return { body: undefined, code: 1, error: message, requestUrl };
     }
 
     if (token !== undefined) {
@@ -276,31 +294,27 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     hintOnShardDenial(logger, { body, runAs, status: response.status });
 
-    if (options.format === "json") {
-        // The function's own return value is the point; `functionPath` and
-        // `requestUrl` name what produced it so a captured document is
-        // self-describing.
-        printJson({ functionPath: options.functionPath, ok: response.ok, requestUrl, result: body });
-    }
-
     return {
         body,
         code: response.ok ? 0 : 1,
+        error: response.ok ? undefined : `${options.functionPath} failed: HTTP ${String(response.status)}`,
         requestUrl,
     };
 };
 
 /** `lunora run <functionPath>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions, RunCommandData>(async ({ argument, cwd, format, logger, options }) => {
     const functionPath = argument[0];
 
     if (!functionPath) {
-        logger.error("missing function path. Usage: lunora run <functionPath> [--args <json>]");
+        const message = "missing function path. Usage: lunora run <functionPath> [--args <json>]";
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: 1, error: message };
     }
 
-    return runRpcCommand({
+    const result = await runRpcCommand({
         args: options.args,
         as: options.as,
         claims: options.claims,
@@ -312,8 +326,14 @@ const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ a
         token: options.token,
         url: options.url,
     });
+
+    return {
+        code: result.code,
+        data: { functionPath, requestUrl: result.requestUrl, result: result.body },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { FetchLike, RunCommandOptions, RunCommandResult };
+export type { FetchLike, RunCommandData, RunCommandOptions, RunCommandResult };
 export { readAndLogBody, runRpcCommand };

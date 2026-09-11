@@ -25,7 +25,6 @@ import { detectPackageManager, execArgsFor } from "../../util/detect-package-man
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
@@ -643,13 +642,7 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
         logger: options.logger,
         options,
     };
-    const result = await dispatchEnvSubcommand(context);
-
-    if (options.format === "json" && result.data !== undefined) {
-        printJson(result.data);
-    }
-
-    return result;
+    return dispatchEnvSubcommand(context);
 };
 
 const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generate", "get", "list", "push", "set", "unset"]);
@@ -658,13 +651,15 @@ const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generat
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand => typeof value === "string" && ENV_SUBCOMMANDS.has(value);
 
 /** `lunora env <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions, EnvCommandData>(({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isEnvSubcommand(sub)) {
-        logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor | generate`);
+        const message = `env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor | generate`;
 
-        return { code: EXIT_CODE.USAGE };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     return runEnvCommand({

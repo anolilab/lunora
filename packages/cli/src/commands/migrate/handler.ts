@@ -42,8 +42,7 @@ import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
 import { runExportCommand } from "../data-transfer/export";
@@ -834,6 +833,17 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
+/**
+ * The `--format json` payload, discriminated by `subcommand`: the five verbs
+ * answer five different questions. There is no `ok` — the envelope's `code` is
+ * the verdict.
+ */
+type MigrateCommandData =
+    | { bytes: number; exported: number; imported: number; subcommand: "d1-to-hyperdrive" }
+    | { empty: boolean; migrationFile?: string; subcommand: "generate" }
+    | { file?: string; name: string; subcommand: "create" }
+    | { id: string; result: unknown; subcommand: "down" | "status" | "up" };
+
 /** What every `migrate` subcommand shell below needs: the parsed invocation plus the resolved output mode. */
 interface MigrateDispatchContext {
     argument: string[];
@@ -846,21 +856,20 @@ interface MigrateDispatchContext {
 }
 
 /** `migrate generate`: diff the schema and emit a SQL migration. */
-const dispatchGenerate = (context: MigrateDispatchContext): { code: number } => {
-    const { argument, cwd, format, logger, options } = context;
+const dispatchGenerate = (context: MigrateDispatchContext): CommandResult<MigrateCommandData> => {
+    const { argument, cwd, logger, options } = context;
     const result = runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
 
-    if (format === "json") {
+    return {
+        code: result.code,
         // `migrationFile` is omitted when nothing was written (an empty diff, or a failure).
-        printJson({ empty: result.empty, migrationFile: result.migrationFile === "" ? undefined : result.migrationFile, subcommand: "generate" });
-    }
-
-    return { code: result.code };
+        data: { empty: result.empty, migrationFile: result.migrationFile === "" ? undefined : result.migrationFile, subcommand: "generate" },
+    };
 };
 
 /** `migrate d1-to-hyperdrive`: copy `.global()` data between two deployments. */
-const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
-    const { format, logger, options } = context;
+const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<CommandResult<MigrateCommandData>> => {
+    const { logger, options } = context;
     const result = await runMigrateToHyperdriveCommand({
         batchSize: options.batchSize,
         fromToken: options.fromToken ?? options.token,
@@ -874,42 +883,41 @@ const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ 
         yes: options.yes === true,
     });
 
-    if (format === "json") {
-        printJson({ bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" });
-    }
-
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" },
+    };
 };
 
 /** `migrate create`: scaffold a data migration. */
-const dispatchCreate = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
-    const { argument, cwd, format, logger, options } = context;
+const dispatchCreate = async (context: MigrateDispatchContext): Promise<CommandResult<MigrateCommandData>> => {
+    const { argument, cwd, logger, options } = context;
     const name = argument[1] ?? options.name;
 
     if (!name) {
-        logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
+        const message = "migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]";
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: 1, error: message };
     }
 
     const result = await runMigrateCreateCommand({ cwd, logger, name, table: options.table });
 
-    if (format === "json") {
-        printJson({ file: result.file === "" ? undefined : result.file, name, subcommand: "create" });
-    }
-
-    return { code: result.code };
+    return { code: result.code, data: { file: result.file === "" ? undefined : result.file, name, subcommand: "create" } };
 };
 
 /** `migrate up|down|status`: drive the cross-shard data-migration orchestrator. */
-const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" | "status" | "up"): Promise<{ code: number }> => {
-    const { argument, cwd, format, logger, options } = context;
+const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" | "status" | "up"): Promise<CommandResult<MigrateCommandData>> => {
+    const { argument, cwd, logger, options } = context;
     const id = argument[1] ?? options.name;
 
     if (!id) {
-        logger.error(`migrate ${subcommand} requires a migration id. Usage: lunora migrate ${subcommand} <id>`);
+        const message = `migrate ${subcommand} requires a migration id. Usage: lunora migrate ${subcommand} <id>`;
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: 1, error: message };
     }
 
     const result = await runMigrateDataCommand({
@@ -926,22 +934,18 @@ const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" 
         yes: options.yes === true,
     });
 
-    if (format === "json") {
-        // The orchestrator's own per-shard roll-up is the document.
-        printJson({ id, ok: result.code === 0, result: result.body, subcommand });
-    }
-
-    return { code: result.code };
+    // The orchestrator's own per-shard roll-up is the document.
+    return { code: result.code, data: { id, result: result.body, subcommand } };
 };
 
 /**
  * `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`).
  *
- * `--format json` is resolved here rather than inside each `run*` function: the
- * subcommands are four different operations sharing one command name, and each
- * already returns the structured result its document is built from.
+ * The document is assembled here rather than inside each `run*` function: the
+ * subcommands are five different operations sharing one command name, and each
+ * already returns the structured result its payload is built from.
  */
-const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(async ({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, MigrateCommandData>(async ({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
     const context: MigrateDispatchContext = { argument, cwd, format, logger, options };
 
@@ -961,18 +965,21 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(as
             return dispatchGenerate(context);
         }
         default: {
-            context.logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
+            const message = `unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`;
+
+            context.logger.error(message);
 
             // Same class as an unknown top-level command, which `cli.ts` already
             // exits USAGE for. A misspelled subcommand is a wrong invocation, not
             // a failed run.
-            return { code: EXIT_CODE.USAGE };
+            return { code: EXIT_CODE.USAGE, error: message };
         }
     }
 });
 
 export { execute };
 export type {
+    MigrateCommandData,
     MigrateCreateCommandOptions,
     MigrateCreateCommandResult,
     MigrateDataCommandOptions,

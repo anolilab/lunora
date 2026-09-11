@@ -1,14 +1,16 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { RegistryOptions } from "./command";
 import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./index";
+import type { RegistryCommandData } from "./types";
 
 /**
  * `lunora registry` handler — dispatches `add | list | view | build` to the
  * orchestrators in `./index`. The remaining positionals after the subcommand are
  * item names.
  */
-const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions, RegistryCommandData>(({ argument, cwd, format, logger, options }) => {
     const subcommand = argument[0];
     const names = argument.slice(1);
 
@@ -62,9 +64,11 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
         return runBuildIndexCommand({ check: options.check === true, cwd, from: options.from, logger, names: [], out: options.out });
     }
 
-    logger.error("registry: unknown subcommand. Usage: lunora registry <add|list|view|build> [names…]");
+    const message = "registry: unknown subcommand. Usage: lunora registry <add|list|view|build> [names…]";
 
-    return { code: 1 };
+    logger.error(message);
+
+    return { code: EXIT_CODE.USAGE, error: message };
 });
 
 export { execute };

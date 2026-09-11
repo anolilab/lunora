@@ -7,7 +7,6 @@ import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { AnalyzeOptions } from "./index";
@@ -41,6 +40,8 @@ interface AnalyzeReport {
 interface AnalyzeCommandResult {
     code: number;
     descriptor: SpawnDescriptor | undefined;
+    /** Why the run failed, for the `--format json` envelope. */
+    error?: string;
     report: AnalyzeReport | undefined;
 }
 
@@ -125,8 +126,6 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
 const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const json = options.format === "json";
-    // In `--format json` mode the human/progress channel moves to stderr so
-    // stdout carries only the JSON document.
     const { logger } = options;
 
     let outdir: string;
@@ -145,6 +144,9 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
             args: exec.args,
             command: exec.command,
             cwd,
+            // wrangler prints its bundle report on stdout, which in json mode
+            // belongs to the result document alone.
+            stdoutToStderr: json,
         };
 
         logger.info(`analyze: building via ${descriptor.command} ${descriptor.args.join(" ")}`);
@@ -153,27 +155,29 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
         const spawned = await spawner(descriptor);
 
         if (spawned.code !== 0) {
-            logger.error(`analyze: wrangler dry-run failed (exit ${String(spawned.code)})`);
+            const message = `analyze: wrangler dry-run failed (exit ${String(spawned.code)})`;
+
+            logger.error(message);
 
             // `temporary` is always true on this branch (we created the outdir above).
             rmSync(outdir, { force: true, recursive: true });
 
-            return { code: spawned.code, descriptor, report: undefined };
+            return { code: spawned.code, descriptor, error: message, report: undefined };
         }
     }
 
     try {
         if (!existsSync(outdir)) {
-            logger.error(`analyze: outdir not found at ${outdir}`);
+            const message = `analyze: outdir not found at ${outdir}`;
 
-            return { code: 1, descriptor, report: undefined };
+            logger.error(message);
+
+            return { code: 1, descriptor, error: message, report: undefined };
         }
 
         const report = buildReport(outdir);
 
-        if (json) {
-            printJson(report);
-        } else {
+        if (!json) {
             renderText(report, logger);
         }
 
@@ -190,7 +194,11 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
 };
 
 /** `lunora analyze` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions>(({ cwd, format, logger }) => runAnalyzeCommand({ cwd, format, logger }));
+const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions, AnalyzeReport>(async ({ cwd, format, logger }) => {
+    const result = await runAnalyzeCommand({ cwd, format, logger });
+
+    return { code: result.code, data: result.report, error: result.error };
+});
 
 export { execute };
 export type { AnalyzeCommandOptions, AnalyzeCommandResult, AnalyzeFileEntry, AnalyzeReport };

@@ -10,7 +10,6 @@ import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";
 import type { AdvisorOptions } from "./index";
 import { formatEntry, formatMatrix, formatSummary } from "./report";
@@ -42,24 +41,28 @@ interface AdvisorCommandOptions {
     write?: boolean;
 }
 
-interface AdvisorCommandResult {
+/** The `--format json` payload: the scored map, plus each gate's verdict. */
+interface AdvisorCommandData {
     /** `true` when `--min-score` was given and the score fell below it. */
     belowMinScore?: boolean;
-
-    /**
-     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
-     * every other outcome is classified by `failed()`, which cannot tell a bad
-     * `--format` (the invocation is wrong, exit 2) from a failed gate (exit 1).
-     */
-    code?: number;
     /** Set when a baseline was requested and could be read. */
     comparison?: BaselineComparison;
-    /** Set when the run aborted, or a gate could not be evaluated. */
-    error?: string;
     /** The scored map; absent only when the run aborted before scoring. */
     map?: AdvisorMap;
     /** Where the artifact was written, when it was. */
     written?: string;
+}
+
+interface AdvisorCommandResult extends AdvisorCommandData {
+    /**
+     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
+     * every other outcome is classified by `failed()`, which cannot tell a
+     * mistyped `--min-score` (the invocation is wrong, exit 2) from a failed gate
+     * (exit 1).
+     */
+    code?: number;
+    /** Set when the run aborted, or a gate could not be evaluated. */
+    error?: string;
 }
 
 /** See {@link AdvisorCommandOptions.generatedAt} — a committed artifact must not churn. */
@@ -189,8 +192,6 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
     }
 
     if (json) {
-        printJson(result);
-
         return result;
     }
 
@@ -214,7 +215,7 @@ const failed = (result: AdvisorCommandResult): boolean => {
 };
 
 /** `lunora advisor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({ cwd, format, logger, options }) => {
+const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions, AdvisorCommandData>(({ cwd, format, logger, options }) => {
     const result = runAdvisorCommand({
         all: options.all,
         baseline: options.baseline,
@@ -227,8 +228,12 @@ const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({
         write: options.write,
     });
 
-    return { code: result.code ?? (failed(result) ? 1 : 0) };
+    return {
+        code: result.code ?? (failed(result) ? 1 : 0),
+        data: { belowMinScore: result.belowMinScore, comparison: result.comparison, map: result.map, written: result.written },
+        error: result.error,
+    };
 });
 
 export { execute, runAdvisorCommand };
-export type { AdvisorCommandOptions, AdvisorCommandResult };
+export type { AdvisorCommandData, AdvisorCommandOptions, AdvisorCommandResult };

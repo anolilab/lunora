@@ -12,8 +12,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { tuiConfirm } from "../../util/tui-prompts";
 import type { StreamingFetchLike } from "../data-transfer";
@@ -49,15 +48,22 @@ interface SeedCommandOptions {
     yes?: boolean;
 }
 
-interface SeedCommandResult {
-    code: number;
+/** The `--format json` payload: what the run generated, and what became of it. */
+interface SeedCommandData {
     /** Rows the import step skipped because their `_id` already existed (re-run collisions). */
     conflicts: number;
     /** Total rows generated across every seeded table. */
     generated: number;
-    /** Rows inserted by the import step; `0` on `--dry-run` or failure. */
+    /** Rows inserted by the import step; `0` on `--dry-run`. */
     inserted: number;
-    /** The generated NDJSON (always populated; printed verbatim on `--dry-run`). */
+    /** `--dry-run` only: the generated rows themselves, which pretty mode streams as NDJSON instead. */
+    rows?: unknown[];
+    /** Tables the plan covered. */
+    tables: number;
+}
+
+interface SeedCommandResult extends CommandResult<SeedCommandData> {
+    /** The generated NDJSON (empty when the run failed before planning). */
     ndjson: string;
 }
 
@@ -79,9 +85,12 @@ const ndjsonReplacer = (_key: string, value: unknown): unknown => {
     return value;
 };
 
-/** A non-inserting failure result (no rows generated). */
-const seedFailure = (code: number): SeedCommandResult => {
-    return { code, conflicts: 0, generated: 0, inserted: 0, ndjson: "" };
+/**
+ * A non-inserting failure result: no rows, and therefore no `data` — an empty
+ * tally would read as "it ran and produced nothing", which is a different fact.
+ */
+const seedFailure = (code: number, error: string): SeedCommandResult => {
+    return { code, error, ndjson: "" };
 };
 
 /**
@@ -92,17 +101,21 @@ const seedFailure = (code: number): SeedCommandResult => {
  */
 const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): SeedCommandResult | undefined => {
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
+        const message = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
 
-        return seedFailure(1);
+        options.logger.error(message);
+
+        return seedFailure(1, message);
     }
 
     // `--reset` clears local `.wrangler/state` only; it cannot touch a remote
     // deployment, so refuse it the moment a remote target is in play.
     if (options.reset === true && targetsRemoteWorker({ prod: options.prod, url: options.url })) {
-        options.logger.error("--reset only clears local .wrangler/state and cannot be combined with --prod or a remote --url");
+        const message = "--reset only clears local .wrangler/state and cannot be combined with --prod or a remote --url";
 
-        return seedFailure(1);
+        options.logger.error(message);
+
+        return seedFailure(1, message);
     }
 
     return undefined;
@@ -113,7 +126,7 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
  * `runImportCommand` (whose `{table, doc}` envelopes pass straight through),
  * surface any skipped rows as conflicts, then clean up regardless of outcome.
  */
-const insertSeedRows = async (ndjson: string, generated: number, cwd: string, options: SeedCommandOptions): Promise<SeedCommandResult> => {
+const insertSeedRows = async (ndjson: string, generated: number, tables: number, cwd: string, options: SeedCommandOptions): Promise<SeedCommandResult> => {
     // Create the scratch file inside a freshly-minted private dir (0700, random
     // suffix) rather than a predictable PID+timestamp name in the shared tmpdir —
     // that pattern (CWE-377) lets a local attacker pre-create the path as a
@@ -153,7 +166,7 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
             );
         }
 
-        return { code: result.code, conflicts, generated, inserted: result.inserted, ndjson };
+        return { code: result.code, data: { conflicts, generated, inserted: result.inserted, tables }, ndjson };
     } finally {
         await rm(scratchDirectory, { force: true, recursive: true }).catch(() => {});
     }
@@ -166,12 +179,13 @@ const validateSeedTable = (options: SeedCommandOptions, ir: { tables: ReadonlyAr
     }
 
     const available = ir.tables.map((table) => table.name).join(", ");
+    const message = `unknown table "${options.table}" — schema defines: ${available || "(no tables)"}`;
 
-    options.logger.error(`unknown table "${options.table}" — schema defines: ${available || "(no tables)"}`);
+    options.logger.error(message);
 
     // Exit 2: `--table` names something the schema does not define, which is the
     // invocation being wrong rather than the seed run failing.
-    return seedFailure(EXIT_CODE.USAGE);
+    return seedFailure(EXIT_CODE.USAGE, message);
 };
 
 /**
@@ -192,9 +206,11 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
     }
 
     if (!process.stdin.isTTY && options.confirm === undefined) {
-        options.logger.error("seed: refusing to insert into a non-local target without confirmation — re-run with --yes");
+        const message = "seed: refusing to insert into a non-local target without confirmation — re-run with --yes";
 
-        return seedFailure(1);
+        options.logger.error(message);
+
+        return seedFailure(1, message);
     }
 
     const confirmer = options.confirm ?? tuiConfirm;
@@ -203,7 +219,7 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
     if (!confirmed) {
         options.logger.info("seed: aborted");
 
-        return seedFailure(1);
+        return seedFailure(1, "seed: aborted at the confirmation prompt");
     }
 
     return undefined;
@@ -220,25 +236,20 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
  */
 
 /**
- * `--dry-run`: emit what WOULD be inserted and stop.
- *
- * In `pretty` the NDJSON goes to stdout verbatim (the historical, pipeable
- * behaviour). In `json` the same lines become one `rows` array inside the result
- * document, because a stream and a document cannot share stdout.
+ * Turn a seed plan into the NDJSON lines it inserts (or prints). Separated from
+ * the orchestration because it is the one pure step — schema in, rows out — and
+ * `runSeedCommand` reads better as a sequence of decisions without it.
  */
-const reportDryRun = (parameters: { json: boolean; lines: string[]; ndjson: string; options: SeedCommandOptions; tables: number }): SeedCommandResult => {
-    const { json, lines, ndjson, options, tables } = parameters;
-    const generated = lines.length;
+const generateSeedRows = (plan: ReturnType<typeof seedPlan>): { lines: string[]; ndjson: string } => {
+    const lines: string[] = [];
 
-    if (json) {
-        printJson({ conflicts: 0, generated, inserted: 0, rows: lines.map((line) => JSON.parse(line) as unknown), tables });
-    } else if (ndjson.length > 0) {
-        process.stdout.write(ndjson);
+    for (const { rows, table } of plan) {
+        for (const row of rows) {
+            lines.push(JSON.stringify({ doc: row, table }, ndjsonReplacer));
+        }
     }
 
-    options.logger.info(`generated ${String(generated)} row(s) across ${String(tables)} table(s) — dry run, nothing inserted`);
-
-    return { code: 0, conflicts: 0, generated, inserted: 0, ndjson };
+    return { lines, ndjson: lines.length > 0 ? `${lines.join("\n")}\n` : "" };
 };
 
 const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandResult> => {
@@ -273,19 +284,25 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         seed: options.seed ?? 0,
     });
 
-    const lines: string[] = [];
-
-    for (const { rows, table } of plan) {
-        for (const row of rows) {
-            lines.push(JSON.stringify({ doc: row, table }, ndjsonReplacer));
-        }
-    }
-
-    const ndjson = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+    const { lines, ndjson } = generateSeedRows(plan);
     const generated = lines.length;
 
     if (options.dryRun === true) {
-        return reportDryRun({ json, lines, ndjson, options, tables: plan.length });
+        // Pretty streams the NDJSON to stdout verbatim (the historical, pipeable
+        // behaviour); json carries the same rows in the document instead, because
+        // a stream and a document cannot share stdout. Only parsed back when the
+        // document will actually be written.
+        if (!json && ndjson.length > 0) {
+            process.stdout.write(ndjson);
+        }
+
+        options.logger.info(`generated ${String(generated)} row(s) across ${String(plan.length)} table(s) — dry run, nothing inserted`);
+
+        return {
+            code: 0,
+            data: { conflicts: 0, generated, inserted: 0, rows: json ? lines.map((line) => JSON.parse(line) as unknown) : undefined, tables: plan.length },
+            ndjson,
+        };
     }
 
     // Checked BEFORE the wipe: `--reset --count 0` used to destroy the local dev
@@ -293,7 +310,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
     if (generated === 0) {
         options.logger.warn("no rows generated — nothing to insert");
 
-        return { code: 0, conflicts: 0, generated: 0, inserted: 0, ndjson };
+        return { code: 0, data: { conflicts: 0, generated: 0, inserted: 0, tables: plan.length }, ndjson };
     }
 
     if (options.reset === true) {
@@ -303,7 +320,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         const reset = await runResetCommand({ confirm: options.confirm, cwd, logger: options.logger, yes: options.yes });
 
         if (reset.code !== 0) {
-            return { code: reset.code, conflicts: 0, generated, inserted: 0, ndjson };
+            return { code: reset.code, error: "seed: --reset could not clear local state", ndjson };
         }
     }
 
@@ -313,17 +330,11 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         return aborted;
     }
 
-    const inserted = await insertSeedRows(ndjson, generated, cwd, options);
-
-    if (json) {
-        printJson({ conflicts: inserted.conflicts, generated: inserted.generated, inserted: inserted.inserted, tables: plan.length });
-    }
-
-    return inserted;
+    return insertSeedRows(ndjson, generated, plan.length, cwd, options);
 };
 
 /** `lunora seed` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions, SeedCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runSeedCommand({
         batchSize: options.batchSize,
         count: options.count,
@@ -343,8 +354,8 @@ const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({
         yes: options.yes === true,
     });
 
-    return { code: result.code };
+    return { code: result.code, data: result.data, error: result.error };
 });
 
 export { execute, runSeedCommand };
-export type { SeedCommandOptions, SeedCommandResult };
+export type { SeedCommandData, SeedCommandOptions, SeedCommandResult };

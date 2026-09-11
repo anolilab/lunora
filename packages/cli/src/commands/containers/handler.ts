@@ -46,8 +46,16 @@ interface ContainersCommandOptions {
 
 interface ContainersCommandResult {
     code: number;
+
+    /**
+     * True once a read subcommand has been forwarded with `--json`: wrangler
+     * writes that document to stdout itself, so the CLI must not add a second.
+     */
+    delegated?: boolean;
     /** The forwarded wrangler invocation, when one was spawned. */
     descriptor?: SpawnDescriptor;
+    /** Set when the run was refused before reaching wrangler. */
+    error?: string;
 }
 
 /**
@@ -59,11 +67,11 @@ interface ContainersCommandResult {
 const runContainersCommand = async (options: ContainersCommandOptions): Promise<ContainersCommandResult> => {
     const [subcommand, ...rest] = options.argument;
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
-        options.logger.error(
-            `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`,
-        );
+        const message = `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`;
 
-        return { code: EXIT_CODE.USAGE };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const json = options.format === "json";
@@ -79,21 +87,21 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     // build step, so automation could not tell "fix the flag" from "provision
     // the runner". Invocation-shaped refusals go before environment probes.
     if (json && !JSON_CAPABLE.has(verb)) {
-        options.logger.error(
-            `containers ${verb}: --format json is only available for the read subcommands (${[...JSON_CAPABLE].toSorted((a, b) => a.localeCompare(b)).join(" | ")}) — wrangler has no JSON rendering for the rest.`,
-        );
+        const message = `containers ${verb}: --format json is only available for the read subcommands (${[...JSON_CAPABLE].toSorted((a, b) => a.localeCompare(b)).join(" | ")}) — wrangler has no JSON rendering for the rest.`;
+
+        options.logger.error(message);
 
         // Same class as an unknown `--format`: a flag value this subcommand
         // cannot honour is a usage error, not a runtime failure.
-        return { code: EXIT_CODE.USAGE };
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     if (NEEDS_DOCKER.has(subcommand) && !(options.dockerAvailable ?? isDockerAvailable)()) {
-        options.logger.error(
-            `containers ${subcommand} needs a running Docker-compatible engine (it builds/pushes images locally). Start Docker or Colima and retry. Note: container images must target linux/amd64.`,
-        );
+        const message = `containers ${subcommand} needs a running Docker-compatible engine (it builds/pushes images locally). Start Docker or Colima and retry. Note: container images must target linux/amd64.`;
 
-        return { code: EXIT_CODE.MISSING_DEPENDENCY };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.MISSING_DEPENDENCY, error: message };
     }
 
     const args = ["containers", subcommand, ...rest];
@@ -125,7 +133,9 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
-    return { code: result.code, descriptor };
+    // A read subcommand forwarded with `--json` writes wrangler's own document to
+    // stdout, so this run's stdout is already spoken for.
+    return { code: result.code, delegated: json, descriptor };
 };
 
 /** `lunora containers` handler (lazy-loaded via the command's `loader`). */

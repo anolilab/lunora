@@ -6,7 +6,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { DeployCommandResult } from "../deploy/handler";
@@ -72,6 +71,19 @@ interface BuildCommandResult extends DeployCommandResult {
 }
 
 /**
+ * The `--format json` payload. The weight of what was produced is what a CI
+ * consumer runs this command for, so `build` reports it rather than delegating
+ * to deploy's payload, which has no field to carry it.
+ */
+interface BuildCommandData {
+    bundle?: BundleSize;
+    deployment?: DeployCommandResult["deployment"];
+    /** Where the bundle was written. */
+    outDir: string;
+    validation: DeployCommandResult["validation"];
+}
+
+/**
  * `defaultSpawner` with every child's stdout folded into stderr.
  *
  * `build` takes over its own `--format json` document (below), which means the
@@ -94,18 +106,10 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
     const jsonMode = options.format === "json";
 
-    // `build` owns its `--format json` document instead of delegating to
-    // deploy's: the bundle measurement below is what a CI consumer runs this
-    // command for, and the deploy result has no field to carry it. Everything
-    // human therefore goes to stderr from here on.
+    // `build` owns its `--format json` payload instead of delegating to deploy's:
+    // the bundle measurement below is what a CI consumer runs this command for,
+    // and the deploy result has no field to carry it.
     const { logger } = options;
-    const emit = (result: BuildCommandResult): BuildCommandResult => {
-        if (jsonMode) {
-            printJson(result);
-        }
-
-        return result;
-    };
 
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift,
@@ -131,7 +135,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     });
 
     if (result.code !== 0) {
-        return emit(result);
+        return result;
     }
 
     logger.success(`build complete — bundle written to ${outDirectory}`);
@@ -149,11 +153,11 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         );
     }
 
-    return emit({ ...result, bundle });
+    return { ...result, bundle };
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
@@ -166,9 +170,13 @@ const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async 
         target: options.target,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { bundle: result.bundle, deployment: result.deployment, outDir: options.outDir ?? DEFAULT_OUT_DIR, validation: result.validation },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { BuildCommandOptions, BuildCommandResult };
+export type { BuildCommandData, BuildCommandOptions, BuildCommandResult };
 export { runBuildCommand };

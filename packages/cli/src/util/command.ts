@@ -4,8 +4,8 @@ import type { CommandExecute, Toolbox } from "@visulima/cerebro";
 import { EXIT_CODE, exitCodeForError } from "./exit-code";
 import type { Logger } from "./logger";
 import { createLogger } from "./logger";
-import type { OutputFormat } from "./output-format";
-import { loggerForFormat, parseOutputFormat } from "./output-format";
+import type { CommandResult, OutputFormat } from "./output-format";
+import { loggerForFormat, parseOutputFormat, printJson } from "./output-format";
 import PromptCancelledError from "./prompt-cancelled";
 import { renderLunoraError } from "./render-lunora-error";
 
@@ -32,8 +32,12 @@ interface CommandContext<TOptions extends Record<string, unknown>> {
     options: TOptions;
 }
 
-/** A command body: read the {@link CommandContext} and resolve to an exit code. */
-type CommandBody<TOptions extends Record<string, unknown>> = (context: CommandContext<TOptions>) => Promise<{ code: number }> | { code: number };
+/**
+ * A command body: read the {@link CommandContext} and resolve to a
+ * {@link CommandResult} — the exit code, plus the payload and failure reason the
+ * `--format json` envelope carries.
+ */
+type CommandBody<TOptions extends Record<string, unknown>, TData> = (context: CommandContext<TOptions>) => CommandResult<TData> | Promise<CommandResult<TData>>;
 
 /**
  * The cerebro `execute` a command handler exports — the return type of
@@ -43,15 +47,32 @@ type CommandBody<TOptions extends Record<string, unknown>> = (context: CommandCo
 type CommandHandler<TOptions extends Record<string, unknown>> = CommandExecute<Toolbox<Console, TOptions>>;
 
 /**
+ * Write the `--format json` envelope — the single serialization point for every
+ * command. Nothing is written in `pretty` mode, and nothing when the command
+ * forwarded the flag to a child that already wrote the document (`delegated`).
+ */
+const emitDocument = (format: OutputFormat, result: CommandResult<unknown>): void => {
+    if (format !== "json" || result.delegated === true) {
+        return;
+    }
+
+    // Spelled out rather than serializing `result` itself: a body is free to
+    // return whatever its in-process callers need, and only these three keys are
+    // the document. `JSON.stringify` drops the absent ones.
+    printJson({ code: result.code, data: result.data, error: result.error });
+};
+
+/**
  * Wrap a command body in the shared `execute` envelope so every command handler
  * stays a thin adapter: resolve `--format` and the logger it implies, hand the
- * body the toolbox context, set the exit code it returns via
+ * body the toolbox context, serialize the {@link CommandResult} it returns when
+ * `--format json` asked for a document, set the exit code via
  * `toolbox.process.exit`, and convert any thrown error into a logged exit
  * through the taxonomy in {@link EXIT_CODE}. The result is a cerebro
  * {@link CommandExecute} — the default a lazy `loader` resolves to.
  */
 const defineHandler =
-    <TOptions extends Record<string, unknown>>(body: CommandBody<TOptions>): CommandExecute<Toolbox<Console, TOptions>> =>
+    <TOptions extends Record<string, unknown>, TData = never>(body: CommandBody<TOptions, TData>): CommandExecute<Toolbox<Console, TOptions>> =>
     async (toolbox) => {
         const logger = createLogger();
         // Before the body runs, and before anything is logged: an unreadable
@@ -72,7 +93,7 @@ const defineHandler =
         const { format } = parsed;
 
         try {
-            const { code } = await body({
+            const result = await body({
                 argument: toolbox.argument,
                 cwd: toolbox.process.cwd,
                 format,
@@ -80,7 +101,8 @@ const defineHandler =
                 options: toolbox.options,
             });
 
-            toolbox.process.exit(code);
+            emitDocument(format, result);
+            toolbox.process.exit(result.code);
         } catch (error: unknown) {
             if (error instanceof PromptCancelledError) {
                 // User cancelled an interactive prompt — not a failure. Exit quietly
@@ -92,13 +114,18 @@ const defineHandler =
             }
 
             const message = error instanceof Error ? error.message : String(error);
+            const code = exitCodeForError(error);
 
             // A Lunora error (or a plain message a solution rule recognises)
             // renders with its actionable hint block — the same treatment
             // `cli.ts` gives an error that escapes cerebro itself. Anything else
             // logs the bare message.
             logger.error(isLunoraError(error) || findSolutionByMessage(message) !== undefined ? renderLunoraError(error) : message);
-            toolbox.process.exit(exitCodeForError(error));
+            // The hint block is for a human; a `--format json` consumer gets the
+            // same failure as the envelope it can parse. Without this a thrown
+            // error left stdout empty and the reason only in prose on stderr.
+            emitDocument(format, { code, error: message });
+            toolbox.process.exit(code);
         }
     };
 

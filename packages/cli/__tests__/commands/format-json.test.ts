@@ -9,12 +9,17 @@ import { runBackupCommand } from "../../src/commands/backup/handler";
 import { runContainersCommand } from "../../src/commands/containers/handler";
 import { runExportCommand } from "../../src/commands/data-transfer";
 import { runDeploymentsCommand } from "../../src/commands/deployments/handler";
-import { runEnvCommand } from "../../src/commands/env/handler";
+import type { EnvCommandData } from "../../src/commands/env/handler";
+import { execute as envExecute } from "../../src/commands/env/handler";
+import type { EnvOptions } from "../../src/commands/env/index";
+import type { RunCommandResult } from "../../src/commands/run/handler";
 import { runRpcCommand } from "../../src/commands/run/handler";
+import type { SeedCommandResult } from "../../src/commands/seed/handler";
 import { runSeedCommand } from "../../src/commands/seed/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+import { runExecute } from "../helpers/execute";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const commandsDirectory = join(testDirectory, "..", "..", "src", "commands");
@@ -116,24 +121,25 @@ describe("--format pretty|json is the one machine-readable flag", () => {
     });
 
     it("env list answers with the key names as a single document", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         writeFileSync(join(workdir, ".dev.vars"), 'A="1"\nB="2"\n', "utf8");
 
-        const { logger } = recordingLogger();
-        let code = -1;
-
-        const stdout = await captureStdout(async () => {
-            ({ code } = await runEnvCommand({ cwd: workdir, format: "json", logger, subcommand: "list" }));
+        const { code, document } = await runExecute<EnvOptions, EnvCommandData>(envExecute, {
+            argument: ["list"],
+            commandName: "env",
+            cwd: workdir,
+            options: { format: "json" },
         });
 
         expect(code).toBe(0);
+        expect(document?.code).toBe(0);
 
-        const document = JSON.parse(stdout) as { keys: string[]; subcommand: string };
+        const data = document?.data as { keys: string[]; subcommand: string } | undefined;
 
-        expect(document.subcommand).toBe("list");
+        expect(data?.subcommand).toBe("list");
         // Names, never values — `list` redacts in pretty mode too.
-        expect(document.keys).toStrictEqual(["A", "B"]);
+        expect(data?.keys).toStrictEqual(["A", "B"]);
     });
 
     it("env doctor answers with the missing / placeholder / extra split", async () => {
@@ -142,19 +148,19 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         writeFileSync(join(workdir, ".dev.vars.example"), "NEEDED=\n", "utf8");
         writeFileSync(join(workdir, ".dev.vars"), 'OTHER="x"\n', "utf8");
 
-        const { logger } = recordingLogger();
-        let code = -1;
-
-        const stdout = await captureStdout(async () => {
-            ({ code } = await runEnvCommand({ cwd: workdir, format: "json", logger, subcommand: "doctor" }));
+        const { code, document } = await runExecute<EnvOptions, EnvCommandData>(envExecute, {
+            argument: ["doctor"],
+            commandName: "env",
+            cwd: workdir,
+            options: { format: "json" },
         });
 
         expect(code).toBe(1);
 
-        const document = JSON.parse(stdout) as { extra: string[]; missing: string[]; ok: boolean };
+        const data = document?.data as { missing: string[]; ok: boolean } | undefined;
 
-        expect(document.missing).toStrictEqual(["NEEDED"]);
-        expect(document.ok).toBe(false);
+        expect(data?.missing).toStrictEqual(["NEEDED"]);
+        expect(data?.ok).toBe(false);
     });
 
     it("seed --dry-run carries the generated rows as an array instead of an NDJSON stream", async () => {
@@ -164,19 +170,18 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
 
         const { logger } = recordingLogger();
-        let code = -1;
+        let result: SeedCommandResult | undefined;
 
         const stdout = await captureStdout(async () => {
-            ({ code } = await runSeedCommand({ count: 2, cwd: workdir, dryRun: true, format: "json", logger, seed: 1 }));
+            result = await runSeedCommand({ count: 2, cwd: workdir, dryRun: true, format: "json", logger, seed: 1 });
         });
 
-        expect(code).toBe(0);
-
-        const document = JSON.parse(stdout) as { generated: number; inserted: number; rows: { table: string }[] };
-
-        expect(document.generated).toBe(2);
-        expect(document.inserted).toBe(0);
-        expect(document.rows.map((row) => row.table)).toStrictEqual(["notes", "notes"]);
+        expect(result?.code).toBe(0);
+        // The NDJSON stream is the PRETTY rendering; in json mode stdout is the
+        // document's, so the rows ride the payload instead.
+        expect(stdout).toBe("");
+        expect(result?.data?.generated).toBe(2);
+        expect((result?.data?.rows as { table: string }[] | undefined)?.map((row) => row.table)).toStrictEqual(["notes", "notes"]);
     });
 
     it("export refuses --format json when stdout already carries the NDJSON stream", async () => {
@@ -257,14 +262,14 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         expect(calls).toHaveLength(0);
     });
 
-    it("run emits the RPC result as the document", async () => {
+    it("run hands the RPC result back for the document", async () => {
         expect.assertions(3);
 
         const { logger } = recordingLogger();
-        let code = -1;
+        let result: RunCommandResult | undefined;
 
         const stdout = await captureStdout(async () => {
-            ({ code } = await runRpcCommand({
+            result = await runRpcCommand({
                 cwd: workdir,
                 fetchImpl: () =>
                     Promise.resolve({
@@ -277,28 +282,24 @@ describe("--format pretty|json is the one machine-readable flag", () => {
                 functionPath: "notes:list",
                 logger,
                 url: "http://localhost:8787",
-            }));
+            });
         });
 
-        expect(code).toBe(0);
-
-        const document = JSON.parse(stdout) as { functionPath: string; result: { result: number } };
-
-        expect(document.functionPath).toBe("notes:list");
-        expect(document.result.result).toBe(42);
+        expect(result?.code).toBe(0);
+        // The document is `defineHandler`'s; the command writes nothing itself.
+        expect(stdout).toBe("");
+        expect((result?.body as { result: number } | undefined)?.result).toBe(42);
     });
 
-    it("backup list answers with the manifest entries", async () => {
-        expect.assertions(2);
+    it("backup list answers with the manifest entries, discriminated by subcommand", async () => {
+        expect.assertions(3);
 
         const { logger } = recordingLogger();
-        let code = -1;
+        const result = await runBackupCommand({ cwd: workdir, format: "json", logger, subcommand: "list" });
 
-        const stdout = await captureStdout(async () => {
-            ({ code } = await runBackupCommand({ cwd: workdir, format: "json", logger, subcommand: "list" }));
-        });
-
-        expect(code).toBe(0);
-        expect(JSON.parse(stdout)).toStrictEqual({ entries: [], ok: true, subcommand: "list" });
+        expect(result.code).toBe(0);
+        // No `ok`: the envelope's `code` is the verdict.
+        expect(result.data).toStrictEqual({ entries: [], subcommand: "list" });
+        expect(result.error).toBeUndefined();
     });
 });

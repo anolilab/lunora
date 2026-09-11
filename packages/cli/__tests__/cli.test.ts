@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION } from "../src/cli";
+import { EXIT_CODE } from "../src/util/exit-code";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -154,7 +155,7 @@ describe("lunora CLI entry", () => {
 
             const code = await runCli({ argv: ["registry", "frobnicate"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(stderr).toContain("unknown subcommand");
         });
 

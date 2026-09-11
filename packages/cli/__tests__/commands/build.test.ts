@@ -176,7 +176,7 @@ describe("lunora build", () => {
         expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
-    it("reports the size in the --format json document without failing on it", async () => {
+    it("measures the bundle for the --format json payload without failing on it", async () => {
         expect.assertions(3);
 
         const { logger } = silentLogger();
@@ -203,11 +203,10 @@ describe("lunora build", () => {
 
         // Measuring is reporting: a size never changes the exit code.
         expect(result.code).toBe(0);
-
-        const document = JSON.parse(written.join("")) as BuildCommandResult;
-
-        expect(written).toHaveLength(1);
-        expect(document.bundle?.gzipBytes).toBeGreaterThan(0);
+        // The document is `defineHandler`'s; the command writes nothing itself, so
+        // the wrangler leg cannot splice its own output into it.
+        expect(written).toHaveLength(0);
+        expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
     it("says so rather than reporting zero when there is nothing to weigh", async () => {

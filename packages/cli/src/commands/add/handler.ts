@@ -8,7 +8,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
-import { printJson } from "../../util/output-format";
 import type { TextPrompt } from "../../util/tui-prompts";
 import { tuiSelect, tuiText } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
@@ -379,8 +378,13 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     return { code: result.code, items };
 };
 
+/** The `--format json` payload: the registry items the feature resolved to. */
+interface AddFeatureData {
+    items: ReadonlyArray<string>;
+}
+
 /** `lunora add <feature>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<AddOptions> = defineHandler<AddOptions, AddFeatureData>(async ({ argument, cwd, logger, options }) => {
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,
         bucket: options.bucket,
@@ -396,12 +400,10 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         yes: options.yes === true,
     });
 
-    if (format === "json") {
-        printJson({ code: result.code, items: result.items });
-    }
-
-    return { code: result.code };
+    // `code` is the envelope's, not the payload's: two fields answering the same
+    // question is how they end up disagreeing.
+    return { code: result.code, data: { items: result.items } };
 });
 
 export { execute, runAddFeature };
-export type { AddFeatureOptions, AddFeatureResult };
+export type { AddFeatureData, AddFeatureOptions, AddFeatureResult };

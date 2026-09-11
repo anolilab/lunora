@@ -96,11 +96,11 @@ export const schema = defineSchema({
                 } as unknown as Parameters<typeof migrateExecute>[0]);
             });
 
-            const document = JSON.parse(stdout) as { empty: boolean; migrationFile?: string; subcommand: string };
+            const document = JSON.parse(stdout) as { data: { empty: boolean; migrationFile?: string; subcommand: string } };
 
-            expect(document.subcommand).toBe("generate");
-            expect(document.empty).toBe(false);
-            expect(document.migrationFile).toMatch(/init/u);
+            expect(document.data.subcommand).toBe("generate");
+            expect(document.data.empty).toBe(false);
+            expect(document.data.migrationFile).toMatch(/init/u);
             // Exactly one document — stdout stays pipeable, the human lines go to stderr.
             expect(
                 stdout
@@ -121,10 +121,10 @@ export const schema = defineSchema({
                 } as unknown as Parameters<typeof migrateExecute>[0]);
             });
 
-            const document = JSON.parse(stdout) as { file?: string; name: string; subcommand: string };
+            const document = JSON.parse(stdout) as { data: { file?: string; name: string; subcommand: string } };
 
-            expect(document.subcommand).toBe("create");
-            expect(document.name).toBe("backfill_emails");
+            expect(document.data.subcommand).toBe("create");
+            expect(document.data.name).toBe("backfill_emails");
         });
 
         it("refuses an unknown --format with the usage exit code, before dispatching", async () => {

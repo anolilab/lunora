@@ -14,7 +14,6 @@ import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import type { CodegenOptions } from "./index";
 
@@ -39,9 +38,16 @@ interface CodegenCommandOptions {
     target?: string;
 }
 
-interface CodegenCommandResult {
+/** The `--format json` payload: what codegen wrote, and what it has to say about it. */
+interface CodegenCommandData {
     advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
+    cronTriggers: ReadonlyArray<string>;
+    /** ERROR-level advisories that made the run fail, when strict mode is on. */
+    failedAdvisories: number;
+    outputDirectory: string;
+}
 
+interface CodegenCommandResult extends CodegenCommandData {
     /**
      * Exit code, when the run resolved one itself. Only a USAGE refusal does —
      * every other outcome is classified from `error`/`failedAdvisories` by
@@ -49,19 +55,12 @@ interface CodegenCommandResult {
      * exit 2) from a failed codegen (exit 1) after the fact.
      */
     code?: number;
-    cronTriggers: ReadonlyArray<string>;
-    /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
+    /** Set when the run failed: an unregistered target, or an error-level platform diagnostic. */
     error?: string;
-    /** ERROR-level advisories that made the run fail, when strict mode is on. */
-    failedAdvisories: number;
-    outputDirectory: string;
 }
 
 const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult => {
     const projectRoot = options.cwd ?? process.cwd();
-    const json = options.format === "json";
-    // In `--format json` mode every human/progress line goes to stderr so
-    // stdout carries only the serialized structured result.
     const { logger } = options;
 
     // CI is the default gate: a pipeline should fail on an ERROR advisory, a
@@ -154,13 +153,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         );
     }
 
-    const finalResult: CodegenCommandResult = { ...commandResult, failedAdvisories: strictAdvisories ? errorAdvisories.length : 0 };
-
-    if (json) {
-        printJson(finalResult);
-    }
-
-    return finalResult;
+    return { ...commandResult, failedAdvisories: strictAdvisories ? errorAdvisories.length : 0 };
 };
 
 /**
@@ -241,7 +234,7 @@ const syncLintIgnores = (projectRoot: string, logger: Logger): void => {
 };
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions, CodegenCommandData>(async ({ cwd, format, logger, options }) => {
     const result = runCodegenCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
@@ -268,8 +261,17 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
         await warnAboutExportGaps(cwd, commandLogger);
     }
 
-    return { code: result.code ?? (result.error === undefined && result.failedAdvisories === 0 ? 0 : 1) };
+    return {
+        code: result.code ?? (result.error === undefined && result.failedAdvisories === 0 ? 0 : 1),
+        data: {
+            advisories: result.advisories,
+            cronTriggers: result.cronTriggers,
+            failedAdvisories: result.failedAdvisories,
+            outputDirectory: result.outputDirectory,
+        },
+        error: result.error,
+    };
 });
 
 export { execute, runCodegenCommand };
-export type { CodegenCommandOptions, CodegenCommandResult };
+export type { CodegenCommandData, CodegenCommandOptions, CodegenCommandResult };

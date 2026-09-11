@@ -1,6 +1,7 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
+import type { ImportCommandData } from "../data-transfer";
 import { runImportCommand } from "../data-transfer";
 import type { ImportSourceName } from "../data-transfer/import-source";
 import { IMPORT_SOURCE_NAMES } from "../data-transfer/import-source";
@@ -11,7 +12,7 @@ import type { ImportOptions } from "./index";
  * `npx convex export --path <dir>` directory; {@link runImportCommand} detects
  * which and bulk-inserts either way.
  */
-const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions, ImportCommandData>(({ argument, cwd, format, logger, options }) => {
     const file = argument[0];
 
     if (!file) {

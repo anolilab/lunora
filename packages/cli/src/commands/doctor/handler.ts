@@ -11,7 +11,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
@@ -764,6 +763,12 @@ const renderReport = (result: DoctorResult, logger: Logger): void => {
     }
 };
 
+/** The `--format json` payload: every finding, plus the per-level tally. */
+interface DoctorData {
+    findings: ReadonlyArray<Finding>;
+    summary: Record<FindingLevel, number>;
+}
+
 interface DoctorCommandOptions extends RunDoctorOptions {
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
@@ -782,19 +787,17 @@ const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorRe
 
     renderReport(result, logger);
 
-    if (options.format === "json") {
-        printJson(result);
-    }
-
     return result;
 };
 
 /** `lunora doctor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, format, logger }) => {
+const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions, DoctorData>(async ({ cwd, format, logger }) => {
     const result = await runDoctorCommand({ cwd, format, logger });
 
-    return { code: result.code };
+    // `ok` is not in the document: the envelope's `code` already says whether
+    // the preflight passed, and two fields answering that can disagree.
+    return { code: result.code, data: { findings: result.findings, summary: result.summary } };
 });
 
 export { DOCTOR_CODES, execute, runDoctor, runDoctorCommand };
-export type { DoctorCode, DoctorCommandOptions, DoctorResult, Finding, FindingLevel, RunDoctorOptions };
+export type { DoctorCode, DoctorCommandOptions, DoctorData, DoctorResult, Finding, FindingLevel, RunDoctorOptions };

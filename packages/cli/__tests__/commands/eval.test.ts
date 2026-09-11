@@ -1,28 +1,13 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { runEvalCommand } from "../../src/commands/eval/handler";
+import type { EvalData } from "../../src/commands/eval/handler";
+import { execute, runEvalCommand } from "../../src/commands/eval/handler";
+import type { EvalOptions } from "../../src/commands/eval/index";
 import type { Logger } from "../../src/util/logger";
-
-/** Run async `body` while capturing everything written to `process.stdout`. */
-const captureStdout = async (body: () => Promise<void>): Promise<string> => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        await body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "fixtures");
@@ -170,25 +155,22 @@ describe("lunora eval", () => {
         expect(recorded.errors.some((line) => line.includes("1/1"))).toBe(true);
     });
 
-    it("--format json prints one structured document to stdout and routes progress to stderr, matching the documented flat per-eval shape", async () => {
-        expect.assertions(5);
+    // Through `execute`, the only path that writes the envelope: `runEvalCommand`
+    // hands back the outcomes and `defineHandler` serializes them.
+    it("--format json prints one structured document to stdout, flat per the documented per-eval shape", async () => {
+        expect.assertions(6);
 
-        const { logger } = recordingLogger();
         const cwd = join(fixtureRoot, "eval-sample");
+        const { code, document } = await runExecute<EvalOptions, EvalData>(execute, { commandName: "eval", cwd, options: { format: "json" } });
 
-        const stdout = await captureStdout(async () => {
-            await runEvalCommand({ cwd, format: "json", logger });
-        });
-
-        const parsed = JSON.parse(stdout) as { evals: { average?: number; items?: unknown[]; name?: string; passed?: boolean }[] };
-
-        expect(parsed).toMatchObject({ code: 0 });
-        expect(parsed.evals).toHaveLength(1);
+        expect(code).toBe(0);
+        expect(document?.code).toBe(0);
+        expect(document?.data?.evals).toHaveLength(1);
         // Flat per the documented contract (`plans/245-eval-runner-design.md`
         // §4/§6): `evals[].average`, not `evals[].result.average`.
-        expect(parsed.evals[0]?.average).toBe(1);
-        expect(parsed.evals[0]?.name).toBe("support-triage");
-        expect(parsed.evals[0]?.passed).toBe(true);
+        expect(document?.data?.evals[0]?.average).toBe(1);
+        expect(document?.data?.evals[0]?.name).toBe("support-triage");
+        expect(document?.data?.evals[0]?.passed).toBe(true);
     });
 
     it("rejects a NaN --threshold before discovering anything", async () => {

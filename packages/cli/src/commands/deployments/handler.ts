@@ -29,6 +29,12 @@ interface DeploymentsCommandOptions {
 
 interface DeploymentsCommandResult {
     code: number;
+
+    /**
+     * True once `wrangler deployments list --json` has been spawned: wrangler
+     * writes that document to stdout itself, so the CLI must not add a second.
+     */
+    delegated?: boolean;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before spawning wrangler. */
     error?: string;
@@ -151,7 +157,9 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
-    return { code: result.code, descriptor };
+    // `list --json` puts wrangler's own document on stdout (see `buildListArgs`),
+    // so this run's stdout is already spoken for.
+    return { code: result.code, delegated: options.format === "json", descriptor };
 };
 
 /** Narrow a raw argument to a known {@link DeploymentsSubcommand}. */
@@ -163,9 +171,11 @@ const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOpt
     const sub = argument[0];
 
     if (!isDeploymentsSubcommand(sub)) {
-        logger.error(`deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`);
+        const message = `deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`;
 
-        return { code: EXIT_CODE.USAGE };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     return runDeploymentsCommand({

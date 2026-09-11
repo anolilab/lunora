@@ -46,6 +46,28 @@ esac
 produces the same code. `7` and `8` are the retryable pair — back off and try
 again. `9` needs a machine change, not a retry.
 
+## The same number, in the document
+
+`--format json` writes one envelope on stdout, and its `code` is this exit code:
+
+```jsonc
+{
+    "code": 2, // the exit code — same number the process terminates with
+    "data": {}, // the command's own payload, absent when the run produced none
+    "error": "…", // the reason, present whenever `code` is non-zero
+}
+```
+
+A **failure answers in the same shape a success does**, so a caller that already
+parses the document never has to fall back to reading stderr to find out what
+went wrong:
+
+```bash
+lunora deploy --format json > deploy.json || jq -r '.error' < deploy.json
+```
+
+See [the CLI reference](/docs/packages/cli) for the per-command `data` payloads.
+
 ## Where the numbers come from
 
 The taxonomy is not a second, hand-maintained list. Every Lunora error carries a

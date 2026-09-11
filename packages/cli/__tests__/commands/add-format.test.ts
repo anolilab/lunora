@@ -86,10 +86,10 @@ describe("lunora add --format", () => {
 
         expect(exitCode).toBe(0);
 
-        const json = JSON.parse(stdout.join("")) as { code: number; items: string[] };
+        const json = JSON.parse(stdout.join("")) as { code: number; data: { items: string[] } };
 
         expect(json.code).toBe(0);
-        expect(json.items).toStrictEqual(["mail"]);
+        expect(json.data.items).toStrictEqual(["mail"]);
     });
 
     // The refusal is `defineHandler`'s, not this command's — asserted through a

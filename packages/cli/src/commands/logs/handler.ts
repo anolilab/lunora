@@ -37,6 +37,13 @@ interface LogsCommandOptions {
 
 interface LogsCommandResult {
     code: number;
+
+    /**
+     * `logs` streams: `--format json` selects wrangler tail's own JSON log lines
+     * on stdout, and `--durable` prints the archived rows there. Either way the
+     * stream owns stdout, so the CLI must not append a result document to it.
+     */
+    delegated?: boolean;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
     error?: string;
@@ -59,9 +66,11 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     const driver = resolveDeployDriver(options.target);
 
     if (driver.toolchain === undefined) {
-        options.logger.error(`logs: deploy target "${driver.id}" has no command-line toolchain`);
+        const message = `logs: deploy target "${driver.id}" has no command-line toolchain`;
 
-        return { code: 1, descriptor: undefined, error: "no toolchain" };
+        options.logger.error(message);
+
+        return { code: 1, descriptor: undefined, error: message };
     }
 
     const tailCommand = driver.toolchain.tail({
@@ -87,17 +96,20 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
 
     return {
         code: result.code,
+        delegated: true,
         descriptor,
     };
 };
 
 /** `lunora logs [worker]` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(async ({ argument, cwd, format, logger, options }) => {
     // `--durable` switches from tailing a live Worker to reading the persisted
     // `ctx.log` archive (pipelineLogSink → R2) back via R2 SQL — a different data
     // path with its own credentials, so it forks here before touching wrangler.
     if (options.durable === true) {
-        return runDurableLogsCommand({
+        // The archived rows are the output, printed to stdout as text or NDJSON —
+        // this run's stdout is a stream, never a result document.
+        const durable = await runDurableLogsCommand({
             cursor: options.cursor,
             functionPrefix: options.functionPrefix,
             level: options.level,
@@ -113,6 +125,8 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
             until: options.until,
             userId: options.userId,
         });
+
+        return { ...durable, delegated: true };
     }
 
     return runLogsCommand({

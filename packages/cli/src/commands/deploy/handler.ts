@@ -49,7 +49,6 @@ import type { HealthFetch } from "../../util/health-probe";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
@@ -245,6 +244,21 @@ interface DeployedIdentity {
     url?: string;
     /** The Worker name from the project's wrangler config. */
     workerName?: string;
+}
+
+/**
+ * The `--format json` payload: where the thing went, and every verdict the
+ * pre-deploy pipeline reached on the way. `code` and `error` are the envelope's.
+ */
+interface DeployCommandData {
+    deployment?: DeployedIdentity;
+    healthCheck?: { error?: string; ok: boolean; url: string };
+    mintedSecretsFile?: string;
+    schemaDrift?: { blocked: boolean; reason: string };
+    validation: {
+        problems: ReadonlyArray<string>;
+        wranglerPath: string | undefined;
+    };
 }
 
 interface DeployCommandResult {
@@ -1858,9 +1872,9 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 };
 
 /**
- * Run a deploy, then (in `--format json` mode) serialize the structured
- * {@link DeployCommandResult} to stdout. Human/progress logging is routed to
- * stderr for json output so stdout carries only the single JSON document.
+ * Run a deploy. In `--format json` mode the human/progress channel is already on
+ * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
+ * stdout is left to the single result document `execute` returns.
  */
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
@@ -1891,8 +1905,6 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     }
 
     if (options.format === "json") {
-        printJson(result);
-
         return result;
     }
 
@@ -1920,7 +1932,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
@@ -1949,11 +1961,21 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: {
+            deployment: result.deployment,
+            healthCheck: result.healthCheck,
+            mintedSecretsFile: result.mintedSecretsFile,
+            schemaDrift: result.schemaDrift,
+            validation: result.validation,
+        },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity };
+export type { DeployCommandData, DeployCommandOptions, DeployCommandResult, DeployedIdentity };
 // `provisionBindings` is shared with `lunora dev`'s wrangler flavor, which has
 // no `@lunora/vite` to reconcile bindings for it on startup.
 export { provisionBindings, runDeployCommand, runPreDeployPipeline };

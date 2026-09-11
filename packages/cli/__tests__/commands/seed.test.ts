@@ -72,9 +72,9 @@ describe("lunora seed", () => {
         const b = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), seed: 1 });
 
         expect(a.code).toBe(0);
-        expect(a.inserted).toBe(0);
+        expect(a.data?.inserted).toBe(0);
         // 4 users + 4 posts.
-        expect(a.generated).toBe(8);
+        expect(a.data?.generated).toBe(8);
         // Same seed ⇒ byte-identical output.
         expect(a.ndjson).toBe(b.ndjson);
 
@@ -107,7 +107,7 @@ describe("lunora seed", () => {
                 .map((line) => (JSON.parse(line) as { table: string }).table),
         );
 
-        expect(result.generated).toBe(3);
+        expect(result.data?.generated).toBe(3);
         expect([...tables]).toEqual(["users"]);
     });
 
@@ -162,8 +162,8 @@ describe("lunora seed", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(result.generated).toBe(4);
-        expect(result.inserted).toBe(4);
+        expect(result.data?.generated).toBe(4);
+        expect(result.data?.inserted).toBe(4);
         expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
     });
 
@@ -189,7 +189,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 2, cwd: workDir, fetchImpl, logger, token: "t", url: "http://localhost:8787" });
 
-        expect(result.conflicts).toBe(4);
+        expect(result.data?.conflicts).toBe(4);
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("4 row(s) skipped"));
     });
 
@@ -217,7 +217,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 0, cwd: workDir, logger: silentLogger(), reset: true, yes: true });
 
-        expect(result.generated).toBe(0);
+        expect(result.data?.generated).toBe(0);
         // The wipe used to run first, so `--count 0` destroyed the dev database
         // and then warned there was nothing to insert.
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);

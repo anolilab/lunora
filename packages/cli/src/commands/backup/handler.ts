@@ -34,8 +34,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { runExportCommand } from "../data-transfer/export";
 import { runImportCommand } from "../data-transfer/import";
@@ -111,10 +110,26 @@ interface BackupCommandOptions {
     yes?: boolean;
 }
 
-interface BackupCommandResult {
+/**
+ * The `--format json` payload — one shape per verb, discriminated by
+ * `subcommand`. The six verbs answer six different questions, so a merged
+ * document would say which one it is holding only by which fields happened to
+ * be null.
+ */
+interface BackupCommandData {
+    deleted?: string[];
+    entries?: ReadonlyArray<BackupManifestEntry>;
+    entry?: BackupManifestEntry;
+    preview?: BackupRetentionPreview;
+    restored?: number;
+    /** `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
+    result?: unknown;
+    subcommand: BackupSubcommand;
+}
+
+interface BackupCommandResult extends CommandResult<BackupCommandData> {
     /** Set on `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
     body?: unknown;
-    code: number;
     /** Set on `prune` — the sidecar keys the worker reported it deleted. */
     deleted?: string[];
     /** Set on `list` — the destination's manifest. */
@@ -756,11 +771,13 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
     // stdout carries only the result document.
     const result = await dispatchBackupSubcommand(options, cwd);
 
-    if (options.format === "json") {
-        // One shape per verb, discriminated by `subcommand`: the six verbs answer
-        // six different questions and a merged document would say which one it is
-        // only by which fields happened to be null.
-        printJson({
+    // One shape per verb, discriminated by `subcommand`: the six verbs answer six
+    // different questions and a merged document would say which one it is only by
+    // which fields happened to be null. No `ok` — the envelope's `code` is the
+    // verdict.
+    return {
+        ...result,
+        data: {
             subcommand: options.subcommand,
             ...(result.entries === undefined ? {} : { entries: result.entries }),
             ...(result.entry === undefined ? {} : { entry: result.entry }),
@@ -768,11 +785,8 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
             ...(result.preview === undefined ? {} : { preview: result.preview }),
             ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
             ...(result.body === undefined ? {} : { result: result.body }),
-            ok: result.code === 0,
-        });
-    }
-
-    return result;
+        },
+    };
 };
 
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
@@ -780,13 +794,15 @@ const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
     value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
 
 /** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(async ({ argument, cwd, format, logger, options }) => {
+const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, BackupCommandData>(async ({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isBackupSubcommand(sub)) {
-        logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | retention | prune | pitr`);
+        const message = `backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | retention | prune | pitr`;
 
-        return { code: EXIT_CODE.USAGE };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     const result = await runBackupCommand({
@@ -811,9 +827,9 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(asyn
         yes: options.yes === true,
     });
 
-    return { code: result.code };
+    return { code: result.code, data: result.data, error: result.error };
 });
 
 export { execute };
-export type { BackupCommandOptions, BackupCommandResult, BackupSubcommand };
+export type { BackupCommandData, BackupCommandOptions, BackupCommandResult, BackupSubcommand };
 export { runBackupCommand };

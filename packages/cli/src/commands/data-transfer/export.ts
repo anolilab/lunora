@@ -13,8 +13,7 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
 import { EXPORT_ENDPOINT_PATH } from "./shared";
 
@@ -41,9 +40,18 @@ interface ExportCommandOptions {
     url?: string;
 }
 
-interface ExportCommandResult {
+/** The `--format json` payload: what was dumped, from which tables, and where to. */
+interface ExportCommandData {
     bytes: number;
-    code: number;
+    /** The file the dump landed in. */
+    out: string;
+    rows: number;
+    /** The table allowlist, omitted when the export covered every table. */
+    tables?: string[];
+}
+
+interface ExportCommandResult extends CommandResult<ExportCommandData> {
+    bytes: number;
     /** Number of NDJSON lines streamed (0 on error). */
     rows: number;
 }
@@ -235,33 +243,23 @@ const resolveExportOutput = (options: ExportCommandOptions): { destination: stri
 };
 
 /**
- * Land the dump and say what happened: commit the staged file (when the
- * destination is one), log the human line, and — in `--format json` — write the
- * single result document. `--format json` is only reachable with a file
- * destination, so `destination` is present whenever `json` is.
+ * Land the dump: commit the staged file (when the destination is one) and log
+ * the human line.
  */
 const finishExport = async (parameters: {
     bytes: number;
-    destination: string | undefined;
     file: { path: string; stage: string } | undefined;
-    json: boolean;
     logger: Logger;
     rows: number;
     sink: NodeJS.WritableStream;
     sinkError: () => Error | undefined;
-    tables: string[] | undefined;
 }): Promise<void> => {
-    const { bytes, destination, file, json, logger, rows, sink, sinkError, tables } = parameters;
+    const { bytes, file, logger, rows, sink, sinkError } = parameters;
 
     if (file !== undefined) {
         await commitStagedExport(sink, file, sinkError);
 
         logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
-    }
-
-    if (json) {
-        // `tables` is omitted when the export covered every table.
-        printJson({ bytes, out: destination, rows, tables });
     }
 };
 
@@ -280,12 +278,13 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     }
 
     const { destination } = resolvedOutput;
-    const json = options.format === "json";
 
     if (options.prod && options.url === undefined) {
-        options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");
+        const message = "--prod requires an explicit --url (refusing to export from the implicit localhost worker)";
 
-        return { bytes: 0, code: 1, rows: 0 };
+        options.logger.error(message);
+
+        return { bytes: 0, code: 1, error: message, rows: 0 };
     }
 
     // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
@@ -294,15 +293,18 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return { bytes: 0, code: 1, rows: 0 };
+        // `resolveAdminBaseUrl` logged why the target was refused.
+        return { bytes: 0, code: 1, error: "could not resolve a usable worker URL", rows: 0 };
     }
 
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
     if (!token) {
-        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+        const message = "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)";
 
-        return { bytes: 0, code: 1, rows: 0 };
+        options.logger.error(message);
+
+        return { bytes: 0, code: 1, error: message, rows: 0 };
     }
 
     const requestUrl = `${baseUrl}${EXPORT_ENDPOINT_PATH}`;
@@ -324,16 +326,17 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
     if (!response.ok) {
         const errorText = await response.text();
+        const message = `export failed: HTTP ${String(response.status)}: ${errorText}`;
 
-        options.logger.error(`export failed: HTTP ${String(response.status)}: ${errorText}`);
+        options.logger.error(message);
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { bytes: 0, code: 1, error: message, rows: 0 };
     }
 
     if (!response.body) {
         options.logger.error("export response carried no body");
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { bytes: 0, code: 1, error: "export response carried no body", rows: 0 };
     }
 
     // Open the output sink: stdout when `out` is `undefined` / `-`, otherwise
@@ -376,10 +379,12 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         throw error;
     }
 
-    await finishExport({ bytes, destination, file, json, logger: options.logger, rows, sink, sinkError: () => sinkError, tables });
+    await finishExport({ bytes, file, logger: options.logger, rows, sink, sinkError: () => sinkError });
 
-    return { bytes, code: 0, rows };
+    // `--format json` is only reachable with a file destination (see
+    // `resolveExportOutput`), so `destination` is present whenever the document is.
+    return { bytes, code: 0, data: destination === undefined ? undefined : { bytes, out: destination, rows, tables }, rows };
 };
 
-export type { ExportCommandOptions, ExportCommandResult };
+export type { ExportCommandData, ExportCommandOptions, ExportCommandResult };
 export { runExportCommand };

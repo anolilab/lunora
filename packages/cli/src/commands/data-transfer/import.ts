@@ -12,8 +12,7 @@ import { stat } from "node:fs/promises";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
@@ -135,9 +134,16 @@ interface ImportSummary {
     warnings?: string[];
 }
 
-interface ImportCommandResult {
+/** The `--format json` payload: which file went in, and what the endpoint made of it. */
+interface ImportCommandData {
+    file: string;
+    inserted: number;
+    /** The batcher's own roll-up: inserted-per-table, conflicts, row errors, unreached shards. */
+    summary: ImportSummary;
+}
+
+interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
-    code: number;
     /** Total inserted rows across batches. */
     inserted: number;
 }
@@ -616,12 +622,7 @@ const reportImportOutcome = (
     }
 };
 
-/**
- * Say what the import did: the summary as human text, then — in `--format json`
- * — the single result document. The batcher's own summary IS that document
- * (inserted-per-table, conflicts, row errors, unreached shards, the storage
- * phase's report), so nothing is re-derived here.
- */
+/** Say what the import did, as human text. The document is the caller's to return. */
 const emitImportReport = (
     options: ImportCommandOptions,
     outcome: {
@@ -634,7 +635,12 @@ const emitImportReport = (
         warnings: ReadonlyArray<string>;
     },
 ): void => {
-    options.logger.info(JSON.stringify(outcome.body, undefined, 2));
+    // Only in pretty mode: in json the same object IS the document's `summary`,
+    // and printing it here too said the whole thing twice per run.
+    if (options.format !== "json") {
+        options.logger.info(JSON.stringify(outcome.body, undefined, 2));
+    }
+
     reportImportOutcome(options.logger, {
         conflicts: outcome.conflicts,
         errorCount: outcome.errorCount,
@@ -643,10 +649,20 @@ const emitImportReport = (
         received: outcome.received,
         warnings: outcome.warnings,
     });
+};
 
-    if (options.format === "json") {
-        printJson({ file: options.file, inserted: outcome.insertedTotal, ok: !outcome.failed, summary: outcome.body });
+/**
+ * `--scan`: write the candidate storage-column mapping and import nothing. Its
+ * product is the file it wrote, so there is no import summary to hand back.
+ */
+const scanOnly = async (source: ImportSource, cwd: string, options: ImportCommandOptions): Promise<ImportCommandResult> => {
+    const scanned = await runScan(source, cwd, options.logger);
+
+    if (scanned === undefined) {
+        return { body: undefined, code: 1, error: "import --scan: the export could not be scanned", inserted: 0 };
     }
+
+    return { body: undefined, code: 0, inserted: 0 };
 };
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
@@ -657,24 +673,22 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const source = await resolveImportSource(options, cwd);
 
     if (source.kind === "invalid") {
-        return { body: undefined, code: 1, inserted: 0 };
+        // `resolveImportSource` logged which source it could not read.
+        return { body: undefined, code: 1, error: `import: could not read ${options.file}`, inserted: 0 };
     }
 
     // Scan-only: it writes the candidate mapping and imports nothing, so it runs
     // before the worker/token preconditions — the operator inspects an export
     // long before a target worker exists.
     if (options.scan === true) {
-        const scanned = await runScan(source, cwd, options.logger);
-
-        // The scan's product is the mapping file it wrote; there is no import
-        // summary to hand back.
-        return { body: undefined, code: scanned === undefined ? 1 : 0, inserted: 0 };
+        return scanOnly(source, cwd, options);
     }
 
     const request = await resolveImportRequest(options);
 
     if (request === undefined) {
-        return { body: undefined, code: 1, inserted: 0 };
+        // `resolveImportRequest` logged the missing target or credential.
+        return { body: undefined, code: 1, error: "import: could not resolve the worker URL and admin token", inserted: 0 };
     }
 
     const { baseUrl, fetchImpl, requestUrl, token } = request;
@@ -685,7 +699,8 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd);
 
     if (storage === undefined) {
-        return { body: undefined, code: 1, inserted: 0 };
+        // `runStoragePhase` logged which object it could not move.
+        return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
     }
 
     const { mapping, storageIdMap, transferredPaths } = storage;
@@ -749,8 +764,16 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     emitImportReport(options, { body, conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
 
-    return { body, code: failed ? 1 : 0, inserted: insertedTotal };
+    const data = { file: options.file, inserted: insertedTotal, summary: body };
+
+    if (failed) {
+        // The per-row detail is in `data.summary`; this is the one line that says
+        // the run did not come out clean.
+        return { body, code: 1, data, error: `import: ${options.file} did not import cleanly`, inserted: insertedTotal };
+    }
+
+    return { body, code: 0, data, inserted: insertedTotal };
 };
 
-export type { ImportCommandOptions, ImportCommandResult, ImportSummary };
+export type { ImportCommandData, ImportCommandOptions, ImportCommandResult, ImportSummary };
 export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand };

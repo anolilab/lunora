@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { InfoCommandResult } from "../../src/commands/info/handler";
 import { runInfoCommand } from "../../src/commands/info/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const recordingLogger = (): { errors: string[]; lines: string[]; logger: Logger; warns: string[] } => {
@@ -78,8 +80,8 @@ describe("lunora info --bindings", () => {
         expect(output).not.toContain("hunter2");
     });
 
-    it("emits the machine-readable manifest under --format json", () => {
-        expect.assertions(2);
+    it("hands the machine-readable manifest back as the --format json payload", () => {
+        expect.assertions(3);
 
         writeWrangler({ kv_namespaces: [{ binding: "CACHE", id: "abc123" }] });
 
@@ -91,16 +93,21 @@ describe("lunora info --bindings", () => {
             return true;
         });
 
+        let result: InfoCommandResult | undefined;
+
         try {
-            runInfoCommand({ bindings: true, cwd: workdir, format: "json", logger });
+            result = runInfoCommand({ bindings: true, cwd: workdir, format: "json", logger });
         } finally {
             spy.mockRestore();
         }
 
-        const manifest = JSON.parse(captured) as { bindings: { binding: string; type: string }[] };
+        // The document is `defineHandler`'s; the command writes nothing itself.
+        expect(captured).toBe("");
 
-        expect(manifest.bindings).toHaveLength(1);
-        expect(manifest.bindings[0]?.binding).toBe("CACHE");
+        const manifest = result?.data as { bindings: { binding: string; type: string }[] } | undefined;
+
+        expect(manifest?.bindings).toHaveLength(1);
+        expect(manifest?.bindings[0]?.binding).toBe("CACHE");
     });
 
     it("writes the manifest to a file with --out", () => {
@@ -127,7 +134,8 @@ describe("lunora info --bindings", () => {
         const { errors, logger } = recordingLogger();
         const { code } = runInfoCommand({ cwd: workdir, logger, out: join(workdir, "x.json") });
 
-        expect(code).toBe(1);
+        // A flag that does not apply to this invocation is a usage error.
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(errors.join(" ")).toContain("--bindings");
     });
 

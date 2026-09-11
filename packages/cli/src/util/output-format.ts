@@ -14,6 +14,40 @@ import { createStderrLogger, isProcessStreamLogger } from "./logger";
 type OutputFormat = "json" | "pretty";
 
 /**
+ * The envelope `--format json` puts on stdout — the same three keys for every
+ * command, so a consumer parses one shape and never has to know which command
+ * produced it.
+ *
+ * - `code` is the exit code the process will terminate with.
+ * - `data` is the command's own payload, and is absent when the run produced
+ * none — which is what a failure before any work looks like.
+ * - `error` is the single-line reason for a non-zero `code`. It is the half that
+ * makes a FAILURE machine-readable: before the envelope, a failed command wrote
+ * nothing at all to stdout and the reason could only be scraped out of English
+ * prose on stderr.
+ *
+ * `defineHandler` serializes exactly these keys, once, after the body returns —
+ * so a body may return a richer result for its in-process callers without
+ * widening the document, and a failure gets one for free.
+ */
+interface CommandResult<TData> {
+    /** Process exit code — one of `EXIT_CODE`. */
+    code: number;
+    /** The command's structured payload. Absent when the run produced none. */
+    data?: TData;
+
+    /**
+     * Set by a command that forwards `--format json` to a child process which
+     * writes the document itself (`wrangler … --json`, `wrangler tail`). The
+     * envelope is suppressed for that run: stdout already carries exactly one
+     * document, and appending a second would make the stream unparseable.
+     */
+    delegated?: boolean;
+    /** Why the run failed. Set whenever `code` is non-zero and a reason is known. */
+    error?: string;
+}
+
+/**
  * The `--format` flag, declared once and shared by every command that offers it
  * so the name, type and description cannot drift apart across 23 modules.
  */
@@ -65,5 +99,5 @@ const printJson = (result: unknown): void => {
     process.stdout.write(`${JSON.stringify(result, undefined, 2)}\n`);
 };
 
-export type { OutputFormat };
+export type { CommandResult, OutputFormat };
 export { loggerForFormat, OUTPUT_FORMAT_OPTION, parseOutputFormat, printJson };

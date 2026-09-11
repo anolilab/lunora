@@ -7,7 +7,6 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
-import { printJson } from "../../util/output-format";
 import type { Connection } from "./connect";
 import { connect, dialectFromUrl } from "./connect";
 import type { EmittedFile } from "./emit";
@@ -39,10 +38,21 @@ interface IntrospectCommandOptions {
     url?: string;
 }
 
+/** The `--format json` payload: what was read, and what was written from it. */
+interface IntrospectData {
+    dialect: SqlDialect;
+    dryRun: boolean;
+    tables: string[];
+    /** Paths (relative to `lunora/`) actually written. */
+    written: string[];
+}
+
 interface IntrospectCommandResult {
     code: number;
     /** The source dialect the scaffold was read from; absent when the run failed before connecting. */
     dialect?: SqlDialect;
+    /** Why the run failed, for the `--format json` envelope. */
+    error?: string;
     /** The source tables that were introspected. */
     tables?: string[];
     /** Paths (relative to `lunora/`) actually written. */
@@ -156,9 +166,11 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
     // on stderr in json mode, leaving stdout to the result document.
 
     if (options.connection === undefined && (options.url === undefined || options.url === "")) {
-        options.logger.error("`lunora introspect` needs a database URL: pass --url, or set DATABASE_URL.");
+        const message = "`lunora introspect` needs a database URL: pass --url, or set DATABASE_URL.";
 
-        return { code: 1, written: [] };
+        options.logger.error(message);
+
+        return { code: 1, error: message, written: [] };
     }
 
     // With an injected connection there is no URL scheme to read the dialect from,
@@ -181,9 +193,11 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
     const selected = selectTables(database, options);
 
     if (selected.length === 0) {
-        options.logger.error("no tables found to introspect — check --schema and --tables.");
+        const message = "no tables found to introspect — check --schema and --tables.";
 
-        return { code: 1, written: [] };
+        options.logger.error(message);
+
+        return { code: 1, error: message, written: [] };
     }
 
     const { files, warnings } = emitIntrospection(
@@ -223,15 +237,11 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
     const tables = selected.map((table) => table.name);
 
-    if (options.format === "json") {
-        printJson({ dialect, dryRun: options.dryRun === true, tables, written });
-    }
-
     return { code: 0, dialect, tables, written };
 };
 
 /** `lunora introspect` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions>(async ({ cwd, format, logger, options }) => {
+const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions, IntrospectData>(async ({ cwd, format, logger, options }) => {
     const result = await runIntrospectCommand({
         cwd,
         dryRun: options.dryRun === true,
@@ -244,8 +254,15 @@ const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptio
         url: options.url ?? process.env.DATABASE_URL,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data:
+            result.dialect === undefined
+                ? undefined
+                : { dialect: result.dialect, dryRun: options.dryRun === true, tables: result.tables ?? [], written: result.written },
+        error: result.error,
+    };
 });
 
 export { execute, resolveServerImport, runIntrospectCommand };
-export type { IntrospectCommandOptions, IntrospectCommandResult };
+export type { IntrospectCommandOptions, IntrospectCommandResult, IntrospectData };

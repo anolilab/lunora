@@ -87,13 +87,35 @@ lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
 Every command that produces a **result document** takes `--format pretty|json`
 (`pretty` is the default). In `json` mode stdout carries exactly one JSON
 document and every human/progress line moves to stderr, so `lunora <cmd>
---format json | jq` always parses:
+--format json | jq` always parses.
+
+The document is the same **envelope** for every command:
+
+```jsonc
+{
+    "code": 0, // the exit code the process terminates with
+    "data": {}, // the command's own payload — per-command, absent when it produced none
+    "error": "…", // why it failed; present whenever `code` is non-zero and a reason is known
+}
+```
+
+One shape to parse, whichever command produced it — and a **failure answers in
+the same shape a success does**, so the reason never has to be scraped out of
+English prose on stderr:
 
 ```bash
-lunora doctor --format json | jq '.checks[] | select(.level == "error")'
-lunora migrate status backfill-names --format json | jq '.result'
-lunora env diff --format json | jq -r '.localOnly[]'
+lunora doctor --format json | jq '.data.findings[] | select(.level == "fail")'
+lunora migrate status backfill-names --format json | jq '.data.result'
+lunora env diff --format json | jq -r '.data.localOnly[]'
+
+# The failure path is parseable too.
+lunora verify --format json | jq -r 'if .code == 0 then "ok" else .error end'
 ```
+
+`code` is the only key present on every document — `data` is absent when the run
+failed before producing one, and `error` is absent on success. Read `code` (or
+the process exit status, which is the same number — see
+[CLI exit codes](/docs/exit-codes)) before reaching for either.
 
 Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
 `codegen`, `containers`, `deploy`, `deployments`, `doctor`, `env`, `eval`,
@@ -106,6 +128,11 @@ the underlying tool has no JSON rendering: `export --format json` requires
 --format json` applies to `list` only; `containers --format json` applies to
 `list`, `info` and `images list`. Each refuses with a usage error rather than
 emitting a fabricated document.
+
+Where the flag is forwarded to a tool that writes the document itself —
+`deployments list`, the `containers` read subcommands, and `logs` (a stream, not
+a result) — stdout carries **that** tool's output and no envelope is added, since
+a second document on the same stream would make neither parseable.
 
 `lunora dev --json` is deliberately **not** part of this: it selects a streaming
 JSON **log-line** format for a long-running process, not a single result
