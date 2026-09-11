@@ -16,7 +16,8 @@ import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
@@ -39,7 +40,7 @@ interface VerifyCommandOptions {
     env?: string;
 
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     /** Injectable fetch for the health probe; defaults to the global `fetch`. */
     healthFetch?: HealthFetch;
 
@@ -199,15 +200,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const cwd = options.cwd ?? process.cwd();
     // In `--format json` mode every human/progress line goes to stderr so
     // stdout carries only the serialized structured result.
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("verify", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
-    }
+    const { logger } = options;
 
     const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
     const errors: string[] = [...validation.report.errors];
@@ -284,7 +277,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 
     const result = reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson(result);
     }
 
@@ -292,13 +285,13 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 };
 
 /** `lunora verify` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, format, logger, options }) => {
     const result = await runVerifyCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         healthUrl: options.healthUrl,
         logger,
         strictAdvisories: options.strictAdvisories,

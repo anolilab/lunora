@@ -233,21 +233,6 @@ describe("lunora codegen", () => {
                 expect(Array.isArray(parsed.advisories)).toBe(true);
                 expect(Array.isArray(parsed.cronTriggers)).toBe(true);
             });
-
-            it("rejects an unknown --format the same way logs does", () => {
-                expect.assertions(3);
-
-                const errors: string[] = [];
-
-                const stdout = captureStdout(() => {
-                    const result = runCodegenCommand({ cwd: workdir, format: "yaml", logger: { ...silentLogger(), error: (message) => errors.push(message) } });
-
-                    expect(result.error).toBeDefined();
-                });
-
-                expect(stdout).toBe("");
-                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
-            });
         });
     });
 

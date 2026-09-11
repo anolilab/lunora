@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora deployments <subcommand>` — inspect deployment history and move
  * traffic between Worker versions, wrapping `wrangler versions` / `rollback`.
@@ -21,7 +23,7 @@ const deploymentsCommand: Command = {
     name: "deployments",
     options: [
         { description: "Cloudflare environment name", name: "env", type: String },
-        { description: "Output format: pretty (default) or json (`list` only)", name: "format", type: String },
+        { ...OUTPUT_FORMAT_OPTION, description: "Output format: pretty (default) or json (`list` only)" },
         { description: "Reason/description recorded with a rollback or promote", name: "message", type: String },
         { description: "Confirm a rollback or promote (required — these change live traffic)", name: "yes", type: Boolean },
     ],

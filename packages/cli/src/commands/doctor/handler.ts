@@ -9,9 +9,9 @@ import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
@@ -766,31 +766,23 @@ const renderReport = (result: DoctorResult, logger: Logger): void => {
 
 interface DoctorCommandOptions extends RunDoctorOptions {
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 }
 
 /**
  * Run the preflight and emit it in the requested format. `pretty` prints the
- * human report exactly as before; `json` routes that same report to stderr (via
- * {@link loggerForFormat}) and puts a single {@link DoctorResult} document on
- * stdout, so `lunora doctor --format json | …` stays pipeable. The exit code is
- * the same in both formats.
+ * human report exactly as before; `json` routes that same report to stderr (the
+ * logger `defineHandler` hands in is already stderr there) and puts a single
+ * {@link DoctorResult} document on stdout, so `lunora doctor --format json | …`
+ * stays pipeable. The exit code is the same in both formats.
  */
 const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorResult> => {
-    const formatError = validateOutputFormat("doctor", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, findings: [], ok: false, summary: { fail: 0, info: 0, pass: 0, warn: 0 } };
-    }
-
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const result = await runDoctor({ ...options, logger });
 
     renderReport(result, logger);
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson(result);
     }
 
@@ -798,8 +790,8 @@ const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorRe
 };
 
 /** `lunora doctor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, logger, options }) => {
-    const result = await runDoctorCommand({ cwd, format: options.format, logger });
+const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, format, logger }) => {
+    const result = await runDoctorCommand({ cwd, format, logger });
 
     return { code: result.code };
 });

@@ -10,7 +10,6 @@ import { execute } from "../../src/commands/add/handler";
 import type { AddOptions } from "../../src/commands/add/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import { setCommandLogger } from "../../src/util/logger";
-import { validateOutputFormat } from "../../src/util/output-format";
 
 // __tests__/commands/ -> package root -> packages/ -> monorepo root -> registry/
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +27,7 @@ const runExecute = async (workdir: string, options: Partial<AddOptions>, argumen
     let exitCode: number | undefined;
     const toolbox = {
         argument,
+        commandName: "add",
         options,
         process: {
             cwd: workdir,
@@ -92,13 +92,15 @@ describe("lunora add --format", () => {
         expect(json.items).toStrictEqual(["mail"]);
     });
 
+    // The refusal is `defineHandler`'s, not this command's — asserted through a
+    // real command so the wiring (cerebro's command name reaching the message,
+    // nothing running past the gate) is covered end to end.
     it("rejects an invalid --format value with the usage exit code", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const exitCode = await runExecute(workdir, { format: "xml", from: registryRoot, yes: true }, ["email"]);
 
         expect(exitCode).toBe(EXIT_CODE.USAGE);
-        expect(validateOutputFormat("add", "xml")).toBe('add: unknown --format "xml" — expected pretty | json');
         expect(logged).toContain('add: unknown --format "xml" — expected pretty | json');
     });
 });

@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora run <functionPath>` — send a single RPC to a running Lunora worker.
  * Metadata only; the handler (lazy-loaded via `loader`) holds the logic.
@@ -28,7 +30,7 @@ const runCommand: Command = {
         },
         { description: 'JSON-encoded extra identity claims to forge alongside --as (e.g. \'{"org":"acme"}\')', name: "claims", type: String },
         { description: "Explicit shard key", name: "shard", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Worker URL (defaults to the running dev server, else http://localhost:8787)", name: "url", type: String },
         {
             description: "Admin bearer for --as (prefer LUNORA_ADMIN_TOKEN or .dev.vars; --token is visible to other local processes via the process table)",

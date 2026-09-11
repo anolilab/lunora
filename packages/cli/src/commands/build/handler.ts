@@ -4,9 +4,9 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { DeployCommandResult } from "../deploy/handler";
@@ -39,7 +39,7 @@ interface BuildCommandOptions {
      */
     emitBindings?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
@@ -92,13 +92,13 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
  */
 const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
     const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
-    const jsonMode = isJsonFormat(options.format);
+    const jsonMode = options.format === "json";
 
     // `build` owns its `--format json` document instead of delegating to
     // deploy's: the bundle measurement below is what a CI consumer runs this
     // command for, and the deploy result has no field to carry it. Everything
     // human therefore goes to stderr from here on.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const emit = (result: BuildCommandResult): BuildCommandResult => {
         if (jsonMode) {
             printJson(result);
@@ -106,14 +106,6 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 
         return result;
     };
-
-    const formatError = validateOutputFormat("build", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
-    }
 
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift,
@@ -161,13 +153,13 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, format, logger, options }) => {
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,
-        format: options.format,
+        format,
         logger,
         outDir: options.outDir,
         strictAdvisories: options.strictAdvisories,

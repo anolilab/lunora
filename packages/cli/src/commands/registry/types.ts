@@ -4,6 +4,7 @@
  * / result types are shared across the four command orchestrators.
  */
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 
 /** A single file the item scaffolds into the project. */
 interface RegistryFile {
@@ -81,7 +82,7 @@ interface AddCommandOptions {
     /** Print the plan and stop without writing anything. */
     dryRun?: boolean;
     /** Output format: `pretty` (default) or `json` — a JSON snapshot of the plan/list. */
-    format?: string;
+    format?: OutputFormat;
     /** Local registry root (offline / tests). Expects per-item subdirs, each with a `registry.json`. */
     from?: string;
     /** `--list`: enumerate available items instead of adding. */

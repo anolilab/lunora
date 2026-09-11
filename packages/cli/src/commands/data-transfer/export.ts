@@ -13,7 +13,8 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
 import { EXPORT_ENDPOINT_PATH } from "./shared";
 
@@ -26,7 +27,7 @@ interface ExportCommandOptions {
      * single document and therefore requires a file destination — with `--out -`
      * (or none) stdout already carries the NDJSON stream.
      */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Output file path; `undefined`/`-` streams to stdout. */
     out?: string;
@@ -214,34 +215,23 @@ const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: str
 };
 
 /**
- * Validate `--format` and resolve where the dump lands, before anything is
- * fetched. Returns `undefined` (having logged the reason) when the run must not
- * proceed; otherwise the file destination (`undefined` means stdout) and an
- * options object whose logger is already routed for the chosen format.
+ * Resolve where the dump lands, before anything is fetched. Returns the file
+ * destination (`destination: undefined` means stdout), or `undefined` — having
+ * logged the reason — when the requested combination cannot produce one.
  */
-const resolveExportOutput = (rawOptions: ExportCommandOptions): { destination: string | undefined; options: ExportCommandOptions } | undefined => {
-    const formatError = validateOutputFormat("export", rawOptions.format);
-
-    if (formatError !== undefined) {
-        rawOptions.logger.error(formatError);
-
-        return undefined;
-    }
-
-    const destination = rawOptions.out === undefined || rawOptions.out === "-" ? undefined : rawOptions.out;
+const resolveExportOutput = (options: ExportCommandOptions): { destination: string | undefined } | undefined => {
+    const destination = options.out === undefined || options.out === "-" ? undefined : options.out;
 
     // The dump itself is the payload, and with no file destination it IS stdout.
     // A result document there would be spliced into the NDJSON, so this is
     // refused rather than interleaved.
-    if (isJsonFormat(rawOptions.format) && destination === undefined) {
-        rawOptions.logger.error("export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.");
+    if (options.format === "json" && destination === undefined) {
+        options.logger.error("export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.");
 
         return undefined;
     }
 
-    // Route the human/progress channel once so every line below lands on stderr
-    // in json mode.
-    return { destination, options: { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) } };
+    return { destination };
 };
 
 /**
@@ -280,17 +270,17 @@ const finishExport = async (parameters: {
  * pipe straight to the output sink, so a 10M-row export doesn't materialise
  * the body in memory.
  */
-const runExportCommand = async (rawOptions: ExportCommandOptions): Promise<ExportCommandResult> => {
-    const resolvedOutput = resolveExportOutput(rawOptions);
+const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
+    const resolvedOutput = resolveExportOutput(options);
 
     if (resolvedOutput === undefined) {
-        // Every `resolveExportOutput` refusal is a usage error: an unknown
-        // `--format`, or `--format json` without the `--out <file>` it needs.
+        // `--format json` without the `--out <file>` it needs: the invocation
+        // asks for two things on one stdout, which is a usage error.
         return { bytes: 0, code: EXIT_CODE.USAGE, rows: 0 };
     }
 
-    const { destination, options } = resolvedOutput;
-    const json = isJsonFormat(options.format);
+    const { destination } = resolvedOutput;
+    const json = options.format === "json";
 
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");

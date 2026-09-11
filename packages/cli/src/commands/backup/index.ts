@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const backupCommand: Command = {
     argument: { description: "create | list | restore <id|file> | retention | prune | pitr", name: "subcommand", type: String },
     description: "Managed snapshot backups (create | list | restore) to a directory or an R2 bucket, plus native point-in-time recovery (pitr)",
@@ -26,7 +28,7 @@ const backupCommand: Command = {
         { description: "Key prefix for bucket-backed snapshots (default backups/)", name: "prefix", type: String },
         { description: "restore: verify the snapshot's checksum before importing anything", name: "verify", type: Boolean },
         { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "pitr: time to read/restore to (ISO or epoch-ms, ≤30 days)", name: "at", type: String },
         { description: "pitr --restore: explicit bookmark to restore to (wins over --at)", name: "bookmark", type: String },
         { description: "pitr: perform a restore instead of just reading the bookmark", name: "restore", type: Boolean },

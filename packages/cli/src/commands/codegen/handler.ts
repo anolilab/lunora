@@ -13,7 +13,8 @@ import { resolveTargetOrError } from "../../util/deploy-target";
 import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import type { CodegenOptions } from "./index";
 
@@ -25,7 +26,7 @@ interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
 
     /**
@@ -58,18 +59,10 @@ interface CodegenCommandResult {
 
 const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult => {
     const projectRoot = options.cwd ?? process.cwd();
-    const json = isJsonFormat(options.format);
+    const json = options.format === "json";
     // In `--format json` mode every human/progress line goes to stderr so
     // stdout carries only the serialized structured result.
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("codegen", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { advisories: [], code: EXIT_CODE.USAGE, cronTriggers: [], error: formatError, failedAdvisories: 0, outputDirectory: "" };
-    }
+    const { logger } = options;
 
     // CI is the default gate: a pipeline should fail on an ERROR advisory, a
     // local run should not have its workflow interrupted by one.
@@ -248,11 +241,11 @@ const syncLintIgnores = (projectRoot: string, logger: Logger): void => {
 };
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, format, logger, options }) => {
     const result = runCodegenCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
-        format: options.format,
+        format,
         logger,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
@@ -269,7 +262,7 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
     // signal rather than `result.error`, which is also set for a platform
     // diagnostic raised AFTER a successful emit, where the warning still applies.
     if (result.outputDirectory !== "") {
-        const commandLogger = loggerForFormat(options.format, logger);
+        const commandLogger = logger;
 
         syncLintIgnores(cwd, commandLogger);
         await warnAboutExportGaps(cwd, commandLogger);

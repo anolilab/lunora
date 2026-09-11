@@ -5,9 +5,9 @@ import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { Connection } from "./connect";
 import { connect, dialectFromUrl } from "./connect";
 import type { EmittedFile } from "./emit";
@@ -28,7 +28,7 @@ interface IntrospectCommandOptions {
     /** Overwrite files that already exist. */
     force?: boolean;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Emit `list`/`get` procedure modules alongside the schema. Defaults to `true`. */
     procedures?: boolean;
@@ -150,19 +150,10 @@ const mergeExistingSchema = async (
  * procedure modules) from it. Read-only against the source database; never
  * overwrites an existing file without `--force`.
  */
-const runIntrospectCommand = async (rawOptions: IntrospectCommandOptions): Promise<IntrospectCommandResult> => {
-    const cwd = rawOptions.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("introspect", rawOptions.format);
-
-    if (formatError !== undefined) {
-        rawOptions.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, written: [] };
-    }
-
+const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<IntrospectCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
     // Routed once so the per-file "wrote …" progress and the dry-run preview land
     // on stderr in json mode, leaving stdout to the result document.
-    const options: IntrospectCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
 
     if (options.connection === undefined && (options.url === undefined || options.url === "")) {
         options.logger.error("`lunora introspect` needs a database URL: pass --url, or set DATABASE_URL.");
@@ -232,7 +223,7 @@ const runIntrospectCommand = async (rawOptions: IntrospectCommandOptions): Promi
 
     const tables = selected.map((table) => table.name);
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson({ dialect, dryRun: options.dryRun === true, tables, written });
     }
 
@@ -240,12 +231,12 @@ const runIntrospectCommand = async (rawOptions: IntrospectCommandOptions): Promi
 };
 
 /** `lunora introspect` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions>(async ({ cwd, format, logger, options }) => {
     const result = await runIntrospectCommand({
         cwd,
         dryRun: options.dryRun === true,
         force: options.force === true,
-        format: options.format,
+        format,
         logger,
         procedures: options.procedures !== false,
         schema: options.schema,

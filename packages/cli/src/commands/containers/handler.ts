@@ -5,7 +5,7 @@ import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ContainersOptions } from "./index";
@@ -37,7 +37,7 @@ interface ContainersCommandOptions {
     dockerAvailable?: DockerProbe;
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     push?: boolean;
     spawner?: Spawner;
@@ -58,14 +58,6 @@ interface ContainersCommandResult {
  */
 const runContainersCommand = async (options: ContainersCommandOptions): Promise<ContainersCommandResult> => {
     const [subcommand, ...rest] = options.argument;
-    const formatError = validateOutputFormat("containers", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE };
-    }
-
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
         options.logger.error(
             `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`,
@@ -74,7 +66,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
         return { code: EXIT_CODE.USAGE };
     }
 
-    const json = isJsonFormat(options.format);
+    const json = options.format === "json";
     // `images` is a namespace, not a verb: `images list` answers as JSON and
     // `images delete` does not, so the check keys off the full path.
     const verb = subcommand === "images" ? `images ${rest[0] ?? ""}`.trim() : subcommand;
@@ -128,7 +120,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
 
     // In json mode the echoed invocation moves to stderr so wrangler's document
     // is the only thing on stdout.
-    loggerForFormat(options.format, options.logger).info(`running ${descriptor.command} ${descriptor.args.join(" ")}`);
+    options.logger.info(`running ${descriptor.command} ${descriptor.args.join(" ")}`);
 
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
@@ -137,12 +129,12 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
 };
 
 /** `lunora containers` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptions>(async ({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptions>(async ({ argument, cwd, format, logger, options }) => {
     const result = await runContainersCommand({
         argument,
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         logger,
         push: options.push === true,
         tag: options.tag,

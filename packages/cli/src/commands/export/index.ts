@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const exportCommand: Command = {
     argument: { description: "Optional path (alias for --out)", name: "path", type: String },
     description: "Stream NDJSON of every shard-local + global table from the worker",
@@ -17,7 +19,7 @@ const exportCommand: Command = {
     options: [
         { description: "Output file path (`-` for stdout, default)", name: "out", type: String },
         { description: "Comma-separated table allowlist", name: "tables", type: String },
-        { description: "Output format: pretty (default) or json — json needs --out <file>, since stdout carries the NDJSON", name: "format", type: String },
+        { ...OUTPUT_FORMAT_OPTION, description: "Output format: pretty (default) or json — json needs --out <file>, since stdout carries the NDJSON" },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
         {

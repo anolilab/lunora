@@ -8,7 +8,7 @@ import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./i
  * orchestrators in `./index`. The remaining positionals after the subcommand are
  * item names.
  */
-const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(({ argument, cwd, format, logger, options }) => {
     const subcommand = argument[0];
     const names = argument.slice(1);
 
@@ -18,7 +18,7 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
             cwd,
             diff: options.diff === true,
             dryRun: options.dryRun === true,
-            format: options.format,
+            format,
             from: options.from,
             logger,
             names,
@@ -36,7 +36,7 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
         return runAddCommand({
             allowUnsafeSource: options.allowUnsafeSource === true,
             cwd,
-            format: options.format,
+            format,
             from: options.from,
             list: true,
             logger,

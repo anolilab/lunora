@@ -4,13 +4,11 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { runDurableLogsCommand } from "./durable";
 import type { LogsOptions } from "./index";
-
-/** Output formats `wrangler tail` understands. */
-const LOG_FORMATS = new Set(["json", "pretty"]);
 
 interface LogsCommandOptions {
     cwd?: string;
@@ -18,7 +16,7 @@ interface LogsCommandOptions {
     /** Cloudflare environment name (forwarded as `--env`). */
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Substring filter on log messages (forwarded as `--search`). */
     search?: string;
@@ -49,17 +47,11 @@ interface LogsCommandResult {
  *
  * Unlike `deploy`, this neither runs codegen nor validates wrangler bindings —
  * it only forwards a tail request, and `wrangler` itself reports a clear error
- * if the Worker isn't deployed or the config can't be resolved. The one local
- * guard is `--format`, where a typo is cheap to catch before spawning.
+ * if the Worker isn't deployed or the config can't be resolved. `--format` is
+ * already parsed by `defineHandler`, so it arrives here as a settled choice.
  */
 const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-
-    if (options.format !== undefined && !LOG_FORMATS.has(options.format)) {
-        options.logger.error(`logs: unknown --format "${options.format}" — expected pretty | json`);
-
-        return { code: 1, descriptor: undefined, error: "invalid format" };
-    }
 
     // Default the environment from the `.lunora/project.json` link when the
     // caller didn't pass `--env`, so a linked checkout tails the right env.
@@ -100,7 +92,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
 };
 
 /** `lunora logs [worker]` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, format, logger, options }) => {
     // `--durable` switches from tailing a live Worker to reading the persisted
     // `ctx.log` archive (pipelineLogSink → R2) back via R2 SQL — a different data
     // path with its own credentials, so it forks here before touching wrangler.
@@ -126,7 +118,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
     return runLogsCommand({
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         logger,
         search: options.search,
         status: options.status,

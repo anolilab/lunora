@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const seedCommand: Command = {
     description: "Generate deterministic fake data from lunora/schema.ts and bulk-insert it via the worker's admin endpoint",
     examples: [
@@ -27,7 +29,7 @@ const seedCommand: Command = {
             type: Number,
         },
         { description: "Print the generated NDJSON instead of inserting", name: "dry-run", type: Boolean },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Wipe local .wrangler/state before seeding (local dev only)", name: "reset", type: Boolean },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },

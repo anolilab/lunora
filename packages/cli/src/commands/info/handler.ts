@@ -12,9 +12,9 @@ import { Project } from "ts-morph";
 import { deriveBindingManifest, writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { InfoOptions } from "./index";
 
 interface InfoCommandOptions {
@@ -22,7 +22,7 @@ interface InfoCommandOptions {
     bindings?: boolean;
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** With {@link InfoCommandOptions.bindings}: write the manifest here instead of stdout. */
     out?: string;
@@ -347,18 +347,10 @@ interface InfoCommandResult {
 
 const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     const cwd = options.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("info", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, snapshot: undefined };
-    }
-
-    const json = isJsonFormat(options.format);
+    const json = options.format === "json";
     // In `--format json` mode the human/progress channel moves to stderr so
     // stdout carries only the JSON document.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
     // `--bindings` narrows this command to the one question a MACHINE asks: what
     // does this Worker need provisioned. Same document `--emit-bindings` writes
@@ -386,8 +378,8 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
 };
 
 /** `lunora info` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, logger, options }) =>
-    runInfoCommand({ bindings: options.bindings === true, cwd, format: options.format, logger, out: options.out }),
+const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, format, logger, options }) =>
+    runInfoCommand({ bindings: options.bindings === true, cwd, format, logger, out: options.out }),
 );
 
 export { execute };

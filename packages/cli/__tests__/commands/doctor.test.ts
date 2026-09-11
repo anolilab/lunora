@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
-import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
@@ -674,23 +673,6 @@ describe("runDoctor", () => {
 
             expect(stdout).toBe("");
             expect(lines.some((line) => line.includes("lunora doctor — project preflight"))).toBe(true);
-        });
-
-        it("rejects an unknown --format the same way the other commands do", async () => {
-            expect.assertions(3);
-
-            seed(workdir, CLEAN_WRANGLER);
-
-            const { lines, logger } = makeLogger();
-
-            const stdout = await captureStdout(async () => {
-                const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
-
-                expect(result.code).toBe(EXIT_CODE.USAGE);
-            });
-
-            expect(stdout).toBe("");
-            expect(lines.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
         });
     });
 

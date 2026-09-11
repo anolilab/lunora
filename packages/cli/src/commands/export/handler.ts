@@ -8,10 +8,10 @@ import type { ExportOptions } from "./index";
  * `lunora export` handler. The positional path (alias for `--out`) takes
  * precedence over the flag. Streams via {@link runExportCommand}.
  */
-const execute: CommandHandler<ExportOptions> = defineHandler<ExportOptions>(({ argument, cwd, logger, options }) =>
+const execute: CommandHandler<ExportOptions> = defineHandler<ExportOptions>(({ argument, cwd, format, logger, options }) =>
     runExportCommand({
         cwd,
-        format: options.format,
+        format,
         logger,
         out: argument[0] ?? options.out,
         prod: options.prod === true,

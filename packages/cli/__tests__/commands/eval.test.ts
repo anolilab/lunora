@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { runEvalCommand } from "../../src/commands/eval/handler";
-import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
@@ -190,18 +189,6 @@ describe("lunora eval", () => {
         expect(parsed.evals[0]?.average).toBe(1);
         expect(parsed.evals[0]?.name).toBe("support-triage");
         expect(parsed.evals[0]?.passed).toBe(true);
-    });
-
-    it("rejects an unknown --format before discovering anything", async () => {
-        expect.assertions(2);
-
-        const { logger, recorded } = recordingLogger();
-        const cwd = join(fixtureRoot, "eval-sample");
-
-        const result = await runEvalCommand({ cwd, format: "xml", logger });
-
-        expect(result.code).toBe(EXIT_CODE.USAGE);
-        expect(recorded.errors.some((line) => line.includes("unknown --format"))).toBe(true);
     });
 
     it("rejects a NaN --threshold before discovering anything", async () => {

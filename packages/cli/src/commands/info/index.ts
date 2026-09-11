@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const infoCommand: Command = {
     description: "Print resolved project config: @lunora/* versions, wrangler summary, schema overview",
     examples: [
@@ -17,7 +19,7 @@ const infoCommand: Command = {
     name: "info",
     options: [
         { description: "Report only what this Worker needs provisioned, as the binding manifest", name: "bindings", type: Boolean },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "With --bindings: write the manifest to <file> instead of stdout", name: "out", type: String },
     ],
 };

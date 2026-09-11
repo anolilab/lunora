@@ -4,9 +4,9 @@ import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-t
 import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { RunRpcOptions } from "./index";
 
@@ -29,7 +29,7 @@ interface RunCommandOptions {
     cwd?: string;
     fetchImpl?: FetchLike;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -199,18 +199,10 @@ const parseRunPayloads = (
 
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("run", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { body: undefined, code: EXIT_CODE.USAGE, requestUrl: options.url ?? "" };
-    }
-
     // In `--format json` mode every human line — the POST echo, the pretty-printed
     // body `readAndLogBody` logs, the shard-denial hint — moves to stderr so
     // stdout carries only the result document.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const runAs = options.as !== undefined && options.as !== "";
 
     // `--claims` only travels inside the `runAs` envelope. Without a non-empty
@@ -284,7 +276,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     hintOnShardDenial(logger, { body, runAs, status: response.status });
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         // The function's own return value is the point; `functionPath` and
         // `requestUrl` name what produced it so a captured document is
         // self-describing.
@@ -299,7 +291,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 };
 
 /** `lunora run <functionPath>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, format, logger, options }) => {
     const functionPath = argument[0];
 
     if (!functionPath) {
@@ -313,7 +305,7 @@ const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ a
         as: options.as,
         claims: options.claims,
         cwd,
-        format: options.format,
+        format,
         functionPath,
         logger,
         shard: options.shard,

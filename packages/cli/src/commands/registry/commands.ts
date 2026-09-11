@@ -8,9 +8,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
 import safe from "./display";
@@ -168,7 +167,7 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
     // In `--format json` mode the human/progress channel moves to stderr so
     // stdout carries only the JSON catalog.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
     let cleanup: () => void = () => {};
 
@@ -179,7 +178,7 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         const items = collectCatalog(resolved.root);
 
-        if (isJsonFormat(options.format)) {
+        if (options.format === "json") {
             printJson(items);
 
             return empty;
@@ -207,21 +206,13 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const empty = emptyResult();
-    const formatError = validateOutputFormat("registry", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { ...empty, code: EXIT_CODE.USAGE };
-    }
-
     if (options.list) {
         return runListCommand(options);
     }
 
     // In `--format json` mode every human line — the plan, the diff preview, the
     // "add complete" report — moves to stderr so stdout carries only the document.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
     if (options.names.length === 0) {
         logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
@@ -259,7 +250,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
             printPlan(logger, manifest);
         }
 
-        if (isJsonFormat(options.format)) {
+        if (options.format === "json") {
             printJsonPlan(items);
         }
 

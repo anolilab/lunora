@@ -2,6 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 import { API_SPEC_HELP } from "../../util/api-spec";
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /**
  * `lunora build` — run codegen + all pre-deploy gates and emit the bundled
@@ -36,7 +37,7 @@ const buildCommand: Command = {
             name: "emit-bindings",
             type: String,
         },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag

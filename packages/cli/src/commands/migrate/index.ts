@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const migrateCommand: Command = {
     argument: { description: "generate | create | up | down | status | d1-to-hyperdrive [name|id]", name: "subcommand", type: String },
     description: "Schema (generate), online data (create | up | down | status), and backend (d1-to-hyperdrive) migrations",
@@ -21,7 +23,7 @@ const migrateCommand: Command = {
         { description: "Migration name slug (e.g. add_users_email)", name: "name", type: String },
         { description: "Target table for `create` (prompted for interactively when omitted)", name: "table", type: String },
         { description: "Preview a data migration without rewriting rows", name: "dry-run", type: Boolean },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Rows per batch for a data migration", name: "batch-size", type: Number },
         { description: "Cap batches processed this run (maps to the runner's maxBatches)", name: "steps", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },

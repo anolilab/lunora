@@ -157,16 +157,6 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         expect(document.ok).toBe(false);
     });
 
-    it("rejects an unknown --format before doing anything", async () => {
-        expect.assertions(2);
-
-        const { lines, logger } = recordingLogger();
-        const { code } = await runEnvCommand({ cwd: workdir, format: "xml", logger, subcommand: "list" });
-
-        expect(code).toBe(EXIT_CODE.USAGE);
-        expect(lines).toContain('env: unknown --format "xml" — expected pretty | json');
-    });
-
     it("seed --dry-run carries the generated rows as an array instead of an NDJSON stream", async () => {
         expect.assertions(4);
 

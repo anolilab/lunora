@@ -2,6 +2,8 @@
 
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora containers <build|push|images|list|info|delete>` — thin wrappers over
  * `wrangler containers …` so container image + instance management lives under
@@ -29,7 +31,7 @@ const containersCommand: Command = {
         { description: "build: push the image to the Cloudflare Registry after building", name: "push", type: Boolean },
         { description: "build: name:tag for the image (forwarded to wrangler --tag)", name: "tag", type: String },
         { description: "Cloudflare environment name", name: "env", type: String },
-        { description: "Output format: pretty (default) or json (read subcommands: list | info | images list)", name: "format", type: String },
+        { ...OUTPUT_FORMAT_OPTION, description: "Output format: pretty (default) or json (read subcommands: list | info | images list)" },
     ],
 };
 

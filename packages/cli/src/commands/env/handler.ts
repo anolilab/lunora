@@ -24,7 +24,8 @@ import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
@@ -43,7 +44,7 @@ interface EnvCommandOptions {
      */
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     /** Required for `set`. Required (positional) for `get`/`unset`. */
     key?: string;
     logger: Logger;
@@ -192,7 +193,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
 
     // Get prints the full value (caller asked for it explicitly) — except in
     // json mode, where it rides the document instead so stdout stays one blob.
-    if (!isJsonFormat(options.format)) {
+    if (options.format !== "json") {
         process.stdout.write(`${entry.value}\n`);
     }
 
@@ -586,7 +587,7 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
     // Print full `KEY=value` lines to stdout (the user asked to generate them —
     // e.g. to pipe into `wrangler secret put`). Not via the logger, which redacts.
     // In json mode the same values ride the document instead, so stdout stays one blob.
-    if (!isJsonFormat(options.format)) {
+    if (options.format !== "json") {
         for (const entry of generated) {
             process.stdout.write(`${entry.key}=${entry.value}\n`);
         }
@@ -634,25 +635,17 @@ const dispatchEnvSubcommand = async (context: EnvContext): Promise<EnvCommandRes
 
 const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("env", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, descriptors: [] };
-    }
-
     const context: EnvContext = {
         cwd,
         devVariablesPath: join(cwd, DEV_VARS_FILE),
         // In json mode every human line moves to stderr so stdout carries only
         // the result document.
-        logger: loggerForFormat(options.format, options.logger),
+        logger: options.logger,
         options,
     };
     const result = await dispatchEnvSubcommand(context);
 
-    if (isJsonFormat(options.format) && result.data !== undefined) {
+    if (options.format === "json" && result.data !== undefined) {
         printJson(result.data);
     }
 
@@ -665,7 +658,7 @@ const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generat
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand => typeof value === "string" && ENV_SUBCOMMANDS.has(value);
 
 /** `lunora env <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isEnvSubcommand(sub)) {
@@ -677,7 +670,7 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
     return runEnvCommand({
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         key: argument[1],
         logger,
         prod: options.prod === true,

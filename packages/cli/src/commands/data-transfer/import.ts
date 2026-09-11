@@ -11,9 +11,9 @@ import { stat } from "node:fs/promises";
 
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
@@ -53,7 +53,7 @@ interface ImportCommandOptions {
     /** Source NDJSON file. Required. */
     file: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     /**
      * Which reader to use. Omit to auto-detect between a Convex export snapshot
@@ -644,25 +644,16 @@ const emitImportReport = (
         warnings: outcome.warnings,
     });
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson({ file: options.file, inserted: outcome.insertedTotal, ok: !outcome.failed, summary: outcome.body });
     }
 };
 
-const runImportCommand = async (rawOptions: ImportCommandOptions): Promise<ImportCommandResult> => {
-    const cwd = rawOptions.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("import", rawOptions.format);
-
-    if (formatError !== undefined) {
-        rawOptions.logger.error(formatError);
-
-        return { body: undefined, code: EXIT_CODE.USAGE, inserted: 0 };
-    }
-
+const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
     // this same `options`, so in `--format json` mode their output goes to stderr
     // too and stdout carries only the summary document.
-    const options: ImportCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
     const source = await resolveImportSource(options, cwd);
 
     if (source.kind === "invalid") {

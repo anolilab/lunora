@@ -2,9 +2,9 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { FetchLike } from "../run/handler";
 import type { InsightsOptions } from "./index";
@@ -165,7 +165,7 @@ interface InsightsCommandOptions {
     cwd?: string;
     fetchImpl?: FetchLike;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     limit?: number;
     logger: Logger;
     prod?: boolean;
@@ -197,17 +197,9 @@ const resolveLimit = (raw: number | undefined): number => {
  * send it in cleartext to a non-loopback host.
  */
 const runInsightsCommand = async (options: InsightsCommandOptions): Promise<InsightsCommandResult> => {
-    const formatError = validateOutputFormat("insights", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE };
-    }
-
     // In `--format json` mode the human/progress channel moves to stderr so
     // stdout carries only the JSON report.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
     if (options.prod && options.url === undefined) {
         logger.error("--prod requires an explicit --url (refusing to report from the implicit localhost worker)");
@@ -285,7 +277,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
 
     const report = buildInsightsReport(functions, resolveLimit(options.limit));
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson(report);
     } else {
         logger.info(formatInsightsReport(report));
@@ -295,13 +287,13 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
 };
 
 /** `lunora insights` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(({ cwd, logger, options }) => {
+const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(({ cwd, format, logger, options }) => {
     const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
 
     return runInsightsCommand({
         cwd,
         fetchImpl: undefined,
-        format: options.format,
+        format,
         limit,
         logger,
         prod: options.prod,

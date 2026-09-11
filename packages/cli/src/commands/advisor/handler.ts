@@ -9,7 +9,8 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";
 import type { AdvisorOptions } from "./index";
 import { formatEntry, formatMatrix, formatSummary } from "./report";
@@ -23,7 +24,7 @@ interface AdvisorCommandOptions {
     /** Inspect a single `file#exportName`. */
     entry?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     /**
      * Stamp for the artifact. Defaults to the epoch rather than "now": the map is
@@ -134,16 +135,8 @@ const render = (map: AdvisorMap, options: AdvisorCommandOptions, comparison: Bas
  */
 const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult => {
     const projectRoot = options.cwd ?? process.cwd();
-    const json = isJsonFormat(options.format);
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("advisor", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, error: formatError };
-    }
+    const json = options.format === "json";
+    const { logger } = options;
 
     const minScore = parseMinScore(options.minScore);
 
@@ -221,13 +214,13 @@ const failed = (result: AdvisorCommandResult): boolean => {
 };
 
 /** `lunora advisor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({ cwd, logger, options }) => {
+const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({ cwd, format, logger, options }) => {
     const result = runAdvisorCommand({
         all: options.all,
         baseline: options.baseline,
         cwd,
         entry: options.entry,
-        format: options.format,
+        format,
         logger,
         minScore: options.minScore,
         out: options.out,

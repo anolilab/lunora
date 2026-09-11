@@ -6,9 +6,9 @@ import type { EvalItemResult, EvalResult } from "@lunora/testing";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { discoverEvalFiles, EVAL_FILE_SUFFIX } from "./discover-eval-files";
 import type { EvalOptions } from "./index";
 import type { EvalModule } from "./types";
@@ -59,7 +59,7 @@ interface EvalCommandOptions {
     dir?: string;
 
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     logger: Logger;
 
@@ -141,7 +141,7 @@ const abortWithTopLevelError = (logger: Logger, format: string | undefined, mess
 
     const result: EvalCommandResult = { code: 1, error: message, evals: [] };
 
-    if (isJsonFormat(format)) {
+    if (format === "json") {
         printJson(toJsonResult(result));
     }
 
@@ -310,15 +310,7 @@ const renderEvalTable = (outcomes: EvalRunOutcome[]): string[] => {
  */
 const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("eval", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, error: formatError, evals: [] };
-    }
+    const { logger } = options;
 
     // Cerebro parses `--threshold` with `type: Number`, so a non-numeric value
     // (`--threshold abc`) silently becomes NaN instead of erroring at the CLI
@@ -367,7 +359,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
 
     const result = { code, evals: outcomes };
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson(toJsonResult(result));
     }
 
@@ -375,11 +367,11 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
 };
 
 /** `lunora eval` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<EvalOptions> = defineHandler<EvalOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<EvalOptions> = defineHandler<EvalOptions>(async ({ cwd, format, logger, options }) => {
     const result = await runEvalCommand({
         cwd,
         dir: options.dir,
-        format: options.format,
+        format,
         logger,
         threshold: options.threshold,
     });

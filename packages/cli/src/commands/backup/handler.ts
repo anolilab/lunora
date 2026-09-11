@@ -34,7 +34,8 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { runExportCommand } from "../data-transfer/export";
 import { runImportCommand } from "../data-transfer/import";
@@ -84,7 +85,7 @@ interface BackupCommandOptions {
     dir?: string;
     fetchImpl?: StreamingFetchLike;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
@@ -748,23 +749,14 @@ const dispatchBackupSubcommand = async (options: BackupCommandOptions, cwd: stri
     }
 };
 
-const runBackupCommand = async (rawOptions: BackupCommandOptions): Promise<BackupCommandResult> => {
-    const cwd = rawOptions.cwd ?? process.cwd();
-    const formatError = validateOutputFormat("backup", rawOptions.format);
-
-    if (formatError !== undefined) {
-        rawOptions.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE };
-    }
-
+const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
     // Routed once: the export/import legs `create` and `restore` drive are handed
     // this same logger, so in json mode every human line lands on stderr and
     // stdout carries only the result document.
-    const options: BackupCommandOptions = { ...rawOptions, logger: loggerForFormat(rawOptions.format, rawOptions.logger) };
     const result = await dispatchBackupSubcommand(options, cwd);
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         // One shape per verb, discriminated by `subcommand`: the six verbs answer
         // six different questions and a merged document would say which one it is
         // only by which fields happened to be null.
@@ -788,7 +780,7 @@ const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
     value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
 
 /** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(async ({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(async ({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isBackupSubcommand(sub)) {
@@ -803,7 +795,7 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(asyn
         bucket: options.bucket,
         cwd,
         dir: options.dir,
-        format: options.format,
+        format,
         logger,
         prefix: options.prefix,
         prod: options.prod === true,

@@ -45,11 +45,11 @@ import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
-import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
@@ -109,7 +109,7 @@ interface DeployCommandOptions {
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     /**
      * After a successful live deploy, probe the new version's health route
@@ -454,7 +454,7 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDep
 const isInteractive = (options: DeployCommandOptions): boolean => {
     // `--format json` owns stdout for the JSON document — interactive spinners
     // would corrupt it, so json mode is always non-interactive.
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         return false;
     }
 
@@ -1550,7 +1550,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; r
  * stdout is left alone (mapped to stderr in json mode).
  */
 const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: string): SpawnDescriptor => {
-    const jsonFormat = isJsonFormat(options.format);
+    const jsonFormat = options.format === "json";
     // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
     // preview and a `--format json` deploy need to report where the thing went
     // just as much as a first pretty deploy does, and a re-deploy is how a
@@ -1717,7 +1717,7 @@ const runPreDeployPipeline = async (
             options.apiSpec,
             target,
             options.spawner,
-            isJsonFormat(options.format),
+            options.format === "json",
             strictAdvisories,
         );
 
@@ -1863,21 +1863,13 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
  * stderr for json output so stdout carries only the single JSON document.
  */
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
-    const formatError = validateOutputFormat("deploy", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return abortResult(formatError, { code: EXIT_CODE.USAGE });
-    }
-
     // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
     // disk until every artifact that has to describe them has been derived, then
     // the committed config goes back exactly as it was. Both artifacts are
     // produced inside this one window — the wrangler bundle by `executeDeploy`,
     // and `--emit-bindings`'s requirements document right after it — so nothing
     // else needs to own a snapshot.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
 
     let result: DeployCommandResult;
@@ -1898,7 +1890,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
         restoreWrangler?.();
     }
 
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         printJson(result);
 
         return result;
@@ -1928,14 +1920,14 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         dryRun: options.dryRun === true,
         env: options.env,
-        format: options.format,
+        format,
         healthCheck: options.healthCheck === true,
         logger,
         migrate: options.migrate === true,

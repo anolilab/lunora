@@ -42,7 +42,8 @@ import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
 import { runExportCommand } from "../data-transfer/export";
@@ -837,8 +838,8 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
 interface MigrateDispatchContext {
     argument: string[];
     cwd: string;
-    /** True when `--format json` selected a result document. */
-    json: boolean;
+    /** The resolved output format, parsed once by `defineHandler`. */
+    format: OutputFormat;
     /** Already routed for the format — stderr in json mode. */
     logger: Logger;
     options: MigrateOptions;
@@ -846,10 +847,10 @@ interface MigrateDispatchContext {
 
 /** `migrate generate`: diff the schema and emit a SQL migration. */
 const dispatchGenerate = (context: MigrateDispatchContext): { code: number } => {
-    const { argument, cwd, json, logger, options } = context;
+    const { argument, cwd, format, logger, options } = context;
     const result = runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
 
-    if (json) {
+    if (format === "json") {
         // `migrationFile` is omitted when nothing was written (an empty diff, or a failure).
         printJson({ empty: result.empty, migrationFile: result.migrationFile === "" ? undefined : result.migrationFile, subcommand: "generate" });
     }
@@ -859,7 +860,7 @@ const dispatchGenerate = (context: MigrateDispatchContext): { code: number } => 
 
 /** `migrate d1-to-hyperdrive`: copy `.global()` data between two deployments. */
 const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
-    const { json, logger, options } = context;
+    const { format, logger, options } = context;
     const result = await runMigrateToHyperdriveCommand({
         batchSize: options.batchSize,
         fromToken: options.fromToken ?? options.token,
@@ -873,7 +874,7 @@ const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ 
         yes: options.yes === true,
     });
 
-    if (json) {
+    if (format === "json") {
         printJson({ bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" });
     }
 
@@ -882,7 +883,7 @@ const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<{ 
 
 /** `migrate create`: scaffold a data migration. */
 const dispatchCreate = async (context: MigrateDispatchContext): Promise<{ code: number }> => {
-    const { argument, cwd, json, logger, options } = context;
+    const { argument, cwd, format, logger, options } = context;
     const name = argument[1] ?? options.name;
 
     if (!name) {
@@ -893,7 +894,7 @@ const dispatchCreate = async (context: MigrateDispatchContext): Promise<{ code: 
 
     const result = await runMigrateCreateCommand({ cwd, logger, name, table: options.table });
 
-    if (json) {
+    if (format === "json") {
         printJson({ file: result.file === "" ? undefined : result.file, name, subcommand: "create" });
     }
 
@@ -902,7 +903,7 @@ const dispatchCreate = async (context: MigrateDispatchContext): Promise<{ code: 
 
 /** `migrate up|down|status`: drive the cross-shard data-migration orchestrator. */
 const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" | "status" | "up"): Promise<{ code: number }> => {
-    const { argument, cwd, json, logger, options } = context;
+    const { argument, cwd, format, logger, options } = context;
     const id = argument[1] ?? options.name;
 
     if (!id) {
@@ -925,7 +926,7 @@ const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" 
         yes: options.yes === true,
     });
 
-    if (json) {
+    if (format === "json") {
         // The orchestrator's own per-shard roll-up is the document.
         printJson({ id, ok: result.code === 0, result: result.body, subcommand });
     }
@@ -940,19 +941,9 @@ const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" 
  * subcommands are four different operations sharing one command name, and each
  * already returns the structured result its document is built from.
  */
-const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(async ({ argument, cwd, logger: rawLogger, options }) => {
+const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(async ({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
-    const formatError = validateOutputFormat("migrate", options.format);
-
-    if (formatError !== undefined) {
-        rawLogger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE };
-    }
-
-    // In json mode every progress line — including the pretty-printed response
-    // body the data subcommands log — moves to stderr.
-    const context: MigrateDispatchContext = { argument, cwd, json: isJsonFormat(options.format), logger: loggerForFormat(options.format, rawLogger), options };
+    const context: MigrateDispatchContext = { argument, cwd, format, logger, options };
 
     switch (sub) {
         case "create": {

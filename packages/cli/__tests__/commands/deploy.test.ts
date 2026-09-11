@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
-import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import type { RecordedSpawn, Spawner } from "../../src/util/spawn";
@@ -1346,26 +1345,6 @@ export const backfillNames = defineMigration({
                 expect(parsed.deployment?.url).toBeUndefined();
                 // Nothing to read → wrangler's stdout is not captured at all.
                 expect(calls[0]?.descriptor.captureStdoutSilently).toBe(false);
-            });
-
-            it("rejects an unknown --format the same way logs does", async () => {
-                expect.assertions(5);
-
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-                const { calls, spawner } = createRecordingSpawner();
-                const { errors, logger } = silentLogger();
-
-                const stdout = await captureStdout(async () => {
-                    const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "yaml", logger, spawner });
-
-                    expect(result.code).toBe(EXIT_CODE.USAGE);
-                    expect(result.error).toBeDefined();
-                });
-
-                expect(stdout).toBe("");
-                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
-                expect(calls).toHaveLength(0);
             });
         });
 

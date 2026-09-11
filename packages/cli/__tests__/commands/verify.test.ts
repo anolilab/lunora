@@ -525,21 +525,6 @@ describe("lunora verify", () => {
                 expect(parsed.code).toBe(1);
                 expect(parsed.errors.length).toBeGreaterThan(0);
             });
-
-            it("rejects an unknown --format the same way logs does", async () => {
-                expect.assertions(3);
-
-                const { logger, recorded } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    const result = await runVerifyCommand({ cwd: workdir, format: "yaml", logger, typecheck: false });
-
-                    expect(result.error).toBeDefined();
-                });
-
-                expect(stdout).toBe("");
-                expect(recorded.errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
-            });
         });
     });
 });

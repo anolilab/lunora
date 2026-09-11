@@ -3,7 +3,7 @@ import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { DeploymentsOptions } from "./index";
@@ -15,7 +15,7 @@ interface DeploymentsCommandOptions {
     /** Cloudflare environment name (`--env`). */
     env?: string;
     /** Output format: `pretty` (default) or `json`. Only `list` has a JSON rendering. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Reason recorded with rollback / promote. */
     message?: string;
@@ -50,7 +50,7 @@ const buildListArgs = (options: DeploymentsCommandOptions): string[] => {
     // `wrangler deployments list --json` writes the document to stdout itself —
     // there is nothing for the CLI to re-serialize, so `--format json` forwards
     // the flag rather than wrapping wrangler output in a shape of its own.
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         args.push("--json");
     }
 
@@ -117,18 +117,10 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
 };
 
 const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promise<DeploymentsCommandResult> => {
-    const formatError = validateOutputFormat("deployments", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: formatError };
-    }
-
     // Only `list` has a document. Refused rather than ignored: a caller that
     // pipes `deployments rollback --format json` into a parser would otherwise
     // get wrangler's prose and a zero exit.
-    if (isJsonFormat(options.format) && options.subcommand !== "list") {
+    if (options.format === "json" && options.subcommand !== "list") {
         const unsupported = `deployments ${options.subcommand}: --format json is only available for \`deployments list\` — wrangler has no JSON rendering for the others.`;
 
         options.logger.error(unsupported);
@@ -149,7 +141,7 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
 
     // In json mode the echoed invocation moves to stderr so wrangler's document
     // is the only thing on stdout.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const cwd = options.cwd ?? process.cwd();
     const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
     const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
@@ -167,7 +159,7 @@ const isDeploymentsSubcommand = (value: unknown): value is DeploymentsSubcommand
     value === "list" || value === "inspect" || value === "rollback" || value === "promote";
 
 /** `lunora deployments <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isDeploymentsSubcommand(sub)) {
@@ -179,7 +171,7 @@ const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOpt
     return runDeploymentsCommand({
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         logger,
         message: options.message,
         subcommand: sub,

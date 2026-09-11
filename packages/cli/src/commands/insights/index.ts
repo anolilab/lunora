@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora insights` — a Convex-Insights-style report over the live worker's
  * per-function metrics. Surfaces write-conflict hot-spots (OCC contention, the
@@ -23,7 +25,7 @@ const insightsCommand: Command = {
     options: [
         { description: "Explicit shard key (defaults to the root shard)", name: "shard", type: String },
         { description: "Max rows per section (default 10)", name: "limit", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
         { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },

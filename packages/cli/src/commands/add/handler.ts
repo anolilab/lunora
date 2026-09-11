@@ -6,10 +6,9 @@ import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { printJson } from "../../util/output-format";
 import type { TextPrompt } from "../../util/tui-prompts";
 import { tuiSelect, tuiText } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
@@ -381,19 +380,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
 };
 
 /** `lunora add <feature>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
-    const formatError = validateOutputFormat("add", options.format);
-
-    if (formatError !== undefined) {
-        logger.error(formatError);
-
-        return { code: EXIT_CODE.USAGE };
-    }
-
-    // In `--format json` mode every human/progress line goes to stderr so
-    // stdout carries only the serialized structured result.
-    const effectiveLogger = loggerForFormat(options.format, logger);
-
+const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, format, logger, options }) => {
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,
         bucket: options.bucket,
@@ -401,7 +388,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         db: options.db,
         feature: argument[0],
         from: options.from,
-        logger: effectiveLogger,
+        logger,
         mailTo: options.mailTo,
         provider: options.provider,
         ref: options.ref,
@@ -409,7 +396,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         yes: options.yes === true,
     });
 
-    if (isJsonFormat(options.format)) {
+    if (format === "json") {
         printJson({ code: result.code, items: result.items });
     }
 

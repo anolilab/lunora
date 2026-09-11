@@ -11,7 +11,7 @@ import type { ImportOptions } from "./index";
  * `npx convex export --path <dir>` directory; {@link runImportCommand} detects
  * which and bulk-inserts either way.
  */
-const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ argument, cwd, format, logger, options }) => {
     const file = argument[0];
 
     if (!file) {
@@ -30,7 +30,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ a
         batchSize: options.batchSize,
         cwd,
         file,
-        format: options.format,
+        format,
         from: options.from as ImportSourceName | undefined,
         logger,
         prod: options.prod === true,

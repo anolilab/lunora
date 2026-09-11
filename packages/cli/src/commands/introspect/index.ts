@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const introspectCommand: Command = {
     description: "Scaffold lunora/schema.ts (and list/get procedures) from an existing Postgres or MySQL database",
     examples: [
@@ -26,7 +28,7 @@ const introspectCommand: Command = {
         { description: "Emit only the schema — skip the per-table list/get procedure modules", name: "no-procedures", type: Boolean },
         { description: "Overwrite files that already exist", name: "force", type: Boolean },
         { description: "Print what would be written without writing it", name: "dry-run", type: Boolean },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
     ],
 };
 
