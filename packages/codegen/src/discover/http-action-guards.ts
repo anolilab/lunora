@@ -139,6 +139,81 @@ const readsContextAuth = (handler: InspectableHandler, contextName: string): boo
     return false;
 };
 
+/**
+ * Header names that carry a provider webhook signature. Which header a provider
+ * signs with is its own choice — `stripe-signature`, `creem-signature`, the
+ * Standard-Webhooks `webhook-signature`, `svix-signature`, GitHub's
+ * `x-hub-signature-256`, Shopify's `x-shopify-hmac-sha256` — so the shape is
+ * matched rather than an allowlist enumerated.
+ */
+const SIGNATURE_HEADER_NAME = /signature|hmac|digest|(?:^|[_-])sig(?:[_-]|$)/i;
+
+/** True when `call` reads a request header (`request.headers.get(name)` / `.has(name)`). */
+const isHeaderRead = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || (callee.getName() !== "get" && callee.getName() !== "has")) {
+        return false;
+    }
+
+    const receiver = callee.getExpression();
+
+    return Node.isPropertyAccessExpression(receiver) && receiver.getName() === "headers";
+};
+
+/** Every string literal at or under `node`. */
+const stringLiteralsOf = (node: TsNode): string[] => node.getDescendantsOfKind(SyntaxKind.StringLiteral).map((literal) => literal.getLiteralText());
+
+/**
+ * True when `handler` authenticates the request by *signature* rather than by
+ * identity: it reads a request header, and a signature-shaped header name is in
+ * scope at that read — written inline
+ * (`request.headers.get("stripe-signature")`) or held in a module constant the
+ * handler forwards (`SIGNATURE_HEADERS.flatMap((name) => request.headers.get(name))`).
+ *
+ * A provider webhook carries no user identity, so `ctx.auth` is meaningless on
+ * it and the missing-guard finding is unsatisfiable — the endpoint is
+ * authenticated, just not by the thing the rule looks for. Recognising the
+ * signature read clears it. FN-biased like the rest of the advisor's negative
+ * proofs: a real unauthenticated write that happens to read a signature-named
+ * header stays quiet, which is cheaper than a permanent warning on the canonical
+ * webhook shape that trains users to ignore the advisor.
+ */
+const verifiesWebhookSignature = (handler: InspectableHandler): boolean => {
+    const body = handler.getBody();
+    const calls = body.getDescendantsOfKind(SyntaxKind.CallExpression);
+
+    if (Node.isCallExpression(body)) {
+        calls.unshift(body);
+    }
+
+    if (!calls.some((call) => isHeaderRead(call))) {
+        return false;
+    }
+
+    if (stringLiteralsOf(body).some((name) => SIGNATURE_HEADER_NAME.test(name))) {
+        return true;
+    }
+
+    // The header names usually live in a module-level allowlist the handler maps
+    // over, so the read's argument is a callback parameter with no literal of its
+    // own — resolve through the constants the handler actually names.
+    const referenced = new Set(body.getDescendantsOfKind(SyntaxKind.Identifier).map((identifier) => identifier.getText()));
+
+    return handler
+        .getSourceFile()
+        .getVariableDeclarations()
+        .some((declaration) => {
+            const initializer = declaration.getInitializer();
+
+            return (
+                referenced.has(declaration.getName()) &&
+                initializer !== undefined &&
+                stringLiteralsOf(initializer).some((name) => SIGNATURE_HEADER_NAME.test(name))
+            );
+        });
+};
+
 /** The uppercased `httpRoute.<verb>` this `.handler(...)` / `.stream(...)` terminal roots at, or `undefined` when it isn't a Lunora REST route. */
 const httpRouteVerbOfTerminal = (terminalCall: CallExpression): string | undefined => {
     const terminalCallee = terminalCall.getExpression();
@@ -183,7 +258,7 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
         const handler = inlineHandler(call.getArguments()[0]);
         const contextName = handler && contextBinding(handler, true);
 
-        if (!handler || contextName === undefined) {
+        if (!handler || contextName === undefined || verifiesWebhookSignature(handler)) {
             return undefined;
         }
 
@@ -211,7 +286,7 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
     const handler = inlineHandler(call.getArguments()[0]);
     const contextName = handler && contextBinding(handler, false);
 
-    if (!handler || contextName === undefined) {
+    if (!handler || contextName === undefined || verifiesWebhookSignature(handler)) {
         return undefined;
     }
 
@@ -239,7 +314,9 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
  * an unauthenticated write bypassing identity/RLS at the edge. Only handlers with
  * a resolvable inline body and a resolvable `ctx` binding are recorded (a named
  * handler ref, a wrapper call, or a destructured `ctx` parameter is skipped,
- * fail-safe); read-only handlers (`ctx.runQuery` only) are never recorded.
+ * fail-safe); read-only handlers (`ctx.runQuery` only) are never recorded, and
+ * neither are handlers that authenticate by provider signature instead of by
+ * identity (see `verifiesWebhookSignature`).
  * Supplied by the codegen feeder; runtime callers don't produce it, so the lint
  * finds nothing there.
  */
