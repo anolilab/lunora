@@ -90,9 +90,13 @@ export const saas = definePlugin("saas", {
                 slug: v.string(),
             })
                 .shardBy("organizationId")
-                .index("byOrg", ["organizationId"])
-                // Unique per tenant, not globally: two organisations may both
-                // have a `website` project, and the shard makes that safe.
+                // One index, not two: `byOrgSlug`'s leading `organizationId`
+                // already serves the per-tenant list, so a separate `byOrg`
+                // would be a redundant prefix — `@lunora/advisor` reports it as
+                // `duplicate_index`.
+                //
+                // Unique per tenant rather than globally: two organisations may
+                // both have a `website` project, and the shard makes that safe.
                 .index("byOrgSlug", ["organizationId", "slug"], { unique: true }),
 
             /**

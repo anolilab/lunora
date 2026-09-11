@@ -4,14 +4,28 @@
     "title": "SaaS kit — tenancy, activity, admin projection",
     "description": "The framework-independent backend of the Lunora SaaS kit: per-tenant tables sharded by organizationId (projects, activity), a .global() organizations projection for the cross-tenant reads a shard cannot serve, an identity claim contract carrying the caller's active organization, and the queries/mutations the dashboard and admin run on. Identity itself stays in better-auth; this item never becomes a second source of truth for it.",
     "docs": "Re-export lunora/saas/index.ts from your lunora/ entry so codegen emits api.saas.*. Then wire `resolveIdentity` in your Worker's createWorker(...) call to return { userId, activeOrganizationId, orgRole, appRole } from the better-auth session — the snippet is in lunora/identity.ts, and without it every org-scoped function fails closed with FAILED_PRECONDITION. Enable better-auth's organization() and admin() plugins in lunora/auth/index.ts, and call internal.saas.syncOrganization after an organization is created or renamed so the admin projection stays in step.",
-    "requires": ["auth"],
+    "requires": ["auth", "ratelimit"],
     "deps": {
+        "@lunora/d1": "workspace:*",
         "@lunora/errors": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/server": "workspace:*"
     },
     "files": [
-        { "from": "identity.ts", "merge": "create-or-skip", "to": "lunora/identity.ts" },
-        { "from": "schema.ts", "merge": "schema-extension", "to": "lunora/saas/schema.ts" },
-        { "from": "saas.ts", "merge": "create-or-skip", "to": "lunora/saas/index.ts" }
+        {
+            "from": "identity.ts",
+            "merge": "create-or-skip",
+            "to": "lunora/identity.ts"
+        },
+        {
+            "from": "schema.ts",
+            "merge": "schema-extension",
+            "to": "lunora/saas/schema.ts"
+        },
+        {
+            "from": "saas.ts",
+            "merge": "create-or-skip",
+            "to": "lunora/saas/index.ts"
+        }
     ]
 }

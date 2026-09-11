@@ -4,8 +4,10 @@
  * Codegen discovers exactly one `defineIdentity({ … })` call, and only in
  * `lunora/identity.ts`. It wires the contract into the runtime's trust
  * boundary, so every identity a resolver returns is validated before it becomes
- * `ctx.auth`, and it type-checks claim reads: `ctx.auth.activeOrganizationId`
- * only compiles because the claim is declared below.
+ * `ctx.auth`, and it types what `ctx.auth.getIdentity()` resolves to —
+ * `identity.activeOrganizationId` only compiles because the claim is declared
+ * below. Note that claims are NOT flat properties on `ctx.auth`: `userId` is
+ * the only one of those, and every other claim comes through `getIdentity()`.
  *
  * Why the kit needs this at all: organisations, members and invitations live in
  * better-auth's D1 tables, which are not Lunora tables. A function cannot read
@@ -39,7 +41,13 @@
  */
 import { defineIdentity, v } from "@lunora/server";
 
-export default defineIdentity(
+/**
+ * A NAMED export, not a default: codegen discovers the contract by walking
+ * exported variable declarations in this file, so `export default
+ * defineIdentity(…)` is never found and `ctx.auth` silently keeps its default
+ * shape — the claims below then fail to compile at every read site.
+ */
+export const identity = defineIdentity(
     {
         /**
          * The tenant the caller is acting in — better-auth's
