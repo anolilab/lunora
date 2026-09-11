@@ -1,3 +1,7 @@
+// `toBeInTheDocument` and friends. Registered here rather than per file so a
+// new test file gets them without remembering to.
+import "@testing-library/jest-dom/vitest";
+
 // React Testing Library's automatic cleanup only activates when the runner's
 // `afterEach` is a global (vitest `globals: true`). This project keeps globals
 // OFF, so the manual cleanup hook below is load-bearing for test isolation —
