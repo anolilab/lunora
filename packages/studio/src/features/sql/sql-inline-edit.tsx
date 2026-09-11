@@ -2,12 +2,12 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "../../components/ui/input";
-import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import assistantReasonMessage from "./assistant-reason";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
+import type { SqlAssistant } from "./hooks/use-sql-assistant";
 import type { DiffLine } from "./line-diff";
 import { lineDiff } from "./line-diff";
 
@@ -41,6 +41,18 @@ const DiffView = ({ lines }: { readonly lines: ReadonlyArray<DiffLine> }): React
             className={cn("max-h-48 overflow-auto rounded-md border border-border bg-background", EDITOR_TEXT_CLASS)}
             data-testid="sql-inline-diff"
         >
+            {/*
+                The index belongs in this key, and `react-doctor/no-array-index-as-key`
+                is a false positive here. A `DiffLine` is `{ kind, text }` and carries
+                no id, and identical lines genuinely recur in SQL (`)`, a blank line,
+                a repeated `AND ...`), so a content-only key collides. The three
+                conditions the rule exists to protect are all absent: the list cannot
+                reorder — it renders only while `proposal !== null`, and `lineDiff`
+                recomputes the whole array from a new proposal; a retry goes through
+                Reject, which nulls `proposal` and UNMOUNTS the list rather than
+                re-ordering it; and no row holds per-row state or focus that a
+                mis-keyed re-render could carry onto the wrong line.
+            */}
             {lines.map((line, index) => (
                 <li className={cn("flex gap-2", ROW_CLASS[line.kind])} data-kind={line.kind} key={`${index.toString()}-${line.text}`}>
                     <span aria-hidden="true" className="shrink-0 select-none opacity-60">
@@ -85,7 +97,13 @@ const SqlInlineEdit = ({
     readonly onAccept: (sql: string) => void;
     /** Dismiss without touching the draft. */
     readonly onCancel: () => void;
-    readonly rpc: AssistantRpc;
+
+    /**
+     * The assistant RPCs. Only four members are read — `unavailable`,
+     * `pending("sql")`, `reason("sql")` and `rewrite` — so any wider assistant
+     * contract satisfies this by structure.
+     */
+    readonly rpc: SqlAssistant;
     /** The statement being rewritten — the operator's selection, or the whole draft. */
     readonly source: string;
     /** True when the target is the whole draft rather than a selection, which the badge names. */
