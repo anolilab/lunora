@@ -130,6 +130,26 @@ describe("sql inline edit", () => {
         expect(screen.getByTestId("sql-inline-edit-prompt")).toBeDefined();
     });
 
+    it("drops an armed rewrite when the draft is edited under it", async () => {
+        expect.assertions(2);
+
+        render(
+            <LunoraProvider client={aiMock(REWRITE).asClient}>
+                <SqlEditorPanel />
+            </LunoraProvider>,
+        );
+
+        fireEvent.keyDown(editor(), { ctrlKey: true, key: "i" });
+
+        await expect(screen.findByTestId("sql-inline-edit")).resolves.toBeDefined();
+
+        // The armed span is a pair of OFFSETS: once the text under them moves,
+        // accepting would splice the rewrite across the wrong characters.
+        fireEvent.change(editor(), { target: { value: "SELECT 1" } });
+
+        expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
+    });
+
     it("closes on Escape without touching the draft", async () => {
         expect.assertions(2);
 
