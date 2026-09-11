@@ -1,3 +1,15 @@
+## @lunora/auth [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.132...@lunora/auth@1.0.0-alpha.133) (2026-09-11)
+
+### Features
+
+* **auth:** check the schema before the first write ([#692](https://github.com/anolilab/lunora/issues/692)) ([82329ea](https://github.com/anolilab/lunora/commit/82329ea7bac0e1002535bfe21b7a56df18929821))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/auth [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.131...@lunora/auth@1.0.0-alpha.132) (2026-09-10)
 
 
