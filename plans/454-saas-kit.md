@@ -195,13 +195,13 @@ Sized S/M/L, status recorded inline as each lands.
 
 - **A — Non-interactive registry composition (M).** Teach `lunora registry add` to merge an item's table block into `lunora/schema.ts` and its wiring into the worker entry instead of documenting it (`registry/payment/payment.ts:19-45`). Everything else depends on this.
 - **B — The shared backend item, `registry/saas` (M).** Schema + functions for organisations, members, invitations, roles, subscriptions, activity and admin. One copy, framework-independent, consumed by all thirteen templates.
-- **C — `packages/saas-ui` core (L).** Framework-agnostic controllers for the dashboard shell, data tables, billing, org management and admin — following `packages/auth-ui/src/core` (61 files) as the model, reusing `create-form-controller.ts` / `create-resource-controller.ts` rather than re-inventing them. Extend the sync script to a second item family; `CLAUDE.md` says build the abstraction when the second implementation exists, and this is it.
-- **D — React reference view (M).** `packages/saas-ui/src/react` at the `Kiranism` bar (§2.4.5): sidebar, ⌘K, URL-synced tables, composable forms, RBAC-filtered nav.
+- **C — `packages/saas-ui` core (L).** **Done** — eleven modules, 406 lines, no framework import; `vitest.config.ts` compiles `core/` with no plugin, which is the property enforcing that. Framework-agnostic controllers for the dashboard shell, data tables, billing, org management and admin — following `packages/auth-ui/src/core` (61 files) as the model, reusing `create-form-controller.ts` / `create-resource-controller.ts` rather than re-inventing them. Extend the sync script to a second item family; `CLAUDE.md` says build the abstraction when the second implementation exists, and this is it.
+- **D — React reference view (M).** **Done, plus Svelte as the proof view** — no JSX, compiler reactivity, a render model maximally unlike React's; a port that agrees with React about everything proves nothing. Both render the same elements with the same class names, so one stylesheet serves both. 50 tests. Still outstanding at the `Kiranism` bar (§2.4.5): the app shell itself — sidebar, ⌘K, URL-synced table state, RBAC-filtered nav.
 - **E — Template shells (S each).** `templates/saas-<framework>`, thin: routing, providers, the composition manifest.
 - **F — Billing UI + entitlement gating (M).** Plans in code; pricing table; checkout (embedded Elements as reference); portal; a gate component/hook over `payment/check`; seats counted against org members.
 - **G — App admin (S).** Users, organisations, subscriptions — list/search/impersonate/suspend on the `admin()` plugin, seeded by `@lunora/seed` (D11), charted from `ctx.analytics`.
 - **H — The realtime wedge (S).** Presence on the team page, seat and subscription state updating across tabs with no reload, an activity feed. The demo, not a nicety (§2.4.1).
-- **I — View ports (M total).** Vue, Svelte, Solid, Solid 2, Angular — mechanical once C and D are right, gated by `lint:registry:sync` plus a per-view typecheck.
+- **I — View ports (M total).** **Svelte done** (see D). Remaining: Vue, Solid, Solid 2, Angular — mechanical once C and D are right, gated by `lint:registry:sync` plus a per-view typecheck.
 - **J — Public API surface (S, optional v1).** Scoped API keys + serve the generated `lunora/_generated/openapi.json` + expose `@lunora/mcp`. Cheap only because it is generated; do not hand-write what the CF template hand-wrote.
 - **K — React Native view + `templates/saas-expo` (M, v2).** The seventh view; the "web and mobile, one backend" story.
 - **L — Surface (S).** A public demo, a gallery entry, a docs page, and a `/pricing` route in `apps/docs` (there is none today).
@@ -216,20 +216,21 @@ The kit targets Cloudflare in v1. `@lunora/platform-node` exists, but nothing he
 
 ## 7. Phasing & ordering
 
-| Phase | Work    | Gate                                                                                                          |
-| ----- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| 0     | A       | **Met.** `registry add saas --yes` composes and typechecks with zero hand edits. Re-scoped to `payment` alone |
-| 1     | B       | **Done for one project.** Still to prove: composes into all 13 templates under `test:templates`               |
-| 2     | C, D, E | One runnable React kit: sign up → create org → invite → accept, green in `tests/e2e`                          |
-| 3     | F, G, H | Stripe test-mode checkout flips a gated route; admin lists a seeded user; two contexts see one live change    |
-| 4     | I       | Every view mirrors clean under `lint:registry:sync`; each `templates/saas-*` typechecks                       |
-| 5     | L, M, N | Demo URL green in CI live mode; bundle under budget                                                           |
-| 6     | J, K    | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                                   |
+| Phase | Work    | Gate                                                                                                                                              |
+| ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | A       | **Met.** `registry add saas --yes` composes and typechecks with zero hand edits. Re-scoped to `payment` alone                                     |
+| 1     | B       | **Done for one project.** Still to prove: composes into all 13 templates under `test:templates`                                                   |
+| 2     | C, D, E | C and D **done** (core + React + Svelte, 50 tests). E outstanding: one runnable kit, sign up → create org → invite → accept, green in `tests/e2e` |
+| 3     | F, G, H | Stripe test-mode checkout flips a gated route; admin lists a seeded user; two contexts see one live change                                        |
+| 4     | I       | Every view mirrors clean under `lint:registry:sync`; each `templates/saas-*` typechecks                                                           |
+| 5     | L, M, N | Demo URL green in CI live mode; bundle under budget                                                                                               |
+| 6     | J, K    | OpenAPI served + MCP reachable; Expo client reads and writes the same shard                                                                       |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if workstream A shows `registry add` cannot compose non-interactively without a rewrite of the item format. Then D3 is wrong, and the plan needs re-scoping before B starts.
-- **STOP** if the core/view file ratio for the kit's screens comes out worse than roughly 3:1. `packages/auth-ui` achieves 61:18 for React; materially worse means logic is leaking into views, and every port after the first will pay for it. Fix the core, do not start the second view.
+- ~~**STOP** if the core/view **file** ratio comes out worse than roughly 3:1.~~ **Withdrawn — the threshold was measured wrong.** The 3:1 came from `auth-ui`'s 61:18 _file_ counts, but core files are small modules and view files are whole components, so the ratio does not mean what it looked like. Measured in code lines (comments and blanks excluded), `auth-ui` is 4141:2403 for React — **1.7:1**, not 3.4:1.
+- **STOP** if a new port has to change `core/`. This replaces the ratio, and it is the condition that actually means something: a ratio is a proxy for "does logic live in the views", while this is the question itself, and `git diff` answers it. On the evidence so far the architecture holds — `saas-ui` sits at 406 core lines to 362 React and 267 Svelte (**1.1:1**, below `auth-ui`'s 1.7:1, because the kit's screens are tables and toolbars where `auth-ui`'s are flows), and **neither port changed a line of `core/`**. If a port ever does, fix the core before starting the next one.
 - **STOP** if generalising `scripts/sync-auth-ui-registry.mjs` to a second family means rewriting it. Ship a second script instead — a bad shared abstraction across two item families is more expensive than duplication, and `CLAUDE.md` is explicit about not abstracting ahead of the second implementation.
 - **STOP** if D9 lands on "org = shard" and cross-org admin reads (G) become an N-shard fan-out per page. Re-scope the admin to `.global()` projections rather than widening the shard model to fit one screen.
 - **Risk:** the `alpha` no-compatibility policy breaks the kit weekly. _Mitigate:_ land M early — a kit inside `test:templates` is a release gate that fails loudly; a kit outside it is a stale demo.
@@ -239,9 +240,9 @@ The kit targets Cloudflare in v1. `@lunora/platform-node` exists, but nothing he
 
 ## 9. Open questions (answer during execution)
 
-1. **Which views ship in v1?** React is settled (D2). All six at once, or React plus one structurally different view (Svelte or Angular) to prove the core, with the rest in phase 4?
+1. ~~**Which views ship in v1?**~~ **Answered: React plus Svelte**, the structurally different one, with the remaining four in phase 4.
 2. **Which template shells ship in v1?** Six React-serving templates exist; shipping all of them is cheap once one works, but each is another `test:templates` entry and another thing to keep green.
-3. **Does `@lunora/saas-ui` want to be a package at all**, or should the core live in `registry/saas-ui-core` directly? `auth-ui` chose a package because it type-checks and tests against real workspace deps there — confirm the same reasoning holds.
+3. ~~**Does `@lunora/saas-ui` want to be a package at all?**~~ **Answered: yes**, `private: true`, for `auth-ui`'s reason — the core type-checks and tests against real workspace deps there, which a bare registry payload cannot.
 4. **Should the app admin ship as its own registry item** so every Lunora app gets it, not only the kit?
 5. **Does D10 hold once someone wants to publish a post?** If kit users immediately want in-app authoring, the decision to revisit is _which_ of the three answers in §2.4.7 — not whether to grow a fourth.
 6. **Which analytics/error-tracking story?** `ctx.analytics` exists via `@lunora/bindings`; every competitor ships Sentry or PostHog.
