@@ -207,9 +207,32 @@ interface ChunkerOptions {
 }
 ```
 
+### `FusionLeg` (interface)
+
+```ts
+interface FusionLeg {
+    chunks: ReadonlyArray<RetrievedChunk>;
+    weight?: FusionWeight;
+}
+```
+
+### `FusionWeight` (type)
+
+```ts
+type FusionWeight = "proximity" | "rank";
+```
+
 ### `GraphMatch` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `HybridRankOptions` (interface)
+
+```ts
+interface HybridRankOptions {
+    k?: number;
+}
+```
 
 ### `IndexInput` (interface)
 
