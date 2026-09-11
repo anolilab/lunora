@@ -1,3 +1,5 @@
+## @lunora/ai [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.87...@lunora/ai@1.0.0-alpha.88) (2026-09-11)
+
 ## @lunora/ai [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.86...@lunora/ai@1.0.0-alpha.87) (2026-09-11)
 
 ## @lunora/ai [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.85...@lunora/ai@1.0.0-alpha.86) (2026-09-10)
