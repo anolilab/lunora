@@ -31,7 +31,7 @@ import { createRemoteDocsIndex } from "./docs/remote-index";
 import { docsResources } from "./docs/resources";
 import { docsTools } from "./docs/tools";
 import type { DocsIndex } from "./docs/types";
-import { callErrorTool, ERROR_TOOL_NAMES } from "./error-tools";
+import { callErrorTool, ERROR_TOOL_DEFINITIONS, ERROR_TOOL_NAMES } from "./error-tools";
 import type { ToolResult } from "./tool-types";
 import { callTool, toolDefinitions } from "./tools";
 
@@ -184,28 +184,46 @@ const lazyDeploymentTools = (
 ): ReadonlyArray<McpTool> => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
 
-    return toolDefinitions(allowWrites, hasAdminToken(resolve())).map((definition) => {
+    // The error tools come from {@link staticErrorTools} instead: they answer
+    // from the compiled-in catalog and belong on every local server, not only
+    // one that was told about a deployment. Filtered out here rather than left
+    // to `createToolServer`'s first-registration-wins rule, so the advertised
+    // list has one entry per name and nothing depends on registration order.
+    return toolDefinitions(allowWrites, hasAdminToken(resolve()))
+        .filter((definition) => !ERROR_TOOL_NAMES.has(definition.name))
+        .map((definition) => {
+            return {
+                definition,
+                handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
+                    const deployment = resolve();
+
+                    if (deployment === undefined) {
+                        return { content: [{ text: NO_DEPLOYMENT_MESSAGE, type: "text" }], isError: true };
+                    }
+
+                    return callTool(clientFor(deployment), definition.name, input, allowWrites, hasAdminToken(deployment));
+                },
+            };
+        });
+};
+
+/**
+ * The error-catalog tools, which need no deployment and are therefore
+ * registered on every local server.
+ *
+ * They used to ride {@link lazyDeploymentTools}, which `localTools` only builds
+ * when a deployment was configured — so `createLocalMcpServer()` on its own
+ * never advertised `lunora_explain_error`. That is precisely backwards: the
+ * catalog is compiled in, and "what does SHARD_TIMEOUT mean" is the question you
+ * ask when nothing is running.
+ */
+const staticErrorTools = (): ReadonlyArray<McpTool> =>
+    ERROR_TOOL_DEFINITIONS.map((definition) => {
         return {
             definition,
-            handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
-                // `lunora_explain_error` answers from the compiled-in error
-                // catalog, so it must not be refused for want of a dev server —
-                // explaining the error is exactly what you want when nothing is up.
-                if (ERROR_TOOL_NAMES.has(definition.name)) {
-                    return callErrorTool(definition.name, input);
-                }
-
-                const deployment = resolve();
-
-                if (deployment === undefined) {
-                    return { content: [{ text: NO_DEPLOYMENT_MESSAGE, type: "text" }], isError: true };
-                }
-
-                return callTool(clientFor(deployment), definition.name, input, allowWrites, hasAdminToken(deployment));
-            },
+            handle: (input: Record<string, unknown>): Promise<ToolResult> => Promise.resolve(callErrorTool(definition.name, input)),
         };
     });
-};
 
 /** URI for the deployment's generated OpenRPC 1.x document (the RPC-native spec: a `methods` array). */
 const OPENRPC_RESOURCE_URI = "lunora-spec:openrpc";
@@ -332,8 +350,9 @@ const combineResourceProviders = (providers: ReadonlyArray<McpResourceProvider>)
 
 /**
  * Assemble the tool list, in the order it is advertised: docs first (the
- * surface that always works), then the caller's extras, then the deployment
- * tools. Order also decides precedence — `createToolServer` keeps the first
+ * surface that always works), then the caller's extras, then the error catalog
+ * (compiled in, so it needs no deployment either), then the deployment tools.
+ * Order also decides precedence — `createToolServer` keeps the first
  * registration of a duplicated name.
  *
  * `clientFor` is the shared client cache built once by
@@ -352,7 +371,7 @@ const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: Loc
         tools.push(...docsTools(index));
     }
 
-    tools.push(...(options.extraTools ?? []));
+    tools.push(...(options.extraTools ?? []), ...staticErrorTools());
 
     if (options.deployment !== undefined) {
         tools.push(...lazyDeploymentTools(options.deployment, options.allowWrites ?? false, clientFor ?? createClientCache(options.fetch)));
