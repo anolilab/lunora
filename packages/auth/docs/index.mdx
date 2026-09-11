@@ -75,6 +75,47 @@ against a fresh database leave the loser with `table user already exists` — an
 since this sits ahead of the router, that 500s every route, not just
 `/api/auth/*`. `defineApp().auth(...)` handles it for you.
 
+## Schema drift fails by name, not by 500
+
+`lunoraD1Adapter` builds its SQL from better-auth's own field list, and the tables it
+writes into are created somewhere else — by `ensureMigrated` / `compileMigrationsSql`,
+or by `authTables(options)` in your `lunora/schema.ts` plus `lunora migrate`. When the
+two halves drift, the adapter used to emit SQL against columns that were not there.
+
+So both adapters compare them. Before the first write — better-auth awaits the check in
+its router **ahead of the rate limiter**, which is the first thing that writes on any
+request, `get-session` included — the tables your plugin list needs are read back out of
+the database and diffed against it. A mismatch throws better-auth's own
+`SchemaMismatchError`, naming what is wrong:
+
+```
+Database schema mismatch
+
+  Missing tables
+    apikey
+
+  Missing columns
+    account.accountId
+```
+
+Both of those are real: `apikey` is what an `apiKey()` in the plugin list needs and
+nothing declared, and `accountId` is better-auth's spelling of the column NextAuth calls
+`providerAccountId`. Neither is visible by reading `schema.ts` — the first because
+nothing in it is _wrong_, only absent.
+
+Practical notes:
+
+- **The database is the authority**, not your schema file. A table you declared but never
+  migrated is reported exactly like one you never declared.
+- **One sweep per isolate.** The check is lazy, cached, and shared across concurrent
+  requests; `ensureMigrated` invalidates it, so a migration's fix is picked up without a
+  redeploy.
+- **`_creationTime` is not drift.** Tables from `authTables(...)` carry Lunora's
+  framework column, which better-auth never writes and the store fills in for it.
+- **Opt out** with `advanced: { database: { validateSchema: false } }` — better-auth's own
+  switch. `lunoraAuthAdapter(store)` over a custom store registers no check either: an
+  `AuthStore` is opaque CRUD with nothing to introspect.
+
 ## Read `ctx.auth` in functions
 
 The runtime resolves the inbound session and populates `ctx.auth` on every
