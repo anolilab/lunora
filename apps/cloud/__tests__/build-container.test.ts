@@ -101,15 +101,17 @@ describe("build box", () => {
         await expect(response.text()).resolves.not.toMatch(/not json/u);
     });
 
-    it("cannot be routed to an inherited Object member", async () => {
-        expect.assertions(1);
+    it.each(["/constructor", "/toString", "/__proto__", "/valueOf"])("cannot be routed to %s", async (path) => {
+        expect.assertions(2);
 
-        // The shape CodeQL flagged: an object-literal route table walks the
-        // prototype chain, so a crafted path resolves to a function that is
-        // not a handler and is then called. A `Map` cannot.
-        const response = await fetch(`${origin}/constructor`, { method: "POST" });
+        // The shape CodeQL flagged twice: a route table indexed by a
+        // user-controlled key. There is no table any more — three explicit
+        // branches — so none of these can resolve to anything callable.
+        const response = await fetch(`${origin}${path}`, { method: "POST" });
 
         expect(response.status).toBe(404);
+        // And the path is not reflected back into the body.
+        await expect(response.text()).resolves.toBe(JSON.stringify({ error: "no such route" }));
     });
 
     it("404s an unknown route rather than treating it as a build", async () => {
