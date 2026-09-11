@@ -47,14 +47,22 @@ const limiter: (ctx: MutationCtx) => RateLimiter<keyof typeof LIMITS> = makeLimi
 const actionLimiter: (ctx: ActionCtx) => RateLimiter<keyof typeof LIMITS> = makeLimiter;
 
 /**
- * Anonymous callers share a bucket per session; signed-in ones get their own.
+ * One bucket per caller: the verified identity first, the caller's IP after that.
  *
- * `"anon"` is a single shared bucket on purpose at this stage: without accounts
- * there is no identity to key on, and an IP-derived key would be both spoofable
- * and wrong behind a shared NAT. It is deliberately conservative until W7 gives
- * anonymous sessions a real identity.
+ * A single shared `"anon"` bucket was the original shape and it is a denial of
+ * service: one caller drains the whole anonymous allowance and every other
+ * anonymous caller is locked out, which inverts what the limit is for.
+ *
+ * `ctx.ip` is the right fallback and the earlier "spoofable" objection was wrong
+ * about it: it is Cloudflare's `CF-Connecting-IP`, forwarded server-side, and the
+ * framework never reads it from a client header — `x-forwarded-for` is
+ * deliberately ignored. It is `undefined` on a live-subscription re-run or a
+ * server-initiated dispatch, which is why the literal is still the last resort.
+ * A shared NAT still shares a bucket; that is a fairness cost on a minority of
+ * callers rather than a free lockout for everyone, and it is the same key the
+ * playground and six examples use.
  */
-const limitKey = (ctx: { auth: { userId?: string | null } }): string => ctx.auth.userId ?? "anon";
+const limitKey = (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon";
 
 /**
  * Call sites write `.use(rateLimit(limiter, "chat", { key: limitKey }))` in full
