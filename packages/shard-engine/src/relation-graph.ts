@@ -70,6 +70,23 @@ const RELATED_DEFAULT_LIMIT = 50;
 const RELATED_MAX_LIMIT = 200;
 
 /**
+ * Hard ceiling on the page offset a cursor may carry.
+ *
+ * The offset is re-walk work, not a skip: a page at offset N makes each hop read
+ * `N + limit + 1` rows, because breadth-first traversal has no ordered column to
+ * seek on. So the offset IS a read-size knob, and leaving it unbounded left
+ * `limit`'s ceiling trivially bypassable — cursors are unsigned base64 JSON, so
+ * a forged `offset` of a billion made a shard materialise every row of up to
+ * {@link RELATED_MAX_DEPTH} tables inside one request.
+ *
+ * 10 000 is 50 pages at {@link RELATED_MAX_LIMIT}, past any interactive paging,
+ * and caps a hop's read at ~10 200 rows. Refused rather than clamped, like every
+ * other bound here: a caller paging beyond it is doing something the traversal
+ * is the wrong tool for.
+ */
+const RELATED_MAX_OFFSET = 10_000;
+
+/**
  * Per-hop score decay: a node's score is `RELATED_DEPTH_DECAY ** (depth - 1)`,
  * so depth 1 scores `1`, depth 2 `0.5`, depth 3 `0.25`.
  *
@@ -173,12 +190,27 @@ interface HopContext {
 /** Encode a page offset as an opaque cursor, in the same envelope every other `ctx.db` cursor uses. */
 const encodeRelatedCursor = (offset: number): string => CURSOR_PREFIX + toBase64(JSON.stringify([offset]));
 
-/** Decode a traversal cursor back into its page offset; a malformed one is the caller's mistake, not a server fault. */
+/**
+ * Decode a traversal cursor back into its page offset; a malformed one is the
+ * caller's mistake, not a server fault.
+ *
+ * The {@link RELATED_MAX_OFFSET} check is a real bound, not a sanity check: a
+ * cursor is unsigned base64 JSON that any caller can write, and the offset sets
+ * each hop's read size. Without it, `limit`'s refusal was bypassable by moving
+ * the same number into the cursor.
+ */
 const decodeRelatedCursor = (cursor: string): number => {
     const [offset] = decodeCursor(cursor);
 
     if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
         throw new LunoraError("BAD_REQUEST", "invalid cursor");
+    }
+
+    if (offset > RELATED_MAX_OFFSET) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `ctx.db.related: cursor offset ${String(offset)} exceeds the maximum of ${String(RELATED_MAX_OFFSET)} — narrow the walk with \`edges\` or \`direction\` instead of paging past it`,
+        );
     }
 
     return offset;
@@ -498,5 +530,5 @@ const findRelated = async (
     };
 };
 
-export { deriveRelationEdges, findRelated, RELATED_DEFAULT_LIMIT, RELATED_DEPTH_DECAY, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT };
+export { deriveRelationEdges, findRelated, RELATED_DEFAULT_LIMIT, RELATED_DEPTH_DECAY, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT, RELATED_MAX_OFFSET };
 export type { RelationGraphReader };

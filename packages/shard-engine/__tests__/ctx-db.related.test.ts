@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import { deriveRelationEdges, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT } from "../src/relation-graph";
+import { deriveRelationEdges, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT, RELATED_MAX_OFFSET } from "../src/relation-graph";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -345,6 +345,30 @@ describe("ctx-db related", () => {
 
             expect(second.nodes.map((node) => node.document["_id"])).toStrictEqual(["m2"]);
             expect(second.isDone).toBe(true);
+        });
+
+        it("refuses a cursor whose offset exceeds the maximum", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter();
+
+            await seed(writer);
+
+            // A cursor is unsigned base64 JSON, so any caller can write one. The
+            // offset is not a skip — each hop reads `offset + limit + 1` rows —
+            // so an unbounded offset moved `limit`'s ceiling into a field that
+            // had no ceiling, and one call could make a shard materialise every
+            // row of up to RELATED_MAX_DEPTH tables.
+            const forged = `~4${Buffer.from(JSON.stringify([1_000_000_000]), "utf8").toString("base64")}`;
+
+            await expect(relatedOf(writer)({ id: "t1", table: "tickets" }, { cursor: forged })).rejects.toThrow(
+                /cursor offset 1000000000 exceeds the maximum/u,
+            );
+
+            // The bound refuses rather than clamps, exactly as `limit` does.
+            const atLimit = `~4${Buffer.from(JSON.stringify([RELATED_MAX_OFFSET]), "utf8").toString("base64")}`;
+
+            await expect(relatedOf(writer)({ id: "t1", table: "tickets" }, { cursor: atLimit })).resolves.toBeDefined();
         });
     });
 

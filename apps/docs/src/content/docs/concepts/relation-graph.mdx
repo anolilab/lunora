@@ -134,8 +134,15 @@ do {
 
 The cursor is an **offset**, not a keyset: a breadth-first expansion has no
 single ordered column to seek on, so page N+1 re-walks deterministically and
-skips what page N returned. The re-walk is bounded by the same depth and limit
-caps as the first page.
+skips what page N returned.
+
+That re-walk is work, not a skip — a page at offset N makes each hop read
+`N + limit + 1` rows — so the offset carries its own ceiling of **10 000**
+(50 pages at the maximum `limit`), refused rather than clamped like every other
+bound here. A cursor is unsigned, so without that ceiling `limit`'s cap was
+bypassable simply by moving the number into the cursor. Paging that far means
+the traversal is the wrong tool: narrow the walk with `edges` or `direction`
+instead.
 
 ## It is an ordinary read
 
