@@ -127,6 +127,16 @@
             "title": "SaaS kit — tenancy, activity, admin projection"
         },
         {
+            "description": "Copy-in, user-owned React screens for the Lunora SaaS kit: the dashboard stat row, the project list with its create form and search/sort toolbar, the activity feed grouped by day, and the platform admin's organization table. Framework-agnostic view model under lunora/saas-ui/core, thin React views under lunora/saas-ui/react, and token-aligned CSS — no Tailwind, no component library. Edit anything; upgrades are 3-way merged.",
+            "name": "saas-ui-react",
+            "title": "SaaS UI — React"
+        },
+        {
+            "description": "Copy-in, user-owned Svelte screens for the Lunora SaaS kit: the dashboard stat row, the project list with its create form and search/sort toolbar, the activity feed grouped by day, and the platform admin's organization table. Framework-agnostic view model under lunora/saas-ui/core, thin Svelte views under lunora/saas-ui/svelte, and token-aligned CSS — no Tailwind, no component library. Edit anything; upgrades are 3-way merged.",
+            "name": "saas-ui-svelte",
+            "title": "SaaS UI — Svelte"
+        },
+        {
             "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
             "name": "storage",
             "title": "Storage"
