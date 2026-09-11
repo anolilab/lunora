@@ -1,4 +1,4 @@
-import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+import { getAuthTablesWithResolvedIndexes, invalidateSchemaChecks } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 
@@ -145,6 +145,33 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
 };
 
 /**
+ * Bump this database's schema revision, so a schema verdict `lunoraD1Adapter`'s
+ * check cached before the migration is re-taken rather than replayed.
+ *
+ * better-auth keys the revision on the database **object**, and the two instances
+ * agree on it by construction: the request instance registers its check against
+ * the binding handed to `lunoraD1Adapter(env.DB)`, and this migration instance
+ * holds that same `env.DB` as its `database` (the migrator needs the raw binding —
+ * see {@link assertMigratableDatabase}). Without this, a mismatch observed before
+ * the migration ran would be rethrown for the life of the isolate even though the
+ * migration has just fixed it.
+ *
+ * Reads `options.database`, not the proxy {@link withD1MigrationSupport} builds:
+ * that is a different object and would invalidate nothing. Widened to `unknown`
+ * for the same reason {@link assertMigratableDatabase} does it — better-auth's
+ * `database` union has an adapter arm the linter reads as an error type. The type
+ * guard is narrowing, not doubt: `assertMigratableDatabase` has already rejected a
+ * falsy or function `database` by the time this runs.
+ */
+const invalidateAuthSchemaChecks = (options: LunoraAuthOptions): void => {
+    const { database } = options as { database?: unknown };
+
+    if (typeof database === "object" && database !== null) {
+        invalidateSchemaChecks(database);
+    }
+};
+
+/**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
  * `options` reference. Storing the *promise* — rather than a post-completion
  * flag — closes a TOCTOU race: concurrent callers that arrive before the first
@@ -192,6 +219,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
 
         await runMigrations();
         await dropLegacyIssuerColumn(options);
+        invalidateAuthSchemaChecks(options);
     })();
 
     // Record the promise synchronously (before the first await above resolves)

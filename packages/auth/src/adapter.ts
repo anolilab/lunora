@@ -3,6 +3,7 @@ import { createAdapterFactory } from "better-auth/adapters";
 
 import type { DoStorageLike } from "./do-store";
 import { doExecutor, doTransactionRunner } from "./do-store";
+import { d1TableInfo, doTableInfo, withAuthSchemaCheck } from "./schema-check";
 import { createSqlAuthStore, d1Executor } from "./sql-store";
 import type { AuthRow, AuthStore } from "./store";
 
@@ -77,6 +78,11 @@ const customAdapter = (store: AuthStore): CustomAdapter => {
  * Scope: the {@link AuthStore} interface is single-table CRUD. better-auth's
  * relational `join` reads (an advanced opt-in) are not handled — pair the
  * adapter with `disableJoins` or let better-auth fall back to per-table reads.
+ *
+ * No schema check either: an {@link AuthStore} is opaque CRUD with nothing to
+ * introspect, so better-auth logs that validation is unavailable for this adapter
+ * and proceeds. {@link lunoraD1Adapter} and {@link lunoraDoAdapter} know which
+ * SQLite backend they sit on and register one — see `schema-check.ts`.
  */
 const lunoraAuthAdapter = (store: AuthStore, runInTransaction?: TransactionRunner): ReturnType<typeof createAdapterFactory> => {
     type AdapterOptions = Parameters<ReturnType<typeof createAdapterFactory>>[0];
@@ -148,8 +154,21 @@ const lunoraAuthAdapter = (store: AuthStore, runInTransaction?: TransactionRunne
  * same. The migration instance is the one exception — it wants raw `env.DB` so
  * `ensureMigrated`'s Kysely migrator can create the tables (its `$context` is
  * never resolved, so the hang doesn't apply there).
+ *
+ * Carries a schema check: before the first write — better-auth awaits it in the
+ * router ahead of the rate limiter, which is the first thing that writes — the
+ * tables this configuration needs are compared against the ones D1 holds, and a
+ * mismatch fails with the table and column named instead of `no such table: …`
+ * inside an empty 500. See `schema-check.ts`.
  */
-const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof lunoraAuthAdapter> => lunoraAuthAdapter(createSqlAuthStore(d1Executor(d1)));
+const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof lunoraAuthAdapter> => {
+    // One executor for both: the check reads the schema through the same seam the
+    // store writes through, so it can never be introspecting a different database
+    // than the one the adapter is about to emit SQL against.
+    const executor = d1Executor(d1);
+
+    return withAuthSchemaCheck(lunoraAuthAdapter(createSqlAuthStore(executor)), { database: d1, executor, tableInfo: d1TableInfo });
+};
 
 /**
  * A better-auth `database` backed by a Durable Object's own SQLite —
@@ -158,9 +177,18 @@ const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeo
  * Unlike `lunoraD1Adapter` this one exposes real transactions, so plugins that
  * demand them (`@better-auth/scim`) accept it. Read the trade-offs in `do-store.ts`
  * before reaching for it: the auth tables then live inside a single Durable Object.
+ *
+ * Schema-checked like {@link lunoraD1Adapter}, against the object's own SQLite.
  * @experimental
  */
-const lunoraDoAdapter = (storage: DoStorageLike): ReturnType<typeof lunoraAuthAdapter> =>
-    lunoraAuthAdapter(createSqlAuthStore(doExecutor(storage)), doTransactionRunner(storage));
+const lunoraDoAdapter = (storage: DoStorageLike): ReturnType<typeof lunoraAuthAdapter> => {
+    const executor = doExecutor(storage);
+
+    return withAuthSchemaCheck(lunoraAuthAdapter(createSqlAuthStore(executor), doTransactionRunner(storage)), {
+        database: storage,
+        executor,
+        tableInfo: doTableInfo,
+    });
+};
 
 export { lunoraAuthAdapter, lunoraD1Adapter, lunoraDoAdapter };
