@@ -35,6 +35,7 @@ lunora mcp uninstall [client…]          # remove them again
 lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawns
             [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
+            [--inspector-port n]
             [--no-studio] [--no-codegen]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
             [--format <pretty|json>]
@@ -294,10 +295,11 @@ In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
 already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
-lunora dev                     # default ports: studio 6173, worker 8787
-lunora dev --port 7000         # custom studio port
-lunora dev --worker-port 8790  # custom wrangler dev port
-lunora dev --no-studio         # Worker + codegen only
+lunora dev                       # default ports: studio 6173, worker 8787
+lunora dev --port 7000           # custom studio port
+lunora dev --worker-port 8790    # custom wrangler dev port
+lunora dev --inspector-port 9235 # pin wrangler's devtools inspector port
+lunora dev --no-studio           # Worker + codegen only
 ```
 
 When 8787 is taken, the worker lands on the next free port so two projects can
@@ -305,6 +307,39 @@ run side by side. That silent move is refused when `.dev.vars` pins the worker
 origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
 on that port) would be left pointing at nothing. Free 8787, or pass
 `--worker-port` and update the pinned values to match.
+
+#### The two ports wrangler takes
+
+`wrangler dev` binds the worker **and** a devtools inspector, and both are
+configurable from `lunora dev`. Each resolves the same way — the flag first,
+then the project's `wrangler.jsonc`:
+
+| Port      | Flag               | `wrangler.jsonc` key | Neither                                      |
+| --------- | ------------------ | -------------------- | -------------------------------------------- |
+| Worker    | `--worker-port`    | `dev.port`           | the first free port at or above 8787         |
+| Inspector | `--inspector-port` | `dev.inspector_port` | wrangler's own default: 9229, probing upward |
+
+```jsonc
+// wrangler.jsonc — the project-level equivalent of the two flags
+{
+    "dev": {
+        "inspector_port": 9235,
+        "port": 8788,
+    },
+}
+```
+
+Pin the inspector in a repo that runs several Workers side by side. Left unset
+it starts at 9229 and climbs while ports are busy, so it eventually lands on a
+port a _sibling_ worker pinned — and the worker that dies is whichever bound
+second, which makes the failure non-deterministic and the port in the error
+message impossible to grep for.
+
+`--inspector-port` is `wrangler dev` only. On the Vite flavors the inspector
+belongs to `@cloudflare/vite-plugin`: pass it through the plugin instead —
+`lunora({ cloudflare: { inspectorPort: 9235 } })` — and for the SvelteKit /
+Nuxt worker sidecar pin `dev.inspector_port` in `wrangler.dev.jsonc`, the
+config that sidecar runs. `lunora dev` says so rather than dropping the flag.
 
 #### Background mode (AI agents)
 

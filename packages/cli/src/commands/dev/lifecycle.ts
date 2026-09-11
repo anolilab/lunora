@@ -485,6 +485,13 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--worker-port", String(options.workerPort));
     }
 
+    // The daemon is the process that spawns `wrangler dev`, so an unforwarded
+    // `--inspector-port` would leave the background run on wrangler's own
+    // upward walk — the exact failure the flag exists to stop.
+    if (options.inspectorPort !== undefined) {
+        args.push("--inspector-port", String(options.inspectorPort));
+    }
+
     // Forwarded, or a `--background` run would emit nothing: the daemon child is
     // the process that knows the resolved origin, and the supervisor asking for
     // the manifest is the same one that wanted the server detached.

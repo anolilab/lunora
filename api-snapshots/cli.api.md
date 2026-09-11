@@ -193,6 +193,7 @@ interface DevCommandOptions {
     findFreePort?: (preferred: number) => Promise<number>;
     flavor?: DevFlavor;
     hasIpv6Loopback?: () => boolean;
+    inspectorPort?: number;
     jsonLogs?: boolean;
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
