@@ -18,6 +18,13 @@ import { siteConfig } from "~/site.config";
 
 const { url } = siteConfig.brand;
 
+/**
+ * Hoisted out of the document below, where `no-secrets` scored the longest of
+ * the three gate names as a high-entropy string inside the template literal. It
+ * is a public env var an operator sets, not a credential.
+ */
+const OBSERVABILITY_GATE = "LUNORA_MCP_ALLOW_OBSERVABILITY";
+
 const AGENT_SETUP = `# Lunora — agent setup
 
 You are working in a project that uses **Lunora**: a type-safe, real-time
@@ -128,6 +135,38 @@ the framework-free client.
 consumed under NodeNext where the extension is required. Everywhere else in a
 Lunora project, relative imports are written without an extension.
 
+## Walking relations
+
+Every \`v.id("table")\` column is a foreign key, and \`ctx.db.related\` follows
+them — "what is this connected to", in one call instead of a hand-written chain
+of \`withIndex\` lookups.
+
+\`\`\`ts
+const { continueCursor, isDone, nodes } = await ctx.db.related(
+    { table: "customers", id: customerId }, // or a document you already loaded
+    { depth: 2, direction: "both", limit: 50 },
+);
+
+for (const node of nodes) {
+    node.table; // "tickets"
+    node.document; // the row itself
+    node.depth; // 1
+    node.score; // 1 at depth 1, halving per hop
+    node.path; // ["tickets.customerId"] — the edge names walked
+    node.pathIds; // the ids along the way, start included
+}
+\`\`\`
+
+Edge names are \`"<table>.<column>"\`; pass \`edges: ["tickets.customerId"]\` to
+restrict the walk. \`depth\` defaults to \`1\` (max **4**), \`limit\` to \`50\`
+(max **200**), \`direction\` to \`"both"\` — \`"out"\` follows the ids this row
+holds, \`"in"\` the rows that point at it.
+
+**The caps refuse, they do not clamp.** \`depth: 9\` throws \`BAD_REQUEST\`, and
+so does an edge name the schema does not declare — do not probe for the ceiling.
+Not yet supported under a \`.rls("required")\` schema, where it throws
+\`NOT_IMPLEMENTED\`: ${url}/docs/concepts/relation-graph
+
 ## Rules that save you a debugging session
 
 1. **The builders chain.** \`query.query(fn)\` and
@@ -169,6 +208,36 @@ Branch on the code, do not parse stderr. \`0\` success · \`1\` failure ·
 
 \`7\` and \`8\` are worth retrying; \`2\`–\`6\` are deterministic. Full table:
 ${url}/docs/exit-codes
+
+## Talking to a running deployment (MCP)
+
+A different server from the docs endpoint above: \`@lunora/mcp\` exposes one
+**deployment**. Always advertised — \`lunora_list_functions\`,
+\`lunora_list_tables\`, \`lunora_get_function_schema\`, \`lunora_run_query\`, and
+\`lunora_explain_error\` (pass an error \`code\` or a raw \`message\` and get the
+catalog's status, title and hint — static data, no deployment or token needed).
+
+Three env gates hold back the rest. Each one both hides the tools and refuses
+them at dispatch:
+
+- \`LUNORA_MCP_ALLOW_WRITES\` — \`lunora_run_mutation\`, \`lunora_run_action\`.
+- \`${OBSERVABILITY_GATE}\` — the five \`lunora_get_*\` tools (logs,
+  issues, advisories, query insights, migration status).
+- \`LUNORA_MCP_ALLOW_DATA_READS\` — \`lunora_find_related\`, the traversal above.
+  It reads through the deployment's **admin** writer, so it returns raw table
+  rows with RLS policies and column masks **bypassed**.
+
+**Every write is a two-step handshake.** The first \`lunora_run_mutation\` /
+\`lunora_run_action\` call does NOT execute. It returns
+\`status: "action_required"\` with \`proposedAction\`, an \`actionDigest\`, and the
+\`expiresAt\` it is good until (10 minutes). Show the proposal to a human, then
+call the same tool again with the IDENTICAL \`functionPath\`, \`args\` and
+\`shardKey\`, plus \`confirmed: true\` and that digest.
+
+Editing any of it produces a different digest and needs a fresh proposal; an
+expired digest is refused rather than silently re-proposed. The digest binds the
+**call**, not the approval — it proves the write about to run is exactly the one
+proposed, never that a human actually saw it. That part is your job.
 
 ## If you are unsure
 
