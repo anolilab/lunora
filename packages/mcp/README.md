@@ -82,7 +82,8 @@ The first call **executes nothing**. It returns the proposed action and a digest
 ```jsonc
 {
     "status": "action_required",
-    "actionDigest": "0ZR2…",
+    "actionDigest": "1789129912052.0ZR2…",
+    "expiresAt": "2026-09-11T14:41:52.052Z",
     "proposedAction": {
         "tool": "lunora_run_mutation",
         "kind": "mutation",
@@ -93,26 +94,53 @@ The first call **executes nothing**. It returns the proposed action and a digest
 }
 ```
 
-Render `proposedAction` for a human, then call the same tool again with the
-identical `functionPath` / `args` / `shardKey` / `idempotencyKey`, plus
-`confirmed: true` and that `actionDigest`. Only then does the write happen.
+Render `proposedAction` for a human, then call the same tool again — before
+`expiresAt` — with the identical `functionPath` / `args` / `shardKey` /
+`idempotencyKey`, plus `confirmed: true` and that `actionDigest`. Only then does
+the write happen.
 
-The digest is an HMAC over a canonical (sorted-key) encoding of the tool name,
-function path, arguments, shard key and idempotency key, keyed by the
-deployment's own identity. So:
+The digest is `<expiresAt>.<signature>`, where the signature is an HMAC over a
+canonical (sorted-key) encoding of the tool name, function path, arguments, shard
+key, idempotency key **and that deadline**, keyed by the deployment's own
+identity. So:
 
 - **Argument key order is irrelevant** — re-serializing `args` does not invalidate a confirmation.
 - **Any real edit invalidates it.** A different target, argument, or shard key produces a different digest, and the confirmation is refused with nothing written. That is the guarantee: what executes is exactly what was reviewed.
+- **It expires after 10 minutes.** The deadline travels in the clear (the verifying instance has to read it) but is signed alongside the proposal, so moving it breaks the signature. An expired digest is refused, not silently re-proposed — call again without `confirmed` for a fresh one.
 - **No server state is involved.** The HTTP handler serves statelessly (a fresh server per request), so a confirmation is revalidated by recomputation on whichever instance receives it, not looked up in a store.
 
-`idempotencyKey` is optional and is folded into the digest. It guarantees that a
-retry under the same key and arguments yields the same digest (so a client that
-timed out can resubmit the confirmation it already holds without a second
-review), and that a deliberately-repeated identical write under a **new** key
-gets its own review instead of riding the first one. It does **not** deduplicate
-the write: this server keeps no state between requests and never forwards the key
-to your function, so a resubmitted confirmed call executes again. Make the
-function itself idempotent if the write must happen at most once.
+`idempotencyKey` is optional and is folded into the digest. A client that timed
+out can resubmit the confirmation it already holds, for as long as that digest is
+inside its window, without asking for a second review; and a deliberately-repeated
+identical write under a **new** key gets its own review instead of riding the
+first one. It does **not** deduplicate the write: this server keeps no state
+between requests and never forwards the key to your function, so a resubmitted
+confirmed call executes again. Make the function itself idempotent if the write
+must happen at most once.
+
+#### What the handshake does not do
+
+It binds **intent, not human presence**, and the difference matters when you
+decide whether to enable writes at all.
+
+A verified digest proves the call about to run is exactly the call that was
+proposed, on this deployment, inside its window. It does **not** prove a human
+saw it, and no server-side check can: an MCP server has no channel to a person —
+no session, no end-user identity, no UI — and MCP deliberately puts the
+human-in-the-loop at the **host**. The client is what renders a tool call for
+approval. A client that asks nobody can take the digest it was just handed, send
+it straight back with `confirmed: true`, and the write runs.
+
+That is why writes are off by default and refused at dispatch as well as omitted
+from `ListTools`: enabling `LUNORA_MCP_ALLOW_WRITES` is **your** statement that
+the client on the other end does the asking. Treat the handshake as a client-UI
+affordance and an audit record of what was proposed, not as a gate against the
+model.
+
+Two more scope limits, stated rather than implied:
+
+- **The digest is deployment-wide, not principal-bound.** Its key is the domain separator, the deployment URL and the admin bearer — nothing identifying a user. On an OAuth-fronted server (`createAuthedMcpFetchHandler`) every principal shares that bearer, so within the 10-minute window any principal holding write scope can confirm another's identical proposal. Binding it to a person would mean folding the verified `sub` claim into the signing key, which this package does not do today.
+- **It survives an admin-bearer rotation only as long as the bearer does.** Rotating `LUNORA_ADMIN_TOKEN`, or moving the deployment URL, invalidates every outstanding digest — which is the intended behaviour, not a bug to work around.
 
 ### Observability tools (privileged)
 

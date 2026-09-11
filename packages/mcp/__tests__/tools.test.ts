@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ERROR_TOOL_DEFINITIONS } from "../src/error-tools";
 import type { ToolResult } from "../src/tools";
 import { callTool, READ_ONLY_TOOL_DEFINITIONS, ROW_READ_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "../src/tools";
+import { CONFIRMATION_TTL_MS } from "../src/write-confirmation";
 
 const MOCK_FUNCTIONS: FunctionDescriptor[] = [
     {
@@ -77,6 +78,7 @@ const mockClient = (
 /** The parsed `action_required` payload a first write call returns. */
 interface ActionRequired {
     actionDigest: string;
+    expiresAt: string;
     nextStep: string;
     proposedAction: {
         args: Record<string, unknown>;
@@ -509,7 +511,9 @@ describe("write confirmation handshake", () => {
             kind: "mutation",
             tool: "lunora_run_mutation",
         });
-        expect(payload.actionDigest).toMatch(/^[\w-]{20,}$/);
+        // `<expiresAt>.<signature>`: the deadline is carried in the digest
+        // itself, because a stateless server has nowhere else to keep it.
+        expect(payload.actionDigest).toMatch(/^\d{13}\.[\w-]{20,}$/);
         // The whole point: proposing must not write.
         expect(mock.mutation).not.toHaveBeenCalled();
     });
@@ -667,10 +671,13 @@ describe("write confirmation handshake", () => {
 
         expect(first.proposedAction.idempotencyKey).toBe("retry-1");
 
-        // Same key, same args — the digest a timed-out client already holds.
-        const replay = await propose(mock.asClient, "lunora_run_mutation", input);
+        // Same key, same args — the digest a timed-out client already holds still
+        // confirms, inside its window. (The digest STRING is no longer identical
+        // across two proposals, because each carries its own deadline; what the
+        // key buys is that the one already in hand keeps working.)
+        const replay = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest: first.actionDigest, confirmed: true }, true);
 
-        expect(replay.actionDigest).toBe(first.actionDigest);
+        expect(replay.isError).toBeUndefined();
 
         // A deliberately-second identical write under a new key is a new action,
         // so it cannot ride the first review's digest.
@@ -682,7 +689,8 @@ describe("write confirmation handshake", () => {
         );
 
         expect(relabelled.isError).toBe(true);
-        expect(mock.mutation).not.toHaveBeenCalled();
+        // Only the in-window replay ran; the relabelled call wrote nothing.
+        expect(mock.mutation).toHaveBeenCalledTimes(1);
     });
 
     it("keeps the allowWrites gate in front of the handshake: a valid digest is still refused", async () => {
@@ -700,6 +708,112 @@ describe("write confirmation handshake", () => {
         expect(mock.mutation).not.toHaveBeenCalled();
         // And the tools stay omitted from the advertised list, not merely refused.
         expect(toolDefinitions(false).map((tool) => tool.name)).not.toContain("lunora_run_mutation");
+    });
+
+    /**
+     * The window, which is the part of "was this reviewed" a stateless server
+     * can actually enforce.
+     *
+     * The handshake binds INTENT, not human presence — a client that confirms
+     * its own proposal is indistinguishable from one that asked somebody, and no
+     * server-side check can separate them (see `../src/write-confirmation`). What
+     * an expiry removes is the OTHER half of the original finding: a digest that
+     * outlives its review, so one approved `payments:refund` stays confirmable in
+     * every later session for as long as the deployment URL and admin bearer
+     * hold. These pin that window shut.
+     */
+    it("refuses a digest past its window and writes nothing", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        try {
+            const mock = mockClient();
+            const input = { args: { roomId: "r1", text: "hi" }, functionPath: "messages:send" };
+            const { actionDigest, expiresAt } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+            expect(Date.parse(expiresAt)).toBe(Date.now() + CONFIRMATION_TTL_MS);
+
+            // One millisecond past the deadline the digest itself carries.
+            vi.setSystemTime(Date.now() + CONFIRMATION_TTL_MS + 1);
+
+            const result = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+            expect(result.isError).toBe(true);
+            // Refused as EXPIRED, not re-proposed: a fresh digest handed back to a
+            // call that said `confirmed: true` reads like an accepted confirmation.
+            expect(result.content[0]!.text).toContain("has expired");
+            expect(mock.mutation).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("still honours a digest inside its window", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const mock = mockClient();
+            const input = { args: { roomId: "r1", text: "hi" }, functionPath: "messages:send" };
+            const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+            // A human taking most of the window to read the proposal.
+            vi.setSystemTime(Date.now() + CONFIRMATION_TTL_MS - 1000);
+
+            const result = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+            expect(result.isError).toBeUndefined();
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("does not let a forged deadline extend a digest", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            const mock = mockClient();
+            const input = { args: { roomId: "r1", text: "hi" }, functionPath: "messages:send" };
+            const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+            // The deadline travels in the clear, so a holder can edit it — but it
+            // is signed alongside the proposal, so editing it breaks the signature.
+            const signature = actionDigest.slice(actionDigest.indexOf(".") + 1);
+            const forged = `${String(Date.now() + 10 * CONFIRMATION_TTL_MS)}.${signature}`;
+
+            vi.setSystemTime(Date.now() + CONFIRMATION_TTL_MS + 1);
+
+            const result = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest: forged, confirmed: true }, true);
+
+            expect(result.isError).toBe(true);
+            expect(result.content[0]!.text).toContain("does not match this call");
+            expect(mock.mutation).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("treats a digest with no deadline or a junk deadline as a mismatch", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const input = { args: { roomId: "r1", text: "hi" }, functionPath: "messages:send" };
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+        const signature = actionDigest.slice(actionDigest.indexOf(".") + 1);
+        // Shapes that reach here straight out of the model's arguments bag: the
+        // pre-expiry digest format, and a deadline that is not an integer.
+        const malformed = [signature, `1e99.${signature}`, `.${signature}`, `-1.${signature}`, "not-a-digest"];
+
+        const refusals = await Promise.all(
+            malformed.map(async (candidate) => callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest: candidate, confirmed: true }, true)),
+        );
+
+        expect(refusals.every((refusal) => refusal.isError === true)).toBe(true);
+        expect(mock.mutation).not.toHaveBeenCalled();
     });
 
     it("advertises the confirmation fields on both write tools", () => {

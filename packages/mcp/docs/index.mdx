@@ -179,7 +179,8 @@ calls. The first executes nothing and returns the proposal:
 ```jsonc
 {
     "status": "action_required",
-    "actionDigest": "0ZR2…",
+    "actionDigest": "1789129912052.0ZR2…",
+    "expiresAt": "2026-09-11T14:41:52.052Z",
     "proposedAction": {
         "tool": "lunora_run_mutation",
         "kind": "mutation",
@@ -190,15 +191,17 @@ calls. The first executes nothing and returns the proposal:
 }
 ```
 
-The client renders `proposedAction` for a human, then calls the same tool again
-with the **identical** `functionPath`, `args`, `shardKey` and `idempotencyKey`,
-plus `confirmed: true` and that `actionDigest`. Only that second call writes.
+The client renders `proposedAction` for a human, then calls the same tool again —
+before `expiresAt` — with the **identical** `functionPath`, `args`, `shardKey`
+and `idempotencyKey`, plus `confirmed: true` and that `actionDigest`. Only that
+second call writes.
 
 <Callout type="warn">
-    The confirmation is bound to the exact action a human saw. `actionDigest` is an HMAC over a canonical, sorted-key encoding of the tool name, function path,
-    arguments, shard key and idempotency key, keyed by the deployment's own identity — so re-serializing `args` in a different key order keeps the same digest,
-    while changing the target, any argument, or the shard key produces a different one and the confirmation is **refused with nothing written**. A digest minted
-    against another deployment never verifies, and a `lunora_run_mutation` digest can never confirm a `lunora_run_action`.
+    The confirmation is bound to the exact action a human saw, for ten minutes. `actionDigest` is `<expiresAt>.<signature>`, the signature an HMAC over a
+    canonical, sorted-key encoding of the tool name, function path, arguments, shard key, idempotency key and that deadline, keyed by the deployment's own
+    identity — so re-serializing `args` in a different key order still verifies, while changing the target, any argument, or the shard key produces a different
+    digest and the confirmation is **refused with nothing written**. A digest minted against another deployment never verifies, a `lunora_run_mutation` digest can
+    never confirm a `lunora_run_action`, and an expired one is refused rather than silently re-proposed.
 </Callout>
 
 The digest carries its own proof rather than naming a stored record, because
@@ -206,17 +209,41 @@ there is no store to name: `createMcpFetchHandler` serves **statelessly** — a
 fresh MCP server per HTTP request, no session, no cross-request state — and the
 confirming request need not even reach the instance that issued the proposal. Any
 instance holding the same deployment URL and admin bearer recomputes and verifies
-the same digest; nothing without that bearer can mint one.
+the same digest; nothing without that bearer can mint one. The deadline rides
+inside the digest for the same reason: there is nowhere else to keep it.
+
+#### What the handshake does not do
+
+It binds **intent, not human presence**.
+
+A verified digest proves the call about to run is exactly the call that was
+proposed, on this deployment, inside its window. It does **not** prove a human
+saw it, and nothing server-side can: an MCP server has no channel to a person,
+and MCP puts the human-in-the-loop at the **host** — the client is what renders a
+tool call for approval. A client that asks nobody can send the digest it was just
+handed straight back with `confirmed: true` and the write runs.
+
+That is why the write surface is off by default and refused at dispatch as well
+as omitted from `ListTools`. Setting `allowWrites` is the operator's statement
+that the client on the other end does the asking; the handshake is a client-UI
+affordance and an audit record of what was proposed, not a gate against the
+model.
+
+Its scope is also **deployment-wide, not principal-bound**: the signing key is
+the deployment URL plus the admin bearer, with nothing identifying a user in it.
+On an OAuth-fronted server every principal shares that bearer, so inside the
+ten-minute window any principal holding write scope can confirm another's
+identical proposal. Binding a confirmation to a person would mean folding the
+verified `sub` claim into the key, which this package does not do today.
 
 #### What `idempotencyKey` does and does not guarantee
 
 `idempotencyKey` is an optional caller-chosen token folded into the digest.
 
-**It guarantees:** repeating the same key with the same target and arguments
-yields the same digest, so a client that timed out can resubmit the confirmation
-it already holds instead of asking for a second human review — and a
-deliberately-repeated _identical_ write sent under a **new** key gets its own
-digest, so it cannot ride the first review.
+**It guarantees:** a client that timed out can resubmit the confirmation it
+already holds, for as long as that digest is inside its window, instead of asking
+for a second human review — and a deliberately-repeated _identical_ write sent
+under a **new** key gets its own digest, so it cannot ride the first review.
 
 **It does not guarantee deduplication.** This server keeps no state between
 requests, so it cannot remember that a call already ran and cannot replay an

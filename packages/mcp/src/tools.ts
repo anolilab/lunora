@@ -137,7 +137,7 @@ const WRITE_RUN_INPUT_SCHEMA: ToolInputSchema = {
 
 /** The two-step handshake, restated in every write tool's description because that is what the model actually reads. */
 const HANDSHAKE_DESCRIPTION =
-    'TWO-STEP: the first call does NOT execute. It returns status "action_required" with the proposed action and an actionDigest; show that to a human, then call again with the IDENTICAL functionPath/args/shardKey plus confirmed: true and that actionDigest. Any change to the target or the arguments produces a different digest and needs a fresh review.';
+    'TWO-STEP: the first call does NOT execute. It returns status "action_required" with the proposed action, an actionDigest and the expiresAt it is good until; show that to a human, then call again before expiresAt with the IDENTICAL functionPath/args/shardKey plus confirmed: true and that actionDigest. Any change to the target or the arguments produces a different digest and needs a fresh review, and an expired digest is refused rather than re-proposed.';
 
 /** The write tool surface (mutations + actions). Exposed ONLY when writes are enabled. */
 const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
