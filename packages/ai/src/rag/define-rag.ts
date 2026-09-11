@@ -10,6 +10,7 @@ import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
+import type { FusionLeg } from "./hybrid-rank";
 import { hybridRank } from "./hybrid-rank";
 import type {
     IndexInput,
@@ -1237,19 +1238,31 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return kept;
             };
 
-            // Multi-query expansion: each rewrite is its own ranking, fused by
-            // RRF. Sequential rather than concurrent on purpose — each leg
-            // embeds and queries, and a Worker's subrequest budget is the
-            // binding constraint on a fan-out the caller controls the width of.
-            let chunks = await runVectorLeg(primaryQuery);
+            // Every ranked list that will be fused, in leg order. They are
+            // COLLECTED and fused once at the end rather than folded in one at a
+            // time: `hybridRank` multiplies each chunk's `importance` into the
+            // score it returns, so feeding a fused list back in as a leg makes
+            // the next pass derive its ranks from an ordering importance already
+            // weighted — and then weight it again. A source demoted to
+            // importance 0.1 lost a further ~5% per extra pass that way, with
+            // the penalty growing in the number of passes rather than staying
+            // the one multiplication the weighting is defined as.
+            //
+            // Leg 0 is the primary vector ranking, which is also `hybridRank`'s
+            // tie-break ordering.
+            const legs: FusionLeg[] = [{ chunks: await runVectorLeg(primaryQuery) }];
 
+            // Multi-query expansion: each rewrite is its own ranking. Sequential
+            // rather than concurrent on purpose — each leg embeds and queries,
+            // and a Worker's subrequest budget is the binding constraint on a
+            // fan-out the caller controls the width of.
             for (const extraQuery of searchQueries.slice(1)) {
                 // eslint-disable-next-line no-await-in-loop -- bounded, caller-sized fan-out over a subrequest budget
-                chunks = [...hybridRank([{ chunks }, { chunks: await runVectorLeg(extraQuery) }])];
+                legs.push({ chunks: await runVectorLeg(extraQuery) });
             }
 
-            // Hybrid search: also rank via the lexical (BM25) leg and fuse the
-            // two rankings with RRF — recovering exact-term matches the embedding
+            // Hybrid search: also rank via the lexical (BM25) leg and fuse it
+            // into the same RRF — recovering exact-term matches the embedding
             // misses. A hit shared with the vector leg keeps the (richer) vector
             // chunk in RRF; a lexical-only hit is hydrated below.
             if (config.lexicalStore) {
@@ -1259,14 +1272,17 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     topK: config.lexicalTopK ?? candidateK,
                 });
 
-                const fusedIds = new Set(chunks.map((chunk) => chunk.id));
+                const fusedIds = new Set(legs.flatMap((leg) => leg.chunks).map((chunk) => chunk.id));
                 // A chunk the vector leg rejected for `minScore` stays rejected —
-                // unless another leg kept it, in which case it is already in
-                // `chunks` and this is only an RRF boost. See `belowMinScore`.
+                // unless another leg kept it, in which case it is already in a
+                // leg and this is only an RRF boost. See `belowMinScore`.
                 const admissible = lexicalMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                chunks = [...hybridRank([{ chunks }, { chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace) }])];
+                legs.push({ chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace) });
             }
+
+            /** Everything the search legs found — the union a fusion of them would return. */
+            const searched = legs.flatMap((leg) => [...leg.chunks]);
 
             // Graph search: the third signal. The search legs answer "which
             // passages look like this question"; the graph answers "what is this
@@ -1286,24 +1302,34 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // dropped by the third is not a filter. `enforcesFilter` is the
             // store's own answer because nothing here can derive it, and the
             // fail-closed reading of "no" is to lose the signal, not the scoping.
-            if (config.graphStore && chunks.length > 0 && (config.graphStore.enforcesFilter || !hasFilter(effectiveFilter))) {
-                const seedSourceIds = [...new Set(chunks.map((chunk) => chunk.sourceId))];
+            if (config.graphStore && searched.length > 0 && (config.graphStore.enforcesFilter || !hasFilter(effectiveFilter))) {
+                const seedSourceIds = [...new Set(searched.map((chunk) => chunk.sourceId))];
                 const graphMatches = await config.graphStore.related(seedSourceIds, {
                     filter: effectiveFilter,
                     namespace: effectiveNamespace,
                     topK: config.graphTopK ?? candidateK,
                 });
 
-                const fusedIds = new Set(chunks.map((chunk) => chunk.id));
+                const fusedIds = new Set(searched.map((chunk) => chunk.id));
                 // Same rule as the lexical leg: a chunk the vector leg rejected
                 // for `minScore` stays rejected unless another leg already kept
                 // it, in which case this is only an RRF boost.
                 const admissible = graphMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                chunks = [...hybridRank([{ chunks }, { chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace), weight: "proximity" }])];
+                legs.push({ chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace), weight: "proximity" });
             }
 
+            // Fuse the legs — ONCE, so `importance` is applied exactly once. A
+            // lone leg is returned as it stands: `hybridRank` would replace its
+            // cosine scores with RRF ones, and with nothing to fuse them against
+            // that only moves `score` off the scale `minScore` is documented on.
+            let chunks = legs.length === 1 ? searched : [...hybridRank(legs)];
+
             // Importance weighting can reorder; re-rank on the adjusted score.
+            // This is the single-leg path's sort — it carries importance-adjusted
+            // cosine scores in the order the store returned. A fused list already
+            // holds this order, and `sort` is stable, so it keeps the tie-break
+            // `hybridRank` applied rather than flattening it.
             chunks.sort((a, b) => b.score - a.score);
 
             // Reranking sees the full candidate pool and returns the final

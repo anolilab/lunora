@@ -404,6 +404,35 @@ describe(hybridRank, () => {
         expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1"]);
     });
 
+    /**
+     * The reason `retrieve()` collects its legs and calls this once.
+     *
+     * Each call multiplies `importance` into the score it returns AND sorts by
+     * that score, so a fused list handed back in as a leg carries an ordering
+     * importance already weighted — and the next pass derives its ranks from it
+     * and multiplies by importance a second time.
+     */
+    it("applies importance once per call, so re-fusing a fused list weights it twice", () => {
+        expect.assertions(3);
+
+        const light = chunk("light#0", { importance: 0.1 });
+        const heavy1 = chunk("h1#0");
+        const heavy2 = chunk("h2#0");
+
+        const once = hybridRank([{ chunks: [light, heavy1, heavy2] }]);
+
+        // Rank 0 in the only leg, weighted once: (1/60) * 0.1.
+        expect(once.find((entry) => entry.id === "light#0")?.score).toBeCloseTo(0.1 / 60, 10);
+        // …and that weighting pushed it to LAST place.
+        expect(once.map((entry) => entry.id)).toStrictEqual(["h1#0", "h2#0", "light#0"]);
+
+        // Feed the fused list back in, as a fold-one-leg-at-a-time caller does:
+        // rank 2 now, and importance multiplies in again — (1/62) * 0.1.
+        const twice = hybridRank([{ chunks: once }]);
+
+        expect(twice.find((entry) => entry.id === "light#0")?.score).toBeCloseTo(0.1 / 62, 10);
+    });
+
     it("breaks exact ties in favour of the better vector rank", () => {
         expect.assertions(1);
 

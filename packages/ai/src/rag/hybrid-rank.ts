@@ -56,6 +56,12 @@ interface HybridRankOptions {
  * Since BM25 is unbounded while cosine is `[0, 1]`, that silently promoted
  * every lexical-only hit above every vector hit.
  *
+ * Importance is applied ONCE, by this call. A caller with several signals passes
+ * them as several legs to ONE call, never one call per leg: the returned list is
+ * both weighted and sorted by that weighting, so handing it back in as a leg
+ * makes the next pass derive its ranks from an already-weighted ordering and
+ * weight it a second time.
+ *
  * So in hybrid mode `RetrievedChunk.score` is an RRF score (small, ~`1/60`
  * scale), not a cosine similarity. `retrieve()` applies `minScore` to the
  * vector leg *before* fusion for exactly this reason — the option is documented

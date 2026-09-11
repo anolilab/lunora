@@ -2,7 +2,7 @@ import type { EmbeddingModel } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 import defineRag from "../../src/rag/define-rag";
-import type { GraphMatch, RagGraphStore, RagVectorMatch, RagVectors } from "../../src/rag/types";
+import type { GraphMatch, LexicalMatch, RagGraphStore, RagLexicalStore, RagVectorMatch, RagVectors } from "../../src/rag/types";
 
 /**
  * The graph leg of hybrid retrieval: `RagConfig.graphStore` seeds a relation
@@ -74,6 +74,21 @@ const vectorMatch = (id: string, score: number, text: string): RagVectorMatch =>
         metadata: { __ragChunkIndex: 0, __ragSource: id.split("#")[0], __ragText: text },
         score,
     };
+};
+
+/** A lexical store that ignores the query and answers with fixed matches. */
+const stubLexicalStore = (matches: ReadonlyArray<LexicalMatch>): RagLexicalStore => {
+    return {
+        index: () => Promise.resolve(undefined),
+        search: () => Promise.resolve(matches),
+    };
+};
+
+/** A vector match whose source carries an `importance` weight below 1. */
+const weightedMatch = (id: string, score: number, text: string, importance: number): RagVectorMatch => {
+    const match = vectorMatch(id, score, text);
+
+    return { ...match, metadata: { ...match.metadata, __ragImportance: importance } };
 };
 
 describe("rag graph leg", () => {
@@ -245,5 +260,68 @@ describe("rag graph leg filter isolation", () => {
         await rag.retrieve("who is this", { topK: 5 });
 
         expect(graph.seeds).toStrictEqual([["customer-1"]]);
+    });
+});
+
+/**
+ * Importance weighting is ONE multiplication, however many legs there are.
+ *
+ * `retrieve()` used to fold one leg in at a time — vector, then lexical, then
+ * graph — and every `hybridRank` call both multiplies `importance` into the
+ * score and sorts by it. So each pass after the first derived its ranks from an
+ * ordering importance had already weighted, then weighted it again: a source
+ * demoted to importance 0.1 lost a further ~5% on every extra pass, with the
+ * penalty growing in the number of legs. The legs are collected and fused once
+ * now.
+ */
+describe("rag fusion applies importance once", () => {
+    it("scores a demoted source by a single importance multiplication across three legs", async () => {
+        expect.assertions(4);
+
+        const graph = stubGraphStore([{ id: "g#0", score: 1, text: "connected" }]);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            graphStore: graph.store,
+            index: "docs",
+            lexicalStore: stubLexicalStore([{ id: "x#0", score: 5, text: "keyword hit" }]),
+        });
+        const rag = docs({
+            vectors: stubVectors([weightedMatch("light#0", 0.9, "demoted", 0.1), vectorMatch("h1#0", 0.8, "h1"), vectorMatch("h2#0", 0.7, "h2")]),
+        });
+
+        const result = await rag.retrieve("anything", { topK: 5 });
+        const light = result.chunks.find((entry) => entry.id === "light#0");
+
+        expect(light?.importance).toBe(0.1);
+        // Rank 0 of the vector leg and in no other, weighted exactly once:
+        // (1/60) * 0.1. Folding the legs in one at a time first demoted it to
+        // rank 3 of an already-weighted ordering, scoring (1/63) * 0.1.
+        expect(light?.score).toBeCloseTo(0.1 / 60, 10);
+        // Full-weight chunks are untouched either way — the drift was specific
+        // to the chunks importance had moved.
+        expect(result.chunks.find((entry) => entry.id === "h1#0")?.score).toBeCloseTo(1 / 61, 10);
+        // All three legs still reach the ranking.
+        expect(result.chunks.map((entry) => entry.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["g#0", "h1#0", "h2#0", "light#0", "x#0"]);
+    });
+
+    it("seeds the graph leg from the search legs' sources, not from a fused list", async () => {
+        expect.assertions(1);
+
+        const graph = stubGraphStore([{ id: "g#0", score: 1, text: "connected" }]);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            graphStore: graph.store,
+            index: "docs",
+            lexicalStore: stubLexicalStore([{ id: "x#0", score: 5, text: "keyword hit" }]),
+        });
+        const rag = docs({ vectors: stubVectors([vectorMatch("a#0", 0.9, "a")]) });
+
+        await rag.retrieve("anything", { topK: 5 });
+
+        // The union of the vector and lexical legs — the same set the fused list
+        // carried, which is why the fusion can move behind the graph leg.
+        expect(graph.seeds.map((seed) => seed.toSorted((a, b) => a.localeCompare(b)))).toStrictEqual([["a", "x"]]);
     });
 });
