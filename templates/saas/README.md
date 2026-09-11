@@ -46,12 +46,12 @@ not a design.
    `openssl rand -base64 32`) and `BETTER_AUTH_URL`. In dev they live in
    `.dev.vars`; in production use `wrangler secret put`.
 
-3. **Enable the organization and admin plugins** in `lunora/auth/index.ts`. They
-   own the records this app projects — users, organizations, members and
-   invitations live in better-auth's own tables, and `saas_organizations` is a
-   projection of them, never a second source of truth. Call
-   `internal.saas.syncOrganization` when an organization is created, renamed or
-   changes plan.
+3. **Call `internal.saas.syncOrganization`** when an organization is created,
+   renamed or changes plan. The `organization()` and `admin()` better-auth
+   plugins are already enabled in `lunora/auth/index.ts` — they own the records
+   this app projects. Users, organizations, members and invitations live in
+   better-auth's own tables; `saas_organizations` is a projection of them, never
+   a second source of truth.
 
 4. **Seed the admin** so it has something to show before you have customers:
 
