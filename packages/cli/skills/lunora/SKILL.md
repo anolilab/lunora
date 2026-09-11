@@ -118,6 +118,64 @@ Scaffolding inside this repo uses `vis generate lunora-<kind>` — `query`,
 plus a stray positional. `lunora-flags` and `lunora-collections` are singletons
 and take no name.
 
+## Exposing a Deployment Over MCP
+
+`@lunora/mcp` puts a **running deployment** behind an MCP server (`lunora-mcp`),
+so an agent can introspect and call it. It needs `LUNORA_URL` and
+`LUNORA_ADMIN_TOKEN` — the admin bearer, which cannot be scoped down, because
+every tool reads admin-gated routes. The safety story is therefore the gates
+below, never the credential.
+
+Always advertised, no gate:
+
+| Tool                         | What it does                                                           |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `lunora_list_functions`      | The deployment's public functions and their kinds.                     |
+| `lunora_list_tables`         | `.global()` tables with row counts.                                    |
+| `lunora_get_function_schema` | One function's argument descriptors, so a caller can build valid args. |
+| `lunora_run_query`           | Runs a query. Read-only.                                               |
+| `lunora_explain_error`       | Explains an error `code` or raw `message` from the static catalog.     |
+
+`lunora_explain_error` touches no deployment and needs no token — the catalog is
+compiled into `@lunora/errors`. Reach for it before guessing at what a Lunora
+error means.
+
+**Three env gates hold back everything else.** Each one both omits the tool from
+the advertised list _and_ refuses it at dispatch, so the guarantee does not
+depend on the client behaving:
+
+- `LUNORA_MCP_ALLOW_WRITES` → `lunora_run_mutation`, `lunora_run_action`.
+- `LUNORA_MCP_ALLOW_OBSERVABILITY` → the five `lunora_get_*` tools (logs,
+  issues, advisories, query insights, migration status). Read-only, but they
+  return production log lines and error messages — user data that lands at the
+  model provider.
+- `LUNORA_MCP_ALLOW_DATA_READS` → `lunora_find_related`. **It returns raw table
+  rows read through the deployment's admin writer, with RLS policies and column
+  masks bypassed**, plus everything reachable within `depth` hops. It is
+  deliberately not folded into the observability gate: enabling log reading for
+  debugging must not silently also hand over every row.
+
+All three default to **off**. Set one only when the answer to "may a model see
+this?" is yes.
+
+### Writes are a two-step handshake
+
+Past `LUNORA_MCP_ALLOW_WRITES`, each individual write still needs its own
+confirmation. The first `lunora_run_mutation` / `lunora_run_action` call does
+**not** execute — it returns `status: "action_required"` carrying
+`proposedAction`, an `actionDigest`, and the `expiresAt` it is valid until (ten
+minutes). The client shows that to a human, then calls the same tool again with
+the identical `functionPath`, `args` and `shardKey`, plus `confirmed: true` and
+that digest.
+
+Editing anything produces a different digest and needs a fresh proposal; an
+expired digest is refused rather than quietly re-proposed. Be precise about what
+this buys: the digest binds the **call**, proving the write that runs is exactly
+the one proposed on this deployment inside the window. It does **not** prove a
+human ever saw it — an MCP server has no channel to a person, and a client that
+asks nobody can echo the digest straight back. Enabling writes is the operator
+asserting that the client on the other end does the asking.
+
 ## Core Mental Model
 
 - **Functions** live in `lunora/*.ts` and are one of `query` (reactive read),
