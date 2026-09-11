@@ -116,6 +116,10 @@ interface RivetShardState {
      * a transaction is open on it, because `serialize()` captures uncommitted
      * rows and clearing the flag would make a subsequent `ROLLBACK` invisible
      * to every later snapshot.
+     *
+     * Concurrent calls **queue**, so the newest state is always the last thing
+     * written to a snapshot row and `dirty` is only ever cleared by the flush
+     * that actually persisted it.
      */
     flush: () => Promise<void>;
 
@@ -201,7 +205,11 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
         );
     };
 
-    const flush = async (): Promise<void> => {
+    const runFlush = async (): Promise<void> => {
+        // Re-checked after the queue wait, not only before it: the predecessor
+        // snapshot may already contain everything this call was queued for, and
+        // re-serializing the whole database to write identical bytes is the one
+        // cost this strategy cannot afford to pay twice.
         if (!dirty && !registryDirty) {
             return;
         }
@@ -242,6 +250,48 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
                 registryDirty = false;
             }
         }
+    };
+
+    /**
+     * Tail of the snapshot queue, reset to a never-rejecting version so a failed
+     * flush cannot wedge the ones behind it.
+     *
+     * Every flush goes through here because they contend over two things: one
+     * snapshot row per slot, and the `dirty` flag that says whether a write is
+     * still owed. The boundaries are not the only callers — `RivetPlatform.flush`
+     * is public, and `RivetPlatform.close()` calls it from the sleep path, which
+     * Rivet does not serialize against an in-flight action — so two flushes can
+     * genuinely be in the air at once.
+     *
+     * Unqueued, the older of the two can be the one that lands last: both
+     * `serialize()` up front, then race on `db.execute`, and Rivet's storage
+     * promises no ordering between two concurrent statements. The row ends up
+     * holding the earlier bytes while the newer flush has already cleared `dirty`
+     * for its own (newer, now-overwritten) snapshot — so nothing owes a retry and
+     * the next wake hydrates a shard missing the last write. Queueing makes each
+     * flush serialize state at least as new as its predecessor persisted, which
+     * is what "the last durable snapshot is the newest one" needs.
+     */
+    let flushTail: Promise<void> = Promise.resolve();
+
+    const flush = async (): Promise<void> => {
+        // Cheap exit BEFORE taking a queue slot, so the read-only boundaries that
+        // call `flush()` unconditionally still pay nothing. Safe because a write
+        // that a queued snapshot would owe has already set `dirty`: a clean state
+        // here means every write so far is either persisted or in flight under a
+        // flush whose own revision check will keep owing it.
+        if (!dirty && !registryDirty) {
+            return;
+        }
+
+        const started = flushTail.then(runFlush, runFlush);
+
+        flushTail = started.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        await started;
     };
 
     return {

@@ -18,18 +18,55 @@ describe("rivet shard state", () => {
         const actor = createRivetActorDouble();
 
         try {
-            const state = await openRivetShardState(actor);
+            /** Armed for exactly one `execute`, so only the snapshot write is held. */
+            let gate: Promise<void> | undefined;
+
+            // The actor double resolves `execute` synchronously, and flushes now
+            // take a queue slot before they serialize — so a mark made in the
+            // same tick as `flush()` lands BEFORE the bytes are captured and is
+            // legitimately part of them. Holding the durable write open is what
+            // puts the second mark where this test needs it: after the copy was
+            // serialized, before it reached Rivet's SQLite.
+            const state = await openRivetShardState({
+                db: {
+                    execute: async <Row extends Record<string, unknown> = Record<string, unknown>>(query: string, ...args: unknown[]): Promise<Row[]> => {
+                        if (gate !== undefined) {
+                            const held = gate;
+
+                            gate = undefined;
+
+                            await held;
+                        }
+
+                        return await actor.db.execute<Row>(query, ...args);
+                    },
+                },
+            });
 
             state.database.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
             state.markDirty();
 
+            let release: () => void = () => {};
+
+            gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
             const flushing = state.flush();
+
+            // A macrotask, so every microtask has drained: the flush has taken
+            // its slot, serialized the copy, and is parked on the gated write.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
 
             // A second write inside the flush's await window — the shape a socket
             // callback takes while its own snapshot is being written. Before the
             // fix the flag was cleared for this write too, even though the
             // serialized copy predates it, and the next wake lost it silently.
             state.markDirty();
+
+            release();
 
             await flushing;
 

@@ -11,7 +11,8 @@
  * `runSerialized` only has to preserve that guarantee across the promise
  * chain rather than establish it. The queue is still built here, because
  * `runSerialized` is also called from `onRequest` and `onWebSocket` handlers
- * that Rivet does *not* serialize against each other.
+ * that Rivet does *not* serialize against each other — and it is the *same*
+ * queue `transaction` uses, because both write the one working copy.
  * - **Local SQL** runs against the synchronous working copy (see
  * `./rivet-shard-state`), which is where the async/sync bridge lives.
  * - **Transactions** are the working copy's own `BEGIN`/`COMMIT`, followed by a
@@ -22,6 +23,8 @@
  * what a Node host can offer: it survives sleep, restart, upgrade and crash,
  * and Rivet wakes the actor to deliver it.
  */
+
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
@@ -155,14 +158,41 @@ interface RivetShardHost {
 /**
  * Build a `ShardHost` over one Rivet actor and its working copy.
  *
- * `runSerialized` chains onto a single `tail` promise that is reset to a
- * never-rejecting version, so one closure's failure cannot wedge every closure
- * behind it. `transaction` runs on a **private** second chain of the same
- * shape: two overlapping bare `transaction()` calls must serialize against each
- * other (raw `BEGIN` inside an open transaction either throws or, worse, lets
- * one call's `COMMIT` commit another's uncommitted writes), while routing them
- * through `runSerialized` would deadlock the `runSerialized(() =>
- * transaction(work))` composition the engine already uses.
+ * `runSerialized` and `transaction` share **one** boundary lock, because they
+ * write **one** `better-sqlite3` connection. Two private tail chains — the shape
+ * this host shipped with — serialize each entry point against itself and nothing
+ * against the other, which silently destroys a committed write:
+ *
+ * 1. A bare `transaction()` runs `BEGIN` and awaits its closure.
+ * 2. A `runSerialized()` closure on the other chain writes rows. It issues no
+ * `BEGIN` of its own, so those rows land inside the transaction's.
+ * 3. Its `flush()` finds `database.inTransaction` and skips the snapshot — it
+ * has to, since `serialize()` would capture uncommitted rows. `runSerialized`
+ * **resolves**, telling its caller the write is durable.
+ * 4. The transaction's closure throws. `ROLLBACK` discards the other
+ * boundary's rows from the working copy, and no snapshot ever held them.
+ *
+ * A write that reported success is then gone from memory *and* from Rivet's
+ * SQLite, with nothing having failed in between. The mirror case is as bad: a
+ * `COMMIT` landing mid-closure publishes another boundary's half-written state.
+ *
+ * ## Why the lock is re-entrant, and why `AsyncLocalStorage` is what makes it so
+ *
+ * The engine composes the two: `ShardRunner.runInTransaction` is
+ * `runSerialized(() => transaction(work))` (`@lunora/shard-engine`), and
+ * `ShardDO.fetch` wraps a mutation dispatch in a *further* `runSerialized` span.
+ * A plain FIFO mutex deadlocks on both — the inner acquire waits on the outer
+ * closure that is awaiting it.
+ *
+ * So the lock is skipped for a boundary opened from inside a boundary, and
+ * `AsyncLocalStorage` is the only thing that can tell that case from the one
+ * that must queue: its store follows a single call's own await chain (through
+ * `Promise.all` branches included) without leaking into a sibling chain. A
+ * held-boolean cannot — it reads `true` for an unrelated second top-level
+ * `transaction()` too, and nests a raw `BEGIN`. This is the same distinction
+ * workerd's `blockConcurrencyWhile` draws natively with "does not queue events
+ * initiated as part of the callback itself", and the same `AsyncLocalStorage`
+ * model `@lunora/do`'s idempotency suite verified against real workerd.
  */
 const createRivetShardHost = (
     actor: Pick<RivetActorLike, "key" | "schedule" | "waitUntil">,
@@ -215,7 +245,51 @@ const createRivetShardHost = (
      */
     const background = new Set<Promise<unknown>>();
 
-    let tail: Promise<unknown> = Promise.resolve();
+    /**
+     * Set for the duration of a boundary's closure, and readable only from that
+     * closure's own await chain. See this module's `createRivetShardHost`
+     * docstring for why a plain boolean would be wrong here.
+     */
+    const insideBoundary = new AsyncLocalStorage<true>();
+
+    /**
+     * Tail of the one boundary queue. Only ever a `release` promise, so it cannot
+     * reject and one failed boundary cannot wedge every boundary behind it.
+     */
+    let boundaryTail: Promise<void> = Promise.resolve();
+
+    /**
+     * Hold the boundary lock for `function_`, or run it in place when the caller
+     * already holds it.
+     *
+     * The re-entrant branch takes no queue slot at all, so it cannot deadlock on
+     * the lock its own caller is holding.
+     */
+    const withBoundary = async <T>(function_: () => Promise<T>): Promise<T> => {
+        if (insideBoundary.getStore() === true) {
+            return await function_();
+        }
+
+        const previous = boundaryTail;
+
+        let release: () => void = () => {};
+
+        boundaryTail = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        await previous;
+
+        try {
+            // `return await`, not a bare `return`: the rejection has to reach the
+            // `finally`, or a boundary whose closure threw never releases the
+            // lock and the shard wedges for good. `await` re-throws by identity,
+            // which the contract's error-identity leg pins.
+            return await insideBoundary.run(true, function_);
+        } finally {
+            release();
+        }
+    };
 
     /**
      * Run `function_`, then make its writes durable.
@@ -233,19 +307,7 @@ const createRivetShardHost = (
         return result;
     };
 
-    const runSerialized: ShardHost["runSerialized"] = <T>(function_: () => Promise<T>): Promise<T> => {
-        const run = async (): Promise<T> => runAndFlush(function_);
-        const started = tail.then(run, run);
-
-        tail = started.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return started;
-    };
-
-    let transactionTail: Promise<unknown> = Promise.resolve();
+    const runSerialized: ShardHost["runSerialized"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(async () => runAndFlush(function_));
 
     const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         const { database } = state;
@@ -272,17 +334,7 @@ const createRivetShardHost = (
         return result;
     };
 
-    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
-        const run = async (): Promise<T> => runTransaction(function_);
-        const started = transactionTail.then(run, run);
-
-        transactionTail = started.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return started;
-    };
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(async () => runTransaction(function_));
 
     const host: ShardHost = {
         alarms,
