@@ -13,7 +13,18 @@
         # main → stable releases; alpha/next/beta → prereleases, per the channel
         # table in `release.channels`.
         "branches": ["main", "alpha", "next", "beta"]
-    "workflow_dispatch": # yamllint disable-line rule:empty-values
+    "workflow_dispatch":
+        "inputs":
+            # A dispatch carries no `github.event.before`, and there is no safe way to
+            # guess one: any baseline narrower than the real one silently drops every
+            # earlier unreleased commit from the change file, the version and the
+            # changelog. So the operator states it. Find it with
+            # `git describe --tags --abbrev=0 <branch>` — the tag of that branch's last
+            # release.
+            "base":
+                "description": "Release the commits AFTER this commit-ish (exclusive) — normally the last release tag, e.g. @lunora/cli@1.0.0-alpha.245."
+                "required": true
+                "type": "string"
 
 # Never cancel an in-progress release (GitHub may still replace a run that is only
 # pending). A wave versions, commits, tags and publishes in sequence; a run cancelled
@@ -121,24 +132,50 @@
             # `vis release` is change-file driven (changesets-style) and `ci release` does
             # NOT derive them, so a commit-driven release has to write one first.
             #
-            # `github.event.before` is the branch tip this push replaced, so the range is
-            # exactly "the commits this push added". That also excludes the previous run's
-            # own `chore(release):` commits — `generate` transcribes commit subjects
-            # verbatim, so a wider range copies old changelog headers into the new entry.
-            # A dispatch carries no `before`, so fall back to the last commit.
+            # The baseline is exclusive (`generate` runs `git log <from>..HEAD`) and is
+            # never guessed:
+            #
+            #   push     — `github.event.before`, the branch tip this push replaced, so the
+            #              range is exactly "the commits this push added". That also excludes
+            #              the previous run's own release commits — `generate` transcribes
+            #              commit subjects verbatim, so a wider range copies old changelog
+            #              headers into the new entry.
+            #   dispatch — the required `base` input.
+            #
+            # Anything else fails the job: a force-push whose old tip is gone, a branch's
+            # first push, an unresolvable input. The `HEAD~1` fallback this replaces looked
+            # like a safe default and was not — a dispatch after N unreleased commits
+            # released only the last one, and the commits it skipped are unrecoverable: no
+            # change file is ever written for them, so the version and the changelog lose
+            # them for good. Failing is recoverable; under-releasing is not.
             - "name": "Derive change files from this push"
               "shell": "bash"
               "env":
+                  "BASE": "${{ inputs.base }}"
                   "BEFORE": "${{ github.event.before }}"
               "run": |
                   set -euo pipefail
 
-                  from="${BEFORE:-}"
-
-                  if [ -z "${from}" ] || ! git rev-parse --verify --quiet "${from}^{commit}" >/dev/null; then
-                      echo "No usable github.event.before (${from:-unset}); deriving from HEAD~1."
-                      from="HEAD~1"
+                  if [ -n "${BASE:-}" ]; then
+                      ref="${BASE}"
+                      origin="the 'base' input"
+                  else
+                      ref="${BEFORE:-}"
+                      origin="github.event.before"
                   fi
+
+                  from=""
+
+                  if [ -n "${ref}" ]; then
+                      from="$(git rev-parse --verify --quiet "${ref}^{commit}" || true)"
+                  fi
+
+                  if [ -z "${from}" ]; then
+                      echo "::error::No release baseline: ${origin} is '${ref:-unset}', which this checkout cannot resolve to a commit. Re-run this workflow from the Actions tab with 'base' set to the last released commit-ish on this branch (git describe --tags --abbrev=0). Refusing to guess one: a guessed baseline drops every earlier unreleased commit from the version and the changelog, and nothing recovers them."
+                      exit 1
+                  fi
+
+                  echo "Releasing ${from}..HEAD (baseline from ${origin})."
 
                   pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
 
