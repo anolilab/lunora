@@ -1801,18 +1801,24 @@ originally reported.
 
 ## SaaS Kit (2026-09-08)
 
-A competitive audit of 21 SaaS starter kits — read first-hand from their own
+A competitive audit of 24 SaaS starter kits — read first-hand from their own
 repositories, across JS/TS (`LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`,
 `wasp-lang/open-saas`, `boxyhq`, `ixartz`, `saasfly`, `nextacular`,
-`nextjs/saas-starter`, `Kiranism/next-shadcn-dashboard-starter` and others),
-Laravel (`thedevdojo/wave`), Rails (`bullet_train`), Go (`go-saas/kit`) and
-Django (`apptension/saas-boilerplate`) — against what this repo already ships.
-Finding: every ingredient exists as a registry item or package and **none of them
-are composed**; the richest template is `templates/expo` at 26 files. No kit
-surveyed makes live data the default read path, and six payment providers is a
-breadth none of them match. The real gaps are an app-level admin, a content
-surface, i18n, and the small finishing features (impersonation, changelog,
-cookie consent, waitlist) whose absence makes a kit read as a demo.
+`Kiranism/next-shadcn-dashboard-starter` and others), Laravel
+(`laravel/{react,vue,livewire}-starter-kit` plus `laravel/maestro` and
+`laravel/chisel`, and `thedevdojo/wave`), Rails (`bullet_train`), Go
+(`go-saas/kit`) and Django (`apptension/saas-boilerplate`) — against what this
+repo already ships.
+
+Two findings set the shape. Every ingredient exists as a registry item or package
+and **none of them are composed** — the richest template is `templates/expo` at 26
+files. And the kit has to work across every meta-framework we template, which
+Laravel solves by building three flavours from one orchestrator repo: **we already
+own the better half of that mechanism**, in `packages/auth-ui` (61 framework-agnostic
+core files against 15–18 per view) mirrored into six registry items by
+`scripts/sync-auth-ui-registry.mjs` under a `lint:registry:sync` drift gate. Six
+views cover eleven of the thirteen templates. No kit surveyed makes live data the
+default read path, and six payment providers is a breadth none of them match.
 
 | Plan | Title                                                                | Pri | Cat     | Status |
 | ---- | -------------------------------------------------------------------- | --- | ------- | ------ |
