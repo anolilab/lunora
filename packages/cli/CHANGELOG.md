@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.245...@lunora/cli@1.0.0-alpha.246) (2026-09-11)
+
+### Features
+
+* **cli:** add dev --inspector-port ([#691](https://github.com/anolilab/lunora/issues/691)) ([326fd4e](https://github.com/anolilab/lunora/commit/326fd4e3297577dca824a96d363bd32904bb4f2b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.125
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.176
+* **@lunora/config:** upgraded to 1.0.0-alpha.213
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.133
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.113
+* **@lunora/seed:** upgraded to 1.0.0-alpha.124
+* **@lunora/testing:** upgraded to 1.0.0-alpha.164
+
 ## @lunora/cli [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.244...@lunora/cli@1.0.0-alpha.245) (2026-09-10)
 
 ### Features
