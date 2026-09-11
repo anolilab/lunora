@@ -690,6 +690,7 @@ interface DatabaseWriterLike {
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
     related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+    relationEdges?: ReadonlyArray<RelationEdge>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;

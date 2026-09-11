@@ -52,6 +52,19 @@
  * so `.use(rls(policies))` slots in like any other middleware.
  */
 import { LunoraError } from "@lunora/errors";
+// The traversal itself, not a structural mirror of it. Every other read here is
+// table-named, so the wrapper can `route()` it; a traversal DISCOVERS its tables
+// as it walks, so the only way to route one per hop is to run the walk here over
+// a reader this wrapper controls. `@lunora/shard-engine` does not depend on
+// `@lunora/server`, so the edge is acyclic.
+//
+// A VALUE import only. The types stay structurally mirrored below like every
+// other `@lunora/*` shape this file reads: a `import type { … } from
+// "@lunora/shard-engine"` here lands in `@lunora/server`'s published `.d.ts`,
+// and every package that builds against `@lunora/server` without declaring
+// `@lunora/shard-engine` then resolves it through pnpm's hoist — which packem
+// fails the build over, by design.
+import { findRelated } from "@lunora/shard-engine";
 
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
@@ -143,6 +156,15 @@ interface RankPageArgs {
     where?: WhereInput;
 }
 
+/** Structural mirror of `@lunora/shard-engine`'s `RelationEdge` — one directed foreign-key edge. */
+interface RelationEdgeLike {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+
 /** Structural mirror of `@lunora/shard-engine`'s `RelatedOptions` — only the fields the wrapper forwards or fills. */
 interface RelatedArgs {
     cursor?: null | string;
@@ -151,6 +173,14 @@ interface RelatedArgs {
     edges?: ReadonlyArray<string>;
     limit?: number;
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /**
+     * Per-hop column mask. Declared because an OUTER `mask()` step hands it to
+     * this wrapper's `related` (see `../mask/middleware`), and this wrapper now
+     * runs the walk itself — so it has to forward the hook rather than let a
+     * spread carry it to a delegate.
+     */
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
 }
 
 /** Structural mirror of `@lunora/shard-engine`'s `RelatedPage`. */
@@ -275,12 +305,24 @@ interface DatabaseWriterLike {
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
 
     /**
-     * Relation-graph traversal. Carries no `where` of its own — every read it
-     * makes is filtered through the `relationBaseWhere` hook, which the wrapper
-     * fills with the same per-table read filter a `with` hop gets, so the start
-     * row AND every hop out of it are policy-scoped.
+     * Relation-graph traversal. Declared so the `...base` spread's shape is
+     * typed, but never CALLED by the wrapper: the walk it performs is bound to
+     * whatever writer this closure came from, and the wrapper has to route each
+     * hop itself. It re-binds the traversal over {@link DatabaseWriterLike.relationEdges}
+     * instead — see the `related` entry on the wrapper.
      */
     related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
+
+    /**
+     * The schema's foreign-key edge set — what `related` walks. Published by the
+     * writer (see `@lunora/shard-engine`'s `DatabaseWriterLike`) precisely so a
+     * wrapper that must route the traversal per hop can run the walk itself
+     * instead of delegating into a closure already bound to one writer.
+     *
+     * Present exactly when `related` is, so it is what this wrapper keys the
+     * traversal off.
+     */
+    relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 
@@ -1099,6 +1141,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     const baseRankBefore = base.rankBefore;
     const baseRankPageRows = base.rankPageRows;
 
+    // The schema's edge set, hoisted so `related` below can narrow on it once
+    // rather than per call. `undefined` ⇒ this writer declares no relation graph.
+    const { relationEdges } = base;
+
     const wrapped: RlsDatabase = {
         ...base,
         async count(tableName, whereOrArgs) {
@@ -1478,47 +1524,66 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
 
-        // A traversal reads many tables, and which ones is only known while it
-        // walks — so it is filtered by the per-table `relationBaseWhere` hook
-        // rather than by a `baseWhere` this wrapper could resolve up front. That
-        // is the same hook a `with` hop rides, applied here to the start row as
-        // well, so both ends of every edge are policy-scoped. The caller's own
-        // `relationBaseWhere` is deliberately NOT spread through: a handler
-        // cannot widen past its policy.
-        related: base.related
-            ? async (start: Record<string, unknown>, options?: RelatedArgs) => {
-                  // Refused up front under `.rls("required")`, because the honest
-                  // alternative is a confusing failure and the tempting one is a
-                  // hole.
-                  //
-                  // `base` is the GUARDED writer there (see the `base`/`raw`
-                  // docblock above), and its `related` is re-bound over that same
-                  // guarded writer — so every hop is `guarded.findMany`, which
-                  // `guardTable` denies for any non-`.public()` table WHETHER OR
-                  // NOT a policy is declared for it. The guard has no notion of
-                  // policy coverage; that is what `route()` exists for, and
-                  // `related` is the one read here that cannot call it: a
-                  // traversal discovers its tables as it walks, so there is no
-                  // `tableName` at this call site to route on.
-                  //
-                  // Routing it properly means handing the traversal a reader that
-                  // resolves per table, which needs both `findRelated` and the
-                  // schema's edge set inside this middleware — neither is reachable
-                  // from `@lunora/server` today. Every shortcut considered instead
-                  // (a reader override, or letting a supplied filter earn guard
-                  // passage) turns an engine-internal seam from one that only
-                  // NARROWS into one that widens, which is a worse bug than this
-                  // one. So this refuses until that routing exists.
-                  if (base !== raw) {
-                      throw new LunoraError(
-                          "NOT_IMPLEMENTED",
-                          'ctx.db.related is not yet supported under a .rls("required") schema: a traversal discovers its tables as it walks, so the guard denies every hop into a protected table even when a policy covers it. Read the relation with explicit policy-scoped queries for now.',
-                      );
-                  }
-
-                  return await (base.related as NonNullable<RlsDatabase["related"]>)(start, { ...options, relationBaseWhere: relationReadFilter });
-              }
-            : undefined,
+        /**
+         * The traversal, RE-BOUND rather than delegated — the same construction
+         * `guardWriter` applies one layer down, for the same reason.
+         *
+         * Every other read here is handed a table name, so it can `route()` up
+         * front. A traversal is not: it DISCOVERS its tables as it walks.
+         * Delegating to `base.related` therefore sends every hop to whatever
+         * writer that closure was built over — under `.rls("required")` the
+         * GUARDED one, whose `guardTable` denies any non-`.public()` table
+         * WHETHER OR NOT a policy covers it. So the walk runs HERE, over a reader
+         * routed per hop:
+         *
+         * - `findMany` goes back through this wrapper's own `findMany`, so each
+         * hop gets exactly the verdict a direct read of that table would: a
+         * policy table is reachable through `raw` and AND-merged with its read
+         * `baseWhere`, a `.public()` table passes through the guard, and a
+         * protected table with no read policy is denied by it.
+         * - `lookupById` resolves the START document's owning table through the
+         * UNGUARDED `raw` — a table-name probe, not caller-visible data, exactly
+         * as `locateRow` does for `get()`. The row itself is then read back
+         * through the routed `findMany`, so a start row the policy hides reads as
+         * absent rather than as a node whose neighbourhood is handed back.
+         *
+         * `relationBaseWhere` is deliberately NOT forwarded: the routed
+         * `findMany` already AND-merges each table's read `baseWhere` per hop, so
+         * passing the same predicate again would only duplicate it — and a
+         * caller-supplied one has never been allowed to reach the walk.
+         * `relationMask` IS forwarded, because an outer `mask()` step hands its
+         * per-hop hook in through these options and nothing else applies it.
+         *
+         * Keyed on `relationEdges` rather than on `related`: the edge set is what
+         * the walk needs, and the writer publishes the two together — so a writer
+         * with neither (the `.global()` twin) republishes `related` as absent
+         * exactly as before.
+         */
+        related:
+            relationEdges === undefined
+                ? undefined
+                : async (start: Record<string, unknown>, options?: RelatedArgs): Promise<RelatedPageLike> =>
+                      findRelated(
+                          // One cast, for one reason: `findRelated` is typed
+                          // against `@lunora/shard-engine`'s `QueryArgs` /
+                          // `WhereInput`, while this module reads its own
+                          // structural mirrors of them (see `QueryArgs` above).
+                          // The runtime objects are the same ones either way.
+                          {
+                              findMany: async (tableName: string, args?: QueryArgs) => wrapped.findMany(tableName, args),
+                              lookupById: async (id: string) => raw.lookupById?.(id),
+                          } as unknown as Parameters<typeof findRelated>[0],
+                          relationEdges,
+                          start,
+                          {
+                              cursor: options?.cursor,
+                              depth: options?.depth,
+                              direction: options?.direction,
+                              edges: options?.edges,
+                              limit: options?.limit,
+                              relationMask: options?.relationMask,
+                          },
+                      ),
 
         // Restore clears the soft-delete marker — a by-id un-delete, gated as an
         // "update" (the policy that governs patch). No post-image check: the

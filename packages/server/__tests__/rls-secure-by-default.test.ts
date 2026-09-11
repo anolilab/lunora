@@ -205,16 +205,10 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
         },
     };
 
-    // `related` is the guard's "rebound" kind: re-bound over the GUARDED writer,
-    // so each hop is a gated `findMany` rather than a raw one. Mirrored here
-    // because that re-binding is exactly what makes the traversal unreachable
-    // under `.rls("required")` — the guard denies a protected table whether or
-    // not a policy covers it.
-    (guarded as Record<string, unknown>)["related"] = async (start: { table?: string }) => {
-        deny(String(start.table));
-
-        return { continueCursor: null, isDone: true, nodes: [] };
-    };
+    // `related` is deliberately absent from this fixture: the traversal is
+    // routed per hop by the wrapper itself (it keys off the writer's
+    // `relationEdges`, which this writer does not publish), and
+    // `rls-related.test.ts` covers it end to end.
 
     // NON-enumerable, mirroring the real `guardWriter`. An enumerable escape
     // hatch rides the `{ ...ctx.db }` spread the RLS wrapper is built from, which
@@ -288,26 +282,6 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(FakeRlsRequiredError);
         // The guard fired before ever reaching the raw writer.
         expect(log).not.toContain("raw.findMany:secrets");
-    });
-
-    it('refuses ctx.db.related up front under .rls("required") instead of failing mid-walk', async () => {
-        expect.assertions(3);
-
-        const log: string[] = [];
-        const raw = createRawWriter([{ _id: "post_1", table: "posts" }], log);
-        const guarded = guard(raw, protectedTables, tableOfId);
-        // `posts` HAS a read policy, so a direct read of it works (the test
-        // above). The traversal still cannot run: its hops go through the
-        // guarded writer, which knows nothing about policy coverage.
-        const handler = lunora.query
-            .use(rlsForTest<TestContext>(definePolicies([readPosts])))
-            .query(async ({ ctx }) => (ctx.db as unknown as { related: (s: unknown) => Promise<unknown> }).related({ id: "post_1", table: "posts" }));
-
-        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(/not yet supported under a .rls\("required"\) schema/u);
-        // Refused BEFORE the walk, so no hop is attempted and the failure names
-        // the real limitation rather than surfacing as a denied table.
-        expect(log).not.toContain("raw.findMany:posts");
-        expect(log).toStrictEqual([]);
     });
 
     it("allows a .public() NON-policy table read through the guard (opt-out)", async () => {

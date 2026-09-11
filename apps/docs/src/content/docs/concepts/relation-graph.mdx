@@ -243,7 +243,12 @@ of the framework applying to it:
 
 - **Row-level security** — the caller's per-table read policy filters the start
   row _and_ every hop, through the same seam a `with` hop rides. A start row the
-  policy hides reads as absent.
+  policy hides reads as absent. Under a `.rls("required")` schema each hop gets
+  exactly the verdict a direct read of that table would: a table your procedure
+  declares a read policy for is reachable and policy-filtered, a `.public()` one
+  is readable, and a protected table you declared no read policy for is denied —
+  so declare a policy for every table the walk can reach, or narrow it with
+  `edges`.
 - **Column masking** — each hop's rows are masked with that hop's table policy.
 - **Soft delete** — deleted rows stay hidden.
 - **`.global()` tables** — a hop into one is routed to the global backend.

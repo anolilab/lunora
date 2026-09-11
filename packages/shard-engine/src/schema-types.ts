@@ -767,6 +767,26 @@ export interface DatabaseWriterLike {
      * read.
      */
     related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
+     * The edge set {@link DatabaseWriterLike.related} walks, derived from this
+     * schema's `v.id(...)` columns once per writer. Present exactly when
+     * `related` is — the two are a pair, and the `.global()` twin carries
+     * neither.
+     *
+     * PUBLISHED rather than kept as a closure variable because a wrapper that
+     * has to route the traversal PER TABLE — the RLS middleware under a
+     * `.rls("required")` schema — cannot delegate to `related`: that closure is
+     * already bound to one writer, and every hop out of it would go to that
+     * writer. Such a wrapper runs the walk itself over a reader it routes, and
+     * the walk needs this set to know what the hops are.
+     *
+     * It is metadata, not capability. Edge NAMES are already a caller-facing
+     * surface (`RelatedOptions.edges` selects by them, and refuses an undeclared
+     * one), and holding the set grants no read that the writer would not
+     * otherwise gate.
+     */
+    relationEdges?: ReadonlyArray<RelationEdge>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 

@@ -5410,6 +5410,7 @@ interface DatabaseWriterLike {
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
     related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
+    relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     wipeShard?: (options?: {
@@ -5847,6 +5848,7 @@ interface RelatedArgs {
     edges?: ReadonlyArray<string>;
     limit?: number;
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
 }
 ```
 
@@ -5864,6 +5866,18 @@ interface RelatedPageLike {
         score: number;
         table: string;
     }[];
+}
+```
+
+### `RelationEdgeLike` (interface)
+
+```ts
+interface RelationEdgeLike {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
 }
 ```
 

@@ -218,6 +218,13 @@ const WRITER_METHOD_GATING = {
      * instead, so every hop is a `findMany` this map already gates.
      */
     related: "rebound",
+
+    /**
+     * Schema-derived metadata, not a read: the edge set `related` walks. It
+     * names tables but reaches no row, and the reads it drives are gated as
+     * `related`'s own entry describes.
+     */
+    relationEdges: "ungated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */

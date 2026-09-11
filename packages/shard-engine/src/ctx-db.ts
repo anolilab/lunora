@@ -4314,6 +4314,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return findRelated(writer, relationEdges, start, relatedOptions);
         },
 
+        /**
+         * Published alongside `related` so a wrapper that has to route the walk
+         * per table can run it itself — see `DatabaseWriterLike.relationEdges`.
+         */
+        relationEdges,
+
         query(tableName) {
             const global = globalWriterFor(tableName, "query");
 
