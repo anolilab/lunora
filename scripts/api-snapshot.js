@@ -207,6 +207,14 @@ const TIER_2 = [
  * snapshot buys today is the record that `@lunora/vite` did not have when it
  * was this young.
  *
+ * `saas-ui` is here rather than beside `auth-ui` in TIER_2 for the reason the
+ * experimental tier exists: it is the SaaS kit's view model, days old, and its
+ * core/view split is the thing the next five ports will push on. Covering it
+ * gives the graduation question an instrument without making a SemVer promise
+ * the surface is nowhere near ready for. Like `auth-ui`, it is `private: true`
+ * with no build step and its exports point at `.ts`/`.tsx` source, extracted via
+ * the source-file fallback in `collectEntries`.
+ *
  * `angular`, `browser`, `react-native`, `replica` and `x402` were added last,
  * for the plainest reason: they were the only published packages whose surface
  * no record described, so the graduation question had no instrument at all for
@@ -214,7 +222,7 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "rspack", "x402"];
+const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "rspack", "saas-ui", "x402"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
