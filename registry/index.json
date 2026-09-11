@@ -122,6 +122,11 @@
             "title": "Rate limit"
         },
         {
+            "description": "The framework-independent backend of the Lunora SaaS kit: per-tenant tables sharded by organizationId (projects, activity), a .global() organizations projection for the cross-tenant reads a shard cannot serve, an identity claim contract carrying the caller's active organization, and the queries/mutations the dashboard and admin run on. Identity itself stays in better-auth; this item never becomes a second source of truth for it.",
+            "name": "saas",
+            "title": "SaaS kit — tenancy, activity, admin projection"
+        },
+        {
             "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
             "name": "storage",
             "title": "Storage"
