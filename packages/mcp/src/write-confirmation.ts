@@ -91,16 +91,16 @@ const digestSecret = (client: LunoraClient): string => `${DIGEST_DOMAIN}\u0000${
  * `{ b: 2, a: 1 }` and `{ a: 1, b: 2 }` produce one digest; absent and
  * `undefined` fields collapse together, so an omitted `shardKey` and an explicit
  * `shardKey: undefined` are the same action rather than two.
+ *
+ * Signs the WHOLE proposal rather than a hand-listed subset of its fields, and
+ * that is a security property, not brevity. A field enumerated here would have
+ * to be enumerated again by every future editor; the one that got forgotten
+ * would sit in `ProposedWrite`, be shown to the human in `action_required`, and
+ * not be bound by the digest — so a confirmation for the action a human saw
+ * would also confirm one with that field changed. Binding by construction fails
+ * closed instead: a new field is covered the moment it exists.
  */
-const canonicalize = (proposal: ProposedWrite): string =>
-    stableStringify({
-        args: proposal.args,
-        functionPath: proposal.functionPath,
-        idempotencyKey: proposal.idempotencyKey,
-        kind: proposal.kind,
-        shardKey: proposal.shardKey,
-        tool: proposal.tool,
-    });
+const canonicalize = (proposal: ProposedWrite): string => stableStringify(proposal);
 
 /** Mint the digest for a proposal. */
 const computeActionDigest = async (client: LunoraClient, proposal: ProposedWrite): Promise<string> =>
@@ -157,19 +157,19 @@ const readConfirmation = (input: Record<string, unknown>): WriteConfirmation => 
     return { actionDigest, confirmed: input.confirmed === true, idempotencyKey };
 };
 
-/** The `action_required` result: the proposal a human reviews, plus the digest that binds it. */
+/**
+ * The `action_required` result: the proposal a human reviews, plus the digest
+ * that binds it.
+ *
+ * Hands back the proposal itself for the same reason {@link canonicalize} signs
+ * it whole — what the human is shown and what the digest binds must be the same
+ * object, or a field can drift into one and not the other.
+ */
 const actionRequired = (proposal: ProposedWrite, actionDigest: string): ToolResult =>
     ok({
         actionDigest,
         nextStep: `Show proposedAction to a human. To execute, call ${proposal.tool} again with the IDENTICAL functionPath, args, shardKey and idempotencyKey, plus confirmed: true and this actionDigest. Nothing has been written or called yet.`,
-        proposedAction: {
-            args: proposal.args,
-            functionPath: proposal.functionPath,
-            idempotencyKey: proposal.idempotencyKey,
-            kind: proposal.kind,
-            shardKey: proposal.shardKey,
-            tool: proposal.tool,
-        },
+        proposedAction: proposal,
         status: "action_required",
     });
 

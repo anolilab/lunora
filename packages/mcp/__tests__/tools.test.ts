@@ -520,6 +520,44 @@ describe("write confirmation handshake", () => {
         expect(mock.mutation).not.toHaveBeenCalled();
     });
 
+    it("binds every field the proposal exposes, so a field added later cannot slip past the digest", async () => {
+        expect.assertions(4);
+
+        const mock = mockClient();
+        const input = { args: { roomId: "r1", text: "hi" }, functionPath: "messages:send", idempotencyKey: "k1", shardKey: "room-1" };
+        const { actionDigest, proposedAction } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+        // The exhaustiveness gate, and the reason `canonicalize` signs the
+        // proposal WHOLE rather than listing its fields. Signing it whole means a
+        // new field is digest-bound the moment it exists — but it would also be
+        // shown to the human here with no tamper coverage below. Failing this
+        // list is the prompt to add that coverage; widening it silently is the
+        // mistake it exists to catch.
+        expect(Object.keys(proposedAction).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "args",
+            "functionPath",
+            "idempotencyKey",
+            "kind",
+            "shardKey",
+            "tool",
+        ]);
+
+        // Each caller-settable field changed one at a time, replayed under the
+        // digest a human approved for the ORIGINAL values. (`tool` and `kind`
+        // are covered by the mutation-digest-cannot-confirm-an-action test.)
+        const refusals = await Promise.all(
+            [
+                { ...input, args: { roomId: "r2", text: "hi" } },
+                { ...input, idempotencyKey: "k2" },
+                { ...input, shardKey: "room-2" },
+            ].map(async (variant) => callTool(mock.asClient, "lunora_run_mutation", { ...variant, actionDigest, confirmed: true }, true)),
+        );
+
+        expect(refusals.map((refusal) => refusal.isError)).toStrictEqual([true, true, true]);
+        expect(refusals.every((refusal) => refusal.content[0]!.text.includes("confirmation rejected"))).toBe(true);
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
     it("rejects a digest issued for a different shardKey", async () => {
         expect.assertions(2);
 
