@@ -19,12 +19,12 @@ Ratings track **celld v0.4.0**. The blocker this package was first written aroun
 
 `emulated`: WebSocket hibernation (the API is implemented, but celld never sheds a cell holding a live socket, and `getTags()` is absent — the shared adapter's accept-time socket ids cover that soundly for exactly that reason), cross-shard fan-out, durable streams, memory tables, server reactors, the scheduler, and the R2-backed backup/CDC-archive paths.
 
-`unsupported`, and two of these are worth reading before choosing this target:
+`unsupported`: Queues and therefore `ctx.mail`, shard placement, read replicas, and the managed Cloudflare products below. Two of these are worth reading before choosing this target:
 
 - **Queues, and therefore `ctx.mail`.** celld ships Queues, but a queue takes one consumer script and that consumer cannot also export a `fetch()` handler. A Lunora app compiles to one worker whose default export carries `fetch`, `scheduled` and `queue` together, and a celld fleet runs one application — so the consumer has nowhere to live. This is a topology rule, not a missing binding, and it is the one gap a Lunora app is most likely to hit.
 - **Shard placement and read replicas.** celld assigns an unowned cell to whichever node has capacity when traffic reaches it and never rebalances, so a `locationHint` has nothing to act on and a read replica has no region to be nearer the reader in.
 
-The rest are managed Cloudflare products celld has no binding for: Workers AI, Vectorize, Containers, Browser Rendering, Images, Analytics Engine, Pipelines, Hyperdrive, Secrets Store, plus the Cache API and Cloudflare Access. Codegen gates every one of them off for `"target": "celld"` in `lunora.json`, with a `platform_unsupported_feature` diagnostic naming the feature.
+The rest are managed Cloudflare products celld has no binding for: Workers AI (and with it `defineAgent`, whose loop compiles onto celld's Workflows but has no model to call), Vectorize, Containers, Browser Rendering, Images, Analytics Engine, Pipelines, Hyperdrive, Secrets Store, plus the Cache API and Cloudflare Access. Codegen gates every one of them off for `"target": "celld"` in `lunora.json`, with a `platform_unsupported_feature` diagnostic naming the feature.
 
 Ratings derive from celld's documented compatibility surface (`docs/cloudflare-compat.md`, `docs/limitations.md` in the celld repo — both alpha), not from running the conformance TCK against a live fleet: celld is an external daemon plus an object store, which unit tests cannot stand up. celld's own rule is that an unsupported configuration or API must fail at deploy or first use, so its "Partial" ratings mean a listed set of gaps rather than silent degradation.
 
