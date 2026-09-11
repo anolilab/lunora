@@ -1,3 +1,5 @@
+## @lunora/mail [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.76...@lunora/mail@1.0.0-alpha.77) (2026-09-11)
+
 ## @lunora/mail [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.75...@lunora/mail@1.0.0-alpha.76) (2026-09-10)
 
 ## @lunora/mail [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.74...@lunora/mail@1.0.0-alpha.75) (2026-09-10)
