@@ -1840,7 +1840,9 @@ interface RelatedPage<T = Record<string, unknown>> {
 ### `RelatedStart` (type)
 
 ```ts
-type RelatedStart = Record<string, unknown> | RelatedStartReference;
+type RelatedStart = (Record<string, unknown> & {
+    _id: string;
+}) | RelatedStartReference;
 ```
 
 ### `RelatedStartReference` (interface)
@@ -5409,7 +5411,7 @@ interface DatabaseWriterLike {
     }>;
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
-    related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
+    related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
@@ -5867,6 +5869,17 @@ interface RelatedPageLike {
         table: string;
     }[];
 }
+```
+
+### `RelatedStartLike` (type)
+
+```ts
+type RelatedStartLike = (Record<string, unknown> & {
+    _id: string;
+}) | {
+    id: string;
+    table: string;
+};
 ```
 
 ### `RelationEdgeLike` (interface)

@@ -1011,8 +1011,13 @@ interface RelatedStartReference {
 /**
  * Where a traversal starts: a loaded document (recognised by its `_id`, whose
  * table the reader resolves), or an explicit `{ table, id }`.
+ *
+ * The document arm requires `_id`, which is what makes the two arms actually
+ * distinguishable: against a bare `Record<string, unknown>` the union collapses
+ * — `{ table, id }` is assignable to it — so a misspelled `{ tabel, id }` used
+ * to type-check and fail only at runtime.
  */
-type RelatedStart = Record<string, unknown> | RelatedStartReference;
+type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
 
 /** Options for {@link DatabaseReader.related}. */
 interface RelatedOptions {

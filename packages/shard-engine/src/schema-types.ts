@@ -374,8 +374,14 @@ export interface RelatedStartReference {
  * writer's `lookupById` seam). A document is recognised by carrying `_id`, so a
  * table that happens to declare `table`/`id` columns is never mistaken for a
  * reference.
+ *
+ * The document arm requires `_id` for the same reason `resolveStart` reads it:
+ * without it the union COLLAPSED — a bare `Record<string, unknown>` swallows
+ * `RelatedStartReference`, so `related({ tabel: "x", id: "y" })` type-checked
+ * and failed at runtime with a message about the shape it was already meant to
+ * enforce. Requiring the discriminant makes the documented distinction real.
  */
-export type RelatedStart = Record<string, unknown> | RelatedStartReference;
+export type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
 
 /** Which way foreign-key edges are followed out of each visited node. */
 export type RelatedDirection = "both" | "in" | "out";

@@ -2038,7 +2038,9 @@ interface RelatedPage {
 ### `RelatedStart` (type)
 
 ```ts
-type RelatedStart = Record<string, unknown> | RelatedStartReference;
+type RelatedStart = (Record<string, unknown> & {
+    _id: string;
+}) | RelatedStartReference;
 ```
 
 ### `RelatedStartReference` (interface)

@@ -312,7 +312,7 @@ describe("ctx-db related", () => {
             await seed(writer);
 
             const ticket = await writer.get("t1", "tickets");
-            const page = await relatedOf(writer)(ticket as Record<string, unknown>, { direction: "out", edges: ["tickets.customerId"] });
+            const page = await relatedOf(writer)(ticket as Record<string, unknown> & { _id: string }, { direction: "out", edges: ["tickets.customerId"] });
 
             expect(page.nodes.map((node) => node.document["_id"])).toStrictEqual(["c1"]);
         });

@@ -156,6 +156,15 @@ interface RankPageArgs {
     where?: WhereInput;
 }
 
+/**
+ * Structural mirror of `@lunora/shard-engine`'s `RelatedStart`.
+ *
+ * The document arm requires `_id` for the same reason the mirrored type does:
+ * against a bare `Record<string, unknown>` the union collapses, because
+ * `{ table, id }` is assignable to it.
+ */
+type RelatedStartLike = (Record<string, unknown> & { _id: string }) | { id: string; table: string };
+
 /** Structural mirror of `@lunora/shard-engine`'s `RelationEdge` — one directed foreign-key edge. */
 interface RelationEdgeLike {
     readonly array: boolean;
@@ -311,7 +320,7 @@ interface DatabaseWriterLike {
      * hop itself. It re-binds the traversal over {@link DatabaseWriterLike.relationEdges}
      * instead — see the `related` entry on the wrapper.
      */
-    related?: (start: Record<string, unknown>, options?: RelatedArgs) => Promise<RelatedPageLike>;
+    related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
 
     /**
      * The schema's foreign-key edge set — what `related` walks. Published by the
@@ -1562,7 +1571,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         related:
             relationEdges === undefined
                 ? undefined
-                : async (start: Record<string, unknown>, options?: RelatedArgs): Promise<RelatedPageLike> =>
+                : async (start: RelatedStartLike, options?: RelatedArgs): Promise<RelatedPageLike> =>
                       findRelated(
                           // One cast, for one reason: `findRelated` is typed
                           // against `@lunora/shard-engine`'s `QueryArgs` /
