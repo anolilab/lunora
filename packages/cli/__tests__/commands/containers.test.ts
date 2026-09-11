@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runContainersCommand } from "../../src/commands/containers/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -76,7 +77,7 @@ describe("lunora containers", () => {
 
         const result = await runContainersCommand({ argument: ["frobnicate"], logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join(" ")).toContain("requires a subcommand");
     });
@@ -89,7 +90,9 @@ describe("lunora containers", () => {
 
         const result = await runContainersCommand({ argument: ["build", "."], dockerAvailable: () => false, logger, spawner, tag: "x:y" });
 
-        expect(result.code).toBe(1);
+        // The bucket that exists for exactly this: a local tool the command
+        // shells out to is not there, so automation provisions rather than retries.
+        expect(result.code).toBe(EXIT_CODE.MISSING_DEPENDENCY);
         expect(calls).toHaveLength(0);
         expect(errors.join(" ")).toContain("Docker-compatible engine");
     });

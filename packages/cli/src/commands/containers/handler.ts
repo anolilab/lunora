@@ -71,15 +71,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
             `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`,
         );
 
-        return { code: 1 };
-    }
-
-    if (NEEDS_DOCKER.has(subcommand) && !(options.dockerAvailable ?? isDockerAvailable)()) {
-        options.logger.error(
-            `containers ${subcommand} needs a running Docker-compatible engine (it builds/pushes images locally). Start Docker or Colima and retry. Note: container images must target linux/amd64.`,
-        );
-
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     const json = isJsonFormat(options.format);
@@ -87,6 +79,13 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     // `images delete` does not, so the check keys off the full path.
     const verb = subcommand === "images" ? `images ${rest[0] ?? ""}`.trim() : subcommand;
 
+    // Ahead of the Docker preflight, and that order is the contract, not a
+    // detail. `containers build --format json` is a refusable invocation on
+    // every machine — the flag combination is unsatisfiable whether or not an
+    // engine is running. Checking Docker first made the SAME command answer
+    // exit 2 on a developer's laptop and exit 1 "start Docker" in a container
+    // build step, so automation could not tell "fix the flag" from "provision
+    // the runner". Invocation-shaped refusals go before environment probes.
     if (json && !JSON_CAPABLE.has(verb)) {
         options.logger.error(
             `containers ${verb}: --format json is only available for the read subcommands (${[...JSON_CAPABLE].toSorted((a, b) => a.localeCompare(b)).join(" | ")}) — wrangler has no JSON rendering for the rest.`,
@@ -95,6 +94,14 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
         // Same class as an unknown `--format`: a flag value this subcommand
         // cannot honour is a usage error, not a runtime failure.
         return { code: EXIT_CODE.USAGE };
+    }
+
+    if (NEEDS_DOCKER.has(subcommand) && !(options.dockerAvailable ?? isDockerAvailable)()) {
+        options.logger.error(
+            `containers ${subcommand} needs a running Docker-compatible engine (it builds/pushes images locally). Start Docker or Colima and retry. Note: container images must target linux/amd64.`,
+        );
+
+        return { code: EXIT_CODE.MISSING_DEPENDENCY };
     }
 
     const args = ["containers", subcommand, ...rest];

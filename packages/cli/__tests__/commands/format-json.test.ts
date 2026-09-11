@@ -235,6 +235,38 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         expect(calls).toHaveLength(1);
     });
 
+    /**
+     * `containers build --format json` is unsatisfiable on every machine, so it
+     * must refuse the same way on every machine. The Docker preflight used to
+     * run first, which made the SAME invocation answer exit 2 on a laptop with
+     * Docker up and exit "start Docker" in a CI runner without it — automation
+     * could not tell "fix the flag" from "provision the runner".
+     */
+    it("containers refuses --format json on a write subcommand before probing Docker", async () => {
+        expect.assertions(3);
+
+        const { logger } = recordingLogger();
+        const { calls, spawner } = createRecordingSpawner(0);
+        let probed = false;
+
+        const built = await runContainersCommand({
+            argument: ["build", "."],
+            cwd: workdir,
+            dockerAvailable: () => {
+                probed = true;
+
+                return false;
+            },
+            format: "json",
+            logger,
+            spawner,
+        });
+
+        expect(built.code).toBe(EXIT_CODE.USAGE);
+        expect(probed).toBe(false);
+        expect(calls).toHaveLength(0);
+    });
+
     it("run emits the RPC result as the document", async () => {
         expect.assertions(3);
 
