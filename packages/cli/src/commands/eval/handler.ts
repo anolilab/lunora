@@ -6,6 +6,7 @@ import type { EvalItemResult, EvalResult } from "@lunora/testing";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { discoverEvalFiles, EVAL_FILE_SUFFIX } from "./discover-eval-files";
@@ -316,7 +317,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, error: formatError, evals: [] };
+        return { code: EXIT_CODE.USAGE, error: formatError, evals: [] };
     }
 
     // Cerebro parses `--threshold` with `type: Number`, so a non-numeric value

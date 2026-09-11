@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import type { RecordedSpawn, Spawner } from "../../src/util/spawn";
@@ -1358,7 +1359,7 @@ export const backfillNames = defineMigration({
                 const stdout = await captureStdout(async () => {
                     const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "yaml", logger, spawner });
 
-                    expect(result.code).toBe(1);
+                    expect(result.code).toBe(EXIT_CODE.USAGE);
                     expect(result.error).toBeDefined();
                 });
 

@@ -11,6 +11,7 @@ import { stat } from "node:fs/promises";
 
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
@@ -655,7 +656,7 @@ const runImportCommand = async (rawOptions: ImportCommandOptions): Promise<Impor
     if (formatError !== undefined) {
         rawOptions.logger.error(formatError);
 
-        return { body: undefined, code: 1, inserted: 0 };
+        return { body: undefined, code: EXIT_CODE.USAGE, inserted: 0 };
     }
 
     // Route the human/progress channel once, here: every helper below is handed

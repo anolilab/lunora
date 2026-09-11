@@ -7,6 +7,7 @@ import { runCodegen } from "@lunora/codegen";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";
@@ -43,6 +44,13 @@ interface AdvisorCommandOptions {
 interface AdvisorCommandResult {
     /** `true` when `--min-score` was given and the score fell below it. */
     belowMinScore?: boolean;
+
+    /**
+     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
+     * every other outcome is classified by `failed()`, which cannot tell a bad
+     * `--format` (the invocation is wrong, exit 2) from a failed gate (exit 1).
+     */
+    code?: number;
     /** Set when a baseline was requested and could be read. */
     comparison?: BaselineComparison;
     /** Set when the run aborted, or a gate could not be evaluated. */
@@ -134,7 +142,7 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { error: formatError };
+        return { code: EXIT_CODE.USAGE, error: formatError };
     }
 
     const minScore = parseMinScore(options.minScore);
@@ -222,7 +230,7 @@ const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({
         write: options.write,
     });
 
-    return { code: failed(result) ? 1 : 0 };
+    return { code: result.code ?? (failed(result) ? 1 : 0) };
 });
 
 export { execute, runAdvisorCommand };

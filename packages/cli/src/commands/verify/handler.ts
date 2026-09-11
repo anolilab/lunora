@@ -12,6 +12,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
@@ -205,7 +206,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
+        return { code: EXIT_CODE.USAGE, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
     }
 
     const validation = validateWrangler({ environment: options.env, projectRoot: cwd });

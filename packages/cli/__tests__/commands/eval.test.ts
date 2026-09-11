@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { runEvalCommand } from "../../src/commands/eval/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
@@ -199,7 +200,7 @@ describe("lunora eval", () => {
 
         const result = await runEvalCommand({ cwd, format: "xml", logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(recorded.errors.some((line) => line.includes("unknown --format"))).toBe(true);
     });
 

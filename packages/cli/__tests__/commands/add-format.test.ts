@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { execute } from "../../src/commands/add/handler";
 import type { AddOptions } from "../../src/commands/add/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import { setCommandLogger } from "../../src/util/logger";
 import { validateOutputFormat } from "../../src/util/output-format";
 
@@ -91,12 +92,12 @@ describe("lunora add --format", () => {
         expect(json.items).toStrictEqual(["mail"]);
     });
 
-    it("rejects an invalid --format value with exit 1", async () => {
+    it("rejects an invalid --format value with the usage exit code", async () => {
         expect.assertions(3);
 
         const exitCode = await runExecute(workdir, { format: "xml", from: registryRoot, yes: true }, ["email"]);
 
-        expect(exitCode).toBe(1);
+        expect(exitCode).toBe(EXIT_CODE.USAGE);
         expect(validateOutputFormat("add", "xml")).toBe('add: unknown --format "xml" — expected pretty | json');
         expect(logged).toContain('add: unknown --format "xml" — expected pretty | json');
     });

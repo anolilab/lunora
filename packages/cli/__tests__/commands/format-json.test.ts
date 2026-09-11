@@ -12,6 +12,7 @@ import { runDeploymentsCommand } from "../../src/commands/deployments/handler";
 import { runEnvCommand } from "../../src/commands/env/handler";
 import { runRpcCommand } from "../../src/commands/run/handler";
 import { runSeedCommand } from "../../src/commands/seed/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -162,7 +163,7 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         const { lines, logger } = recordingLogger();
         const { code } = await runEnvCommand({ cwd: workdir, format: "xml", logger, subcommand: "list" });
 
-        expect(code).toBe(1);
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(lines).toContain('env: unknown --format "xml" — expected pretty | json');
     });
 
@@ -194,7 +195,7 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         const { lines, logger } = recordingLogger();
         const result = await runExportCommand({ cwd: workdir, format: "json", logger, out: "-" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(lines.join("\n")).toContain("export --format json needs a file destination");
     });
 
@@ -205,7 +206,7 @@ describe("--format pretty|json is the one machine-readable flag", () => {
         const { spawner } = createRecordingSpawner(0);
         const result = await runDeploymentsCommand({ cwd: workdir, format: "json", logger, spawner, subcommand: "rollback", yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.error).toContain("only available for `deployments list`");
     });
 
@@ -229,7 +230,7 @@ describe("--format pretty|json is the one machine-readable flag", () => {
             spawner,
         });
 
-        expect(built.code).toBe(1);
+        expect(built.code).toBe(EXIT_CODE.USAGE);
         // The refused build never spawned, so only `list` was recorded.
         expect(calls).toHaveLength(1);
     });

@@ -4,6 +4,7 @@ import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-t
 import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
@@ -203,7 +204,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+        return { body: undefined, code: EXIT_CODE.USAGE, requestUrl: options.url ?? "" };
     }
 
     // In `--format json` mode every human line — the POST echo, the pretty-printed

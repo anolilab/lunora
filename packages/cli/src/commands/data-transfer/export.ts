@@ -11,6 +11,7 @@ import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
@@ -283,7 +284,9 @@ const runExportCommand = async (rawOptions: ExportCommandOptions): Promise<Expor
     const resolvedOutput = resolveExportOutput(rawOptions);
 
     if (resolvedOutput === undefined) {
-        return { bytes: 0, code: 1, rows: 0 };
+        // Every `resolveExportOutput` refusal is a usage error: an unknown
+        // `--format`, or `--format json` without the `--out <file>` it needs.
+        return { bytes: 0, code: EXIT_CODE.USAGE, rows: 0 };
     }
 
     const { destination, options } = resolvedOutput;

@@ -1,6 +1,7 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -121,7 +122,7 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, descriptor: undefined, error: formatError };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: formatError };
     }
 
     // Only `list` has a document. Refused rather than ignored: a caller that
@@ -132,7 +133,10 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
 
         options.logger.error(unsupported);
 
-        return { code: 1, descriptor: undefined, error: unsupported };
+        // Same class as an unknown `--format`: the invocation asks for something
+        // this subcommand cannot do, so it exits USAGE like every other refusal
+        // of a flag value.
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: unsupported };
     }
 
     const { args, error } = buildArgs(options);

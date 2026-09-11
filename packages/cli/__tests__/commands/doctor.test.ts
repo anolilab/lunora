@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
@@ -685,7 +686,7 @@ describe("runDoctor", () => {
             const stdout = await captureStdout(async () => {
                 const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
             });
 
             expect(stdout).toBe("");

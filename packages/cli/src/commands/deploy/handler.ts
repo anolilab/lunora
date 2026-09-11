@@ -45,6 +45,7 @@ import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
@@ -1867,7 +1868,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return abortResult(formatError);
+        return abortResult(formatError, { code: EXIT_CODE.USAGE });
     }
 
     // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on

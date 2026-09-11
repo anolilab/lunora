@@ -12,6 +12,7 @@ import { Project } from "ts-morph";
 import { deriveBindingManifest, writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { InfoOptions } from "./index";
@@ -351,7 +352,7 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, snapshot: undefined };
+        return { code: EXIT_CODE.USAGE, snapshot: undefined };
     }
 
     const json = isJsonFormat(options.format);

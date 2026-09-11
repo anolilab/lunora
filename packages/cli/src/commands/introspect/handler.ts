@@ -5,6 +5,7 @@ import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { Connection } from "./connect";
@@ -156,7 +157,7 @@ const runIntrospectCommand = async (rawOptions: IntrospectCommandOptions): Promi
     if (formatError !== undefined) {
         rawOptions.logger.error(formatError);
 
-        return { code: 1, written: [] };
+        return { code: EXIT_CODE.USAGE, written: [] };
     }
 
     // Routed once so the per-file "wrote …" progress and the dry-run preview land

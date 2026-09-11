@@ -9,6 +9,7 @@ import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
@@ -781,7 +782,7 @@ const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorRe
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, findings: [], ok: false, summary: { fail: 0, info: 0, pass: 0, warn: 0 } };
+        return { code: EXIT_CODE.USAGE, findings: [], ok: false, summary: { fail: 0, info: 0, pass: 0, warn: 0 } };
     }
 
     const logger = loggerForFormat(options.format, options.logger);

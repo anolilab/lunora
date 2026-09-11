@@ -38,6 +38,7 @@ import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token"
 import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
@@ -945,7 +946,7 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(as
     if (formatError !== undefined) {
         rawLogger.error(formatError);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     // In json mode every progress line — including the pretty-printed response

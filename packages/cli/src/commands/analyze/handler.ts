@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -128,7 +129,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, descriptor: undefined, report: undefined };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, report: undefined };
     }
 
     const json = isJsonFormat(options.format);

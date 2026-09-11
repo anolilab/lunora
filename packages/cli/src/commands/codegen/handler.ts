@@ -10,6 +10,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
+import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
@@ -39,6 +40,14 @@ interface CodegenCommandOptions {
 
 interface CodegenCommandResult {
     advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
+
+    /**
+     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
+     * every other outcome is classified from `error`/`failedAdvisories` by
+     * `execute`, which cannot tell a bad `--format` (the invocation is wrong,
+     * exit 2) from a failed codegen (exit 1) after the fact.
+     */
+    code?: number;
     cronTriggers: ReadonlyArray<string>;
     /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
     error?: string;
@@ -59,7 +68,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { advisories: [], cronTriggers: [], error: formatError, failedAdvisories: 0, outputDirectory: "" };
+        return { advisories: [], code: EXIT_CODE.USAGE, cronTriggers: [], error: formatError, failedAdvisories: 0, outputDirectory: "" };
     }
 
     // CI is the default gate: a pipeline should fail on an ERROR advisory, a
@@ -262,7 +271,7 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
         await warnAboutExportGaps(cwd, commandLogger);
     }
 
-    return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };
+    return { code: result.code ?? (result.error === undefined && result.failedAdvisories === 0 ? 0 : 1) };
 });
 
 export { execute, runCodegenCommand };

@@ -10,6 +10,7 @@ import { Project } from "ts-morph";
 import { targetsRemoteWorker } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
@@ -244,7 +245,7 @@ const runSeedCommand = async (rawOptions: SeedCommandOptions): Promise<SeedComma
     if (formatError !== undefined) {
         rawOptions.logger.error(formatError);
 
-        return seedFailure(1);
+        return seedFailure(EXIT_CODE.USAGE);
     }
 
     const json = isJsonFormat(rawOptions.format);

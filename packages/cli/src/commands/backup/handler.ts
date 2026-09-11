@@ -32,6 +32,7 @@ import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token"
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
@@ -753,7 +754,7 @@ const runBackupCommand = async (rawOptions: BackupCommandOptions): Promise<Backu
     if (formatError !== undefined) {
         rawOptions.logger.error(formatError);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     // Routed once: the export/import legs `create` and `restore` drive are handed

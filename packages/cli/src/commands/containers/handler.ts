@@ -3,6 +3,7 @@ import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -62,7 +63,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
@@ -91,7 +92,9 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
             `containers ${verb}: --format json is only available for the read subcommands (${[...JSON_CAPABLE].toSorted((a, b) => a.localeCompare(b)).join(" | ")}) — wrangler has no JSON rendering for the rest.`,
         );
 
-        return { code: 1 };
+        // Same class as an unknown `--format`: a flag value this subcommand
+        // cannot honour is a usage error, not a runtime failure.
+        return { code: EXIT_CODE.USAGE };
     }
 
     const args = ["containers", subcommand, ...rest];

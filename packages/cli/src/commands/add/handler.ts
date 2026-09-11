@@ -6,6 +6,7 @@ import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
@@ -386,7 +387,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
     if (formatError !== undefined) {
         logger.error(formatError);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     // In `--format json` mode every human/progress line goes to stderr so

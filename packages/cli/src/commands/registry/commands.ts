@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { confirmDepMutation, resolveDepRange } from "./apply";
@@ -211,7 +212,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE };
     }
 
     if (options.list) {

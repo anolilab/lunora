@@ -4,6 +4,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
@@ -111,7 +112,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     if (formatError !== undefined) {
         options.logger.error(formatError);
 
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
     }
 
     const result = await runDeployCommand({
