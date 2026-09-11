@@ -3,7 +3,8 @@ import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { ERROR_TOOL_DEFINITIONS } from "../src/error-tools";
-import { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "../src/tools";
+import type { ToolResult } from "../src/tools";
+import { callTool, READ_ONLY_TOOL_DEFINITIONS, ROW_READ_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "../src/tools";
 
 const MOCK_FUNCTIONS: FunctionDescriptor[] = [
     {
@@ -102,12 +103,15 @@ const proposeAndConfirm = async (client: LunoraClient, name: string, input: Reco
 };
 
 describe("toolDefinitions", () => {
-    it("exposes only the read-only tools by default (writes disabled, no admin token)", () => {
-        expect.assertions(2);
+    it("exposes only the read-only and error tools by default (writes disabled, no admin token)", () => {
+        expect.assertions(3);
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_find_related"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
+        // Not in the default tier: it returns raw rows through the ADMIN writer,
+        // so RLS and column masks do not apply to what it hands the model.
+        expect(names).not.toContain("lunora_find_related");
         expect(toolDefinitions(false).every((tool) => tool.inputSchema.type === "object")).toBe(true);
     });
 
@@ -121,7 +125,7 @@ describe("toolDefinitions", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
-            "lunora_find_related",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
@@ -399,15 +403,21 @@ describe("callTool", () => {
         expect.assertions(3);
 
         const mock = mockClient();
-        const result = await callTool(mock.asClient, "lunora_find_related", {
-            depth: 2,
-            direction: "in",
-            edges: ["tickets.customerId"],
-            id: "c1",
-            limit: 10,
-            shardKey: "org-1",
-            table: "customers",
-        });
+        const result = await callTool(
+            mock.asClient,
+            "lunora_find_related",
+            {
+                depth: 2,
+                direction: "in",
+                edges: ["tickets.customerId"],
+                id: "c1",
+                limit: 10,
+                shardKey: "org-1",
+                table: "customers",
+            },
+            false,
+            true,
+        );
 
         expect(result.isError).toBeUndefined();
         expect(mock.query).toHaveBeenCalledWith(
@@ -415,9 +425,10 @@ describe("callTool", () => {
             { depth: 2, direction: "in", edges: ["tickets.customerId"], id: "c1", limit: 10, table: "customers" },
             { shardKey: "org-1" },
         );
-        // The read is advertised as read-only, so a client UI can offer it
-        // without the write gate.
-        expect(READ_ONLY_TOOL_DEFINITIONS.find((tool) => tool.name === "lunora_find_related")?.annotations?.readOnlyHint).toBe(true);
+        // Advertised read-only (it writes nothing), but gated with the
+        // observability tier rather than the write tier — the risk it carries is
+        // disclosure, not mutation.
+        expect(ROW_READ_TOOL_DEFINITIONS.find((tool) => tool.name === "lunora_find_related")?.annotations?.readOnlyHint).toBe(true);
     });
 
     it("lunora_find_related omits absent options rather than sending undefined", async () => {
@@ -425,17 +436,30 @@ describe("callTool", () => {
 
         const mock = mockClient();
 
-        await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" });
+        await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" }, false, true);
 
         expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.findRelated }, { id: "c1", table: "customers" }, {});
+    });
+
+    it("lunora_find_related is refused at dispatch without the observability opt-in", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        // Omission is not the guarantee — a client that ignores the advertised
+        // list must still be refused, and must not reach the deployment.
+        const result = await callTool(mock.asClient, "lunora_find_related", { id: "c1", table: "customers" });
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0]!.text).toContain("LUNORA_MCP_ALLOW_OBSERVABILITY");
+        expect(mock.query).not.toHaveBeenCalled();
     });
 
     it("lunora_find_related refuses a call with no table or id", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
-        const noTable = await callTool(mock.asClient, "lunora_find_related", { id: "c1" });
-        const noId = await callTool(mock.asClient, "lunora_find_related", { table: "customers" });
+        const noTable = await callTool(mock.asClient, "lunora_find_related", { id: "c1" }, false, true);
+        const noId = await callTool(mock.asClient, "lunora_find_related", { table: "customers" }, false, true);
 
         expect(noTable.isError).toBe(true);
         expect(noId.isError).toBe(true);

@@ -91,14 +91,37 @@ const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_query",
     },
+];
+
+/**
+ * Tools that hand back RAW USER ROWS. Gated with the observability tier, and for
+ * a stronger version of the same reason.
+ *
+ * `lunora_find_related` does not run a declared function the way
+ * `lunora_run_query` does — it reaches the shard's `__lunora_admin__:findRelated`
+ * op, whose writer is built by the generated `adminWriter()` WITHOUT
+ * `enforceRls`. So it returns rows straight out of arbitrary tables with RLS
+ * policies and column masks bypassed, plus everything transitively reachable
+ * within `depth` hops. Holding the admin bearer already confers that authority;
+ * what must not be implied is handing it to a MODEL by default.
+ *
+ * That is the same argument the observability tools already make for log lines
+ * and grouped errors, only sharper — these are the rows themselves. Exposing it
+ * ungated made the most sensitive read on the server the one tool nothing held
+ * back.
+ */
+const ROW_READ_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Find rows related to a row" },
         description:
-            "Follow the schema's foreign keys out of one row and return the rows it is connected to, each with its hop distance, the edge names walked to reach it, and a depth-decaying score. Use this to answer 'what is connected to this' — a customer's tickets, those tickets' messages — which keyword and semantic search cannot, because the connection lives in a foreign key rather than in the text. Read-only.",
+            "Follow the schema's foreign keys out of one row and return the rows it is connected to, each with its hop distance, the edge names walked to reach it, and a depth-decaying score. Use this to answer 'what is connected to this' — a customer's tickets, those tickets' messages — which keyword and semantic search cannot, because the connection lives in a foreign key rather than in the text. Read-only, but it reads through the deployment's ADMIN writer: RLS policies and column masks do not apply to what it returns.",
         inputSchema: FIND_RELATED_INPUT_SCHEMA,
         name: "lunora_find_related",
     },
 ];
+
+/** Names of the raw-row tools — used to gate them out of a non-observability server. */
+const ROW_READ_TOOL_NAMES: ReadonlySet<string> = new Set(ROW_READ_TOOL_DEFINITIONS.map((tool) => tool.name));
 
 /**
  * The write tools' input schema: the shared run-tool triple plus the
@@ -165,7 +188,7 @@ const toolDefinitions = (allowWrites: boolean, allowObservability = false): Read
     [
         ...READ_ONLY_TOOL_DEFINITIONS,
         ...ERROR_TOOL_DEFINITIONS,
-        ...(allowObservability === true ? OBSERVABILITY_TOOL_DEFINITIONS : []),
+        ...(allowObservability === true ? [...ROW_READ_TOOL_DEFINITIONS, ...OBSERVABILITY_TOOL_DEFINITIONS] : []),
         ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : []),
     ];
 
@@ -363,6 +386,40 @@ const screenWrite = async (
 };
 
 /**
+ * Refuse a gated tool by NAME alone, before any dispatch.
+ *
+ * Both gates already OMIT their tools from {@link toolDefinitions}; this is the
+ * second half of that guarantee, so it does not depend on a client honouring
+ * the advertised list. Kept separate from {@link callTool} because the two
+ * gates plus the dispatch switch exceed the cognitive-complexity budget
+ * together, and the gates are the half that must stay trivially auditable.
+ *
+ * Returns the refusal to send back, or `undefined` when `name` is not gated.
+ */
+/* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
+const refuseGatedTool = (name: string, allowWrites: boolean, allowObservability: boolean): ToolResult | undefined => {
+    // Fail closed: only the boolean `true` opts in, whatever a JS caller passed.
+    if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
+        return errorResult(`tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`);
+    }
+
+    if (allowObservability !== true && OBSERVABILITY_TOOL_NAMES.has(name)) {
+        return errorResult(
+            `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+        );
+    }
+
+    if (allowObservability !== true && ROW_READ_TOOL_NAMES.has(name)) {
+        return errorResult(
+            `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+        );
+    }
+
+    return undefined;
+};
+/* eslint-enable @typescript-eslint/no-unnecessary-boolean-literal-compare */
+
+/**
  * Dispatch a tool call against `client`. Unknown tools and thrown errors are
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
@@ -478,7 +535,7 @@ const callTool = async (
     }
 };
 
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+export { callTool, READ_ONLY_TOOL_DEFINITIONS, ROW_READ_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";
