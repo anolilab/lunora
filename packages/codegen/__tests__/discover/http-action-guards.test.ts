@@ -222,6 +222,71 @@ describe("discoverHttpActionGuards", () => {
         expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
     });
 
+    it("skips a signed-webhook handler that reads through a single-name module constant", () => {
+        expect.assertions(1);
+
+        // The scalar form of the allowlist shape: one provider, so the constant is a
+        // bare string literal rather than an array of them.
+        write(
+            "scalar-constant.ts",
+            `const SIGNATURE_HEADER = "stripe-signature";
+             export const webhook = httpAction(async (ctx, request) => {
+                 const signature = request.headers.get(SIGNATURE_HEADER);
+                 await ctx.runAction(api.billing.processWebhook, { signature });
+                 return new Response("ok");
+             });`,
+        );
+
+        expect(discoverHttpActionGuards(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("still records a handler whose signature-shaped string is not the header it reads", () => {
+        expect.assertions(2);
+
+        // The read names `x-tenant-id`; the only signature-shaped string is an error
+        // message. Scanning the whole body for one would mute an unauthenticated write.
+        write(
+            "loose-string.ts",
+            `export const ingest = httpAction(async (ctx, request) => {
+                 const tenant = request.headers.get("x-tenant-id");
+
+                 if (tenant === null) {
+                     throw new Error("missing signature header");
+                 }
+
+                 await ctx.runMutation(api.events.add, { tenant });
+                 return new Response("ok");
+             });`,
+        );
+
+        const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
+    });
+
+    it("still records a handler that reads a signature header off something other than its request", () => {
+        expect.assertions(2);
+
+        // The signature header is read off a fetched *response*. Nothing about the
+        // inbound request was authenticated, so the write is still unguarded.
+        write(
+            "response-header.ts",
+            `export const ingest = httpAction(async (ctx, request) => {
+                 const upstream = await fetch("https://example.test/echo");
+                 const signature = upstream.headers.get("x-hub-signature-256");
+
+                 await ctx.runMutation(api.events.add, { signature });
+                 return new Response("ok");
+             });`,
+        );
+
+        const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
+    });
+
     it("skips a named-function or wrapped handler (unresolvable body — fail-safe)", () => {
         expect.assertions(1);
 
