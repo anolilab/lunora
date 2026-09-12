@@ -34,7 +34,7 @@ uses for server frames.
 
 **Divergence from ``@lunora/client``.** The TypeScript engine suppresses a
 notification whose folded result is reference-identical to the value already
-displayed. Reference identity has no portable meaning across these seven
+displayed. Reference identity has no portable meaning across these eight
 languages, and structural equality is not available for every value in all of
 them, so the ports notify on every fold instead: applying a layer, dropping one,
 and each server frame. A consumer therefore sees at most a few redundant
