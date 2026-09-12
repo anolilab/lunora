@@ -1,3 +1,20 @@
+## @lunora/do [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.138...@lunora/do@1.0.0-alpha.139) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardDO`'s protected `isQueryFunction` is renamed to `isCacheableQuery`, and
+`QueryReadScope` gains a required `markIpRead` member. A hand-written subclass overriding the
+former, or constructing the latter, must be updated; generated shards are regenerated.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** key the reactive cache on the whole caller ([#714](https://github.com/anolilab/lunora/issues/714)) ([0bbf506](https://github.com/anolilab/lunora/commit/0bbf506c1982cd58aa2aafc4f7c6be79c4c44efb))
+
 ## @lunora/do [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.137...@lunora/do@1.0.0-alpha.138) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
