@@ -15,6 +15,7 @@ import {
     resolveWorkerPort,
     runDevCommand,
 } from "../../src/commands/dev/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -1313,7 +1314,7 @@ describe("lunora dev", () => {
             const destination = join(workdir, "dev-manifest.json");
             const code = await runWithManifest(destination);
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(destination)).toBe(false);
         });
 

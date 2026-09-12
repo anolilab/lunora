@@ -7,6 +7,7 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -117,7 +118,7 @@ describe("lunora prepare", () => {
             const { logger } = silentLogger();
             const result = await runPrepareCommand({ cwd: workdir, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.error).toContain("postcodegen");
         });
 
@@ -158,7 +159,7 @@ describe("lunora prepare", () => {
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.error).toBe("wrangler validation failed");
         expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
     });
@@ -170,7 +171,7 @@ describe("lunora prepare", () => {
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.length).toBeGreaterThan(0);
     });
 
@@ -203,7 +204,7 @@ describe("lunora prepare", () => {
         const { logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.error).toContain("placeholder database_id");
         // And it names the fix, rather than leaving the user to discover it at
         // deploy time.
@@ -263,7 +264,7 @@ export default crons;
         expect(parsed.triggers?.crons).toStrictEqual(["0 0 * * *"]);
     });
 
-    it("returns code 1 when codegen fails (no schema.ts)", async () => {
+    it("exits usage when codegen fails (no schema.ts)", async () => {
         expect.assertions(3);
 
         // Remove the schema so codegen has nothing to process — some codegen
@@ -280,10 +281,10 @@ export default crons;
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        // Codegen failure returns code 1; or if codegen succeeds despite missing
-        // schema (no-op), validation may fail — either way code must be non-zero
-        // because no schema means SHARD binding can't be validated.
-        expect(result.code === 1 || result.code === 0).toBe(true);
+        // A missing schema is the project source being wrong, which is exit 2 —
+        // and if codegen somehow succeeds despite it, validation fails on the
+        // unverifiable SHARD binding, which is the same bucket.
+        expect(result.code === EXIT_CODE.USAGE || result.code === 0).toBe(true);
         // No assertion on specific error — codegen vs validator may differ, but
         // the plumbing (logger.error called on non-zero) is tested.
         expect(typeof result.code).toBe("number");
@@ -315,7 +316,7 @@ export default crons;
 
         const blocked = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(blocked.code).toBe(1);
+        expect(blocked.code).toBe(EXIT_CODE.USAGE);
         expect(blocked.schemaDrift?.blocked).toBe(true);
 
         const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
@@ -348,7 +349,7 @@ export default crons;
             const { logger } = silentLogger();
             const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: true });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.error).toContain("ERROR-level");
         });
 

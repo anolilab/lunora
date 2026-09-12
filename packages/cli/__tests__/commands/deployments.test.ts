@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runDeploymentsCommand } from "../../src/commands/deployments/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -33,13 +34,13 @@ const npmProjectCwd = (): string => {
 };
 
 describe("lunora deployments", () => {
-    it("list spawns `wrangler deployments list` and forwards --json/--env", async () => {
+    it("list spawns `wrangler deployments list` and forwards --format json/--env", async () => {
         expect.assertions(3);
 
         const { calls, spawner } = createRecordingSpawner();
         const { logger } = silentLogger();
 
-        const result = await runDeploymentsCommand({ cwd: "/tmp", env: "production", json: true, logger, spawner, subcommand: "list" });
+        const result = await runDeploymentsCommand({ cwd: "/tmp", env: "production", format: "json", logger, spawner, subcommand: "list" });
 
         expect(result.code).toBe(0);
         expect(argsOf(calls)).toContain("wrangler deployments list");
@@ -66,7 +67,7 @@ describe("lunora deployments", () => {
 
         const result = await runDeploymentsCommand({ cwd: "/tmp", logger, spawner, subcommand: "inspect" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
     });
 
@@ -89,7 +90,7 @@ describe("lunora deployments", () => {
 
         const result = await runDeploymentsCommand({ cwd: "/tmp", logger, spawner, subcommand: "rollback" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
     });
 
@@ -126,7 +127,7 @@ describe("lunora deployments", () => {
 
         const result = await runDeploymentsCommand({ cwd: "/tmp", logger, spawner, subcommand: "promote", versionId: "v9" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
     });
 });

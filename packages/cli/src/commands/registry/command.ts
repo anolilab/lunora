@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora registry <add|list|view|build>` — the component-registry command.
  * Metadata only; `./handler` dispatches the subcommand. (The sibling `./index`
@@ -32,7 +34,7 @@ const registryCommand: Command = {
             type: String,
         },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
-        { description: "Emit JSON output (add plan / list)", name: "json", type: Boolean },
+        { ...OUTPUT_FORMAT_OPTION, description: "Output format: pretty (default) or json (add plan / list)" },
         { description: "build: output path for the catalog (default <root>/index.json)", name: "out", type: String },
         { description: "build: verify the index is current instead of rewriting it", name: "check", type: Boolean },
     ],
@@ -45,8 +47,8 @@ export type RegistryOptions = CreateOptions<{
     check: boolean | undefined;
     diff: boolean | undefined;
     "dry-run": boolean | undefined;
+    format: string | undefined;
     from: string | undefined;
-    json: boolean | undefined;
     out: string | undefined;
     overwrite: boolean | undefined;
     ref: string | undefined;

@@ -161,16 +161,18 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
  * branch — the fix for a shipped export/import data-loss bug — was never once
  * executed by it.
  */
-const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" }) as never;
+const optionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" };
+};
 
 /**
  * An `optional(inner.nullable())` column — the case where a stored NULL is a
  * VALUE the column holds rather than an absent field. `.nullable()` is the one
  * thing that clears `notNull`, and it clears it on the INNER validator.
  */
-const nullableOptionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
+const nullableOptionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" };
+};
 
 const schema: SchemaLike = {
     tables: {

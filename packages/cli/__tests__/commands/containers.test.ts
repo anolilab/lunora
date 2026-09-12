@@ -2,11 +2,25 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { runContainersCommand } from "../../src/commands/containers/handler";
+import { execute, runContainersCommand } from "../../src/commands/containers/handler";
+import type { ContainersOptions } from "../../src/commands/containers/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+import { runExecute } from "../helpers/execute";
+
+// `execute` spawns through the module-level `defaultSpawner` — there is no
+// injection seam on the cerebro path — so the forwarded run is stubbed here.
+vi.mock(import("../../src/util/spawn"), async (importOriginal) => {
+    return {
+        ...(await importOriginal()),
+        defaultSpawner: async () => {
+            return { code: 0 };
+        },
+    };
+});
 
 const silentLogger = (): { errors: string[]; logger: Logger } => {
     const errors: string[] = [];
@@ -76,7 +90,7 @@ describe("lunora containers", () => {
 
         const result = await runContainersCommand({ argument: ["frobnicate"], logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join(" ")).toContain("requires a subcommand");
     });
@@ -89,7 +103,9 @@ describe("lunora containers", () => {
 
         const result = await runContainersCommand({ argument: ["build", "."], dockerAvailable: () => false, logger, spawner, tag: "x:y" });
 
-        expect(result.code).toBe(1);
+        // The bucket that exists for exactly this: a local tool the command
+        // shells out to is not there, so automation provisions rather than retries.
+        expect(result.code).toBe(EXIT_CODE.MISSING_DEPENDENCY);
         expect(calls).toHaveLength(0);
         expect(errors.join(" ")).toContain("Docker-compatible engine");
     });
@@ -103,5 +119,44 @@ describe("lunora containers", () => {
         await runContainersCommand({ argument: ["images", "list"], dockerAvailable: () => false, logger, spawner });
 
         expect(calls).toHaveLength(1);
+    });
+
+    /**
+     * Through `execute`, because the envelope is `defineHandler`'s: every other
+     * test here calls `runContainersCommand`, which writes nothing, so a marker
+     * this handler failed to forward was invisible to all of them.
+     */
+    describe("--format json envelope", () => {
+        it("stays silent on a forwarded read — wrangler already wrote the document", async () => {
+            expect.assertions(2);
+
+            const { stdout } = await runExecute<ContainersOptions>(execute, {
+                argument: ["images", "list"],
+                commandName: "containers",
+                cwd: npmProjectCwd(),
+                options: { format: "json" },
+            });
+
+            // `delegated` suppresses the envelope. Dropping it appended a second
+            // JSON document after wrangler's own, and the concatenation parses
+            // as neither.
+            expect(stdout).toBe("");
+            expect(() => JSON.parse(stdout === "" ? "{}" : stdout)).not.toThrow();
+        });
+
+        it("carries the refusal reason for a subcommand that cannot answer as JSON", async () => {
+            expect.assertions(3);
+
+            const { code, document } = await runExecute<ContainersOptions>(execute, {
+                argument: ["build", "."],
+                commandName: "containers",
+                cwd: npmProjectCwd(),
+                options: { format: "json" },
+            });
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(document?.code).toBe(EXIT_CODE.USAGE);
+            expect(document?.error).toContain("--format json is only available");
+        });
     });
 });

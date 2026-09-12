@@ -17,6 +17,7 @@ export {
     findIssueSolution,
     findSolutionByMessage,
     flattenHint,
+    getCatalogEntry,
     isInternalCode,
     MESSAGE_SOLUTIONS,
     resolveHint,

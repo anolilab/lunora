@@ -37,8 +37,9 @@ const col = (kind: string): ValidatorLike => {
  * builds (only `.nullable()` clears it), so the decode measured here is the one
  * production runs — including `nullMeansAbsent`'s absent-on-null branch.
  */
-const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" }) as never;
+const optionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" };
+};
 
 /** A wide-ish table mixing every decode branch: verbatim, boolean, bigint, JSON, and an unwrapped optional. */
 const shape: Record<string, ValidatorLike> = {
