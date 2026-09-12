@@ -30,15 +30,31 @@ const FRAME_INTERVAL_MS = 1000 / 30; // throttle pointer events to ~30fps
 // (never Math.random) so it isn't treated as insecure randomness in a security
 // context; this demo only ever runs in the browser, where crypto is present.
 const randomId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => byte.toString(16).padStart(2, "0")).join("");
-// Cosmetic cursor color — not a security context, so plain Math.random is fine.
-// `crypto.getRandomValues` rather than `Math.random()`: same job here (pick a
-// cursor colour), but it keeps the whole example free of a PRNG a reader might
-// copy into a place where predictability matters.
-const pickColor = (): string => {
-    const [draw = 0] = crypto.getRandomValues(new Uint32Array(1));
 
-    return COLORS[draw % COLORS.length] ?? "#1d3557";
+/**
+ * A uniform integer in `[0, bound)` drawn from the CSPRNG.
+ *
+ * The rejection loop is the point: `draw % bound` is NOT uniform unless `bound`
+ * divides 2^32, because the leftover values at the top of the range map onto the
+ * first few buckets twice. Discarding that tail is what makes the draw unbiased.
+ * It retries with probability under `bound / 2^32` — for a palette, effectively
+ * never.
+ */
+const randomBelow = (bound: number): number => {
+    const ceiling = Math.floor(0x1_00_00_00_00 / bound) * bound;
+    let draw = ceiling;
+
+    while (draw >= ceiling) {
+        [draw = 0] = crypto.getRandomValues(new Uint32Array(1));
+    }
+
+    return draw % bound;
 };
+
+// `crypto.getRandomValues` rather than `Math.random()`: the colour is cosmetic,
+// but keeping the example free of a PRNG means nobody copies one out of here into
+// a place where predictability matters.
+const pickColor = (): string => COLORS[randomBelow(COLORS.length)] ?? "#1d3557";
 
 /**
  * Full-page cursor sharing demo. Drives one mutation per pointer move
