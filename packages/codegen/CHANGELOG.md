@@ -1,3 +1,73 @@
+## @lunora/codegen [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.180...@lunora/codegen@1.0.0-alpha.181) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **do,codegen:** `ctx.ip` inside a subscription, stream, shape predicate, or connect/disconnect
+hook now reports the subscribing socket's own IP instead of `undefined` (seed) or the concurrent
+writer's IP (refresh). `withRequestIdentity` takes a fourth `ip` argument, and
+`LifecycleDispatchInfo` requires an `ip` member. Relayed shape seeds carry no IP over the relay
+wire, so `ctx.ip` there is `undefined` rather than a stranger's — the fail-closed direction.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(do,codegen): close two ip gaps found in review
+
+Two real holes the first pass left, plus the code-judo that stops the next field from
+repeating the whole exercise.
+
+The admin plane could not offer the IP its comment claimed. The admin branch of `fetch`
+answers at `preDispatchAnswer`, before `beginDispatch`, so `x-lunora-client-ip` is never read
+there — and `withAdminRequestScope` did not list `currentRequestIp` among the fields it resets.
+So `handleRunAs` read either nothing or a concurrently-parked `/rpc`'s address, and a forged
+dispatch ran under a stranger's IP. The admin scope now clears it, `RequestScope` carries it so
+the `/rpc` tail re-pins its own after every await, and `handleRunAs` passes `undefined` — the
+only honest answer on that path.
+
+The relay multicast uniformity probe did not model `ip`. `probeShapeRelayUniform` decides
+whether a shape may be cohort-multicast by resolving it under three identities and requiring
+agreement; all three left `ip` undefined. `ctx.ip` was never populated inside `resolveShape`
+before, so nothing could key on it — making it a real per-subscriber value for the first time
+turned that into a live gap: an ip-keyed `where` read uniform and every socket in the cohort
+got the membership computed for nobody's address, while the non-relay path resolved per socket.
+The two populated probes now carry distinct addresses.
+
+Code-judo, all of it aimed at the same failure mode:
+
+- `buildCtx` resolves the caller ONCE on one discriminant instead of three parallel ternaries —
+  the exact shape that let `ip` be the one field still reading the shared state. The untracked
+  `runQuery` sub-context forwards that resolved value instead of rebuilding the triple.
+- The emitted signatures name `SubscriptionIdentity` rather than restating it inline six times.
+  Method parameters are bivariant, so an inline copy missing a member compiles clean against
+  the base — naming the type is what makes `tsc` the enforcer.
+- `LifecycleDispatchInfo` extends `SubscriptionIdentity`, so `lifecycleInfo` goes through the
+  shared `socketIdentity` helper like the other six sites instead of assembling it by hand.
+
+Also: the emitted `readGlobalShapeRows` names the two identity members it puts on the global
+request instead of spreading the whole context, matching the dispatch path — `globalShapeReadKey`
+keys on those two, and equal keys must mean equal rows. The `SocketAttachment.ip` docblock no
+longer claims a relayed shape `where` among the paths it reaches, and states the limitation.
+* **do,codegen:** `withAdminRequestScope` clears `currentRequestIp`, so `ctx.ip` inside a
+`runAs` dispatch is `undefined` rather than a borrowed address. `LifecycleDispatchInfo` now
+extends `SubscriptionIdentity` (its three caller members are optional, not required).
+`globalShapeReadKey` takes a `SubscriptionIdentity`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **do,codegen:** thread the socket's own ip into ctx ([#702](https://github.com/anolilab/lunora/issues/702)) ([6fae2b3](https://github.com/anolilab/lunora/commit/6fae2b3b457d54bb09a8338f30fdb11b7c571f13))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.131
+* **@lunora/agent:** upgraded to 1.0.0-alpha.110
+* **@lunora/do:** upgraded to 1.0.0-alpha.137
+* **@lunora/server:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/codegen [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.179...@lunora/codegen@1.0.0-alpha.180) (2026-09-12)
 
 ### Bug Fixes
