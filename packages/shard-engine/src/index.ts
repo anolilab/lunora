@@ -63,6 +63,7 @@ export {
     readCdcChangeKeys,
     readCdcChanges,
     runShardMigrations,
+    stripReservedPatchFields,
     trimCdcChanges,
 } from "./ctx-db";
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";

@@ -101,6 +101,7 @@ import {
     selectIndexForGroupBy,
     softDeleteScope,
     sortColumnName,
+    stripReservedPatchFields,
     throwingScheduler,
     tiebreakDirectionFor,
     uniqueIndexFields,
@@ -3340,7 +3341,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
-            const merged: Record<string, unknown> = { ...existing, ...patch, _id: id };
+            const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(patch), _id: id };
 
             applyOnUpdate(definition, patch, merged, auth);
 
@@ -3864,12 +3865,22 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
+            // `_creationTime` is when the row was INSERTED, so a rewrite carries
+            // the stored one forward — the same thing `patch` does. Minting a
+            // fresh `clock()` here moved every replaced row to the end of every
+            // `_creationTime`-ordered index and past every live keyset cursor, so
+            // a paginating client saw it twice or never.
+            //
             // A client-supplied `_creationTime` is honored only under the
             // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
-            // rewrite — both replay a row's original creation time). The default
-            // mutation path mints from `clock()` so a forged document
-            // `_creationTime` can't overwrite the persisted timestamp.
-            const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // rewrite — both replay a row's original creation time); a forged one
+            // on the default mutation path cannot overwrite the persisted
+            // timestamp.
+            const replayed = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : undefined;
+            const stored = typeof snapshot["_creationTime"] === "number" ? snapshot["_creationTime"] : undefined;
+            // `clock()` is the last resort, for a row with no readable stored
+            // timestamp; the `??` chain keeps it unevaluated on the normal paths.
+            const creationTime = replayed ?? stored ?? clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(definition, document, replaced, auth);

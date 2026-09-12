@@ -179,6 +179,30 @@ describe("schema-drift", () => {
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
         });
 
+        it("treats an added non-unique index as safe but an added UNIQUE index as breaking", () => {
+            // A non-unique index is pure DDL over rows that already satisfy it.
+            // A UNIQUE one is a constraint the stored rows may already violate,
+            // and `CREATE UNIQUE INDEX` throws inside the shard's cold-start
+            // migration when they do — so it needs a de-dup backfill first, the
+            // same classification an added `.unique()` COLUMN already gets.
+            expect.assertions(2);
+
+            const plain = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []),
+            );
+            const unique = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(
+                    schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                    [],
+                ),
+            );
+
+            expect(plain.changes.some((c) => c.type === "addedIndex" && c.severity === "safe" && c.remediation === "none")).toBe(true);
+            expect(unique.changes.some((c) => c.type === "addedIndex" && c.severity === "breaking" && c.remediation === "backfill")).toBe(true);
+        });
+
         it("flags a dropped table, removed index, removed relation, and changed shard mode as breaking", () => {
             expect.assertions(4);
 

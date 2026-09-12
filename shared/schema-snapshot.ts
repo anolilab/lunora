@@ -680,14 +680,32 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
         const old = baseline.indexes[name];
 
         if (old === undefined) {
-            changes.push({
-                remediation: "none",
-                scope: "table",
-                severity: "safe",
-                summary: `added index ${name} on ${tableName}`,
-                table: tableName,
-                type: "addedIndex",
-            });
+            // A UNIQUE index is a CONSTRAINT, not just DDL: the rows already on
+            // disk may violate it, and nothing in the schema can say whether they
+            // do. `CREATE UNIQUE INDEX` then throws inside the shard's cold-start
+            // migration, `ensureMigrated()` leaves the shard unmigrated, and every
+            // later dispatch re-runs and re-throws — the shard never opens, and
+            // the de-dup data migration that would fix it cannot run either.
+            // Same classification an added `.unique()` COLUMN already carries.
+            changes.push(
+                index.unique
+                    ? {
+                          remediation: "backfill",
+                          scope: "table",
+                          severity: "breaking",
+                          summary: `added unique index ${name} on ${tableName} — existing duplicates would violate it; add a data migration to de-duplicate first`,
+                          table: tableName,
+                          type: "addedIndex",
+                      }
+                    : {
+                          remediation: "none",
+                          scope: "table",
+                          severity: "safe",
+                          summary: `added index ${name} on ${tableName}`,
+                          table: tableName,
+                          type: "addedIndex",
+                      },
+            );
 
             continue;
         }

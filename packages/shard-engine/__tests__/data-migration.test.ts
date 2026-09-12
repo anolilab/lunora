@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SqlExec } from "../src/ctx-db";
+import type { SqlExec, WriteHook } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase } from "../src/ctx-db";
 import { runShardMigrations } from "../src/ctx-db-migrations";
 import type { DataMigrationLike } from "../src/data-migration";
@@ -31,11 +31,12 @@ const usersSchema: SchemaLike = {
 
 let harness: ReturnType<typeof createSqliteExec>;
 
-const setupWriter = (): DatabaseWriterLike => {
+const setupWriter = (overrides: { onWrite?: WriteHook } = {}): DatabaseWriterLike => {
     runShardMigrations(harness.sql, usersSchema);
 
     return createShardContextDatabase({
         clock: () => 1_700_000_000_000,
+        onWrite: overrides.onWrite,
         schema: usersSchema,
         sql: harness.sql,
     });
@@ -713,10 +714,86 @@ describe("runDataMigration", () => {
 
             expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
+
+        it("does not re-apply a row whose write committed before a post-write hook threw", async () => {
+            // `replace` commits the guarded UPDATE and only THEN awaits its
+            // after-update triggers and `onWrite`. A throw from there is not a
+            // failed write — the row is already rewritten — so the runner has to
+            // advance past it. Leaving the cursor behind makes the resume bump a
+            // `version + 1` transform twice on a row that was already migrated.
+            expect.assertions(3);
+
+            let explode = true;
+
+            const writer = setupWriter({
+                onWrite: ({ id, op }) => {
+                    if (explode && op === "update" && id === "u3") {
+                        explode = false;
+
+                        throw new Error("post-write hook exploded");
+                    }
+                },
+            });
+
+            await seed(writer);
+
+            await expect(runDataMigration({ batchSize: 10, migration: bumpVersion, sql: harness.sql, writer })).rejects.toThrow("post-write hook exploded");
+
+            // u3's UPDATE committed before the hook ran, so it is already at 1.
+            const halfway = await allUsers(writer);
+
+            expect(halfway.map((document) => document["version"])).toEqual([1, 1, 1, 0, 0]);
+
+            await runDataMigration({ batchSize: 10, migration: bumpVersion, sql: harness.sql, writer });
+
+            const resumed = await allUsers(writer);
+
+            expect(resumed.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+    });
+
+    describe("runDataMigration — soft-deleted rows", () => {
+        it("visits a soft-deleted row, so restoring it cannot resurrect a pre-migration document", async () => {
+            // `findMany` hides tombstones by default, so the runner walked past
+            // them and recorded `completed`. A later `restore(id)` then handed the
+            // application a document written against the old shape.
+            expect.assertions(2);
+
+            const softSchema: SchemaLike = {
+                tables: {
+                    users: {
+                        indexes: [],
+                        shape: { deletedAt: { kind: "number" }, name: { kind: "string" }, score: { kind: "number" }, version: { kind: "number" } },
+                        softDeleteMode: { field: "deletedAt" },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, softSchema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: softSchema, sql: harness.sql });
+
+            await writer.insert("users", { _id: "u1", name: "one", score: 10, version: 0 }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "two", score: 20, version: 0 }, { allowExplicitId: true });
+            await writer.delete("u2", "users");
+
+            const result = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(result).toMatchObject({ changed: 2, processed: 2, status: "completed" });
+
+            await writer.restore?.("u2", "users");
+
+            const restored = await writer.get("u2", "users");
+
+            expect(restored?.["version"]).toBe(1);
+        });
     });
 
     describe("runDataMigration — resume across a cursor-format bump", () => {
-        it("resumes from a cursor minted under the previous cursor prefix", async () => {
+        // Every prefix a build before the current one stamped. The runner's key
+        // list is the fixed `MIGRATION_ORDER_KEYS`, so the payload is
+        // `[_creationTime, _id]` under all of them and only the stamp differs.
+        it.each(["~2", "~3"])("resumes from a cursor minted under the %s prefix", async (priorPrefix) => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -736,7 +813,7 @@ describe("runDataMigration", () => {
              * payload itself is untouched: this runner's key list is fixed, so it
              * is `[_creationTime, _id]` on both sides of the bump.
              */
-            harness.raw(`UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET cursor = '~2' || substr(cursor, 3) WHERE id = ?`, "bump-version");
+            harness.raw(`UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET cursor = ? || substr(cursor, 3) WHERE id = ?`, priorPrefix, "bump-version");
 
             const second = await runDataMigration({ batchSize: 10, migration: bumpVersion, sql: harness.sql, writer });
 
