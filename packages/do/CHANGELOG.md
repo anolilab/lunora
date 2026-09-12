@@ -1,3 +1,30 @@
+## @lunora/do [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.139...@lunora/do@1.0.0-alpha.140) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** `withDeferredSchedules` takes an optional second argument, the
+outbox the generated shard supplies; the emitted `buildCtx` passes it and
+`ShardDO` gains `scheduleOutbox`, `scheduleOutboxScheduler` and
+`pollScheduleOutbox`. Regenerate `_generated` after upgrading.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** hold deferred schedules in a durable outbox ([#735](https://github.com/anolilab/lunora/issues/735)) ([40482b9](https://github.com/anolilab/lunora/commit/40482b92278b956c39e5b148c6a1ea61f89f7b87))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/do [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.138...@lunora/do@1.0.0-alpha.139) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
