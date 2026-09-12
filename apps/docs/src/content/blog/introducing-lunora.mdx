@@ -108,9 +108,14 @@ cursors: defineTable({
 })
     .shardBy("roomId") // one Durable Object per room or tenant
     .index("by_room", ["roomId"]),
+
+// …or, for a read-mostly table nobody shards:
+regions: defineTable({ code: v.string(), name: v.string() })
+    .global(), // geo-replicated reads at the edge
 ```
 
-Same code, different topology.
+Same code, different topology. The two are alternatives — a table picks one
+tier, and declaring both throws.
 
 ## Where it's rough
 
