@@ -1,3 +1,15 @@
+## @lunora/storage [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.67...@lunora/storage@1.0.0-alpha.68) (2026-09-12)
+
+### Bug Fixes
+
+* **server,codegen:** keep deferred deletes off a rolled-back span ([#718](https://github.com/anolilab/lunora/issues/718)) ([9cea51e](https://github.com/anolilab/lunora/commit/9cea51e088d4bf7a08d3b027d04ef2d6c569ee77))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/storage [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.66...@lunora/storage@1.0.0-alpha.67) (2026-09-12)
 
 ## @lunora/storage [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.65...@lunora/storage@1.0.0-alpha.66) (2026-09-11)
