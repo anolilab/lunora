@@ -62,6 +62,7 @@ import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { trustedClientIp } from "./trusted-client-ip";
@@ -96,6 +97,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
  */
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
+    [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -1733,17 +1735,6 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
-
-// Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
-// native `scheduled()` trigger would. Cloudflare silently drops `triggers.crons`
-// for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
-// platform fans cron ticks out to its tenants by POSTing here.
-const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
-
-// Admin-gated HTTP entrypoint that processes a forwarded queue batch. Namespaced
-// WfP Workers can't be queue consumers, so a platform-owned consumer forwards
-// batches here, where the app's `queueHandler` runs.
-const QUEUE_DISPATCH_PATH = "/_lunora/queue";
 
 /**
  * The reserved cross-shard relation reader's function-path prefix. Inlined as a
@@ -5124,66 +5115,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    /**
-     * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
-     * Workers-for-Platforms workaround for dropped `triggers.crons` (a platform
-     * fans ticks out to its namespaced tenants). Admin-gated; the body carries
-     * the cron expression to run as `{ "cron": "0 9 * * *" }`, and dispatch goes through the SAME
-     * `handleScheduled` path the native trigger uses (user crons + code crons +
-     * scheduled backup), so behaviour is identical to a real firing.
-     */
-    const handleScheduledTick = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
-        assertAdminAuthorized(request);
-
-        if (request.method !== "POST") {
-            throw new LunoraError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const body = (await request.json().catch(() => undefined)) as { cron?: unknown } | undefined;
-        const cron = typeof body?.cron === "string" ? body.cron : "";
-
-        if (cron === "") {
-            throw new LunoraError("scheduled tick requires a `cron` expression", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        await handleScheduled({ cron, noRetry: () => {}, scheduledTime: Date.now() }, env, context);
-
-        return Response.json({ cron, ok: true });
-    };
-
-    /**
-     * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
-     * for queue consumers). Admin-gated; the body is
-     * `{ "queue": "name", "messages": [{ "id": "...", "body": ... }] }`. Returns
-     * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
-     */
-    const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
-        assertAdminAuthorized(request);
-
-        if (request.method !== "POST") {
-            throw new LunoraError("queue dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!options.queueHandler) {
-            throw new LunoraError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const body = (await request.json().catch(() => undefined)) as { messages?: unknown; queue?: unknown } | undefined;
-        const queue = typeof body?.queue === "string" ? body.queue : "";
-        const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
-        const messages = rawMessages
-            .filter(
-                (message): message is { body: unknown; id: string } =>
-                    typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string",
-            )
-            .map((message) => {
-                return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
-            });
-
-        const result = await options.queueHandler({ messages, queue }, env, context);
-
-        return Response.json({ retry: result?.retry ?? [] });
-    };
+    // The reserved WfP fan-out entrypoints (`/_lunora/scheduled`,
+    // `/_lunora/queue`). Kept out of the internal route table below because both
+    // need the execution `context` — the cron tick for user-cron `waitUntil`,
+    // the queue batch to hand to the app's handler — which the table-shaped
+    // routes don't receive.
+    const tenantFanoutRoutes = buildTenantFanoutRoutes({
+        assertAdmin: assertAdminAuthorized,
+        dispatchScheduled: handleScheduled,
+        queueHandler: options.queueHandler,
+    });
 
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
@@ -5446,8 +5387,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const contentLength = Number(request.headers.get("content-length") ?? "");
         // Routes that declare their own larger body budget (the KV value PUT,
-        // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV value,
-        // and the storage object upload, which moves real files) must not be
+        // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV value;
+        // the storage object upload, which moves real files; and the queue
+        // fan-out, which takes a full 100 × 128 KiB forwarded batch) must not be
         // pre-rejected by the shared 1 MiB cap — else the per-route cap is dead
         // code for any client that sends a `Content-Length`. Pick the route's cap
         // so the header check matches the reader's cap.
@@ -5493,15 +5435,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         }
 
-        // The cron-tick entrypoint needs the execution `context` (for user-cron
-        // `waitUntil`), which the table-shaped routes don't receive — dispatch it
-        // here while `context` is in scope.
-        if (url.pathname === SCHEDULED_TICK_PATH) {
-            return handleScheduledTick(request, env, context);
-        }
+        // The WfP fan-out entrypoints need the execution `context`, which the
+        // table-shaped routes below don't receive — dispatch them here while
+        // `context` is in scope.
+        const fanoutRoute = tenantFanoutRoutes[url.pathname];
 
-        if (url.pathname === QUEUE_DISPATCH_PATH) {
-            return handleQueueDispatch(request, env, context);
+        if (fanoutRoute) {
+            return fanoutRoute(request, env, context);
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts

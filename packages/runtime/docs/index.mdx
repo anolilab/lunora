@@ -393,6 +393,14 @@ misconfigured tenant fails loudly instead of dropping every batch. Messages with
 no string `id` are dropped before the handler sees them — there would be nothing
 to ack or retry them by.
 
+A forwarded batch is capped at **16 MiB** and a larger one is refused with a
+`413` — chunked or not, since the cap is enforced as the bytes arrive rather than
+from `Content-Length`. That is sized for a full Cloudflare Queues batch (100
+messages × 128 KiB) plus the forwarding envelope, so a consumer that respects the
+queue's own limits never meets it. A body that names no `messages` array — an
+empty body included — is a `400` rather than an empty batch, because answering
+`{ "retry": [] }` would tell the consumer to ack messages this worker never read.
+
 Neither endpoint replaces the native triggers where a host has them. On an
 ordinary account-level Worker, `triggers.crons` and a real queue consumer are
 still the path; these are the seam a platform reaches for when the host removed

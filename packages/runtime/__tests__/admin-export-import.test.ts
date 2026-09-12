@@ -10,6 +10,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import chunkedBody from "./helpers/chunked-body";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -31,23 +32,7 @@ const ADMIN_TOKEN = "admin-bear";
  * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
  * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
  */
-const oversizedStream = (): ReadableStream<Uint8Array> => {
-    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
-    let sent = 0;
-
-    return new ReadableStream<Uint8Array>({
-        pull(controller) {
-            if (sent >= 5) {
-                controller.close();
-
-                return;
-            }
-
-            sent += 1;
-            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
-        },
-    });
-};
+const oversizedStream = (): ReadableStream<Uint8Array> => chunkedBody({ exceedBytes: 1_048_576 });
 
 describe("createWorker — admin export endpoint", () => {
     it("rejects without a configured admin token (403)", async () => {
