@@ -27,7 +27,8 @@
  */
 import type { SubscriptionIdentity, TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
-import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
+import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes, withDeferredSchedules } from "@lunora/server";
+import type { SchedulerLike } from "@lunora/shard-engine";
 
 class EmittedShardContract extends ShardDO {
     public override async handleRpc(): Promise<unknown> {
@@ -56,6 +57,26 @@ class EmittedShardContract extends ShardDO {
         await this.scheduleSourcePoll();
 
         return undefined;
+    }
+
+    /**
+     * Mirrors the generated `scheduleOutboxScheduler` override — the seam the
+     * deferred-schedule outbox retries through. The generated body answers
+     * `config.scheduler?.(env)`, so the base's return type has to admit
+     * `undefined`; if it stops doing so, every generated shard stops compiling and
+     * this is where that surfaces.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reads `config.scheduler`
+    protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+        return undefined;
+    }
+
+    /**
+     * Mirrors the generated `buildCtx`'s scheduler wiring: the facade is handed
+     * `this.scheduleOutbox()`, which is `protected` for exactly this call.
+     */
+    protected wrapScheduler(scheduler: SchedulerLike): SchedulerLike {
+        return withDeferredSchedules(scheduler, this.scheduleOutbox());
     }
 
     /**

@@ -33,6 +33,7 @@ import { migrateCommitSeq } from "./ctx-db-commit-seq";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateRelayShapes } from "./ctx-db-relay-shapes";
+import { migrateScheduleOutbox } from "./ctx-db-schedule-outbox";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runDrizzle } from "./do-exec";
@@ -446,6 +447,14 @@ export const runShardMigrations = (
     // Always present: the mutation-replay dedup table is independent of CDC and
     // costs nothing until the first id-bearing mutation writes to it.
     migrateIdempotency(sql);
+
+    // Always present, and always NEXT TO the dedup table: the outbox is what makes
+    // that table honest. A dedup row says "this mutation succeeded"; without the
+    // outbox it can say that about a mutation whose deferred `ctx.scheduler` job
+    // never reached the SchedulerDO. A `ctx.scheduler` call needs no schema change
+    // to appear, so the table must exist before the first mutation makes one. Empty
+    // (and free) on a shard that schedules nothing.
+    migrateScheduleOutbox(sql);
 
     // Always present: the durable per-socket baseline for `.global()`-shape diff
     // pokes. Independent of CDC (global shapes are polled, not poke-live) and

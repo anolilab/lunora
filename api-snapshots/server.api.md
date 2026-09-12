@@ -3317,7 +3317,7 @@ const withDeferredDeletes: (storage: unknown) => unknown;
 ### `withDeferredSchedules` (const)
 
 ```ts
-const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox) => S;
 ```
 
 ## `@lunora/server/data-model`
@@ -6016,6 +6016,21 @@ interface SchedulableWorkflowReference {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: {
+        args: unknown;
+        options: Record<string, unknown> | undefined;
+        target: unknown;
+        when: number;
+    }) => void;
+    wake: () => void;
 }
 ```
 
