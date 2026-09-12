@@ -88,7 +88,7 @@ Three ideas carry the whole design:
 | **SchedulerDO**  | `@lunora/scheduler`         | Alarm-driven `runAfter` / `runAt` and Cron Triggers.                                                                                                                                                      |
 | **Container DO** | `@lunora/container`         | A Docker workload running as a Durable Object, for jobs that don't fit the Workers runtime (ffmpeg, headless Chrome, an ML model, a long-running process). Reached from actions via `ctx.containers`.     |
 | **D1**           | `@lunora/d1`                | Backs `.global()` tables. Wraps the Sessions API (`withSession(bookmark)`) for read-your-writes across regional replicas.                                                                                 |
-| **R2**           | `@lunora/storage`           | Typed buckets and signed URLs; the browser uploads/downloads directly, never proxied through the Worker.                                                                                                  |
+| **R2**           | `@lunora/storage`           | Typed buckets and signed URLs that point back at your Worker (it verifies the signature and streams the bytes, so storage rules apply); `getPresignedUrl` bypasses the Worker for direct R2 transfers.    |
 | **Queues**       | `@lunora/queue`             | Fire-and-forget background work via a typed `ctx.queues.<name>` producer and a generated `queue()` consumer.                                                                                              |
 | **Client**       | `@lunora/client` + adapters | Browser SDK: multiplexed WebSocket, optimistic writes, offline queue, reconnect-by-bookmark. Framework adapters expose `useQuery` / `useMutation` / `useSubscription`.                                    |
 | **Codegen**      | `@lunora/codegen`           | Reads `schema.ts` + your functions, emits `_generated/{api,server,dataModel}.ts` so the address of every shard and the type of every result is known at build time.                                       |
@@ -219,7 +219,7 @@ without a sticky-session router.
 
 ### Tier 3: Blob & async
 
-- **R2** (`@lunora/storage`): signed URLs; the browser transfers directly. Egress is free, so design around direct downloads.
+- **R2** (`@lunora/storage`): signed URLs served by your Worker; `getPresignedUrl` (needs R2 S3 credentials) transfers directly against R2. Egress is free, so design around direct downloads.
 - **Queues** (`@lunora/queue`): `ctx.queues.<name>.send(...)` from a mutation or action for fire-and-forget work. A generated `queue()` consumer drains it. Idempotency is on you.
 - **KV**: edge-cached config and feature flags via `@lunora/bindings/kv` (`ctx.kv`).
 
@@ -354,7 +354,7 @@ The theme is **fail closed and re-derive**, never silently diverge.
   Because containers reach data only through RPC, a crashed container can never
   leave storage half-written; the DO transaction is still the only writer.
 - **Hot shard (approaching the ceiling).** Not a crash but a capacity wall: the
-  runtime warns at 1 GB / sustained >700 req/s well before the hard limit, so a
+  runtime warns at 1 GiB of DO SQLite well before the hard limit, so a
   `.shardBy()` migration has runway. Moving the rows already in `__root__` needs
   a [write window](/docs/concepts/sharding#migrating-a-populated-table), which is
   the part to plan for. See [Limits](/docs/limits).

@@ -53,7 +53,8 @@ const client = new LunoraClient({
 });
 ```
 
-Both adapters share a single `lunora` IndexedDB database, so there is nothing
+Each adapter opens its own IndexedDB database (`lunora-outbox`,
+`lunora-query-cache`; override either with `databaseName`), so there is nothing
 else to wire up. For tests or SSR you can swap in the in-memory variants
 (`createInMemoryPersistence()` / `createInMemoryQueryCache()`), which implement
 the same contract without touching IndexedDB.

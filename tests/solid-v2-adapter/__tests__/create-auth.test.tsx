@@ -39,13 +39,21 @@ const createAuthFakeClient = (options: { user?: User | null; userResolves?: bool
         };
     });
 
+    // The shared identity store also watches the connection so it can retry a
+    // resolve that failed while offline; the double has to offer it.
+    const onConnectionStatus = vi.fn<(listener: (status: string) => void) => Unsubscribe>((listener) => {
+        listener("idle");
+
+        return () => {};
+    });
+
     // `userResolves: false` models the in-flight window the `AuthLoading` gate
     // exists for: a token is set but `getCurrentUser` has not come back yet.
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => (userResolves ? currentUser : new Promise<never>(() => {})));
 
-    const client = { getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken } as unknown as LunoraClient;
+    const client = { getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken } as unknown as LunoraClient;
 
-    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken };
+    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken };
 };
 
 /** Let the identity store's `getCurrentUser` promise land, then settle reads. */
