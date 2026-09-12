@@ -2,6 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 import { API_SPEC_HELP } from "../../util/api-spec";
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const verifyCommand: Command = {
     description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
@@ -30,7 +31,7 @@ const verifyCommand: Command = {
             name: "env",
             type: String,
         },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         {
             description: "Probe this deployment's /_lunora/health endpoint (off by default; keeps verify offline-safe)",
             name: "health-url",

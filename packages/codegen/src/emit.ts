@@ -4238,8 +4238,10 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "MigrationRunResult",
     "QueryReadScope",
     ...(hasQueues ? ["QueuesResult"] : []),
+    "RelatedPage",
     "RunShardApplyCdcArgs",
     "RunShardExportArgs",
+    "RunShardFindRelatedArgs",
     "RunShardImportArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
@@ -4691,8 +4693,8 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, ${shapeReadPolicyImport}beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
-            : `import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
+            ? `import { asBucketStorage, ${shapeReadPolicyImport}beginDeferredDeletes, beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
+            : `import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -5621,18 +5623,30 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * has no savepoints and \`runInTransaction\` rejects a second open, so it
          * rides the enclosing span, which also owns its commit and therefore its
          * scheduler flush.
+         *
+         * Both deferral windows are opened here and settled against the SAME
+         * outcome. The delete window is what keeps a composed mutation's queued
+         * object deletes off the caller's flush when it rolls back: \`ctx\` is
+         * shared, so without a window the keys are indistinguishable from the
+         * action's own and the action's flush destroys objects whose rows the
+         * rollback put back.
          */
         private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
             const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
+            // Synchronous and non-throwing (it only moves queue entries), so it can
+            // settle first on every path and cannot mask the outcome.
+            const settleDeletes = beginDeferredDeletes(ctx);
 
             if (this.isInTransaction()) {
                 try {
                     const nested = await work();
 
+                    settleDeletes(true);
                     await settleSchedules(true);
 
                     return nested;
                 } catch (error) {
+                    settleDeletes(false);
                     await settleSchedules(false);
 
                     throw error;
@@ -5648,10 +5662,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // to run "after I commit" must go with them. Dropping them is the
                 // whole point of buffering: a persisted job for a write that never
                 // landed fires against state that does not exist.
+                //
+                // The queued object deletes go the same way, and for a sharper
+                // reason: the rows they were to clean up after are still there, and
+                // an R2 delete cannot be undone.
+                settleDeletes(false);
                 await settleSchedules(false);
 
                 throw error;
             }
+
+            // Committed, so this span's queued keys join whatever the flush below
+            // (or an enclosing span's) will drain.
+            settleDeletes(true);
 
             // Committed. Schedules first and AWAITED: \`runAfter(0, ...)\` is
             // documented as the deterministic equivalent of an \`afterCommit\` hook,
@@ -5963,6 +5986,24 @@ ${adminWriterPrelude()}
                 rowId: args.rowId,
                 sortValues: args.sortValues,
             });
+        }
+
+        protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+            this.ensureMigrated();
+
+${adminWriterPrelude()}
+
+            // \`related\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
+            // but the shard writer from \`createShardCtxDb\` always defines it — it
+            // derives the edge set from this app's schema.
+            if (!writer.related) {
+                throw new LunoraError("NOT_IMPLEMENTED", "findRelated is unavailable on the shard writer", { status: 500 });
+            }
+
+            return writer.related(
+                { id: args.id, table: args.table },
+                { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+            );
         }
 
         protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {

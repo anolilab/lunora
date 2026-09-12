@@ -27,7 +27,7 @@
  */
 import type { TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
-import { beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
+import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
 
 class EmittedShardContract extends ShardDO {
     public override async handleRpc(): Promise<unknown> {
@@ -89,10 +89,12 @@ class EmittedShardContract extends ShardDO {
      */
     private async runMutationTransaction<T>(context: unknown, work: () => Promise<T>): Promise<T> {
         const settleSchedules = beginDeferredSchedules(context as { scheduler?: unknown });
+        const settleDeletes = beginDeferredDeletes(context);
 
         if (this.isInTransaction()) {
             const nested = await work();
 
+            settleDeletes(true);
             await settleSchedules(true);
 
             return nested;
@@ -100,6 +102,7 @@ class EmittedShardContract extends ShardDO {
 
         const result = await this.runInTransaction(work);
 
+        settleDeletes(true);
         await settleSchedules(true);
         await this.deferPastResponse(flushDeferredDeletes(context));
 

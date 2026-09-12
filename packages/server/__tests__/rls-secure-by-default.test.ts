@@ -205,6 +205,11 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
         },
     };
 
+    // `related` is deliberately absent from this fixture: the traversal is
+    // routed per hop by the wrapper itself (it keys off the writer's
+    // `relationEdges`, which this writer does not publish), and
+    // `rls-related.test.ts` covers it end to end.
+
     // NON-enumerable, mirroring the real `guardWriter`. An enumerable escape
     // hatch rides the `{ ...ctx.db }` spread the RLS wrapper is built from, which
     // re-published the unguarded writer off the wrapper.

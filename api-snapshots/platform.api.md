@@ -292,6 +292,7 @@ interface PlatformCapabilities {
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
+        relationGraph?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;

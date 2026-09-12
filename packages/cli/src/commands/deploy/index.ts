@@ -2,6 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 import { API_SPEC_HELP } from "../../util/api-spec";
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const deployCommand: Command = {
     description: "Codegen, validate wrangler, then wrangler deploy",
@@ -27,7 +28,7 @@ const deployCommand: Command = {
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         {
             description:
                 "After the deploy, probe the new version's health route (/_lunora/health/ready, falling back to /_lunora/health) and fail if it never answers",

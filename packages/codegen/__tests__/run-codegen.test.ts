@@ -603,7 +603,7 @@ export const listMessages = query
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
-                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredDeletes, beginDeferredSchedules");
                 expect(result.generated.shard).toContain(
                     'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
                 );

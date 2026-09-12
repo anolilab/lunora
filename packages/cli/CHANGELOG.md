@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.247...@lunora/cli@1.0.0-alpha.248) (2026-09-12)
+
+### Documentation
+
+* **cli:** give registry build the --from it requires ([#709](https://github.com/anolilab/lunora/issues/709)) ([6fc3efd](https://github.com/anolilab/lunora/commit/6fc3efdd35811051357b4f69c0171e19a98c8903))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.127
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.178
+* **@lunora/config:** upgraded to 1.0.0-alpha.215
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+* **@lunora/seed:** upgraded to 1.0.0-alpha.126
+* **@lunora/testing:** upgraded to 1.0.0-alpha.166
+
 ## @lunora/cli [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.246...@lunora/cli@1.0.0-alpha.247) (2026-09-11)
 
 

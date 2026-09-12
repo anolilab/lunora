@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuildCommandResult } from "../../src/commands/build/handler";
 import { runBuildCommand } from "../../src/commands/build/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -176,7 +177,7 @@ describe("lunora build", () => {
         expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
-    it("reports the size in the --format json document without failing on it", async () => {
+    it("measures the bundle for the --format json payload without failing on it", async () => {
         expect.assertions(3);
 
         const { logger } = silentLogger();
@@ -203,11 +204,10 @@ describe("lunora build", () => {
 
         // Measuring is reporting: a size never changes the exit code.
         expect(result.code).toBe(0);
-
-        const document = JSON.parse(written.join("")) as BuildCommandResult;
-
-        expect(written).toHaveLength(1);
-        expect(document.bundle?.gzipBytes).toBeGreaterThan(0);
+        // The document is `defineHandler`'s; the command writes nothing itself, so
+        // the wrangler leg cannot splice its own output into it.
+        expect(written).toHaveLength(0);
+        expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
     it("says so rather than reporting zero when there is nothing to weigh", async () => {
@@ -238,7 +238,7 @@ describe("lunora build", () => {
 
         const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
     });
 });

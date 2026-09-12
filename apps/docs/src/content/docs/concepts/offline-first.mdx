@@ -110,6 +110,33 @@ consistently, and avoid a `user?.id` that's transiently `undefined` across a rel
 boundary, since a value queued under the token-hash and replayed under the subject
 after a reload can still mismatch.
 
+### Offline reads need a bearer token
+
+The read cache seeds offline only when the client itself holds the credential
+the rows were cached under. A **cookie session** is not that: the cookie is
+`HttpOnly`, so the client can neither read it nor prove it still has it, and
+offline the `/get-session` round trip that would resolve the subject never
+answers. Such entries are cached under `subj:<id>` with no credential, and a
+cold offline start has nothing to match them against — so it renders empty and
+fills in once the app is back online.
+
+This is deliberate, not a gap to work around. The alternative — remembering the
+last resolved subject and seeding on that label — hands the cached rows to
+whoever opens the browser profile, with nothing on the client evidencing they
+are that subject. Re-checking once connectivity returns does not repair it: the
+check can only run in the state where the offline seed was never needed, so a
+session revoked server-side stays readable offline for as long as the app stays
+offline.
+
+If you want offline-first reads, give the client a bearer token:
+
+```ts
+client.setAuthToken(accessToken, user.id);
+```
+
+The offline write outbox is unaffected — queued writes replay under their own
+identity gate regardless of how the session is carried.
+
 ## Surviving a breaking deploy
 
 Set `persistenceVersion` to invalidate persisted writes and cached reads across a

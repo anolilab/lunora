@@ -45,10 +45,12 @@ import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
+import type { ExitCode } from "../../util/exit-code";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
@@ -108,7 +110,7 @@ interface DeployCommandOptions {
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     /**
      * After a successful live deploy, probe the new version's health route
@@ -244,6 +246,21 @@ interface DeployedIdentity {
     url?: string;
     /** The Worker name from the project's wrangler config. */
     workerName?: string;
+}
+
+/**
+ * The `--format json` payload: where the thing went, and every verdict the
+ * pre-deploy pipeline reached on the way. `code` and `error` are the envelope's.
+ */
+interface DeployCommandData {
+    deployment?: DeployedIdentity;
+    healthCheck?: { error?: string; ok: boolean; url: string };
+    mintedSecretsFile?: string;
+    schemaDrift?: { blocked: boolean; reason: string };
+    validation: {
+        problems: ReadonlyArray<string>;
+        wranglerPath: string | undefined;
+    };
 }
 
 interface DeployCommandResult {
@@ -453,7 +470,7 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDep
 const isInteractive = (options: DeployCommandOptions): boolean => {
     // `--format json` owns stdout for the JSON document — interactive spinners
     // would corrupt it, so json mode is always non-interactive.
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         return false;
     }
 
@@ -1416,26 +1433,30 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
  * without it: building pushes images, which a command whose whole job is "tell me
  * whether this would deploy" must not do. `executeDeploy` runs both.
  */
-const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): string | undefined => {
+const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command: PreDeployCommand): { code: ExitCode; error: string } | undefined => {
     const d1Error = checkD1Placeholder(cwd, options.logger, command, options.env);
 
     if (d1Error !== undefined) {
-        return d1Error;
+        return { code: EXIT_CODE.USAGE, error: d1Error };
     }
 
     const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger, command, options.env);
 
     if (localhostOriginError !== undefined) {
-        return localhostOriginError;
+        return { code: EXIT_CODE.USAGE, error: localhostOriginError };
     }
 
     const sourceError = checkContainerSourcesExist(cwd, options.logger, command);
 
     if (sourceError !== undefined) {
-        return sourceError;
+        return { code: EXIT_CODE.USAGE, error: sourceError };
     }
 
-    return checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command, options.env);
+    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command, options.env);
+
+    // Not a usage error: the project is fine and the machine is not. Same bucket
+    // `lunora containers build` already exits with for the same missing engine.
+    return dockerError === undefined ? undefined : { code: EXIT_CODE.MISSING_DEPENDENCY, error: dockerError };
 };
 
 /**
@@ -1496,10 +1517,16 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     return driver.toolchain.deploy(request);
 };
 
-/** Failed-deploy result with the empty validation shape shared by every pre-wrangler abort. */
+/**
+ * Failed-deploy result with the empty validation shape shared by every
+ * pre-wrangler abort. Exit 2 by default: everything that aborts before wrangler
+ * runs — the pipeline, the `--migrate` preflight, the entry build — refuses
+ * because the project or the invocation is wrong, never because the deploy
+ * itself failed. A check that resolved a different bucket passes `code`.
+ */
 const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
     return {
-        code: 1,
+        code: EXIT_CODE.USAGE,
         descriptor: undefined,
         error,
         validation: { problems: [], wranglerPath: undefined },
@@ -1549,7 +1576,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; r
  * stdout is left alone (mapped to stderr in json mode).
  */
 const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: string): SpawnDescriptor => {
-    const jsonFormat = isJsonFormat(options.format);
+    const jsonFormat = options.format === "json";
     // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
     // preview and a `--format json` deploy need to report where the thing went
     // just as much as a first pretty deploy does, and a re-deploy is how a
@@ -1633,7 +1660,7 @@ const completeDeploy = async ({
     const healthCheck = await runHealthCheckStep(options, cwd, deployment.url);
 
     if (healthCheck?.error !== undefined) {
-        return { code: 1, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
+        return { code: EXIT_CODE.UNAVAILABLE, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
     }
 
     const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
@@ -1669,6 +1696,8 @@ const runPreDeployPipeline = async (
     options: DeployCommandOptions,
     command: PreDeployCommand,
 ): Promise<{
+    /** Set when a check resolved its own exit code — otherwise the caller's default applies. */
+    code?: ExitCode;
     codegen?: CodegenResult;
     error?: string;
     reblessSchemaBaseline?: () => void;
@@ -1716,7 +1745,7 @@ const runPreDeployPipeline = async (
             options.apiSpec,
             target,
             options.spawner,
-            isJsonFormat(options.format),
+            options.format === "json",
             strictAdvisories,
         );
 
@@ -1762,7 +1791,7 @@ const runPreDeployPipeline = async (
     const checkError = runPreDeployChecks(cwd, options, command);
 
     if (checkError !== undefined) {
-        return { error: checkError, target, validation: empty };
+        return { code: checkError.code, error: checkError.error, target, validation: empty };
     }
 
     // `--env <name>` validates the env-scoped view — a binding present only at
@@ -1787,12 +1816,12 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // A validation failure carries its problem list; every earlier abort
         // shares the empty-validation shape, optionally with the drift verdict.
         if (pipeline.validation.problems.length > 0) {
-            return { code: 1, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
+            return { code: EXIT_CODE.USAGE, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
         }
 
         const extra = pipeline.schemaDrift === undefined ? undefined : { schemaDrift: pipeline.schemaDrift };
 
-        return abortResult(pipeline.error, extra);
+        return abortResult(pipeline.error, { ...extra, ...(pipeline.code === undefined ? {} : { code: pipeline.code }) });
     }
 
     const { reblessSchemaBaseline, validation } = pipeline;
@@ -1832,7 +1861,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         // and STILL abort (e.g. the second of two mintable keys failed to
         // push) — carry it through so the caller's `error` path doesn't drop
         // the one place that value is now recoverable.
-        return { code: 1, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
     const descriptor = buildDeploySpawn(cwd, options, target);
@@ -1857,26 +1886,18 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 };
 
 /**
- * Run a deploy, then (in `--format json` mode) serialize the structured
- * {@link DeployCommandResult} to stdout. Human/progress logging is routed to
- * stderr for json output so stdout carries only the single JSON document.
+ * Run a deploy. In `--format json` mode the human/progress channel is already on
+ * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
+ * stdout is left to the single result document `execute` returns.
  */
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
-    const formatError = validateOutputFormat("deploy", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return abortResult(formatError);
-    }
-
     // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
     // disk until every artifact that has to describe them has been derived, then
     // the committed config goes back exactly as it was. Both artifacts are
     // produced inside this one window — the wrangler bundle by `executeDeploy`,
     // and `--emit-bindings`'s requirements document right after it — so nothing
     // else needs to own a snapshot.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
 
     let result: DeployCommandResult;
@@ -1890,16 +1911,14 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             if (error !== undefined) {
                 logger.error(error);
 
-                result = { ...result, code: 1 };
+                result = { ...result, code: EXIT_CODE.USAGE };
             }
         }
     } finally {
         restoreWrangler?.();
     }
 
-    if (isJsonFormat(options.format)) {
-        printJson(result);
-
+    if (options.format === "json") {
         return result;
     }
 
@@ -1927,14 +1946,14 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         dryRun: options.dryRun === true,
         env: options.env,
-        format: options.format,
+        format,
         healthCheck: options.healthCheck === true,
         logger,
         migrate: options.migrate === true,
@@ -1956,11 +1975,21 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: {
+            deployment: result.deployment,
+            healthCheck: result.healthCheck,
+            mintedSecretsFile: result.mintedSecretsFile,
+            schemaDrift: result.schemaDrift,
+            validation: result.validation,
+        },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity };
+export type { DeployCommandData, DeployCommandOptions, DeployCommandResult, DeployedIdentity };
 // `provisionBindings` is shared with `lunora dev`'s wrangler flavor, which has
 // no `@lunora/vite` to reconcile bindings for it on startup.
 export { provisionBindings, runDeployCommand, runPreDeployPipeline };

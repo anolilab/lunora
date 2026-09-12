@@ -1,3 +1,12 @@
+## @lunora/platform-node [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.65...@lunora/platform-node@1.0.0-alpha.66) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+* **@lunora/storage:** upgraded to 1.0.0-alpha.67
+
 ## @lunora/platform-node [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.64...@lunora/platform-node@1.0.0-alpha.65) (2026-09-11)
 
 ### Bug Fixes

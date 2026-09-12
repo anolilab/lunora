@@ -10,9 +10,10 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
+import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import type { CodegenOptions } from "./index";
 
@@ -24,7 +25,7 @@ interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
 
     /**
@@ -37,30 +38,30 @@ interface CodegenCommandOptions {
     target?: string;
 }
 
-interface CodegenCommandResult {
+/** The `--format json` payload: what codegen wrote, and what it has to say about it. */
+interface CodegenCommandData {
     advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
     cronTriggers: ReadonlyArray<string>;
-    /** Set when the run failed: an invalid `--format`, an unregistered target, or an error-level platform diagnostic. */
-    error?: string;
     /** ERROR-level advisories that made the run fail, when strict mode is on. */
     failedAdvisories: number;
     outputDirectory: string;
 }
 
+interface CodegenCommandResult extends CodegenCommandData {
+    /**
+     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
+     * every other outcome is classified from `error`/`failedAdvisories` by
+     * `execute`, which cannot tell a bad `--format` (the invocation is wrong,
+     * exit 2) from a failed codegen (exit 1) after the fact.
+     */
+    code?: number;
+    /** Set when the run failed: an unregistered target, or an error-level platform diagnostic. */
+    error?: string;
+}
+
 const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult => {
     const projectRoot = options.cwd ?? process.cwd();
-    const json = isJsonFormat(options.format);
-    // In `--format json` mode every human/progress line goes to stderr so
-    // stdout carries only the serialized structured result.
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("codegen", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { advisories: [], cronTriggers: [], error: formatError, failedAdvisories: 0, outputDirectory: "" };
-    }
+    const { logger } = options;
 
     // CI is the default gate: a pipeline should fail on an ERROR advisory, a
     // local run should not have its workflow interrupted by one.
@@ -74,8 +75,12 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (resolvedTarget.target === undefined) {
         options.logger.error(resolvedTarget.error ?? "unknown deploy target");
 
+        // Exit 2 for the same reason a bad `--format` does: an unresolved
+        // `--target` names a driver that does not exist, which is the
+        // invocation being wrong rather than codegen failing.
         return {
             advisories: [],
+            code: EXIT_CODE.USAGE,
             cronTriggers: [],
             error: resolvedTarget.error ?? "unknown deploy target",
             failedAdvisories: 0,
@@ -148,13 +153,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         );
     }
 
-    const finalResult: CodegenCommandResult = { ...commandResult, failedAdvisories: strictAdvisories ? errorAdvisories.length : 0 };
-
-    if (json) {
-        printJson(finalResult);
-    }
-
-    return finalResult;
+    return { ...commandResult, failedAdvisories: strictAdvisories ? errorAdvisories.length : 0 };
 };
 
 /**
@@ -235,11 +234,11 @@ const syncLintIgnores = (projectRoot: string, logger: Logger): void => {
 };
 
 /** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions, CodegenCommandData>(async ({ cwd, format, logger, options }) => {
     const result = runCodegenCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
-        format: options.format,
+        format,
         logger,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
@@ -256,14 +255,23 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(as
     // signal rather than `result.error`, which is also set for a platform
     // diagnostic raised AFTER a successful emit, where the warning still applies.
     if (result.outputDirectory !== "") {
-        const commandLogger = loggerForFormat(options.format, logger);
+        const commandLogger = logger;
 
         syncLintIgnores(cwd, commandLogger);
         await warnAboutExportGaps(cwd, commandLogger);
     }
 
-    return { code: result.error === undefined && result.failedAdvisories === 0 ? 0 : 1 };
+    return {
+        code: result.code ?? (result.error === undefined && result.failedAdvisories === 0 ? 0 : 1),
+        data: {
+            advisories: result.advisories,
+            cronTriggers: result.cronTriggers,
+            failedAdvisories: result.failedAdvisories,
+            outputDirectory: result.outputDirectory,
+        },
+        error: result.error,
+    };
 });
 
 export { execute, runCodegenCommand };
-export type { CodegenCommandOptions, CodegenCommandResult };
+export type { CodegenCommandData, CodegenCommandOptions, CodegenCommandResult };

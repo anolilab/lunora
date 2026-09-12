@@ -3791,6 +3791,7 @@ class LunoraClient {
 
             if (subscriptionState.callbacks.size === 0) {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
+                this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
             }
         };
@@ -4823,6 +4824,36 @@ class LunoraClient {
     private dropCacheSeed(key: string): void {
         this.cacheSeededQueries.delete(key);
         this.hydratedQueryCache.delete(key);
+    }
+
+    /**
+     * Hand a cache-seeded entry back to {@link hydratedQueryCache} when its last
+     * subscriber detaches, so the NEXT `subscribe()` of the same key can seed
+     * from it again.
+     *
+     * Without this the hydrated cache was one-shot per key: {@link takeHydratedCache}
+     * consumes the entry, the final unsubscribe drops the state that held its
+     * value, and nothing re-seeds. Navigating away from a route and back while
+     * offline therefore rendered `undefined` for the rest of the offline
+     * session even though the durable store still held the rows. React hid it
+     * behind TanStack's `gcTime`; every other adapter showed it immediately.
+     *
+     * Only a seed still listed in {@link cacheSeededQueries} moves — a server
+     * frame calls {@link dropCacheSeed}, which clears both maps, so an entry
+     * that is still here has not been superseded and is the freshest value this
+     * client has for the key. That is the same map-to-map move
+     * {@link revokeCacheSeededValues} makes, and it keeps the two maps disjoint:
+     * an entry is either on display or waiting, never both.
+     */
+    private returnCacheSeed(key: string): void {
+        const entry = this.cacheSeededQueries.get(key);
+
+        if (entry === undefined) {
+            return;
+        }
+
+        this.cacheSeededQueries.delete(key);
+        this.hydratedQueryCache.set(key, entry);
     }
 
     /**
@@ -6965,6 +6996,18 @@ class LunoraClient {
      * `setAuthToken(token)` from storage and only learns the subject a
      * `/get-session` round trip later — which offline never completes at all.
      * Without it the durable read cache never seeded for a bearer-token app.
+     *
+     * All three want a credential this client actually HOLDS, which is why a
+     * **cookie session seeds nothing on an offline cold start** — a documented
+     * limitation, not a gap. The cookie is `HttpOnly`: the client can neither
+     * read it nor prove it still has it, and offline the `/get-session` that
+     * would resolve the subject never answers, so such entries (stamped
+     * `subj:<id>`, no credential) have nothing to match. Seeding them on the
+     * remembered subject LABEL would hand the rows to whoever opens the browser
+     * profile with nothing evidencing they are that subject, and revoking on a
+     * later mismatch does not repair it: that check can only run once
+     * connectivity returns, which is exactly the state where the offline seed
+     * was not needed. Offline-first reads require a bearer token.
      *
      * Case 1 is suspended while the subject awaits re-confirmation
      * ({@link subjectAwaitingReconfirm}): the fingerprint then labels a

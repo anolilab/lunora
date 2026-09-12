@@ -159,6 +159,46 @@ await ctx.db.delete(id);
 scans the whole table — `@lunora/advisor` flags it as `filter-without-index`.
 Declare the index and constrain with `.withIndex`.
 
+### Following foreign keys: `ctx.db.related`
+
+Every `v.id("table")` column is an edge in a graph your schema already declares.
+`ctx.db.related` walks it, so "this customer's tickets, and those tickets'
+messages" is one call instead of a hand-written chain of `withIndex` lookups.
+
+```ts
+const { continueCursor, isDone, nodes } = await ctx.db.related(
+    { table: "customers", id: customerId }, // or a row you already loaded
+    { depth: 2, direction: "in", edges: ["tickets.customerId", "messages.ticketId"], limit: 50 },
+);
+
+for (const node of nodes) {
+    node.table; // "messages"
+    node.document; // the row itself
+    node.depth; // 2
+    node.score; // 0.5 — 1 at depth 1, halving per hop
+    node.path; // ["tickets.customerId", "messages.ticketId"]
+    node.pathIds; // ids along the way, start included
+}
+```
+
+- **Edge names are `"<table>.<column>"`.** `edges` restricts the walk to the
+  named ones; a name the schema does not declare is **refused**, not ignored.
+- **`direction`** — `"out"` follows the ids this row holds, `"in"` the rows that
+  point at it, `"both"` (the default) does both.
+- **`depth`** defaults to `1`, max `4`. **`limit`** defaults to `50`, max `200`.
+  Both caps **refuse rather than clamp**, so do not probe for the ceiling.
+- **Only a column is an edge**: a bare `v.id(...)`, `v.optional(v.id(...))` or
+  `v.array(v.id(...))`. An id nested in a `v.object` / `v.union` / `v.record` is
+  not. An array FK is followed **outward only**.
+- **It is an ordinary read** — RLS, column masks, soft delete, `.global()`
+  routing and reactivity all apply, because every hop goes back through
+  `ctx.db`. Under a `.rls("required")` schema each hop gets exactly the verdict a
+  direct read of that table would, so declare a read policy for every table the
+  walk can reach — or narrow it with `edges`.
+- Index the foreign keys. Each inward hop is a `WHERE fk IN (…)` read, and
+  unindexed it scans — see the `lunora-performance-audit` skill for the cost
+  model and the traversal caps.
+
 ## Other `ctx` capabilities
 
 Always available:
@@ -242,4 +282,6 @@ export default app;
       `action` (side effects via `runQuery`/`runMutation`).
 - [ ] Server-only logic uses `internal*`; expected failures throw `LunoraError`.
 - [ ] `ctx.db` writes only inside mutations; ids typed with `Id<"table">`.
+- [ ] Any `ctx.db.related` walk is narrowed with `edges` / `direction`, and its
+      foreign keys are indexed.
 - [ ] Ran `lunora codegen`; typecheck is clean.
