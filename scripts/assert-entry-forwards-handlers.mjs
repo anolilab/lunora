@@ -132,6 +132,23 @@ const reExportsDefault = (source) =>
 const reExportsImportedDefault = (source, name) =>
     new RegExp(String.raw`import\s+${name}\s*(?:,\s*(?:\{[^}]*\}|\*\s+as\s+\w+)\s*)?from\s*["'][^"']*["']`, "u").test(source);
 
+/**
+ * The identifier in `export default <name>`, or `undefined` when the default is
+ * not a bare identifier.
+ *
+ * The terminating semicolon is optional: ASI makes `export default worker` valid
+ * without one, and requiring it left `exportedName` unset for that spelling — so
+ * the opaque-handler check below was skipped and the scaffold passed without
+ * ever proving its declared handlers are forwarded.
+ *
+ * `function` and `class` are captured by the same shape (`export default
+ * function foo() {}`), which is harmless: neither names an imported default nor
+ * binds an object literal, so both fall through exactly as they did before.
+ * @param {string} source
+ * @returns {string | undefined}
+ */
+const defaultExportName = (source) => /export default (\w+)\s*;?/u.exec(source)?.[1];
+
 /** @param {string} file @returns {string} */
 const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
 
@@ -152,21 +169,6 @@ const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
  * template literal can hold real code in a `${…}` substitution.
  */
 /** @param {string} source @returns {string} */
-/**
- * The identifier in `export default <name>`, or `undefined` when the default is
- * not a bare identifier.
- *
- * The terminating semicolon is optional: ASI makes `export default worker` valid
- * without one, and requiring it left `exportedName` unset for that spelling — so
- * the opaque-handler check below was skipped and the scaffold passed without
- * ever proving its declared handlers are forwarded.
- *
- * `function` and `class` are captured by the same shape (`export default
- * function foo() {}`), which is harmless: neither names an imported default nor
- * binds an object literal, so both fall through exactly as they did before.
- */
-const defaultExportName = (source) => /export default (\w+)\s*;?/u.exec(source)?.[1];
-
 const stripToCode = (source) =>
     source
         .replaceAll(/"(?:[^"\\\n]|\\.)*"/g, '""')
