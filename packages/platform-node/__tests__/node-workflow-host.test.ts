@@ -6,7 +6,7 @@ import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
 import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 import { createNodeWorkflowStore } from "../src/node-workflow-store";
@@ -603,6 +603,130 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(status.status).toBe("errored");
         expect(status.error?.message).toBe("carrier down");
         expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("unwinds concurrent steps in declaration order, not completion order", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const record = (name: string) => {
+            return {
+                rollback: async (): Promise<void> => {
+                    unwound.push(name);
+                },
+            };
+        };
+        // `ctx.parallel` and a hand-rolled `Promise.all` of `ctx.runStep` both
+        // reach the one shared adapter this way, so the compensation list sees
+        // the steps in COMPLETION order while the saga contract is declaration
+        // order reversed.
+        const raced = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await Promise.all([
+                    ctx.step.do(
+                        "slow",
+                        async () => {
+                            await sleep(20);
+
+                            return "slow-1";
+                        },
+                        record("slow"),
+                    ),
+                    ctx.step.do("fast", async () => "fast-1", record("fast")),
+                ]);
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    record("ship"),
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { raced } });
+        const instance = await host.bindings.raced.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // "fast" finished first but was declared second, so it must compensate
+        // before "slow" — reversing completion order would give ["slow", "fast"].
+        expect(unwound).toStrictEqual(["ship", "fast", "slow"]);
+    });
+
+    // `Infinity` and `NaN` both survive `Math.trunc` and `Math.max`, so an
+    // unguarded `limit` leaves `attempt >= limit` forever false. The bodies here
+    // succeed on their first attempt on purpose: a regression then reports a
+    // COMPLETE run these assertions reject, rather than spinning the attempt
+    // loop until the suite is killed.
+    it.each([
+        ["Infinity", Number.POSITIVE_INFINITY],
+        ["NaN", Number.NaN],
+    ])("rejects a %s retry limit instead of looping forever", async (_label, limit) => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const endless = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { limit } } as never, async () => {
+                    runs += 1;
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { endless } });
+        const instance = await host.bindings.endless.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toMatch(/retries\.limit must be a finite number/);
+        // Rejected at the adapter boundary, before the callback can run at all.
+        expect(runs).toBe(0);
+    });
+
+    it("caps a backoff that would overflow Node's timer ceiling", async () => {
+        expect.hasAssertions();
+
+        const waits: number[] = [];
+        const realSetTimeout = globalThis.setTimeout;
+
+        // Every timer in the activation fires immediately, so the run finishes
+        // in test time while the delay the adapter ASKED for is still observable.
+        vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+            waits.push(ms);
+
+            return realSetTimeout(callback, 0);
+        }) as never);
+
+        let runs = 0;
+        // "1 month" is 2_592_000_000 ms, past the 2_147_483_647 Node honours —
+        // above that a `setTimeout` fires on the next tick, so an unclamped
+        // backoff is no backoff at all.
+        const slowBackoff = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { delay: "1 month", limit: 2 } }, async () => {
+                    runs += 1;
+
+                    if (runs === 1) {
+                        throw new Error("transient");
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { slowBackoff } });
+        const instance = await host.bindings.slowBackoff.create({});
+        const status = await instance.status();
+
+        vi.restoreAllMocks();
+
+        expect(status.status).toBe("complete");
+        expect(runs).toBe(2);
+        expect(waits).toContain(2_147_483_647);
+        expect(waits).not.toContain(2_592_000_000);
     });
 
     it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {

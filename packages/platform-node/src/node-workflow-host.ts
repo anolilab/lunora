@@ -178,10 +178,24 @@ const stepContext = (name: string, attempt: number, config: WorkflowStepConfigLi
 /** Config a `step.do` with no `config` argument runs under — one attempt, no retry. */
 const DEFAULT_STEP_CONFIG: WorkflowStepConfigLike = { retries: { limit: 1 } };
 
-/** Wait `ms` before the next attempt. */
+/**
+ * The longest delay Node's timers honour. Anything above it is silently taken
+ * as 1 ms, so an unclamped oversized backoff fires on the next tick — turning
+ * the pause that was meant to spare a failing dependency into back-to-back
+ * retries. A `delay` of "1 month" alone is already past this, so the finite
+ * `retries.limit` guard does not put it out of reach.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Wait `ms` before the next attempt, capped at {@link MAX_TIMER_MS}. The cap is
+ * a ceiling, not a fix for the underlying limit: the backoff is an in-process
+ * `setTimeout`, so a wait anywhere near it outlives the activation's lease
+ * regardless. Clamping only keeps an oversized backoff from becoming no backoff.
+ */
 const delay = async (ms: number): Promise<void> =>
     new Promise((resolve) => {
-        setTimeout(resolve, ms);
+        setTimeout(resolve, Math.min(ms, MAX_TIMER_MS));
     });
 
 /**
@@ -202,17 +216,32 @@ const backoffMs = (base: number, backoff: "constant" | "exponential" | "linear" 
     }
 };
 
-/** One registered `rollback`, captured when its step completed. */
+/** One registered `rollback`, captured when its step settled. */
 interface Compensation {
     context: WorkflowStepContextLike;
     handler: WorkflowRollbackHandlerLike;
     name: string;
+
+    /**
+     * The step's DECLARATION position — the order its `step.do` was called in,
+     * assigned before that call awaits anything. Steps that run concurrently
+     * (`ctx.parallel`, or a hand-rolled `Promise.all` of `ctx.runStep`) settle
+     * in an order their declaration order does not predict, so recording the
+     * position is the only way to unwind by it.
+     */
+    order: number;
     output: unknown;
 }
 
 /**
  * Run every registered compensation in reverse declaration order — the saga
  * unwind Cloudflare performs natively when a step fails.
+ *
+ * Entries arrive in the order their steps SETTLED, which for concurrent steps
+ * is not the order they were declared in, so the list is sorted by the recorded
+ * declaration position before it is reversed. Sequential bodies are unaffected:
+ * there the two orders coincide, and the failing step — declared last — still
+ * compensates first.
  *
  * The list is emptied first, so a second failure (two `step.do`s raced with
  * `Promise.all`, say) cannot compensate the same steps twice.
@@ -224,7 +253,7 @@ interface Compensation {
 const compensate = async (entries: Compensation[], cause: unknown): Promise<void> => {
     const error = cause instanceof Error ? cause : new Error(String(cause));
 
-    for (const entry of entries.splice(0).toReversed()) {
+    for (const entry of entries.splice(0).toSorted((a, b) => b.order - a.order)) {
         try {
             // eslint-disable-next-line no-await-in-loop -- compensations must unwind in order, not concurrently
             await entry.handler({ ctx: entry.context, error, output: entry.output, stepName: entry.name });
@@ -262,13 +291,18 @@ const mapStatus = (status: RunStatus): WorkflowInstanceStatus => {
  * only the attempt that finally succeeds is memoized and `ctx.attempt` counts
  * up the way Cloudflare's does. `limit` is read as the total number of
  * attempts, which is what this host's previous `{ retries: { limit: 1 } }`
- * default already meant by it. The backoff wait is an in-process `setTimeout`
- * rather than a durable sleep, so a crash mid-backoff restarts the step at
- * attempt 1 instead of resuming the countdown — at-least-once either way.
- * - Rollbacks: each completed step with a `rollback` handler is pushed onto a
- * per-activation list, and a step that fails after its last attempt unwinds
- * that list in reverse, its own handler first (with `output: undefined`, since
- * it never produced one). Replay is what makes this whole across a suspension:
+ * default already meant by it. A non-finite `limit` is rejected outright —
+ * `attempt >= limit` could never end the loop. The backoff wait is an
+ * in-process `setTimeout` rather than a durable sleep, so a crash mid-backoff
+ * restarts the step at attempt 1 instead of resuming the countdown
+ * — at-least-once either way — and it is capped at {@link MAX_TIMER_MS}.
+ * - Rollbacks: each settled step with a `rollback` handler is pushed onto a
+ * per-activation list along with its declaration position, and a step that
+ * fails after its last attempt unwinds that list in reverse declaration order
+ * (its own handler carrying `output: undefined`, since it never produced one).
+ * The position is recorded because concurrent steps — `ctx.parallel`, or a
+ * `Promise.all` of `ctx.runStep` — settle in an order their declaration order
+ * does not predict. Replay is what makes this whole across a suspension:
  * the engine re-executes the workflow body from the top on every activation,
  * so a `step.do` whose result is memoized still re-registers its rollback
  * before a later step can fail. Compensations are plain calls, not durable
@@ -288,6 +322,14 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
      */
     const compensations: Compensation[] = [];
 
+    /**
+     * Counts `step.do` CALLS, so a compensation records where its step was
+     * declared rather than when it happened to settle. Rebuilt on every replay
+     * alongside `compensations`, and read before the call awaits anything, so
+     * concurrent steps still take their positions in source order.
+     */
+    let declared = 0;
+
     return {
         do: async (
             name: string,
@@ -295,6 +337,10 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
             callbackOrRollback?: ((context: WorkflowStepContextLike) => Promise<unknown>) | WorkflowStepRollbackOptionsLike,
             maybeRollback?: WorkflowStepRollbackOptionsLike,
         ) => {
+            const order = declared;
+
+            declared += 1;
+
             const hasConfig = typeof configOrCallback !== "function";
             const callback = hasConfig ? (callbackOrRollback as (context: WorkflowStepContextLike) => Promise<unknown>) : configOrCallback;
             const rollback = hasConfig ? maybeRollback : (callbackOrRollback as WorkflowStepRollbackOptionsLike);
@@ -304,7 +350,23 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
             }
 
             const config = hasConfig ? configOrCallback : DEFAULT_STEP_CONFIG;
-            const limit = Math.max(1, Math.trunc(config.retries?.limit ?? 1));
+            const declaredLimit = config.retries?.limit ?? 1;
+
+            // `Math.trunc` and `Math.max` both propagate `NaN` and `Infinity`,
+            // so an unvalidated limit leaves `attempt >= limit` forever false
+            // and the attempt loop never ends. Rejected here rather than in
+            // `defineStep` because this is where every path converges: a direct
+            // `step.do(name, config, cb)` never sees `defineStep`, and
+            // `ctx.runStep(step, args, { config })` can override whatever it
+            // declared.
+            if (!Number.isFinite(declaredLimit)) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: step.do("${name}") retries.limit must be a finite number, got ${String(declaredLimit)}`,
+                );
+            }
+
+            const limit = Math.max(1, Math.trunc(declaredLimit));
             const baseDelay = config.retries?.delay === undefined ? 0 : toMs(config.retries.delay);
 
             // The last attempt's context, so a rollback reports the attempt the
@@ -335,7 +397,7 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
                 });
 
                 if (rollback?.rollback !== undefined) {
-                    compensations.push({ context: lastContext, handler: rollback.rollback, name, output });
+                    compensations.push({ context: lastContext, handler: rollback.rollback, name, order, output });
                 }
 
                 return output;
@@ -345,6 +407,7 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
                         context: lastContext,
                         handler: rollback.rollback,
                         name,
+                        order,
                         output: undefined,
                     });
                 }
