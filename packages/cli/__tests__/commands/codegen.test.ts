@@ -221,6 +221,28 @@ describe("lunora codegen", () => {
                 expect(Array.isArray(document?.data?.advisories)).toBe(true);
                 expect(Array.isArray(document?.data?.cronTriggers)).toBe(true);
             });
+
+            /**
+             * The refusal answers in the same shape a success does. An unresolved
+             * `--target` returns before codegen runs, and that early return is the
+             * one a serialization written inside the command body would have
+             * skipped — leaving stdout empty and the reason only as prose on
+             * stderr, which is what `--format json` exists to avoid.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
+
+                const { code, document } = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                    commandName: "codegen",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope" },
+                });
+
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.outputDirectory).toBe("");
+            });
         });
     });
 

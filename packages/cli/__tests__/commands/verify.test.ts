@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifyCommandData } from "../../src/commands/verify/handler";
 import { execute, runVerifyCommand } from "../../src/commands/verify/handler";
 import type { VerifyOptions } from "../../src/commands/verify/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 import { runExecute } from "../helpers/execute";
@@ -515,6 +516,28 @@ describe("lunora verify", () => {
                 expect(document?.code).toBe(1);
                 expect(document?.data?.errors.length).toBeGreaterThan(0);
                 expect(document?.error).toBeDefined();
+            });
+
+            /**
+             * `runVerifyCommand` returns for an unresolved `--target` before it
+             * reaches its reporting tail, so this is the path a serialization
+             * written inside the command body would have skipped.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope", typecheck: false },
+                });
+
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.errors.join(" ")).toContain("unknown deploy target");
             });
         });
     });

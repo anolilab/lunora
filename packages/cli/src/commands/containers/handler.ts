@@ -150,7 +150,12 @@ const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptio
         tag: options.tag,
     });
 
-    return { code: result.code };
+    // Both markers travel, and both matter in `--format json`. Dropping
+    // `delegated` appended a second envelope after wrangler's own document, so
+    // the stdout of a forwarded read was two JSON documents concatenated and
+    // parsed as neither. Dropping `error` left a refusal's envelope carrying an
+    // exit code with nothing saying why.
+    return { code: result.code, delegated: result.delegated, error: result.error };
 });
 
 export type { ContainersCommandOptions, ContainersCommandResult };
