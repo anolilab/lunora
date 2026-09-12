@@ -27,6 +27,7 @@ import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import {
+    defaultReplayRetryDelayMs,
     isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
@@ -7395,15 +7396,26 @@ class LunoraClient {
             // ask again from here — nothing else would, and the writes would
             // stay held for the life of the session.
             this.getCurrentUser().catch(() => undefined);
+            // ...and ask AGAIN later if that probe fails too. One probe is not a
+            // retry policy: over a socket that stays up there is no reconnect to
+            // re-flush, so a `/get-session` that keeps failing wedged the queue
+            // for the whole session. Held for any other reason (nobody signed in
+            // at all) schedules nothing — `setAuthToken` is that hold's only
+            // exit, and it re-flushes on its own.
+            this.noteHeldRetryDelay(shardKey);
         }
 
         if (sendable.length === 0) {
+            this.scheduleRateLimitedRetry(shardKey);
+
             return;
         }
 
         const encodable = this.encodableOrSettleTerminal(sendable);
 
         if (encodable.length === 0) {
+            this.scheduleRateLimitedRetry(shardKey);
+
             return;
         }
 
@@ -7448,6 +7460,40 @@ class LunoraClient {
     }
 
     /**
+     * Ask for another flush of this shard after a backoff, because every entry it
+     * drained was HELD for an identity that is not re-confirmed yet.
+     *
+     * Same state and same timer as a rate-limited replay
+     * ({@link LunoraClient.noteReplayRetryDelay}) — one pending flush per shard
+     * key either way — only the reason differs: there is no error to read a
+     * `Retry-After` off, so the hintless {@link defaultReplayRetryDelayMs} ramp
+     * (1s doubling to a 60s ceiling, jittered) is the whole policy. It is a
+     * ceiling on the rate, not a budget of attempts: a durable write is never
+     * dropped for having waited too long, so a subject that never resolves leaves
+     * the queue re-probing at ≤ 60s intervals with the writes intact and
+     * {@link LunoraClient.pendingCount} non-zero for the app to surface. The
+     * retries stop when the hold lifts (the queue drains), when the shard has
+     * nothing queued, or at `close()`.
+     *
+     * Identity is re-read by the flush, never carried across the timer: the
+     * retry re-enters {@link LunoraClient.drainOfflineQueue}, which re-runs
+     * {@link LunoraClient.replayGateVerdict} per entry against the identity in
+     * effect when it runs. A retry therefore cannot replay a write under an
+     * identity that changed while the timer was pending — it re-holds it, or
+     * rejects it as a mismatch, exactly as a reconnect-driven flush would.
+     */
+    private noteHeldRetryDelay(shardKey: string | undefined): void {
+        const key = connectionKey(shardKey);
+        const previous = this.replayRetryState.get(key);
+        const attempts = (previous?.attempts ?? 0) + 1;
+
+        this.replayRetryState.set(key, {
+            attempts,
+            delayMs: Math.max(previous?.delayMs ?? 0, defaultReplayRetryDelayMs(attempts)),
+        });
+    }
+
+    /**
      * Remember the longest delay this shard's flush was told (or worked out) to
      * wait, so the drain can honour it before trying again
      * ({@link LunoraClient.replayRetryState}). Counts the attempt either way:
@@ -7469,12 +7515,13 @@ class LunoraClient {
      * Consume this shard's retry delay and re-flush it once the delay has
      * elapsed.
      *
-     * Only a failure the server or an edge ANSWERED schedules anything (see
-     * {@link replayRetryDelayMs}): a `fetch` that never landed is already covered
-     * by the reconnect that will flush the queue, whereas a refused flush happens
-     * over a socket that stays open — so without this the writes sit queued
-     * indefinitely. One pending timer per shard; a second delay replaces it
-     * rather than stacking flushes.
+     * Two things record a delay for it to consume: a failure the server or an
+     * edge ANSWERED (see {@link replayRetryDelayMs}) and a flush that HELD every
+     * entry it drained (see {@link LunoraClient.noteHeldRetryDelay}). Both happen
+     * over a socket that stays open, so without this the writes sit queued
+     * indefinitely; a `fetch` that never landed records nothing, because the
+     * reconnect that follows flushes the queue anyway. One pending timer per
+     * shard; a second delay replaces it rather than stacking flushes.
      *
      * Nothing left to retry on this key (drained, closed, or no delay) drops its
      * backoff state, which is both the reset after progress and what bounds the
