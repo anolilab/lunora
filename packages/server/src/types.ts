@@ -2519,7 +2519,8 @@ interface QueryCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Query/mutation handlers must be
-     * deterministic — they may be re-run on OCC retry / subscription re-eval — so
+     * deterministic — they may be re-run on subscription re-evaluation (an OCC
+     * conflict surfaces as a `409` to the caller, not an internal retry) — so
      * read time through `ctx.now` instead of `Date.now()` (the latter is flagged
      * by the `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
@@ -2584,9 +2585,10 @@ interface MutationCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Mutation handlers must be deterministic
-     * — they may be re-run on OCC retry — so read time through `ctx.now` instead
-     * of `Date.now()` (the latter is flagged by the `nondeterministic_query_mutation`
-     * advisor). Actions may use `Date.now()`.
+     * — an OCC conflict surfaces as a `409` to the caller rather than an internal
+     * retry, but a caller's own retry is a fresh dispatch — so read time through
+     * `ctx.now` instead of `Date.now()` (the latter is flagged by the
+     * `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
     readonly now: number;
 
