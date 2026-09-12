@@ -23,7 +23,7 @@
 import { describe, expect, it } from "vitest";
 
 // eslint-disable-next-line import/no-relative-parent-imports -- the gate is a repo script, not a package export
-import { reExportsDefault, stripToCode } from "../../../scripts/assert-entry-forwards-handlers.mjs";
+import { reExportsDefault, reExportsImportedDefault, stripToCode } from "../../../scripts/assert-entry-forwards-handlers.mjs";
 
 /** What the gate itself asks of the stripped source. */
 const declaresCron = (source: string): boolean => /\bcronJobs\s*\(/u.test(stripToCode(source));
@@ -104,5 +104,42 @@ describe("assert-entry-forwards-handlers — opaque default re-exports", () => {
         expect.assertions(1);
 
         expect(reExportsDefaultAsGateSeesIt(source)).toBe(false);
+    });
+});
+
+/**
+ * The same opacity written as two statements. `import worker from "./worker";
+ * export default worker;` hands wrangler the other module's default exactly as
+ * `export { default } from "./worker"` does, but carries no `export … from` for
+ * {@link reExportsDefault} to match — so the gate fell through to its "an
+ * identifier default export forwards everything already" branch and waved it
+ * past. True of a builder result, false of a re-export, and the difference is
+ * only visible in the import.
+ */
+const reExportsImportedDefaultAsGateSeesIt = (source: string, name: string): boolean => reExportsImportedDefault(stripToCode(source), name);
+
+describe("assert-entry-forwards-handlers — default exports of an imported binding", () => {
+    it.each([
+        ["a bare default import", 'import worker from "./worker";\nexport default worker;'],
+        ["a default import alongside named ones", 'import worker, { ShardDO } from "./worker";\nexport default worker;'],
+        ["a default import alongside a namespace", 'import worker, * as handlers from "./worker";\nexport default worker;'],
+    ])("treats %s as opaque", (_label, source) => {
+        expect.assertions(1);
+
+        expect(reExportsImportedDefaultAsGateSeesIt(source, "worker")).toBe(true);
+    });
+
+    it.each([
+        // The case the skipped branch was actually reasoning about: a builder
+        // result does forward every handler, and `createApp` is a NAMED import.
+        ["a builder result", 'import { createApp } from "lunorash/server";\n\nconst app = createApp();\n\nexport default app;', "app"],
+        ["a locally built object", "const app = { fetch };\nexport default app;", "app"],
+        // The identifier must be the imported DEFAULT, not a named import that
+        // merely shares the exported name.
+        ["a named import of the same name", 'import { worker } from "./worker";\nexport default worker;', "worker"],
+    ])("does not flag %s", (_label, source, name) => {
+        expect.assertions(1);
+
+        expect(reExportsImportedDefaultAsGateSeesIt(source, name)).toBe(false);
     });
 });
