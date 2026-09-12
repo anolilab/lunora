@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 142 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 144 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -291,6 +291,14 @@ Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs
 
 `404` — Session expired
 
+### `EXPORT_SHARD_FAILED`
+
+`502` — Export failed on one or more shards
+
+One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.
+
+The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows.
+
 ### `EXPORT_TAP_NOT_CONFIGURED`
 
 `400` — Export tap not configured
@@ -358,6 +366,14 @@ Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs
 ### `HTTP_STREAM_TRANSPORT`
 
 `502` — HTTP stream transport error
+
+### `ID_COLLISION`
+
+`409` — Document id already belongs to another table
+
+The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.
+
+This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
 
 ### `INVALID_INPUT`
 
