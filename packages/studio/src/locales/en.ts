@@ -363,6 +363,8 @@ const MESSAGE_IDS = [
     "Run probe",
     "Allowed",
     "Denied",
+    "Errored",
+    "The call failed for a reason that is not an access verdict, so it says nothing about the policy.",
     "Probing…",
     "Set `runAsIdentity` to forge an identity and probe access.",
     "Dev only: runs the selected function as this user over the admin gate so you can test auth and RLS.",

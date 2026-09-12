@@ -35,20 +35,24 @@ interface PermissionsPanelProps {
  * operator can immediately run it under a chosen identity.
  *
  * Cell → procedure is the only safe prefill (a table/operation has no single
- * canonical function), so the matrix passes the covering procedure's path and
- * the playground selects it.
+ * canonical function), so the matrix passes the covering procedure's registry
+ * path (`<file>:<function>`) and the playground selects it.
  */
 export const PermissionsPanel = ({ functions, runAsIdentity = false, schemaEditable = false }: PermissionsPanelProps = {}): ReactElement => {
     const t = useT();
     const [prefill, setPrefill] = useState<{ functionPath: string; nonce: number } | undefined>(undefined);
 
-    // The matrix surfaces the covering *procedure* per cell; "Probe this" seeds
-    // the playground with that procedure. The bumped nonce re-applies on repeat
-    // clicks of the same target.
-    const onProbe = (_table: string, _operation: RlsOperation, procedure: string): void => {
-        if (procedure !== "") {
+    // The matrix surfaces the covering procedure's REGISTRY PATH per cell
+    // (`<file>:<function>`); "Probe this" seeds the playground with it. The bare
+    // export name would be a different string from every entry in the function
+    // list — the `<select>` would still display the right option (React falls
+    // back to the first when the value matches none) while the probe dispatched
+    // a path the registry has never heard of. The bumped nonce re-applies on
+    // repeat clicks of the same target.
+    const onProbe = (_table: string, _operation: RlsOperation, functionPath: string): void => {
+        if (functionPath !== "") {
             setPrefill((previous) => {
-                return { functionPath: procedure, nonce: (previous?.nonce ?? 0) + 1 };
+                return { functionPath, nonce: (previous?.nonce ?? 0) + 1 };
             });
         }
     };
