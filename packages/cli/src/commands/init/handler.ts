@@ -2065,6 +2065,6 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     });
 });
 
-export { execute, isTemplate, resolveTemplateFlag, resolveTemplateSource };
+export { execute, FRAMEWORK_CHOICES, isTemplate, resolveTemplateFlag, resolveTemplateSource };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };
