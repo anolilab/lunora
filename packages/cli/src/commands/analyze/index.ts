@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const analyzeCommand: Command = {
     description: "Run wrangler dry-run and report bundle size, top modules, and _generated files",
     examples: [["lunora analyze", "Report the worker bundle size + heaviest modules"]],
@@ -9,9 +11,9 @@ const analyzeCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "analyze",
-    options: [{ description: "Emit a JSON report instead of human text", name: "json", type: Boolean }],
+    options: [OUTPUT_FORMAT_OPTION],
 };
 
 export { analyzeCommand };
 
-export type AnalyzeOptions = CreateOptions<{ json: boolean | undefined }>;
+export type AnalyzeOptions = CreateOptions<{ format: string | undefined }>;

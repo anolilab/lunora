@@ -86,8 +86,11 @@ export const App = (): ReactElement => {
             await send(
                 { author, text },
                 {
-                    optimistic: (current) => {
-                        const list = (current as Doc<"messages">[] | undefined) ?? [];
+                    // `optimisticUpdate` names the query the write patches:
+                    // `messages.send` and `messages.list` are different
+                    // functions, so nothing can infer the link for you.
+                    optimisticUpdate: (store) => {
+                        const list = (store.getQuery(api.messages.list, {}) as Doc<"messages">[] | undefined) ?? [];
                         const provisional: Doc<"messages"> = {
                             _id: `optimistic_${Date.now()}` as Id<"messages">,
                             _creationTime: Date.now(),
@@ -96,7 +99,7 @@ export const App = (): ReactElement => {
                             createdAt: Date.now(),
                         };
 
-                        return [provisional, ...list];
+                        store.setQuery(api.messages.list, {}, [provisional, ...list]);
                     },
                 },
             );

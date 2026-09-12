@@ -961,6 +961,7 @@ interface OutboxMutation {
     idempotencyKey: string;
     identity: string | null;
     mutationId: number;
+    onRejected?: () => void;
     shardKey?: string;
 }
 ```

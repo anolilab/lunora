@@ -19,8 +19,8 @@ interface AddCommandOptions {
     cwd?: string;
     diff?: boolean;
     dryRun?: boolean;
+    format?: OutputFormat;
     from?: string;
-    json?: boolean;
     list?: boolean;
     logger: Logger;
     names: ReadonlyArray<string>;
@@ -36,9 +36,8 @@ interface AddCommandOptions {
 ### `AddCommandResult` (interface)
 
 ```ts
-interface AddCommandResult {
+interface AddCommandResult extends CommandResult<RegistryCommandData> {
     bindings: ReadonlyArray<string>;
-    code: number;
     deps: ReadonlyArray<string>;
     skipped: ReadonlyArray<string>;
     written: ReadonlyArray<string>;
@@ -117,7 +116,7 @@ interface DeployCommandOptions {
     emitBindings?: string;
     env?: string;
     fetchImpl?: FetchLike;
-    format?: string;
+    format?: OutputFormat;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
@@ -244,12 +243,37 @@ interface DiffEntry {
 }
 ```
 
+### `EXIT_CODE` (const)
+
+```ts
+const EXIT_CODE: {
+    readonly SUCCESS: 0;
+    readonly FAILURE: 1;
+    readonly USAGE: 2;
+    readonly AUTH: 3;
+    readonly PERMISSION: 4;
+    readonly NOT_FOUND: 5;
+    readonly CONFLICT: 6;
+    readonly RATE_LIMITED: 7;
+    readonly UNAVAILABLE: 8;
+    readonly MISSING_DEPENDENCY: 9;
+    readonly CANCELLED: 130;
+};
+```
+
+### `ExitCode` (type)
+
+```ts
+type ExitCode = (typeof EXIT_CODE)[keyof typeof EXIT_CODE];
+```
+
 ### `ExportCommandOptions` (interface)
 
 ```ts
 interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
+    format?: OutputFormat;
     logger: Logger;
     out?: string;
     prod?: boolean;
@@ -262,9 +286,8 @@ interface ExportCommandOptions {
 ### `ExportCommandResult` (interface)
 
 ```ts
-interface ExportCommandResult {
+interface ExportCommandResult extends CommandResult<ExportCommandData> {
     bytes: number;
-    code: number;
     rows: number;
 }
 ```
@@ -292,6 +315,7 @@ interface ImportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     file: string;
+    format?: OutputFormat;
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
@@ -309,9 +333,8 @@ interface ImportCommandOptions {
 ### `ImportCommandResult` (interface)
 
 ```ts
-interface ImportCommandResult {
+interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
-    code: number;
     inserted: number;
 }
 ```
@@ -410,6 +433,7 @@ interface MigrateGenerateCommandOptions {
 interface MigrateGenerateCommandResult {
     code: number;
     empty: boolean;
+    error?: string;
     migrationFile: string;
 }
 ```
@@ -507,6 +531,7 @@ interface RunCommandOptions {
     claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
+    format?: OutputFormat;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -521,6 +546,7 @@ interface RunCommandOptions {
 interface RunCommandResult {
     body: unknown;
     code: number;
+    error?: string;
     requestUrl: string;
 }
 ```
@@ -669,6 +695,24 @@ const defaultSpawner: Spawner;
 
 ```ts
 const diffSnapshots: (previous: SchemaSnapshot | undefined, next: SchemaSnapshot) => SchemaDiff;
+```
+
+### `exitCodeForCode` (const)
+
+```ts
+const exitCodeForCode: (code: string) => ExitCode;
+```
+
+### `exitCodeForError` (const)
+
+```ts
+const exitCodeForError: (error: unknown) => ExitCode;
+```
+
+### `exitCodeForStatus` (const)
+
+```ts
+const exitCodeForStatus: (status: number | undefined) => ExitCode;
 ```
 
 ### `insertSchemaExtension` (const)
@@ -865,13 +909,29 @@ interface CatalogItem {
 type CiProvider = "github" | "gitlab";
 ```
 
+### `CodegenCommandData` (interface)
+
+```ts
+interface CodegenCommandData {
+    advisories: ReadonlyArray<{
+        detail: string;
+        level: Finding["level"];
+        name: string;
+        remediation: string;
+    }>;
+    cronTriggers: ReadonlyArray<string>;
+    failedAdvisories: number;
+    outputDirectory: string;
+}
+```
+
 ### `CodegenCommandOptions` (interface)
 
 ```ts
 interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     strictAdvisories?: boolean;
     target?: string;
@@ -881,17 +941,9 @@ interface CodegenCommandOptions {
 ### `CodegenCommandResult` (interface)
 
 ```ts
-interface CodegenCommandResult {
-    advisories: ReadonlyArray<{
-        detail: string;
-        level: Finding["level"];
-        name: string;
-        remediation: string;
-    }>;
-    cronTriggers: ReadonlyArray<string>;
+interface CodegenCommandResult extends CodegenCommandData {
+    code?: number;
     error?: string;
-    failedAdvisories: number;
-    outputDirectory: string;
 }
 ```
 
@@ -917,6 +969,17 @@ interface CodegenWatcherOptions {
     projectRoot: string;
     spawner?: Spawner;
     target?: string;
+}
+```
+
+### `CommandResult` (interface)
+
+```ts
+interface CommandResult<TData> {
+    code: number;
+    data?: TData;
+    delegated?: boolean;
+    error?: string;
 }
 ```
 
@@ -952,6 +1015,17 @@ interface EntrypointReexport {
 }
 ```
 
+### `ExportCommandData` (interface)
+
+```ts
+interface ExportCommandData {
+    bytes: number;
+    out: string;
+    rows: number;
+    tables?: string[];
+}
+```
+
 ### `FeatureApply` (interface)
 
 ```ts
@@ -984,6 +1058,16 @@ const IMPORT_SOURCE_NAMES: readonly [
     "firebase",
     "supabase"
 ];
+```
+
+### `ImportCommandData` (interface)
+
+```ts
+interface ImportCommandData {
+    file: string;
+    inserted: number;
+    summary: ImportSummary;
+}
 ```
 
 ### `ImportRowError` (interface)
@@ -1124,6 +1208,12 @@ interface OfferDeps {
 type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
 ```
 
+### `OutputFormat` (type)
+
+```ts
+type OutputFormat = "json" | "pretty";
+```
+
 ### `PailLogger` (interface)
 
 ```ts
@@ -1148,6 +1238,14 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
 type ReadinessProbe = (origin: string, signal?: AbortSignal) => Promise<boolean>;
 ```
 
+### `RegistryCommandData` (interface)
+
+```ts
+interface RegistryCommandData {
+    items: ReadonlyArray<CatalogItem | RegistryPlanItem>;
+}
+```
+
 ### `RegistryEnvVariable` (interface)
 
 ```ts
@@ -1156,6 +1254,35 @@ interface RegistryEnvVariable {
     name: string;
     secret?: boolean;
     value?: string;
+}
+```
+
+### `RegistryPlanItem` (interface)
+
+```ts
+interface RegistryPlanItem {
+    bindings: {
+        path: string;
+        value: unknown;
+    }[];
+    deps: string[];
+    devDependencies: string[];
+    entrypointReexports: {
+        comment?: string;
+        module: string;
+    }[];
+    envVars: {
+        name: string;
+        secret?: boolean;
+        value?: string;
+    }[];
+    files: {
+        merge: RegistryFile["merge"];
+        to: string;
+    }[];
+    name: string;
+    requires: ReadonlyArray<string>;
+    title?: string;
 }
 ```
 

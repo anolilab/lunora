@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runImportCommand } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: { error: string[]; warn: string[] } } => {
@@ -508,7 +509,7 @@ describe("lunora import --from firebase", () => {
         const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
         const { logs, result } = await runImport(root, "firebase", { withStorage: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(logs.error.join("\n")).toContain("gcloud storage cp");
     });
 });

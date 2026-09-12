@@ -263,6 +263,8 @@ interface PlatformSignals {
     globalTables?: boolean;
     /** A `defineQueue` declaration. */
     queues?: boolean;
+    /** At least one `v.id("target")` column — the schema declares a relation graph `ctx.db.related` can walk. */
+    relationGraph?: boolean;
     /** A `ctx.secrets` read. */
     secrets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
@@ -278,6 +280,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "durableStreams",
     "globalTables",
     "queues",
+    "relationGraph",
     "secrets",
     "vectorStore",
 ] as const;
@@ -291,6 +294,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
     queues: "queues (`defineQueue`)",
+    relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
     vectorStore: "vector indexes (`.vectorize()`)",
 };

@@ -79,7 +79,13 @@ export interface ColumnMetaLike {
 
 /** Structural mirror of a validator from `@lunora/values`. */
 export interface ValidatorLike {
-    readonly _meta?: { readonly column?: ColumnMetaLike };
+    /**
+     * The validator's internal metadata bag. `column` carries the modifier
+     * chain; `inner` is the child of a `v.optional(...)` / `v.array(...)`
+     * wrapper; `tableName` is a `v.id("target")`'s target table — the fact the
+     * relation-graph edge set is derived from.
+     */
+    readonly _meta?: { readonly column?: ColumnMetaLike; readonly inner?: ValidatorLike; readonly tableName?: string };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
 }
@@ -331,6 +337,119 @@ export interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+}
+
+/**
+ * One directed foreign-key edge derived from a `v.id("target")` column:
+ * `sourceTable.column` → `targetTable`.
+ *
+ * The direction is the one the DATA points in — the row carrying the column is
+ * the source — which is the direction a `"out"` traversal follows. The `name`
+ * is what a caller passes to `related({ edges: [...] })`; a column name is
+ * unique within its table, so `` `${sourceTable}.${column}` `` is unique within
+ * the schema.
+ */
+export interface RelationEdge {
+    /** `true` for a `v.array(v.id(...))` column — one row holds MANY target ids. */
+    readonly array: boolean;
+    /** The `v.id(...)` column on {@link RelationEdge.sourceTable}. */
+    readonly column: string;
+    /** The addressable edge-type name: `` `${sourceTable}.${column}` ``. */
+    readonly name: string;
+    /** The table whose rows carry the foreign key. */
+    readonly sourceTable: string;
+    /** The table the foreign key points at. */
+    readonly targetTable: string;
+}
+
+/** An explicit `{ table, id }` start node for {@link DatabaseWriterLike.related}. */
+export interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: an explicit {@link RelatedStartReference}, or a
+ * loaded document (its `_id` is read and its owning table resolved through the
+ * writer's `lookupById` seam). A document is recognised by carrying `_id`, so a
+ * table that happens to declare `table`/`id` columns is never mistaken for a
+ * reference.
+ *
+ * The document arm requires `_id` for the same reason `resolveStart` reads it:
+ * without it the union COLLAPSED — a bare `Record<string, unknown>` swallows
+ * `RelatedStartReference`, so `related({ tabel: "x", id: "y" })` type-checked
+ * and failed at runtime with a message about the shape it was already meant to
+ * enforce. Requiring the discriminant makes the documented distinction real.
+ */
+export type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Which way foreign-key edges are followed out of each visited node. */
+export type RelatedDirection = "both" | "in" | "out";
+
+/** Options for {@link DatabaseWriterLike.related}. */
+export interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood;
+     * higher values re-expand each frontier. Must be an integer in
+     * `1 … RELATED_MAX_DEPTH`.
+     */
+    depth?: number;
+
+    /** Which way edges are followed. Default `"both"`. */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names ({@link RelationEdge.name}).
+     * Omitted ⇒ every edge the schema declares. An unknown name is refused
+     * rather than ignored — a typo that silently widens a traversal is the
+     * failure this exists to prevent.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default `RELATED_DEFAULT_LIMIT`, capped at `RELATED_MAX_LIMIT`. */
+    limit?: number;
+
+    /**
+     * Per-table read filter applied to EVERY read the traversal makes, the
+     * start row's included — the same seam `with`-relation loading threads (see
+     * {@link QueryArgs.relationBaseWhere}). Engine-internal: the RLS middleware
+     * supplies it so a traversal cannot walk into rows the caller's policy
+     * excludes, and so a start row the policy hides reads as absent.
+     *
+     * One seam rather than a separate `baseWhere` for the start table, because
+     * the start table is only known after the reader resolves it — a caller
+     * passing a loaded document does not name it.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /** Per-target-table column mask applied to every hop's rows — see {@link RelationMask}. */
+    relationMask?: RelationMask;
+}
+
+/** One row reached by a traversal, with how it was reached. */
+export interface RelatedNode {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: Record<string, unknown>;
+    /** Edge-type names walked from the start node to this one, in order. Length equals {@link RelatedNode.depth}. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance, `RELATED_DEPTH_DECAY ** (depth - 1)` — `1` at depth 1, halving per hop. */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a traversal — the same envelope shape as {@link QueryPage}. */
+export interface RelatedPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode[];
 }
 
 export interface OrderKey {
@@ -639,6 +758,41 @@ export interface DatabaseWriterLike {
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
+
+    /**
+     * Walk the schema-derived foreign-key graph out of one row — breadth-first,
+     * bounded by `depth` and `limit`, cycle-safe — and return each reached row
+     * with its depth, the edge names walked to reach it, and a depth-decaying
+     * score.
+     *
+     * OPTIONAL because it is derived from the schema's `v.id(...)` columns and
+     * implemented by the shard writer; the `.global()` twin and the generated
+     * `globalDbStub` do not carry it. Reads route through this writer's own
+     * `get`/`findMany`, so read-dependency tracking, soft-delete scoping and
+     * global-table routing all apply per hop exactly as they do for a direct
+     * read.
+     */
+    related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
+     * The edge set {@link DatabaseWriterLike.related} walks, derived from this
+     * schema's `v.id(...)` columns once per writer. Present exactly when
+     * `related` is — the two are a pair, and the `.global()` twin carries
+     * neither.
+     *
+     * PUBLISHED rather than kept as a closure variable because a wrapper that
+     * has to route the traversal PER TABLE — the RLS middleware under a
+     * `.rls("required")` schema — cannot delegate to `related`: that closure is
+     * already bound to one writer, and every hop out of it would go to that
+     * writer. Such a wrapper runs the walk itself over a reader it routes, and
+     * the walk needs this set to know what the hops are.
+     *
+     * It is metadata, not capability. Edge NAMES are already a caller-facing
+     * surface (`RelatedOptions.edges` selects by them, and refuses an undeclared
+     * one), and holding the set grants no read that the writer would not
+     * otherwise gate.
+     */
+    relationEdges?: ReadonlyArray<RelationEdge>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 

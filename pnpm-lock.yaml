@@ -4513,6 +4513,9 @@ importers:
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/values':
         specifier: workspace:*
         version: link:../values

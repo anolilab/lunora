@@ -349,7 +349,7 @@ describe(hybridRank, () => {
         const textOnly = chunk("doc#2");
 
         // shared: 1/(60+1) + 1/(60+0) ≈ 0.033 — beats vectorOnly's 1/60 alone.
-        const fused = hybridRank([vectorOnly, shared], [shared, textOnly]);
+        const fused = hybridRank([{ chunks: [vectorOnly, shared] }, { chunks: [shared, textOnly] }]);
 
         expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1", "doc#2"]);
     });
@@ -360,7 +360,7 @@ describe(hybridRank, () => {
         const vectorChunk = chunk("doc#0", { metadata: { title: "rich" }, score: 0.9 });
         const lexicalChunk = chunk("doc#0", { metadata: undefined, score: 3.2 });
 
-        const [winner] = hybridRank([vectorChunk], [lexicalChunk]);
+        const [winner] = hybridRank([{ chunks: [vectorChunk] }, { chunks: [lexicalChunk] }]);
 
         // The richer vector-leg chunk survives — the lexical leg carries no
         // stored metadata. Asserted on the payload, not by reference: the
@@ -380,7 +380,7 @@ describe(hybridRank, () => {
         const vectorChunk = chunk("doc#0", { score: 0.9 });
         const lexicalOnly = chunk("doc#1", { score: 3.2 });
 
-        const fused = hybridRank([vectorChunk], [lexicalOnly]);
+        const fused = hybridRank([{ chunks: [vectorChunk] }, { chunks: [lexicalOnly] }]);
 
         // Both appear once in each leg at rank 0, so both fuse to 1/60.
         for (const entry of fused) {
@@ -399,9 +399,38 @@ describe(hybridRank, () => {
 
         // `light` ranks first in the vector leg, so on rank alone it would win.
         // Its 0.1 importance has to pull it under `heavy`.
-        const fused = hybridRank([light, heavy], []);
+        const fused = hybridRank([{ chunks: [light, heavy] }]);
 
         expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1"]);
+    });
+
+    /**
+     * The reason `retrieve()` collects its legs and calls this once.
+     *
+     * Each call multiplies `importance` into the score it returns AND sorts by
+     * that score, so a fused list handed back in as a leg carries an ordering
+     * importance already weighted — and the next pass derives its ranks from it
+     * and multiplies by importance a second time.
+     */
+    it("applies importance once per call, so re-fusing a fused list weights it twice", () => {
+        expect.assertions(3);
+
+        const light = chunk("light#0", { importance: 0.1 });
+        const heavy1 = chunk("h1#0");
+        const heavy2 = chunk("h2#0");
+
+        const once = hybridRank([{ chunks: [light, heavy1, heavy2] }]);
+
+        // Rank 0 in the only leg, weighted once: (1/60) * 0.1.
+        expect(once.find((entry) => entry.id === "light#0")?.score).toBeCloseTo(0.1 / 60, 10);
+        // …and that weighting pushed it to LAST place.
+        expect(once.map((entry) => entry.id)).toStrictEqual(["h1#0", "h2#0", "light#0"]);
+
+        // Feed the fused list back in, as a fold-one-leg-at-a-time caller does:
+        // rank 2 now, and importance multiplies in again — (1/62) * 0.1.
+        const twice = hybridRank([{ chunks: once }]);
+
+        expect(twice.find((entry) => entry.id === "light#0")?.score).toBeCloseTo(0.1 / 62, 10);
     });
 
     it("breaks exact ties in favour of the better vector rank", () => {
@@ -412,7 +441,7 @@ describe(hybridRank, () => {
         const fromVector = chunk("vec#0");
         const fromText = chunk("lex#0");
 
-        const fused = hybridRank([fromVector], [fromText]);
+        const fused = hybridRank([{ chunks: [fromVector] }, { chunks: [fromText] }]);
 
         expect(fused.map((entry) => entry.id)).toStrictEqual(["vec#0", "lex#0"]);
     });
@@ -426,20 +455,74 @@ describe(hybridRank, () => {
 
         // Default k=60 flattens ranks: two mid-rank appearances (c: 1/62 + 1/61)
         // beat one top rank (a: 1/60), so consensus wins.
-        const flat = hybridRank([first, second, third], [second, third]);
+        const flat = hybridRank([{ chunks: [first, second, third] }, { chunks: [second, third] }]);
 
         expect(flat.map((entry) => entry.id)).toStrictEqual(["b#0", "c#0", "a#0"]);
 
         // A tiny k sharpens ranks: a's vector rank 0 (1/1) now beats c's two
         // mid ranks (1/3 + 1/2) — same lists, different fusion.
-        const sharp = hybridRank([first, second, third], [second, third], 1);
+        const sharp = hybridRank([{ chunks: [first, second, third] }, { chunks: [second, third] }], { k: 1 });
 
         expect(sharp.map((entry) => entry.id)).toStrictEqual(["b#0", "a#0", "c#0"]);
     });
 
-    it("returns an empty list when both legs are empty", () => {
+    it("returns an empty list when there are no legs, or every leg is empty", () => {
+        expect.assertions(2);
+        expect(hybridRank([])).toStrictEqual([]);
+        expect(hybridRank([{ chunks: [] }, { chunks: [] }])).toStrictEqual([]);
+    });
+
+    it("fuses a proximity-weighted leg as a third signal", () => {
         expect.assertions(1);
-        expect(hybridRank([], [])).toStrictEqual([]);
+
+        const vectorOnly = chunk("a#0");
+        const shared = chunk("b#0");
+
+        // `shared` is rank 1 in the vector leg (1/61) and rank 0 in the graph
+        // leg at full proximity (1/60), so the graph connection lifts it over a
+        // chunk the vector leg ranked first.
+        const fused = hybridRank([{ chunks: [vectorOnly, shared] }, { chunks: [chunk("b#0", { score: 1 })], weight: "proximity" }]);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["b#0", "a#0"]);
+    });
+
+    it("scales the graph leg's contribution by each hit's depth decay", () => {
+        expect.assertions(2);
+
+        const near = hybridRank([{ chunks: [chunk("a#0", { score: 1 })], weight: "proximity" }]);
+        const far = hybridRank([{ chunks: [chunk("a#0", { score: 0.25 })], weight: "proximity" }]);
+
+        // Same rank in the same leg — only the depth decay differs, and a
+        // rank-only fusion would score the two identically.
+        expect(near[0]?.score).toBeCloseTo(1 / 60, 10);
+        expect(far[0]?.score).toBeCloseTo(0.25 / 60, 10);
+    });
+
+    it("orders a graph-only ranking by depth, nearest first", () => {
+        expect.assertions(1);
+
+        const fused = hybridRank([{ chunks: [chunk("a#0", { score: 1 }), chunk("b#0", { score: 0.5 }), chunk("c#0", { score: 0.25 })], weight: "proximity" }]);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["a#0", "b#0", "c#0"]);
+    });
+
+    it("clamps a graph score outside [0, 1] so a leg cannot out-weigh the search legs", () => {
+        expect.assertions(2);
+
+        const huge = hybridRank([{ chunks: [chunk("a#0", { score: 1000 })], weight: "proximity" }]);
+        const negative = hybridRank([{ chunks: [chunk("a#0", { score: -5 })], weight: "proximity" }]);
+
+        expect(huge[0]?.score).toBeCloseTo(1 / 60, 10);
+        expect(negative[0]?.score).toBe(0);
+    });
+
+    it("adds the graph contribution to a chunk the search legs already found", () => {
+        expect.assertions(1);
+
+        const [entry] = hybridRank([{ chunks: [chunk("a#0")] }, { chunks: [chunk("a#0")] }, { chunks: [chunk("a#0", { score: 1 })], weight: "proximity" }]);
+
+        // Rank 0 in all three legs: 1/60 + 1/60 + 1/60.
+        expect(entry?.score).toBeCloseTo(3 / 60, 10);
     });
 });
 

@@ -6,8 +6,8 @@
  * (snapshot reading, blob migration, the storage-column mapping) sit beside
  * them rather than inside the import pipeline.
  */
-export type { ExportCommandOptions, ExportCommandResult } from "./export";
+export type { ExportCommandData, ExportCommandOptions, ExportCommandResult } from "./export";
 export { runExportCommand } from "./export";
-export type { ImportCommandOptions, ImportCommandResult, ImportSummary } from "./import";
+export type { ImportCommandData, ImportCommandOptions, ImportCommandResult, ImportSummary } from "./import";
 export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand } from "./import";
 export type { StreamingFetchLike } from "./shared";

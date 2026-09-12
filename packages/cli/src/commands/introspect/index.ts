@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const introspectCommand: Command = {
     description: "Scaffold lunora/schema.ts (and list/get procedures) from an existing Postgres or MySQL database",
     examples: [
@@ -26,6 +28,7 @@ const introspectCommand: Command = {
         { description: "Emit only the schema — skip the per-table list/get procedure modules", name: "no-procedures", type: Boolean },
         { description: "Overwrite files that already exist", name: "force", type: Boolean },
         { description: "Print what would be written without writing it", name: "dry-run", type: Boolean },
+        OUTPUT_FORMAT_OPTION,
     ],
 };
 
@@ -34,6 +37,7 @@ export { introspectCommand };
 export type IntrospectOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     force: boolean | undefined;
+    format: string | undefined;
     // Declared twice in `options` (`--procedures` and `--no-procedures`, each
     // with its own description); cerebro exposes both under this one positive key.
     procedures: boolean | undefined;
