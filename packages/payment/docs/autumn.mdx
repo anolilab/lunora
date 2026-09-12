@@ -300,7 +300,8 @@ updated.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` — the only mode Autumn accepts. Its meter is additive, so
+    // `mode: "set"` (a period total) throws VALIDATION_ERROR here.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -430,6 +431,15 @@ intent to act on directly. These adapter methods **throw** `PROVIDER_ERROR`:
 
 Issue refunds and one-off payment operations from your Stripe dashboard or the
 Autumn dashboard instead.
+
+<Callout type="warn">
+    **`reconcile` does not retry a failed usage forward on Autumn.** For Stripe, Polar and Dodo the sweep re-sends usage events the provider never accepted,
+    because the event's `idempotencyKey` travels in the ingestion body (`identifier`, `externalId`, `event_id`) and the provider collapses a re-send onto the
+    original. `autumn-js` has no idempotency surface at all — `TrackParams` carries no such field — so every `client.track` call applies. A row is unreported
+    whether the request failed or only its response was lost, and those are indistinguishable, so re-sending would debit the customer's allowance a second time
+    for usage that happened once. The sweep is skipped for Autumn and `checkedUsage` stays `0`; a forward that genuinely failed is lost (Autumn under-counts)
+    and surfaces as the `usage.report_failed` observability signal. Alert on it, and re-issue by hand if you must.
+</Callout>
 
 ## Troubleshooting
 
