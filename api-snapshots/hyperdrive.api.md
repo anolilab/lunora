@@ -38,7 +38,7 @@ interface HyperdriveLike {
 
 ```ts
 interface Mysql2Like {
-    execute: (text: string, params?: ReadonlyArray<unknown>) => Promise<[
+    execute(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<[
         unknown,
         unknown
     ]>;
@@ -49,7 +49,7 @@ interface Mysql2Like {
 
 ```ts
 interface NodePgLike {
-    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<{
+    query(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<{
         rows: unknown[];
     }>;
 }
@@ -59,7 +59,7 @@ interface NodePgLike {
 
 ```ts
 interface PostgresJsLike {
-    unsafe: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
 }
 ```
 

@@ -49,7 +49,20 @@
 import { createMailerFromEnv } from "@lunora/mail";
 import type { Mailer, SendOptions } from "@lunora/mail";
 import { internalAction, v } from "#lunora/_generated/server.js";
-import { env } from "cloudflare:workers";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
+import { env as workerEnv } from "cloudflare:workers";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it, or handing it to `createMailerFromEnv`
+ * (whose `MailEnv` is a `Record<string, unknown>`), is a `tsc` error in a fresh
+ * scaffold. The generated `CloudflareBindings` is the open index signature both
+ * want.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * The Cloudflare Email Workers send callback: serialize the RFC 822 message

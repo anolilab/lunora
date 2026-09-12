@@ -52,13 +52,25 @@
  *      `.dev.vars` (locally) and push the secrets to production with
  *      `wrangler secret put`.
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
 import { SUBSCRIPTIONS_TABLE } from "./schema.js";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it is a `tsc` error in a fresh scaffold. The
+ * generated `CloudflareBindings` is the open index signature this needs; the
+ * value stays `unknown`, so `appOrigin` still has to narrow it.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * Public origin of this deployment, used to build the checkout return URLs and
@@ -68,11 +80,13 @@ import { SUBSCRIPTIONS_TABLE } from "./schema.js";
  * time.
  *
  * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
- * manifest) and in `.dev.vars`. The first is what puts it on the generated env
- * TYPE — `CloudflareBindings` is built from wrangler's config, so a var that
- * lives only in `.dev.vars` reaches the running Worker and not the
- * type-checker, and reading it here is a `TS7053`. The second supplies the value
- * locally, and wins over `vars` under `wrangler dev`.
+ * manifest) and in `.dev.vars`. That is a RUNTIME split, not a typing one:
+ * `.dev.vars` is read locally and never deployed, so a var declared only there
+ * is absent from the deployed Worker; the `vars` entry is what carries it to
+ * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
+ * the type — `env` above is `cloudflare:workers`' `Cloudflare.Env`, which only
+ * `wrangler types` populates, so the narrowing there is what makes this read
+ * compile, and it yields `unknown`.
  *
  * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
  * so a committed `http://localhost:…` placeholder is read only in production —
