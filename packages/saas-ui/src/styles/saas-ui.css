@@ -302,6 +302,48 @@
     font-weight: 600;
 }
 
+/* Who is here. The avatars overlap because a row of them reads as a group and a
+   row of separated circles reads as a list of strangers. */
+.lu-saas-presence {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    margin-block-end: 1rem;
+}
+
+.lu-saas-presence--loading {
+    min-height: 1.75rem;
+}
+
+.lu-saas-presence__list {
+    display: flex;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lu-saas-presence__list > .lu-saas-avatar + .lu-saas-avatar {
+    margin-inline-start: -0.5rem;
+}
+
+.lu-saas-presence__list > .lu-saas-avatar {
+    border: 2px solid var(--card, hsl(0 0% 100%));
+}
+
+.lu-saas-avatar--self {
+    background: var(--primary, hsl(240 14% 10%));
+    color: var(--primary-foreground, hsl(0 0% 100%));
+}
+
+.lu-saas-avatar--more {
+    font-size: 0.625rem;
+}
+
+.lu-saas-presence__summary {
+    color: var(--muted-foreground, hsl(240 4% 46%));
+    font-size: 0.8125rem;
+}
+
 .lu-saas-table {
     width: 100%;
     border-collapse: collapse;

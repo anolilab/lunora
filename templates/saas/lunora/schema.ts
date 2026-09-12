@@ -1,3 +1,6 @@
+// lunora:add:presence:start
+import { presence } from "./presence/schema";
+// lunora:add:presence:end
 // lunora:add:saas:start
 import { saas } from "./saas/schema";
 // lunora:add:saas:end
@@ -97,5 +100,8 @@ export default defineSchema({
     .extend(ratelimit.extension)
     // lunora:add:ratelimit:end
     // lunora:add:saas:start
-    .extend(saas.extension);
+    .extend(saas.extension)
+    // lunora:add:presence:start
+    .extend(presence.extension);
+// lunora:add:presence:end
 // lunora:add:saas:end
