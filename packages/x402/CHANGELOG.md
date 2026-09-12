@@ -1,3 +1,5 @@
+## @lunora/x402 [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.67...@lunora/x402@1.0.0-alpha.68) (2026-09-12)
+
 ## @lunora/x402 [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.66...@lunora/x402@1.0.0-alpha.67) (2026-09-11)
 
 ## @lunora/x402 [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.65...@lunora/x402@1.0.0-alpha.66) (2026-09-11)
