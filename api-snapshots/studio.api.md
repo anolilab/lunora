@@ -367,6 +367,9 @@ type DeploymentHealthProbe = (kind: ProbeKind) => Promise<ProbeSnapshot>;
 ```ts
 interface EditableFilter {
     column: string;
+    literal?: [
+        unknown
+    ];
     operator: FilterOperator;
     value: string;
 }
@@ -1155,6 +1158,7 @@ interface TablePage {
     columns: string[];
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+    sqlColumns?: string[];
     total?: number;
 }
 ```

@@ -599,7 +599,9 @@ type ShardRegionHint = RegionHint;
 
 ```ts
 interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```

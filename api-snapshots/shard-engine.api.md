@@ -2799,7 +2799,9 @@ interface SqlConsoleResult {
 
 ```ts
 interface SqlCursor<Row> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```
@@ -3113,6 +3115,7 @@ interface TablePage {
     columns: string[];
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+    sqlColumns: string[];
     total?: number;
 }
 ```

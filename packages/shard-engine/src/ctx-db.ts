@@ -155,7 +155,27 @@ interface SqlExec {
 }
 
 interface SqlCursor<Row> extends Iterable<Row> {
+    /**
+     * The result columns in SELECT order, as the statement declares them —
+     * before they are collapsed into a row object's keys.
+     *
+     * Optional because it is a capability, not a guarantee: Cloudflare's
+     * `SqlStorageCursor` and better-sqlite3 both expose it, a thin `.all()`
+     * adapter need not. A reader that has it can report a result faithfully; a
+     * reader without it falls back to the keys of the first row, which is blind
+     * to a zero-row result and silently keeps only the last of two same-named
+     * columns (`SELECT u.id, o.id` ⇒ one `id`).
+     */
+    readonly columnNames?: string[];
     one: () => Row;
+
+    /**
+     * The rows as positional value arrays aligned with `columnNames`, rather
+     * than as objects. The only shape that survives two result columns sharing
+     * a name. Optional for the same reason, and consuming it consumes the
+     * cursor — call it *or* `toArray`, never both.
+     */
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 

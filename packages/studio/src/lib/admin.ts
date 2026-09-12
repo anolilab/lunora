@@ -1618,6 +1618,19 @@ export interface TablePage {
     rows: Record<string, unknown>[];
 
     /**
+     * The table's PHYSICAL column names (`id`, `_creationTime`, `__doc__` for a
+     * canonical shard table), mirroring `@lunora/do`'s `TablePage.sqlColumns`.
+     *
+     * `columns` is the DISPLAY list, with every `__doc__` field lifted to a
+     * top-level column — names no SQL statement can reference. A surface that
+     * feeds columns to something SQL-shaped wants this list, not that one.
+     *
+     * Optional on the client mirror because a shard running an older `@lunora/do`
+     * omits it; a caller must treat its absence as "unknown", never as "none".
+     */
+    sqlColumns?: string[];
+
+    /**
      * Total rows matching the predicate. Absent when the read passed
      * `skipCount: true` — the data browser sources the count from a separate,
      * predicate-keyed read so paging never re-runs the COUNT.

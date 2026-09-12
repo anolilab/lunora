@@ -145,3 +145,56 @@ describe("workerd SQLite limits", () => {
         });
     });
 });
+
+describe("workerd SQLite result shapes the SQL console depends on", () => {
+    // `runReadonlySql` reports a result's columns from the cursor's own
+    // `columnNames` and its rows from `raw()`, instead of from the keys of the
+    // first row object. Whether that is an improvement or a no-op is a fact
+    // about workerd, and `node:sqlite` cannot answer it — the build CI runs
+    // (22.15) has neither `columns()` nor `setReturnArrays`, so the unit suite
+    // drives a hand-built cursor and this file checks the hand was right.
+    it("collapses two same-named result columns into one row key, but not in `columnNames`/`raw`", async () => {
+        expect.assertions(4);
+
+        await withSql("console-duplicate-columns", (sql) => {
+            sql.exec(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "name" TEXT)`);
+            sql.exec(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "user_id" TEXT)`);
+            sql.exec(`INSERT INTO "users" VALUES ('u1', 'ada')`);
+            sql.exec(`INSERT INTO "orders" VALUES ('o1', 'u1')`);
+
+            const query = `SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id`;
+
+            // The defect, on the real runtime: `u.id` is gone and the result
+            // says nothing about having dropped it.
+            expect(sql.exec(query).toArray()).toStrictEqual([{ id: "o1" }]);
+
+            const cursor = sql.exec(query);
+
+            expect(cursor.columnNames).toStrictEqual(["id", "id"]);
+            expect([...cursor.raw()]).toStrictEqual([["u1", "o1"]]);
+
+            // And a result that matched nothing still knows its own shape,
+            // which is the half a first-row read can never recover.
+            expect(sql.exec(`${query} WHERE 1 = 0`).columnNames).toStrictEqual(["id", "id"]);
+        });
+    });
+
+    // Why the SQL editor probes PHYSICAL columns and lints a `__doc__` field
+    // written as a column. SQLite's stock build raises for an unresolvable
+    // double-quoted identifier; this one falls back to a string literal, so the
+    // mistake returns data instead of an error and nothing upstream can notice.
+    it("resolves an unresolvable double-quoted identifier to a string literal", async () => {
+        expect.assertions(2);
+
+        await withSql("console-dqs-fallback", (sql) => {
+            sql.exec(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "__doc__" TEXT)`);
+            sql.exec(`INSERT INTO "posts" VALUES ('p1', ?)`, JSON.stringify({ status: "draft" }));
+
+            // Bare: a loud, correct error.
+            expect(() => sql.exec(`SELECT status FROM posts`).toArray()).toThrow(/no such column/u);
+
+            // Quoted: the word "status", once per row, silently.
+            expect(sql.exec(`SELECT "status" FROM posts`).toArray()).toStrictEqual([{ '"status"': "status" }]);
+        });
+    });
+});
