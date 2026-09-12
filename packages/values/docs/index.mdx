@@ -45,7 +45,7 @@ Lunora validator directly.
 | `v.boolean()`          | `boolean`                     | `true` / `false`                                       |
 | `v.null()`             | `null`                        | Only `null`                                            |
 | `v.bigint()`           | `bigint`                      | Stored as INTEGER (int64) in D1                        |
-| `v.bytes()`            | `ArrayBuffer`                 | Binary; stored as BLOB. A `Uint8Array` is rejected     |
+| `v.bytes()`            | `ArrayBuffer` or any view     | Binary; stored as BLOB. A view copies to its own bytes |
 | `v.any()`              | anything                      | Escape hatch; no runtime check — see below             |
 | `v.id(table)`          | `Id<table>`                   | Branded id string for the given table                  |
 | `v.literal(value)`     | exact `value`                 | `string` / `number` / `boolean` / `bigint` / `null`    |

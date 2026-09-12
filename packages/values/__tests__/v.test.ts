@@ -53,13 +53,36 @@ describe("primitives", () => {
         expect(() => v.null().parse(undefined)).toThrow(ValidationError);
     });
 
-    it("bytes accepts ArrayBuffer only", () => {
+    it("bytes passes an ArrayBuffer through and rejects a non-buffer", () => {
         expect.assertions(2);
 
         const buffer = new ArrayBuffer(4);
 
         expect(v.bytes().parse(buffer)).toBe(buffer);
-        expect(() => v.bytes().parse(new Uint8Array(4))).toThrow(ValidationError);
+        expect(() => v.bytes().parse("nope")).toThrow(ValidationError);
+    });
+
+    it("bytes normalises a view to an ArrayBuffer", () => {
+        expect.assertions(3);
+
+        const parsed = v.bytes().parse(new Uint8Array([1, 2, 3]));
+
+        expect(parsed).toBeInstanceOf(ArrayBuffer);
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
+    });
+
+    it("bytes copies only a view's own window, not its parent buffer", () => {
+        expect.assertions(2);
+
+        // A subarray views a slice of a larger buffer. Returning `view.buffer`
+        // would hand the column every byte of the parent — the neighbouring
+        // records' bytes included.
+        const parent = new Uint8Array([9, 9, 1, 2, 3, 9, 9]);
+        const parsed = v.bytes().parse(parent.subarray(2, 5));
+
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
     });
 
     it("literal", () => {
