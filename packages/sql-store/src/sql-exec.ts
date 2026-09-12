@@ -189,10 +189,10 @@ const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boole
         return false;
     }
 
-    // `@lunora/values` stashes the wrapped validator on `_meta.inner`; the
-    // package's own `ValidatorLike` does not declare it (see `shared/effective-kind`,
-    // which reads it the same way for the same reason).
-    const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
+    // `@lunora/values` stashes the wrapped validator on `_meta.inner`, which
+    // `ValidatorLike` declares (see `shared/effective-kind`, which reads it the
+    // same way for the same reason).
+    const inner = validator._meta?.inner;
 
     return !acceptsNull(inner);
 };

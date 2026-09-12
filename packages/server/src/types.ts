@@ -933,6 +933,30 @@ interface DatabaseReader {
     query: (tableName: string) => TableReader;
 
     /**
+     * Walk the relation graph out of one row: follow the foreign keys the
+     * schema's `v.id("target")` columns already declare, breadth-first, and
+     * return each reached row with its `depth`, the edge names walked to reach
+     * it (`path`), the ids along the way (`pathIds`), and a depth-decaying
+     * `score`.
+     *
+     * This is the read a keyword or vector search cannot do: "everything
+     * connected to this customer" is a property of the edges, not of the text.
+     * Depth 1 (the default) is the direct neighbourhood; a multi-hop expansion
+     * is the same call with a higher `depth`.
+     *
+     * ```ts
+     * const { nodes } = await ctx.db.related({ table: "customers", id }, { depth: 2 });
+     * ```
+     *
+     * Every hop is a normal `ctx.db` read, so row-level security, column
+     * masking, soft-delete scoping and subscription dependency tracking all
+     * apply per hop. `depth` is capped at 4 and `limit` at 200; a
+     * `v.array(v.id(...))` column is followed outward only (there is no
+     * array-containment filter to find its holders with).
+     */
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
      * Best-effort, read-only reader over Lunora's system tables
      * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
      * part of the transaction snapshot — see {@link SystemDatabaseReader}.
@@ -973,6 +997,84 @@ interface PaginationResult<T = Record<string, unknown>> {
      * into two adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+}
+
+/** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */
+type RelatedDirection = "both" | "in" | "out";
+
+/** An explicit `{ table, id }` start node for {@link DatabaseReader.related}. */
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: a loaded document (recognised by its `_id`, whose
+ * table the reader resolves), or an explicit `{ table, id }`.
+ *
+ * The document arm requires `_id`, which is what makes the two arms actually
+ * distinguishable: against a bare `Record<string, unknown>` the union collapses
+ * — `{ table, id }` is assignable to it — so a misspelled `{ tabel, id }` used
+ * to type-check and fail only at runtime.
+ */
+type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Options for {@link DatabaseReader.related}. */
+interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood.
+     * Must be an integer in `1 … 4`; anything else is refused rather than
+     * clamped, because a silently-shortened walk looks like a graph with fewer
+     * edges than it has.
+     */
+    depth?: number;
+
+    /**
+     * Which way foreign keys are followed. `"out"` follows the ids the start
+     * row HOLDS (ticket → customer), `"in"` the rows that point AT it (customer
+     * → tickets), `"both"` (the default) does both.
+     */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names — `"<table>.<column>"`, e.g.
+     * `"tickets.customerId"`. Omitted ⇒ every `v.id(...)` column the schema
+     * declares. An unknown name is refused, so a typo cannot silently widen the
+     * traversal.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default 50, capped at 200. */
+    limit?: number;
+}
+
+/** One row reached by {@link DatabaseReader.related}, with how it was reached. */
+interface RelatedNode<T = Record<string, unknown>> {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: T;
+    /** Edge-type names walked from the start node to this one, in order. Length equals `depth`. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance: `1` at depth 1, halving each hop (`0.5 ** (depth - 1)`). */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a {@link DatabaseReader.related} traversal — the {@link PaginationResult} envelope, with `nodes` instead of `page`. */
+interface RelatedPage<T = Record<string, unknown>> {
+    /** Cursor to pass back for the next page, or `null` once `isDone`. */
+    continueCursor: null | string;
+    /** `true` when this page is the last one. */
+    isDone: boolean;
+    /** The reached nodes, nearest first. */
+    nodes: RelatedNode<T>[];
 }
 
 /**
@@ -2659,6 +2761,12 @@ export type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
     RestCacheConfig,
     RetryPolicy,

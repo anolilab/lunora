@@ -1,5 +1,8 @@
+import type { LunoraErrorLike } from "@lunora/errors";
+import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
+import { EXIT_CODE, exitCodeForError } from "../../src/util/exit-code";
 import { defaultSpawner, spawnShellCompat } from "../../src/util/spawn";
 
 describe("spawnShellCompat", () => {
@@ -157,5 +160,18 @@ describe("defaultSpawner", () => {
         });
 
         expect(result.code).toBe(3);
+    });
+
+    // Every shell-out in the CLI goes through this spawner, so it is the one
+    // place that can turn "wrangler/git/docker isn't installed" into something
+    // a script can branch on — exit 9 rather than the generic 1.
+    it("codes a command that is not on PATH as LOCAL_DEPENDENCY_MISSING", async () => {
+        expect.assertions(3);
+
+        const error = await defaultSpawner({ args: [], command: "lunora-definitely-not-a-real-binary" }).catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error)).toBe(true);
+        expect((error as LunoraErrorLike).code).toBe("LOCAL_DEPENDENCY_MISSING");
+        expect(exitCodeForError(error)).toBe(EXIT_CODE.MISSING_DEPENDENCY);
     });
 });

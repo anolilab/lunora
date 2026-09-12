@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runAddFeature } from "../../src/commands/add/handler";
 import { applyDeps, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 
@@ -433,7 +434,9 @@ describe("lunora add", () => {
                 source: "gh:attacker/evil",
             });
 
-            expect(result.code).toBe(1);
+            // Non-TTY with no `--yes`: nobody could be asked, so the INVOCATION
+            // is wrong — distinct from a human declining the prompt (CANCELLED).
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(lines.join("\n")).toContain("custom registry source");
             // Nothing from the attacker-controlled origin reached the project.
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(false);
@@ -519,7 +522,7 @@ describe("lunora add", () => {
                 names: [],
             });
 
-            expect(proceeded).toBe(true);
+            expect(proceeded).toStrictEqual({ ok: true });
             expect(asked).toHaveLength(0);
         });
     });

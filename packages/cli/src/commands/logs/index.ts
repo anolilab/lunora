@@ -1,6 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /**
  * `lunora logs [worker]` — stream live logs from a deployed Lunora Worker by
@@ -20,7 +21,7 @@ const logsCommand: Command = {
     name: "logs",
     options: [
         { description: "Cloudflare environment name", name: "env", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Substring filter on log messages", name: "search", type: String },
         { description: "Filter by invocation status: ok, error, or canceled", name: "status", type: String },
         TARGET_OPTION,
