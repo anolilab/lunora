@@ -214,7 +214,7 @@ const ERROR_CATALOG: {
         readonly hint: readonly [
             "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
             "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`)."
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`)."
         ];
         readonly status: 400;
         readonly title: "Email domain not allowed";

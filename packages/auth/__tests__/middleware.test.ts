@@ -274,6 +274,21 @@ describe("withAuthPlugins — runtime header guard", () => {
         expect(calls).toHaveLength(1);
     });
 
+    it("{ enforceHeaders: false } keeps the withoutHeaders() escape hatch callable", async () => {
+        expect.assertions(2);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls), false);
+
+        // `withoutHeaders` is part of the DECLARED `ctx.authApi` type, so an app
+        // that wrote the documented escape hatch for a cron path must not start
+        // throwing `is not a function` the day it flips the guard off.
+        const result = await authApi.withoutHeaders().banUser({ body: { userId: "u_1" } });
+
+        expect(result).toEqual({ called: true, sawHeaders: false });
+        expect(calls).toHaveLength(1);
+    });
+
     it("guards a real better-auth admin endpoint end to end", async () => {
         expect.assertions(2);
 

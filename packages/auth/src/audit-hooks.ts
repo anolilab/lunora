@@ -70,9 +70,15 @@ interface AuditHookContext {
  *
  * Sign-in is split by what the endpoint actually DOES (plan 280 §4):
  *
- * - `/sign-in/social`, `/sign-in/magic-link` only DISPATCH — the first mints a
- * provider redirect URL, the second sends an email. Nobody is authenticated
- * yet, so these are `sign-in-initiated`, not `sign-in`.
+ * - `/sign-in/social`, `/sign-in/magic-link` and `@better-auth/sso`'s
+ * `/sign-in/sso` only DISPATCH — the first mints a provider redirect URL, the
+ * second sends an email, the third answers `{ url, redirect: true }` pointing
+ * at the identity provider's authorization endpoint. Nobody is authenticated
+ * yet, so these are `sign-in-initiated`, not `sign-in`. Without the `sso`
+ * branch that path fell through to the `/sign-in/` substring below and every
+ * SSO redirect mint was recorded as a completed, successful `sign-in` with no
+ * actor — in exactly the flow where the "who authenticated" trail matters
+ * most.
  * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`, and every
  * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
  * — all three complete a challenged sign-in the same way) are where a
@@ -84,14 +90,16 @@ interface AuditHookContext {
  * `/callback/` check above already covers it, and covering it is CORRECT: an
  * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
  * same substring also catches `@better-auth/sso`'s `/sso/callback/:providerId`,
- * so if `plugins.ts` ever re-exports `sso` (plan 280 §9 Q1) that endpoint is
- * classified rather than silently unrecorded. Checked against the installed
- * `better-auth` and `@better-auth/*` dist for 1.7.1: generic-oauth reuses the
- * core `/callback/:id` endpoint rather than registering its own, and the one
- * dist hit for a literal `/oauth2/callback/` is inside
- * `better-auth/plugins/oauth-popup`, which `plugins.ts` does not re-export —
- * so today the branch fires for the core callback, and stays correct if either
- * of the others becomes reachable. `__tests__/audit.test.ts` pins all three.
+ * which is where an SSO sign-in actually completes — `sso` is re-exported from
+ * `@lunora/auth/plugins/enterprise`, so that path is live, not hypothetical.
+ *
+ * Checked against the installed `better-auth` and `@better-auth/*` dist for
+ * 1.7.3: generic-oauth registers NO endpoints of its own (there is no
+ * `/sign-in/oauth2`) — it registers providers used through the core
+ * `/sign-in/social` and `/callback/:id`, and the one dist hit for a literal
+ * `/oauth2/callback/` is inside `better-auth/plugins/oauth-popup`, which
+ * `plugins.ts` does not re-export — so today the branch fires for the core
+ * callback, and stays correct if the other becomes reachable.
  */
 const eventForPath = (path: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
@@ -101,7 +109,7 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
         return "sign-up";
     }
 
-    if (ends("/sign-in/social") || ends("/sign-in/magic-link")) {
+    if (ends("/sign-in/social") || ends("/sign-in/magic-link") || ends("/sign-in/sso")) {
         return "sign-in-initiated";
     }
 
