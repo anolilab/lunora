@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.68...@lunora/platform-node@1.0.0-alpha.69) (2026-09-12)
+
+### Bug Fixes
+
+* **platform-node:** apply the limits R2 and Queues apply ([#741](https://github.com/anolilab/lunora/issues/741)) ([c0d69f5](https://github.com/anolilab/lunora/commit/c0d69f553adb22336bc4d53a7755cec71fe0a15f))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.118
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+* **@lunora/queue:** upgraded to 1.0.0-alpha.56
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.119
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.42
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+* **@lunora/storage:** upgraded to 1.0.0-alpha.70
+
 ## @lunora/platform-node [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.67...@lunora/platform-node@1.0.0-alpha.68) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
