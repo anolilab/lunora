@@ -750,7 +750,7 @@ modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
 Reports per-function metrics from a **running** worker, ranked into three
 sections:
 
-- **Write-conflict hot-spots**: functions that lose OCC retries most often.
+- **Write-conflict hot-spots**: functions that lose the OCC race most often.
   These are your sharding candidates: a high conflict rate means many writers are
   contending on one Durable Object.
 - **Error hot-spots**: functions by error rate, with the most recent error
