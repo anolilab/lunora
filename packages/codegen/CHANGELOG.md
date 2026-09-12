@@ -1,3 +1,32 @@
+## @lunora/codegen [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.181...@lunora/codegen@1.0.0-alpha.182) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,codegen:** `ColumnMeta` (`@lunora/shard-engine`, mirrored in `@lunora/studio`) gains
+an optional `onDelete`, and the generated shard's `tableColumns` signature widens with it.
+Regenerate with `lunora codegen`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,codegen:** confirm only what a delete measured ([#728](https://github.com/anolilab/lunora/issues/728)) ([da7be59](https://github.com/anolilab/lunora/commit/da7be59f282403363115b82ae0937c18fb84034d))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.132
+* **@lunora/agent:** upgraded to 1.0.0-alpha.111
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/queue:** upgraded to 1.0.0-alpha.55
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
 ## @lunora/codegen [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.180...@lunora/codegen@1.0.0-alpha.181) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
