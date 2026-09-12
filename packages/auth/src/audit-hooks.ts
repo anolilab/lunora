@@ -79,12 +79,20 @@ interface AuditHookContext {
  * SSO redirect mint was recorded as a completed, successful `sign-in` with no
  * actor — in exactly the flow where the "who authenticated" trail matters
  * most.
- * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`, and every
+ * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`,
+ * `@better-auth/sso`'s `/sso/saml2/sp/acs/:providerId`, and every
  * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
  * — all three complete a challenged sign-in the same way) are where a
  * session actually gets issued, so they join credential sign-ins
  * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
  * plain `sign-in`. They were NOT recorded at all before this change.
+ *
+ * The SAML assertion consumer service needs its own branch because it is the
+ * one completion that carries no `/callback/` segment: `processSAMLResponse`
+ * validates the assertion, resolves the user and calls `setSessionCookie`, all
+ * under `/sso/saml2/sp/acs/:providerId`. Matching neither that substring nor
+ * any other branch, it classified as `undefined` — the endpoint that issues
+ * every SAML session left no audit row at all.
  *
  * There is no dedicated `/oauth2/callback/*` branch because the generic
  * `/callback/` check above already covers it, and covering it is CORRECT: an
@@ -113,7 +121,13 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
         return "sign-in-initiated";
     }
 
-    if (normalized.includes("/sign-in/") || normalized.includes("/callback/") || ends("/magic-link/verify") || normalized.includes("/two-factor/verify-")) {
+    if (
+        normalized.includes("/sign-in/") ||
+        normalized.includes("/callback/") ||
+        normalized.includes("/saml2/sp/acs/") ||
+        ends("/magic-link/verify") ||
+        normalized.includes("/two-factor/verify-")
+    ) {
         return "sign-in";
     }
 

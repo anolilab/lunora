@@ -353,6 +353,21 @@ describe("auth audit trail", () => {
             expect(buildAuditEntry({ path: "/api/auth/sso/callback/okta" })?.event).toBe("sign-in");
         });
 
+        /**
+         * SAML completes at the assertion consumer service, not at a `/callback/`
+         * path — `/sso/saml2/sp/acs/:providerId` runs the whole validate-and-issue
+         * pipeline and calls `setSessionCookie`. Matching neither the `/callback/`
+         * substring nor any other branch, it classified as `undefined` and the one
+         * endpoint that issues a SAML session was not recorded at all.
+         */
+        it("classifies the SAML assertion consumer service as a completed `sign-in`", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/acs/okta" })?.event).toBe("sign-in");
+            // The SP metadata document is a public config read, not a sign-in.
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/metadata" })?.event).toBeUndefined();
+        });
+
         it("classifies every sign-in COMPLETION endpoint as `sign-in` (previously unrecorded)", () => {
             expect.assertions(5);
 
