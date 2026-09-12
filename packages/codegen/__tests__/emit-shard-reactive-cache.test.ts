@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { emitShard } from "../src/emit";
+import { emitFunctions, emitShard } from "../src/emit";
 import { emitApp } from "../src/emit-app";
 
 /**
@@ -42,6 +42,21 @@ describe("emitShard — reactive cache wiring", () => {
         expect(emitted).toContain("...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),");
     });
 
+    it("keeps a procedure with a per-dispatch middleware out of the cache", () => {
+        expect.assertions(2);
+
+        // A `.use(rateLimit(...))` step runs as part of the registered function's
+        // handler, so it runs inside the dispatch callback — and a cache HIT never
+        // invokes that callback. The query was therefore charged once and served
+        // from the memo to every request after, each of which still reached the
+        // Durable Object. The builder hoists `perDispatch` onto such a function;
+        // this is the half that acts on it.
+        expect(emitFunctions({ functions: [] })).toContain("perDispatch?: boolean;");
+        expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).toContain(
+            'return registered?.kind === "query" && registered.visibility !== "internal" && registered.perDispatch !== true;',
+        );
+    });
+
     it("overrides isCacheableQuery against the generated registry, excluding internal functions", () => {
         expect.assertions(2);
 
@@ -55,7 +70,7 @@ describe("emitShard — reactive cache wiring", () => {
         // And the half that is a security boundary, not a performance knob: a hit
         // skips `handleRpc` and with it the `internal` refusal, so an internal
         // function must never reach the cache in the first place.
-        expect(emitted).toContain('return registered?.kind === "query" && registered.visibility !== "internal";');
+        expect(emitted).toContain('registered?.kind === "query" && registered.visibility !== "internal"');
     });
 
     it("overrides isPaidFunction against the generated registry", () => {
