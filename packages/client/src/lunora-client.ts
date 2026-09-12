@@ -2437,7 +2437,20 @@ class LunoraClient {
         const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
         const midReconnect = wsState === "connecting" && connectedGate;
 
-        if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
+        // Second half of the ordering barrier above, for the case the barrier
+        // cannot cover: a queued write can be HELD at flush time (its identity
+        // isn't re-confirmed yet — see `replayGateVerdict`), and a held queue
+        // publishes no `offlineFlushes` entry to wait on. This write would then
+        // go out live over the open socket and land BEFORE the older queued one;
+        // last-writer-wins silently resurrects the older value. So while the
+        // durable path still holds anything for this shard, go behind it.
+        //
+        // The durable path's OWN replay is the exception: it re-enters here
+        // carrying the original `mutationId`, is already persisted, and
+        // re-queueing it would loop it back into the queue it is draining.
+        const queuedAhead = shouldQueueOffline && options.mutationId === undefined && this.hasPendingWriteAhead(options.shardKey);
+
+        if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect || queuedAhead) {
             return this.enqueueOfflineMutation(
                 function_,
                 argsRecord,
@@ -4608,6 +4621,28 @@ class LunoraClient {
                 this.queuedIdentities.set(entry.id, issuingIdentity);
             }
         });
+    }
+
+    /**
+     * Is a write for this shard still sitting in the durable path, waiting to
+     * replay? Drives the FIFO gate in {@link mutation}: a live write must never
+     * overtake one that is queued (or held) ahead of it.
+     *
+     * Whichever durable path is wired answers: the built-in {@link OfflineQueue}
+     * knows its entries' shard keys, while an {@link OutboxSink} reports only a
+     * process-wide depth (the executor's pending count is not shard-scoped) —
+     * over-inclusion there costs a write a trip through the outbox it could have
+     * skipped, which is the same trip the writes ahead of it are taking anyway.
+     * A sink that reports nothing keeps the previous behaviour.
+     */
+    private hasPendingWriteAhead(shardKey: string | undefined): boolean {
+        if (this.outbox) {
+            return this.outbox.pending?.() ?? false;
+        }
+
+        const key = connectionKey(shardKey);
+
+        return this.offlineQueue.hasPending((item) => connectionKey(item.shardKey) === key);
     }
 
     /**

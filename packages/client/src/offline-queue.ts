@@ -360,6 +360,17 @@ class OfflineQueue {
     }
 
     /**
+     * Whether any queued mutation matches — the cheap "is there a write ahead of
+     * me on this shard?" question, answered without draining. A write held at
+     * flush time (an identity not yet re-confirmed) sits here with no barrier
+     * published for a later `mutation()` to wait on, so this is what keeps a
+     * live write from overtaking it.
+     */
+    public hasPending(predicate: (item: QueuedMutation) => boolean): boolean {
+        return this.items.some((item) => predicate(item));
+    }
+
+    /**
      * Remove and return queued mutations. With no `predicate`, drains the whole
      * queue. With one, drains only matching entries (preserving FIFO order) and
      * leaves the rest queued — used to flush a single shard's writes when its

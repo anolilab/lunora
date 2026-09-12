@@ -90,6 +90,21 @@ describe(createExecutorOutboxSink, () => {
 
         expect(seen).toStrictEqual([OUTBOX_MUTATION_FN_NAME]);
     });
+
+    it("reports pending writes so the client keeps a live mutation behind them", async () => {
+        const { executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        // Nothing durable yet — a fresh write may go out live.
+        expect(sink.pending?.()).toBe(false);
+
+        await sink.enqueue(outboxMutation(1));
+
+        // A write is persisted and unreplayed: the client must queue behind it
+        // rather than send past it (which would invert FIFO if this one is
+        // deferred on an identity that isn't re-confirmed yet).
+        expect(sink.pending?.()).toBe(true);
+    });
 });
 
 /** A SyncWriter that records the writes it received, in order. */
