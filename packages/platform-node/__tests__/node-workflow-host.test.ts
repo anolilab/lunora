@@ -440,6 +440,171 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         }
     });
 
+    it("retries a failing step up to its config limit and memoizes only the attempt that succeeded", async () => {
+        expect.hasAssertions();
+
+        const attempts: number[] = [];
+        const flaky = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { backoff: "constant", delay: 1, limit: 3 } }, async (stepContext) => {
+                    attempts.push(stepContext.attempt);
+
+                    if (stepContext.attempt < 3) {
+                        throw new Error(`attempt ${String(stepContext.attempt)} failed`);
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { flaky } });
+        const instance = await host.bindings.flaky.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("complete");
+        expect(status.output).toBe("charged");
+        // `attempt` is the 1-based counter Cloudflare passes, not a fresh 1 each time.
+        expect(attempts).toStrictEqual([1, 2, 3]);
+    });
+
+    it("gives up after the last attempt and errors the run", async () => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const doomed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("doomed", { retries: { delay: 1, limit: 2 } }, async () => {
+                    runs += 1;
+
+                    throw new Error("always fails");
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { doomed } });
+        const instance = await host.bindings.doomed.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(runs).toBe(2);
+        expect(status.error?.message).toBe("always fails");
+    });
+
+    it("runs rollbacks in reverse declaration order when a later step fails", async () => {
+        expect.hasAssertions();
+
+        const unwound: { output: unknown; stepName: string }[] = [];
+        const saga = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    {
+                        rollback: async (rollbackContext) => {
+                            unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                        },
+                    },
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { saga } });
+        const instance = await host.bindings.saga.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // The failing step compensates first, with no output — it never produced
+        // one — then the completed steps unwind newest-first with theirs.
+        expect(unwound).toStrictEqual([
+            { output: undefined, stepName: "ship" },
+            { output: "charge-1", stepName: "charge" },
+            { output: "reservation-1", stepName: "reserve" },
+        ]);
+    });
+
+    it("compensates a step that completed before a suspension", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const resumed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push(rollbackContext.stepName);
+                    },
+                });
+                await ctx.step.sleep("wait", 5);
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { resumed } });
+        const instance = await host.bindings.resumed.create({});
+
+        const suspended = await instance.status();
+
+        expect(suspended.status).toBe("waiting");
+        expect(unwound).toStrictEqual([]);
+
+        await sleep(15);
+        await instance.resume();
+
+        // The failure happens in a second activation, after the engine replayed
+        // the body — the replayed `reserve` re-registers its rollback, which is
+        // the only reason the earlier step is compensable at all.
+        const failed = await instance.status();
+
+        expect(failed.status).toBe("errored");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("does not let a throwing rollback mask the step error or strand the rest of the unwind", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const messy = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async () => {
+                        unwound.push("reserve");
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async () => {
+                        throw new Error("compensation exploded");
+                    },
+                });
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { messy } });
+        const instance = await host.bindings.messy.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toBe("carrier down");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
     it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {
         expect.hasAssertions();
 
