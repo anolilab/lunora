@@ -263,6 +263,15 @@ interface DataBrowserModel {
     /** Toggle a column into / out of the facet sidebar (fetches its summary when turned on). */
     toggleFacet: (column: string) => void;
     total: number;
+
+    /**
+     * Whether {@link DataBrowserModel.total} is the COUNT the server returned, or
+     * still the first-load lower bound derived from the loaded page. A destructive
+     * confirmation must not quote the lower bound — the page is 50 rows and the
+     * delete is the whole predicate — so the buttons drop the number until this
+     * is `true`.
+     */
+    totalKnown: boolean;
     viewMode: "json" | "table";
     writeError: null | string;
     /** Outcome line for the last completed bulk op — how many rows it actually wrote. */
@@ -1093,7 +1102,9 @@ const useDataBrowser = ({
     // `offset + rows shown` — so a page with rows never briefly reads "0 of 0".
     // The count resolves alongside the page on first load and stays cached across
     // paging, so this fallback is a brief first-load transient only.
-    const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
+    const countTotal = countQuery.data?.total;
+    const totalKnown = countTotal !== undefined;
+    const total = countTotal ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
 
     // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
@@ -1102,7 +1113,11 @@ const useDataBrowser = ({
     // DROPPED there, so counting raw `filters.length` offered "Delete N matching"
     // over the whole table and then sent `filters: []`, which the server refuses.
     const hasPredicate = search !== "" || toFilterClauses(filters).length > 0;
-    const hasNext = page !== null && offset + page.rows.length < total;
+    // With the COUNT still pending, `total` is exactly `offset + rows.length`, so
+    // comparing against it always says "no next page" and freezes the pager on
+    // page one. A full page is the only next-page evidence available until the
+    // real count lands.
+    const hasNext = page !== null && (totalKnown ? offset + page.rows.length < total : page.rows.length === pageSize);
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
@@ -1310,6 +1325,7 @@ const useDataBrowser = ({
         tablesError,
         toggleFacet,
         total,
+        totalKnown,
         viewMode,
         writeError,
         writeNotice,

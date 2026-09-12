@@ -302,6 +302,15 @@ interface ColumnMeta {
      * column — one of those must not be offered a control that writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to —
+     * what the writer actually does to this row when the referenced parent is
+     * deleted. Absent when the column is not an FK, or when the schema declared
+     * no action for it. Paired with {@link ColumnMeta.ref}, which names the
+     * parent table.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */

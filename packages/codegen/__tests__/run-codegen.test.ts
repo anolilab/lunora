@@ -3745,6 +3745,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('"type": "id"');
         });
 
+        it("carries each foreign key's declared onDelete onto its column", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [
+                            { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" },
+                            { field: "editorId", kind: "one", name: "editor", onDelete: "restrict", references: "_id", table: "users" },
+                            // No declared action — the column must stay silent rather
+                            // than inherit a sibling's.
+                            { field: "reviewerId", kind: "one", name: "reviewer", references: "_id", table: "users" },
+                        ],
+                        searchIndexes: [],
+                        shape: {
+                            authorId: { kind: "id", tableName: "users" },
+                            editorId: { kind: "id", tableName: "users" },
+                            reviewerId: { kind: "id", tableName: "users" },
+                        },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const columns = JSON.parse(/const LUNORA_TABLE_COLUMNS[^=]+= (?<json>\{.*?\n\});/su.exec(emitShard({ schema }))?.groups?.["json"] ?? "{}") as {
+                posts: { name: string; onDelete?: string }[];
+            };
+            const byName = new Map(columns.posts.map((column) => [column.name, column.onDelete]));
+
+            expect(byName.get("authorId")).toBe("cascade");
+            expect(byName.get("editorId")).toBe("restrict");
+            expect(byName.get("reviewerId")).toBeUndefined();
+        });
+
         it("flags a v.storage() column with isStorage: true", () => {
             expect.assertions(1);
 
@@ -3775,9 +3814,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
-            expect(output).toContain(
-                "Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>",
-            );
+            expect(output).toContain('onDelete?: "cascade" | "restrict" | "set null";');
         });
 
         it("names the members of a string-literal union so the row editor can offer them", () => {

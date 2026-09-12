@@ -3066,6 +3066,100 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
 });
 
 /**
+ * The page read (`skipCount: true`, one `pageSize` window) and the COUNT are
+ * independent admin RPCs, and the COUNT is by far the slower of the two — a
+ * `search` runs `instr(...)` over every column of every row. Until it lands the
+ * browser's `total` is a LOWER BOUND derived from the loaded page, and quoting
+ * it at a destructive step promised "Clear all 50 rows?" over a table the op
+ * then emptied entirely.
+ */
+describe("destructive labels while the COUNT is still pending", () => {
+    const ROWS = Array.from({ length: 500 }, (_, index) => {
+        return { __id__: `r${index.toString()}`, text: `row ${index.toString()}` };
+    });
+
+    /** A client that serves the page immediately and leaves the COUNT read hanging. */
+    const createPendingCountClient = (): MockClientHooks =>
+        createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 500 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable || reference === ADMIN_FUNCTIONS.deleteRows) {
+                    return { count: ROWS.length, done: true };
+                }
+
+                const { limit = 50, offset = 0, skipCount } = args as { limit?: number; offset?: number; skipCount?: boolean };
+
+                // The COUNT read is the one WITHOUT `skipCount`. Never resolves.
+                if (skipCount !== true) {
+                    return new Promise(() => {});
+                }
+
+                return { columns: ["__id__", "text"], rows: ROWS.slice(offset, offset + limit) };
+            },
+        });
+
+    const openTable = async (): Promise<void> => {
+        render(renderBrowser(createPendingCountClient(), { editable: true, pageSize: 50 }));
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+    };
+
+    it("never quotes the page size on the clear-table button or its confirm", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        const clear = screen.getByTestId("db-clear-table");
+
+        expect(clear.textContent).toBe("Clear table");
+
+        fireEvent.click(clear);
+
+        expect(screen.getByTestId("db-clear-table-confirm").textContent).toBe("Clear every row and everything that cascades?");
+    });
+
+    it("never quotes the page size on 'Delete N matching'", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+
+        const bulk = await screen.findByTestId("db-bulk-delete");
+
+        expect(bulk.textContent).toBe("Delete matching");
+
+        fireEvent.click(bulk);
+
+        expect(screen.getByTestId("db-bulk-delete-confirm").textContent).toBe("Delete all matching rows and everything that cascades?");
+    });
+
+    it("keeps the pager's Next reachable on a full page", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        // `total` is exactly `offset + rows.length` while the COUNT is pending, so
+        // comparing against it froze the pager on page one.
+        expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(false);
+    });
+
+    it("withholds the bulk-patch action until the count it quotes exists", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+        await screen.findByTestId("db-bulk-delete");
+
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+    });
+});
+
+/**
  * Plan 265 made `v.bigint()` / `v.bytes()` storable by routing `__doc__` through
  * the wire codec, so a decoded row now reaches the browser carrying real
  * `bigint` and `ArrayBuffer` values rather than JSON-safe stand-ins. The JSON

@@ -50,6 +50,7 @@ const DataBrowserViewControls = ({
     onShowTable,
     onToggleMask,
     total,
+    totalKnown,
     viewMode,
 }: {
     columns: string[];
@@ -86,6 +87,14 @@ const DataBrowserViewControls = ({
     onShowTable: () => void;
     onToggleMask: () => void;
     total: number;
+
+    /**
+     * Whether `total` is the server's COUNT rather than the first-load lower
+     * bound. The COUNT is a separate, much slower read than the 50-row page, so
+     * until it lands `total` is the page size — quoting it would promise "Clear
+     * all 50 rows?" over a table the op then empties entirely.
+     */
+    totalKnown: boolean;
     viewMode: "json" | "table";
 }): ReactElement => {
     const t = useT();
@@ -123,9 +132,24 @@ const DataBrowserViewControls = ({
                         {t("Generate rows")}
                     </button>
                 )}
+                {/*
+                 * The count is dropped, not defaulted, while the COUNT read is still
+                 * in flight: `total` is then the loaded page's length and the delete
+                 * runs over the whole predicate. Both labels also say the delete
+                 * cascades — these bulk paths never open the per-row cascade preview,
+                 * so this is the only place the operator is told.
+                 */}
                 {editable && total > 0 && hasPredicate && (
-                    <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
-                        {`Delete ${total.toString()} matching`}
+                    <ConfirmButton
+                        confirmLabel={
+                            totalKnown
+                                ? t("Delete {total} matching rows and everything that cascades?", { total: total.toString() })
+                                : t("Delete all matching rows and everything that cascades?")
+                        }
+                        onConfirm={onBulkDelete}
+                        testId="db-bulk-delete"
+                    >
+                        {totalKnown ? t("Delete {total} matching", { total: total.toString() }) : t("Delete matching")}
                     </ConfirmButton>
                 )}
                 {/*
@@ -137,15 +161,26 @@ const DataBrowserViewControls = ({
                  *
                  * No `ConfirmButton` on top: the dialog is the confirmation step — it
                  * names the row count and cannot be submitted without a parsed value.
+                 * Which is why this one waits for `totalKnown` rather than dropping
+                 * the number the way the two delete buttons do: every line of that
+                 * dialog is built from the count, including the unique-index guard.
                  */}
-                {editable && total > 0 && hasPredicate && (
+                {editable && totalKnown && total > 0 && hasPredicate && (
                     <button className={CONTROL_TOGGLE_BTN} data-testid="db-bulk-patch" onClick={onBulkPatch} type="button">
                         {t("Set column on {total} matching", { total: total.toString() })}
                     </button>
                 )}
                 {editable && total > 0 && !hasPredicate && (
-                    <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
-                        {`Clear table (${total.toString()})`}
+                    <ConfirmButton
+                        confirmLabel={
+                            totalKnown
+                                ? t("Clear all {total} rows and everything that cascades?", { total: total.toString() })
+                                : t("Clear every row and everything that cascades?")
+                        }
+                        onConfirm={onClearTable}
+                        testId="db-clear-table"
+                    >
+                        {totalKnown ? t("Clear table ({total})", { total: total.toString() }) : t("Clear table")}
                     </ConfirmButton>
                 )}
             </div>
@@ -259,6 +294,7 @@ const DataBrowserPage = ({
                 onShowTable={browser.showTable}
                 onToggleMask={preferences.onToggleMask}
                 total={browser.total}
+                totalKnown={browser.totalKnown}
                 viewMode={browser.viewMode}
             />
 

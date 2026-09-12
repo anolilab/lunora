@@ -217,12 +217,14 @@ const QueuesMessagesTab = ({
                     {t("Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.")}
                 </p>
                 <div className="ml-auto">
-                    <ConfirmButton
-                        confirmLabel={t("Clear {count} messages?", { count: messages.length })}
-                        disabled={messages.length === 0}
-                        onConfirm={onClear}
-                        testId="queues-clear"
-                    >
+                    {/*
+                     * No count in the confirm: `messages` is one loaded page
+                     * ({@link DEFAULT_MESSAGE_LIMIT}) while the clear empties the
+                     * whole table, which retains up to `QUEUE_RETENTION` rows. The
+                     * panel has no total to quote, so it names the scope instead of
+                     * a number it did not measure.
+                     */}
+                    <ConfirmButton confirmLabel={t("Clear the whole message log?")} disabled={messages.length === 0} onConfirm={onClear} testId="queues-clear">
                         {t("Clear log")}
                     </ConfirmButton>
                 </div>

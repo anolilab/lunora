@@ -17,12 +17,11 @@ import type { ColumnMeta } from "./admin";
  * `describeTables` column metadata every data-browser session already loads.
  *
  * `ColumnMeta.ref` names the FK target of a `v.id("target")` column, which is
- * the edge the impact walk follows. It does NOT carry the declared `onDelete`
- * action — that lives in the schema and is not on the admin wire — so every
- * relation here is emitted with `onDelete` UNSET, and the preview renders those
- * edges as "action not declared to the studio" rather than claiming a cascade it
- * cannot verify. A feeder that does know the action (a real
- * {@link AdvisorSchema}) sets it and the preview labels each edge exactly.
+ * the edge the impact walk follows, and `ColumnMeta.onDelete` carries the action
+ * the writer will actually apply to the child rows. Both come from codegen's
+ * relation graph, so the preview can label each edge `cascade` / `restrict` /
+ * `set null` exactly. `onDelete` stays absent when the schema declared no action
+ * for that FK, and the preview says so rather than guessing.
  */
 const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, ReadonlyArray<ColumnMeta>>>): AdvisorSchema => {
     return {
@@ -34,7 +33,7 @@ const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, Readon
                 relations: columns
                     .filter((column) => column.ref !== undefined)
                     .map((column): AdvisorRelation => {
-                        return { field: column.name, kind: "one", name: column.name, references: column.ref as string, table: name };
+                        return { field: column.name, kind: "one", name: column.name, onDelete: column.onDelete, references: column.ref as string, table: name };
                     }),
             };
         }),

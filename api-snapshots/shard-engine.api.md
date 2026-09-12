@@ -418,6 +418,7 @@ interface ColumnMeta {
     isStorage?: boolean;
     name: string;
     nullable?: boolean;
+    onDelete?: "cascade" | "restrict" | "set null";
     optional: boolean;
     pk?: boolean;
     ref?: string;

@@ -345,8 +345,17 @@ const SelectionBar = ({
             <button className={CONTROL_BTN} data-testid="grid-selection-clear" onClick={onClear} type="button">
                 {t("Clear")}
             </button>
+            {/*
+             * `count` is measured (the checked rows), but the delete also removes
+             * whatever cascades off them — and this path never opens the per-row
+             * cascade preview, so the confirm is where that has to be said.
+             */}
             {editable && (
-                <ConfirmButton confirmLabel={t("Delete {count} rows?", { count })} onConfirm={onDelete} testId="grid-selection-delete">
+                <ConfirmButton
+                    confirmLabel={t("Delete {count} rows and everything that cascades?", { count })}
+                    onConfirm={onDelete}
+                    testId="grid-selection-delete"
+                >
                     {t("Delete {count}", { count })}
                 </ConfirmButton>
             )}
