@@ -2,9 +2,9 @@ import type { D1Like } from "@lunora/notify";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import notifyConfig from "../../lunora/notify.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
+import notifyConfig from "../../lunora/notify.js";
 
 // The generated ShardDO wires `ctx.notify` / `ctx.push` from `lunora/notify.ts`
 // (codegen discovers the default export) onto every handler ctx.
@@ -18,7 +18,7 @@ interface Env extends Record<string, unknown> {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
 
 /**
  * Worker entry. Beyond the ShardDO binding, it threads the SAME `@lunora/notify`
@@ -29,14 +29,11 @@ let worker: ReturnType<typeof createWorker> | null = null;
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!worker) {
-            worker = createWorker({
-                notifySubscriptionStore: notifyConfig.store?.(env),
-                openApiSpec,
-                shardDO: env.SHARD,
-            });
-        }
-
+        worker ??= createWorker({
+            notifySubscriptionStore: notifyConfig.store?.(env),
+            openApiSpec,
+            shardDO: env.SHARD,
+        });
         return worker.fetch(request, env, ctx);
     },
 };

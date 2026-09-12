@@ -1,6 +1,7 @@
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import focusOnMount from "./focus-on-mount.js";
 import type { Status, Task } from "./types.js";
 
 const LABELS: Record<Status, string> = {
@@ -35,9 +36,9 @@ interface ColumnProperties {
     draggable: boolean;
     onCreate: (status: Status, title: string) => void;
     onDelete: (task: Task) => void;
+    onDragStart: (task: Task) => void;
     onDrop: (status: Status, index: number) => void;
     onRename: (task: Task, title: string) => void;
-    onDragStart: (task: Task) => void;
     status: Status;
     tasks: Task[];
 }
@@ -67,13 +68,20 @@ export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart
     };
 
     return (
-        <section className="column" style={{ "--col": columnIndex } as CSSProperties} aria-label={LABELS[status]}>
+        <section aria-label={LABELS[status]} className="column" style={{ "--col": columnIndex } as CSSProperties}>
             <header className="column-header">
                 <h2>{LABELS[status]}</h2>
                 <span className="count">{tasks.length}</span>
             </header>
 
-            <div className="column-body" onDragLeave={() => setDropIndex(null)} onDragOver={onDragOver} onDrop={onDropCard}>
+            <div
+                className="column-body"
+                onDragLeave={() => {
+                    setDropIndex(null);
+                }}
+                onDragOver={onDragOver}
+                onDrop={onDropCard}
+            >
                 {tasks.map((task, index) => (
                     <div key={task._id} style={{ "--i": index } as CSSProperties}>
                         {dropIndex === index && <div className="drop-indicator" />}
@@ -81,15 +89,18 @@ export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart
                             className="card"
                             data-card=""
                             draggable={draggable}
-                            onDragEnd={() => setDropIndex(null)}
+                            onDragEnd={() => {
+                                setDropIndex(null);
+                            }}
                             onDragStart={(event) => {
-                                event.dataTransfer.effectAllowed = "move";
+                                const { dataTransfer } = event;
+
+                                dataTransfer.effectAllowed = "move";
                                 onDragStart(task);
                             }}
                         >
                             {editing === task._id ? (
                                 <input
-                                    autoFocus
                                     aria-label="Card title"
                                     className="card-input"
                                     defaultValue={task.title}
@@ -111,13 +122,27 @@ export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart
                                             setEditing(null);
                                         }
                                     }}
+                                    ref={focusOnMount}
                                 />
                             ) : (
                                 <>
-                                    <button className="card-title" onClick={() => setEditing(task._id)} type="button">
+                                    <button
+                                        className="card-title"
+                                        onClick={() => {
+                                            setEditing(task._id);
+                                        }}
+                                        type="button"
+                                    >
                                         {task.title}
                                     </button>
-                                    <button aria-label={`Delete ${task.title}`} className="card-delete" onClick={() => onDelete(task)} type="button">
+                                    <button
+                                        aria-label={`Delete ${task.title}`}
+                                        className="card-delete"
+                                        onClick={() => {
+                                            onDelete(task);
+                                        }}
+                                        type="button"
+                                    >
                                         ×
                                     </button>
                                 </>
@@ -131,10 +156,11 @@ export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart
 
             {composing ? (
                 <input
-                    autoFocus
                     aria-label={`New card in ${LABELS[status]}`}
                     className="card-input"
-                    onBlur={() => setComposing(false)}
+                    onBlur={() => {
+                        setComposing(false);
+                    }}
                     onKeyDown={(event) => {
                         if (event.key === "Escape") {
                             setComposing(false);
@@ -147,14 +173,23 @@ export const Column = ({ columnIndex, draggable, onCreate, onDelete, onDragStart
                         const title = event.currentTarget.value.trim();
 
                         if (title) {
+                            const field = event.currentTarget;
+
                             onCreate(status, title);
-                            event.currentTarget.value = "";
+                            field.value = "";
                         }
                     }}
                     placeholder="Card title, then Enter"
+                    ref={focusOnMount}
                 />
             ) : (
-                <button className="add-card" onClick={() => setComposing(true)} type="button">
+                <button
+                    className="add-card"
+                    onClick={() => {
+                        setComposing(true);
+                    }}
+                    type="button"
+                >
                     + Add a card
                 </button>
             )}

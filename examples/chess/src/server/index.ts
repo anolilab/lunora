@@ -1,8 +1,8 @@
 import type { D1DatabaseLike } from "@lunora/d1";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 
-import { authOptions } from "../../lunora/auth.js";
 import { defineApp } from "../../lunora/_generated/app.js";
+import { authOptions } from "../../lunora/auth.js";
 
 interface Env {
     AUTH_SECRET: string;
@@ -30,7 +30,7 @@ const app = defineApp<Env>()
     .auth({ d1: (env) => env.DB, options: authOptions })
     .build();
 
-export const ShardDO = app.ShardDO;
+export const { ShardDO } = app;
 
 // The composed app IS the module worker — exported wholesale rather than
 // re-wrapped, so every handler `.build()` composes reaches Cloudflare. A

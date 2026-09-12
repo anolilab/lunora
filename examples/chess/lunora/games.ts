@@ -1,6 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
+import { mutation, query, v } from "./_generated/server.js";
+import type { PieceType } from "./chess.js";
 import {
     applyMove,
     createInitialState,
@@ -12,25 +16,54 @@ import {
     nameToSquare,
     serializeState,
 } from "./chess.js";
-import type { PieceType } from "./chess.js";
 import { ratingUpdates } from "./players.js";
 import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
-import { mutation, query, v } from "./_generated/server.js";
+
+/** The terminal/check marker a move produced, or `undefined` for an ordinary move. */
+const specialOf = (position: { isCheck: boolean; isCheckmate: boolean; isStalemate: boolean }): string | undefined => {
+    if (position.isCheckmate) {
+        return "checkmate";
+    }
+
+    if (position.isStalemate) {
+        return "stalemate";
+    }
+
+    return position.isCheck ? "check" : undefined;
+};
+
+const settle = async (ctx: MutationCtx, game: Document_<"games">, result: "black_wins" | "draw" | "white_wins"): Promise<void> => {
+    const profileOf = async (userId: string): Promise<Document_<"profiles"> | null> =>
+        ctx.db
+            .query("profiles")
+            .withIndex("by_user", (q) => q.eq("userId", userId))
+            .first();
+
+    const white = await profileOf(game.whiteId);
+    const black = await profileOf(game.blackId);
+
+    if (!white || !black) {
+        return;
+    }
+
+    const updates = ratingUpdates(white, black, result);
+
+    await ctx.db.patch(white._id, updates.white);
+    await ctx.db.patch(black._id, updates.black);
+};
 
 /** Signed-in app, so limits key on the player rather than the IP. */
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byPlayer = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
-const PROMOTION_CHOICES = new Set<PieceType>(["Q", "R", "B", "N"]);
+const PROMOTION_CHOICES = new Set<PieceType>(["B", "N", "Q", "R"]);
 
 export const get = query
     .input({ gameId: v.id("games") })
-    .query(async ({ args: { gameId }, ctx }): Promise<Doc<"games"> | null> => (await ctx.db.get(gameId)) ?? null);
+    .query(async ({ args: { gameId }, ctx }): Promise<Document_<"games"> | null> => (await ctx.db.get(gameId)) ?? null);
 
 /** The move list, oldest first — the board's history panel subscribes to this. */
-export const moves = query.input({ gameId: v.id("games") }).query(async ({ args: { gameId }, ctx }): Promise<Doc<"moves">[]> =>
+export const moves = query.input({ gameId: v.id("games") }).query(async ({ args: { gameId }, ctx }): Promise<Document_<"moves">[]> =>
     ctx.db
         .query("moves")
         .withIndex("by_game_turn", (q) => q.eq("gameId", gameId))
@@ -39,19 +72,19 @@ export const moves = query.input({ gameId: v.id("games") }).query(async ({ args:
 );
 
 /** Games in progress. Anyone signed in may subscribe to one and watch it move — that is all spectating is. */
-export const listActive = query.query(async ({ ctx }): Promise<Doc<"games">[]> =>
+export const listActive = query.query(async ({ ctx }): Promise<Document_<"games">[]> =>
     ctx.db
         .query("games")
         .withIndex("by_status", (q) => q.eq("status", "active"))
         .collect(),
 );
 
-export const mine = query.query(async ({ ctx }): Promise<Doc<"games">[]> => {
+export const mine = query.query(async ({ ctx }): Promise<Document_<"games">[]> => {
     if (!ctx.auth.userId) {
         return [];
     }
 
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
     const asWhite = await ctx.db
         .query("games")
         .withIndex("by_white", (q) => q.eq("whiteId", userId))
@@ -61,7 +94,7 @@ export const mine = query.query(async ({ ctx }): Promise<Doc<"games">[]> => {
         .withIndex("by_black", (q) => q.eq("blackId", userId))
         .collect();
 
-    return [...asWhite, ...asBlack].sort((a, b) => b.startedAt - a.startedAt);
+    return [...asWhite, ...asBlack].toSorted((a, b) => b.startedAt - a.startedAt);
 });
 
 /** Host starts play. Host takes white. */
@@ -110,6 +143,17 @@ export const start = mutation
         return gameId;
     });
 
+/** Shape checks on the raw move arguments, before they touch the engine. */
+const assertMoveArguments = (from: string, to: string, promotion: string | undefined): void => {
+    if (!isSquareName(from) || !isSquareName(to)) {
+        throw new LunoraError("BAD_REQUEST", 'squares must look like "e2"');
+    }
+
+    if (promotion !== undefined && !PROMOTION_CHOICES.has(promotion as PieceType)) {
+        throw new LunoraError("BAD_REQUEST", "a pawn may only promote to Q, R, B or N");
+    }
+};
+
 /**
  * Play a move.
  *
@@ -146,19 +190,14 @@ export const makeMove = mutation
             throw new LunoraError("CONFLICT", "this game is over");
         }
 
-        const color = ctx.auth.userId === game.whiteId ? "white" : ctx.auth.userId === game.blackId ? "black" : null;
+        const blackSeat = ctx.auth.userId === game.blackId ? "black" : null;
+        const color = ctx.auth.userId === game.whiteId ? "white" : blackSeat;
 
         if (!color) {
             throw new LunoraError("UNAUTHORIZED", "you are not playing in this game");
         }
 
-        if (!isSquareName(from) || !isSquareName(to)) {
-            throw new LunoraError("BAD_REQUEST", 'squares must look like "e2"');
-        }
-
-        if (promotion !== undefined && !PROMOTION_CHOICES.has(promotion as PieceType)) {
-            throw new LunoraError("BAD_REQUEST", "a pawn may only promote to Q, R, B or N");
-        }
+        assertMoveArguments(from, to, promotion);
 
         const position = deserializeState(game.position);
 
@@ -188,7 +227,7 @@ export const makeMove = mutation
             gameId,
             notation,
             playerId: ctx.auth.userId,
-            special: next.isCheckmate ? "checkmate" : next.isStalemate ? "stalemate" : next.isCheck ? "check" : undefined,
+            special: specialOf(next),
             to,
             turnNumber: game.moveCount + 1,
         });
@@ -221,10 +260,10 @@ export const makeMove = mutation
  * game-action mutations below all need the same pair of checks, and a guard
  * that is copied is a guard that eventually diverges.
  */
-const requirePlayer = async (ctx: MutationCtx, gameId: Id<"games">): Promise<Doc<"games">> => {
+const requirePlayer = async (ctx: MutationCtx, gameId: Id<"games">): Promise<Document_<"games">> => {
     const game = await ctx.db.get(gameId);
 
-    if (!game || game.status !== "active") {
+    if (game?.status !== "active") {
         throw new LunoraError("CONFLICT", "this game is not in progress");
     }
 
@@ -236,25 +275,6 @@ const requirePlayer = async (ctx: MutationCtx, gameId: Id<"games">): Promise<Doc
 };
 
 /** Apply a finished game's result to both profiles, in the same transaction that finished it. */
-const settle = async (ctx: MutationCtx, game: Doc<"games">, result: "black_wins" | "draw" | "white_wins"): Promise<void> => {
-    const profileOf = async (userId: string): Promise<Doc<"profiles"> | null> =>
-        ctx.db
-            .query("profiles")
-            .withIndex("by_user", (q) => q.eq("userId", userId))
-            .first();
-
-    const white = await profileOf(game.whiteId);
-    const black = await profileOf(game.blackId);
-
-    if (!white || !black) {
-        return;
-    }
-
-    const updates = ratingUpdates(white, black, result);
-
-    await ctx.db.patch(white._id, updates.white);
-    await ctx.db.patch(black._id, updates.black);
-};
 
 export const resign = mutation
     .use(rateLimit(mutationLimiter, "move", byPlayer))

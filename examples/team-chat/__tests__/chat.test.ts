@@ -16,6 +16,9 @@ import { list as listMessages, search, send } from "../lunora/messages";
 import { heartbeat, leave, list as listPresence } from "../lunora/presence";
 import schema from "../lunora/schema";
 
+const SIGN_IN_RE = /sign in/i;
+const ALREADY_EXISTS_RE = /already exists/i;
+
 let t: ReturnType<typeof lunoraTest>;
 let ada: ReturnType<typeof lunoraTest>;
 
@@ -29,20 +32,24 @@ afterEach(() => {
 });
 
 it("shows a signed-out visitor nothing and lets them write nothing", async () => {
+    expect.assertions(2);
     await ada.mutation(create, { name: "general" });
 
     expect(await t.query(listChannels, {})).toStrictEqual([]);
-    await expect(t.mutation(send, { channelId: "general", content: "hi" })).rejects.toThrow(/sign in/i);
+    await expect(t.mutation(send, { channelId: "general", content: "hi" })).rejects.toThrow(SIGN_IN_RE);
 });
 
 it("creates a channel once, slugged, and rejects the duplicate", async () => {
+    expect.assertions(2);
     await ada.mutation(create, { name: "General Chat" });
 
-    expect((await ada.query(listChannels, {})).map((channel) => channel.name)).toStrictEqual(["general-chat"]);
-    await expect(ada.mutation(create, { name: "general-chat" })).rejects.toThrow(/already exists/i);
+    const awaited1 = await ada.query(listChannels, {});
+    expect(awaited1.map((channel) => channel.name)).toStrictEqual(["general-chat"]);
+    await expect(ada.mutation(create, { name: "general-chat" })).rejects.toThrow(ALREADY_EXISTS_RE);
 });
 
 it("posts messages into a channel and reads them back", async () => {
+    expect.assertions(1);
     await ada.mutation(create, { name: "general" });
     await ada.mutation(send, { channelId: "general", content: "hello" });
     await t.withIdentity({ userId: "u-grace" }).mutation(send, { channelId: "general", content: "hi back" });
@@ -72,28 +79,35 @@ it("posts messages into a channel and reads them back", async () => {
 });
 
 it("keeps channels apart", async () => {
+    expect.assertions(1);
     await ada.mutation(send, { channelId: "general", content: "in general" });
     await ada.mutation(send, { channelId: "random", content: "in random" });
 
-    expect((await ada.query(listMessages, { channelId: "random" })).map((message) => message.content)).toStrictEqual(["in random"]);
+    const awaited2 = await ada.query(listMessages, { channelId: "random" });
+    expect(awaited2.map((message) => message.content)).toStrictEqual(["in random"]);
 });
 
 it("refuses an attachment key that belongs to someone else", async () => {
+    expect.assertions(1);
     await expect(ada.mutation(send, { attachmentKey: "general/u-grace/secret.png", channelId: "general", content: "" })).rejects.toThrow();
 });
 
 it("searches within a channel and returns nothing for an empty term", async () => {
+    expect.assertions(2);
     await ada.mutation(send, { channelId: "general", content: "deploy is green" });
     await ada.mutation(send, { channelId: "general", content: "lunch?" });
 
-    expect((await ada.query(search, { channelId: "general", text: "deploy" })).map((message) => message.content)).toStrictEqual(["deploy is green"]);
+    const awaited3 = await ada.query(search, { channelId: "general", text: "deploy" });
+    expect(awaited3.map((message) => message.content)).toStrictEqual(["deploy is green"]);
     expect(await ada.query(search, { channelId: "general", text: "   " })).toStrictEqual([]);
 });
 
 it("tracks presence per session and clears it on leave", async () => {
+    expect.assertions(3);
     await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "s1" });
 
-    expect((await ada.query(listPresence, { channelId: "general" })).map((row) => row.name)).toStrictEqual(["Ada"]);
+    const awaited4 = await ada.query(listPresence, { channelId: "general" });
+    expect(awaited4.map((row) => row.name)).toStrictEqual(["Ada"]);
 
     // A second heartbeat from the same session must refresh, not duplicate.
     await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "s1" });

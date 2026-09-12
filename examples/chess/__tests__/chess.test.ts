@@ -4,8 +4,10 @@ import type { ChessState } from "../lunora/chess";
 import { applyMove, createInitialState, getGameResult, getMoveNotation, getValidMoves, isValidMove, nameToSquare } from "../lunora/chess";
 
 /** Play a list of `"e2e4"`-style moves, asserting each one is legal. */
-const play = (moves: string[], from: ChessState = createInitialState()): ChessState =>
-    moves.reduce((state, move) => {
+const play = (moves: string[], from: ChessState = createInitialState()): ChessState => {
+    let state = from;
+
+    for (const move of moves) {
         const step = {
             from: nameToSquare(move.slice(0, 2)),
             promotion: move.includes("=") ? (move.at(-1) as "N" | "Q") : undefined,
@@ -14,11 +16,16 @@ const play = (moves: string[], from: ChessState = createInitialState()): ChessSt
 
         expect(isValidMove(state, step), `${move} should be legal`).toBe(true);
 
-        return applyMove(state, step);
-    }, from);
+        state = applyMove(state, step);
+    }
+
+    return state;
+};
 
 describe("chess engine", () => {
     it("opens with twenty legal moves for white", () => {
+        expect.assertions(1);
+
         const state = createInitialState();
         let count = 0;
 
@@ -32,10 +39,13 @@ describe("chess engine", () => {
     });
 
     it("rejects a move by the side that is not to play", () => {
+        expect.assertions(1);
         expect(isValidMove(createInitialState(), { from: nameToSquare("e7"), to: nameToSquare("e5") })).toBe(false);
     });
 
     it("ends the game on checkmate", () => {
+        expect.hasAssertions();
+
         // Fool's mate.
         const state = play(["f2f3", "e7e5", "g2g4", "d8h4"]);
 
@@ -45,6 +55,8 @@ describe("chess engine", () => {
     });
 
     it("will not let a pinned piece expose its own king", () => {
+        expect.hasAssertions();
+
         // The d2 pawn is pinned along the e1–a5 diagonal by the bishop on b4.
         const state = play(["e2e4", "e7e5", "d2d3", "f8b4"]);
 
@@ -52,6 +64,8 @@ describe("chess engine", () => {
     });
 
     it("castles king-side and moves the rook with the king", () => {
+        expect.hasAssertions();
+
         const state = play(["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5", "e1g1"]);
 
         expect(state.board[7][6]).toStrictEqual({ color: "white", type: "K" });
@@ -60,6 +74,8 @@ describe("chess engine", () => {
     });
 
     it("captures en passant, removing the pawn beside the mover", () => {
+        expect.hasAssertions();
+
         const state = play(["e2e4", "a7a6", "e4e5", "d7d5", "e5d6"]);
 
         // The black d5 pawn is gone even though white landed on d6.
@@ -68,6 +84,8 @@ describe("chess engine", () => {
     });
 
     it("promotes a pawn to the requested piece", () => {
+        expect.hasAssertions();
+
         const state = play(["a2a4", "b7b5", "a4b5", "a7a6", "b5a6", "h7h6", "a6a7", "h6h5", "a7b8=N"]);
 
         // The pawn captured the knight on b8 and became a knight itself.
@@ -75,6 +93,8 @@ describe("chess engine", () => {
     });
 
     it("writes notation with capture, check and mate markers", () => {
+        expect.hasAssertions();
+
         const start = createInitialState();
 
         expect(getMoveNotation(start, { from: nameToSquare("g1"), to: nameToSquare("f3") })).toBe("Ngf3");

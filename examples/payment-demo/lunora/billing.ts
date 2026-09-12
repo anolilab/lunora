@@ -1,8 +1,8 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { ActionCtx } from "./_generated/server.js";
 import { action, internalAction, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 // A real app keys checkout on the signed-in user (`ctx.auth.userId`); this demo
 // has no auth, so it uses a fixed reference and an allow-all authorizer (wired in
@@ -100,7 +100,14 @@ export const processWebhook = internalAction
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);
-        const result = (await response.json()) as { applied?: boolean };
+        // Narrowed rather than asserted: the platform types `Response.json()` as
+        // `Promise<unknown>`, and an `as { applied?: boolean }` here is a claim
+        // about a body that crossed an RPC hop. `in` narrows without asserting,
+        // which also keeps `no-unnecessary-type-assertion` from "fixing" the
+        // assertion away and leaving `result` untyped — its autofix did exactly
+        // that, and `tsc` then failed with TS18046.
+        const payload: unknown = await response.json();
+        const applied = typeof payload === "object" && payload !== null && "applied" in payload && payload.applied === true;
 
-        return { applied: result.applied ?? false, status: response.status };
+        return { applied, status: response.status };
     });

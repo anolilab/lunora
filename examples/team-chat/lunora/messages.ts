@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Everyone here is signed in, so limits are keyed by user rather than by IP —
@@ -44,7 +44,7 @@ const attachmentKeyFor = (channelId: string, userId: string): string => `files/c
  * subscriber. Everything a query returns must be a function of the data;
  * `attachmentUrl` below mints the URL on demand instead.
  */
-export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Doc<"messages">[]> => {
+export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Document_<"messages">[]> => {
     if (!ctx.auth.userId) {
         return [];
     }
@@ -63,7 +63,7 @@ export const list = query.input({ channelId: v.string().max(128) }).query(async 
  */
 export const search = query
     .input({ channelId: v.string().max(128), text: v.string().max(200) })
-    .query(async ({ args: { channelId, text }, ctx }): Promise<Doc<"messages">[]> => {
+    .query(async ({ args: { channelId, text }, ctx }): Promise<Document_<"messages">[]> => {
         if (!ctx.auth.userId || !text.trim()) {
             return [];
         }

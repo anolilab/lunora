@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /** Signed-in app, so limits key on the user rather than the IP. */
 const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
@@ -31,7 +31,7 @@ const ALLOWED_AVATAR_TYPES = new Set(["image/avif", "image/jpeg", "image/png", "
  * Every client subscribes to this query, so a per-evaluation URL here would
  * re-push the whole directory to everyone on every unrelated write.
  */
-export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => {
+export const list = query.query(async ({ ctx }): Promise<Document_<"profiles">[]> => {
     if (!ctx.auth.userId) {
         return [];
     }
