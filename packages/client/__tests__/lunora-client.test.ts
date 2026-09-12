@@ -4100,7 +4100,7 @@ describe("lunoraClient", () => {
             await expect(client.getCurrentUser()).resolves.toBeNull();
         });
 
-        it("returns null when the fetch rejects", async () => {
+        it("rejects when the fetch rejects — unreachable is not signed out", async () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
@@ -4111,7 +4111,9 @@ describe("lunoraClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await expect(client.getCurrentUser()).resolves.toBeNull();
+            // Folding this into `null` made it indistinguishable from "the server
+            // says you have no session" — see `auth-gate-contract.test.ts`.
+            await expect(client.getCurrentUser()).rejects.toThrow("offline");
         });
 
         it("honours a custom authBasePath", async () => {
