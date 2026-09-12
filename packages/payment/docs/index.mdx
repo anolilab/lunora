@@ -79,12 +79,12 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                                                                           |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                            |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                                           |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                    |
+| Option          | Type                 | Notes                                                                                                                                                       |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                                        |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
 
 ### Provider adapters
 
@@ -280,10 +280,11 @@ active plans cap the same limit, the most-generous value wins.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` (default) increments; `"set"` reconciles the LOCAL period total.
     // Both are a single append — a `"set"` records the absolute target as a marker
     // the period fold resets to, so concurrent or replayed `"set"` calls resolve
     // last-writer-wins instead of double-applying. Neither mode needs a lock.
+    // `"set"` throws on a provider that meters usage upstream — see the callout below.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -306,6 +307,14 @@ updated.
     **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — a unique index over `(provider, idempotencyKey)` then makes the append exactly-once, so a
     retried call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the
     same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+</Callout>
+
+<Callout type="warn">
+    **`mode: "set"` is local-only, and throws where the provider meters.** Provider meters are additive: they take events, not period totals, so a `"set"` can
+    only be forwarded as a delta against the total just read — and a `"set"` that LOWERS usage has no negative delta to send. `set 10 → set 5 → set 8` would
+    forward `10` then `3`, billing 13 upstream against a local period total of 8. Rather than over-bill silently, `track` rejects `"set"` with a
+    `VALIDATION_ERROR` on any provider whose `capabilities.usageMetering` is `true` (Stripe, Polar, Dodo, Autumn). Use `mode: "add"`, which is exact on both
+    sides. `"set"` stays available where usage is enforced locally.
 </Callout>
 
 ## Webhooks

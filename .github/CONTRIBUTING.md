@@ -40,26 +40,25 @@ We use [Conventional Commits](https://www.conventionalcommits.org/) enforced by 
 <type>(<scope>): <short summary>
 ```
 
-Allowed `<type>` values:
+Allowed `<type>` values — this list is the commitlint `type-enum`, enforced by the `commit-msg`
+hook, and anything outside it is rejected:
 
-| type       | use it for                                                           |
-| ---------- | -------------------------------------------------------------------- |
-| `feat`     | A new user-facing feature.                                           |
-| `fix`      | A bug fix.                                                           |
-| `perf`     | A performance improvement with no behaviour change.                  |
-| `docs`     | Docs-only changes (README, JSDoc, package READMEs).                  |
-| `dx`       | Developer-experience changes (scripts, generators, dev tooling).     |
-| `refactor` | Internal restructure with no observable behaviour change.            |
-| `test`     | Adding or fixing tests.                                              |
-| `workflow` | GitHub Actions / repo automation changes.                            |
-| `build`    | Build pipeline / tsup / bundler / output config.                     |
-| `ci`       | CI plumbing not covered by `workflow`.                               |
-| `chore`    | Anything that doesn't fit and doesn't ship to users.                 |
-| `types`    | Type-only changes (`.d.ts`, generic parameters, etc.).               |
-| `wip`      | Work-in-progress (squashed away before merge).                       |
-| `release`  | Release commits created by `multi-semantic-release` — do not author. |
-| `deps`     | Dependency updates (mostly Renovate / Dependabot).                   |
-| `revert`   | Reverting a previous commit.                                         |
+| type          | use it for                                                 |
+| ------------- | ---------------------------------------------------------- |
+| `feat`        | A new user-facing feature.                                 |
+| `fix`         | A bug fix.                                                 |
+| `perf`        | A performance improvement with no behaviour change.        |
+| `security`    | A change that closes or hardens a security hole.           |
+| `docs`        | Docs-only changes (README, JSDoc, package READMEs).        |
+| `refactor`    | Internal restructure with no observable behaviour change.  |
+| `style`       | Formatting only — no change to what the code means.        |
+| `test`        | Adding or fixing tests.                                    |
+| `build`       | Build pipeline / bundler / output config.                  |
+| `ci`          | CI plumbing and repo automation (GitHub Actions, scripts). |
+| `chore`       | Anything that doesn't fit and doesn't ship to users.       |
+| `deps`        | Dependency updates (mostly Renovate / Dependabot).         |
+| `revert`      | Reverting a previous commit.                               |
+| `translation` | Translation / localisation content.                        |
 
 `<scope>` is the package name minus the `@lunora/` prefix. Examples:
 
@@ -77,7 +76,7 @@ Subject line: imperative, lowercase, no trailing period, ≤ 50 characters where
 ```bash
 # Whole workspace
 pnpm test
-pnpm test:affected     # only projects touched since main
+pnpm test:affected     # only projects touched since alpha
 
 # One package
 pnpm --filter "@lunora/runtime" test
@@ -92,7 +91,7 @@ For real-runtime integration tests against `workerd` + Miniflare, set the opt-in
 LUNORA_WORKERD_TESTS=1 pnpm test
 ```
 
-`LUNORA_WORKERD_TESTS` is opt-in because the workerd pool is slower and currently only meaningful for `@lunora/runtime` and `@lunora/do`. Most contributions don't need it; CI runs both modes.
+`LUNORA_WORKERD_TESTS` is opt-in because the workerd pool is slower and cannot run under coverage. Eleven packages declare a second, gated `workerd` vitest project — run them with `pnpm run test:workerd [pkg…]`. Reach for it whenever you touch SQL, storage, or a Durable Object; CI runs both modes.
 
 ## Linting and types
 
@@ -108,14 +107,14 @@ pnpm lint:package-json:fix
 
 `lint:package-json` runs the same command as the "Lint (package.json sort)" CI job (`vis sort-package-json --check`, which writes nothing and exits 1 naming each unsorted file). No other target looks at key order, so a hand-placed block — `peerDependencies` written above `devDependencies` rather than below it — passes everything else and only fails after a push. Run it whenever you touch a `package.json`.
 
-Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `staged` and `secrets` blocks of [`vis.config.ts`](../vis.config.ts)) run Prettier, ESLint, and a secrets scan on staged files. Don't `--no-verify` past them.
+Pre-commit hooks (vis-native — installed by the root `prepare` script's `vis hook install`, scripts in `.vis/hooks/`, configured in the `staged` and `secrets` blocks of [`vis.config.ts`](../vis.config.ts)) run Prettier, ESLint, and a secrets scan on staged files. Don't `--no-verify` past them.
 
 ## Adding a new package
 
 1. Pick the closest existing package to copy from (`packages/runtime/` is a good template for runtime code; `packages/values/` for pure utility libs).
 2. Copy it into `packages/<name>/` and rename:
     - `package.json` → set `"name": "@lunora/<name>"`, clear `version`/`description`, update keywords.
-    - `project.json` → update `"name"`, `"sourceRoot"`, and vis tags. Every package gets `type:package` and a `category:<slug>` tag (see [`AGENTS.md`](../AGENTS.md) for the categories).
+    - `project.json` → update `"name"`, `"sourceRoot"`, and vis tags. Every package gets `type:package` and a `category:<slug>` tag (the valid slugs are the keys of `CATEGORY_TITLES` in [`apps/docs/scripts/package-categories.js`](../apps/docs/scripts/package-categories.js)).
     - `README.md` → write a 4–8 line description plus a minimal example.
 3. Run `pnpm install` from the repo root so pnpm picks up the new workspace project.
 4. Add a Vitest config under `vitest.config.ts` extending the workspace helper.
@@ -125,9 +124,9 @@ Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `stage
 
 Releases run on **`multi-semantic-release`** triggered by `.github/workflows/semantic-release.yml` on pushes to `alpha` (and later, `main` / `next` / `beta`).
 
-You don't tag, you don't bump versions, you don't author `release` commits. Conventional Commits drive the version bumps; the workflow generates changelogs and publishes per-package.
+You don't tag, you don't bump versions, and you never author a release commit by hand — semantic-release writes those as `chore(release): <pkg>@<version> [skip ci]`. Conventional Commits drive the version bumps; the workflow generates changelogs and publishes per-package.
 
-Until a package has been wired with its own `.releaserc.json` (extending `@anolilab/semantic-release-preset/pnpm`), it is **not** published — early alpha packages are intentionally held back.
+Every publishable package carries its own `.releaserc.json` (extending `@anolilab/semantic-release-preset/pnpm`); only the three `private: true` internal packages lack one, and those are never published.
 
 ## Help
 

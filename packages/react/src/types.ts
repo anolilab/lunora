@@ -1,4 +1,5 @@
 import type { OptimisticUpdate, SubscriptionError, SubscriptionErrorCallback, User } from "@lunora/client";
+import type { AuthStatus } from "@lunora/client/auth";
 import type { PaginationStatus } from "@lunora/client/pagination";
 
 export interface UseQueryOptions {
@@ -90,6 +91,13 @@ export interface UseInfiniteQueryResult<T> {
 
 export interface UseAuthResult {
     setToken: (token: string | null) => void;
+
+    /**
+     * The resolved auth state. Branch on this, not on `user === null` — see the
+     * contract in `@lunora/client/auth`; `user` is `null` both when signed out
+     * and when a held credential's identity could not be resolved.
+     */
+    status: AuthStatus;
     token: string | null;
     user: User | null;
 }
@@ -113,4 +121,5 @@ export {
     type SubscriptionErrorCallback,
     type User,
 } from "@lunora/client";
+export { type AuthStatus } from "@lunora/client/auth";
 export { type PaginationResult, type PaginationStatus } from "@lunora/client/pagination";

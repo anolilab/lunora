@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
@@ -49,12 +49,13 @@ describe("auth gate components", () => {
         expect(screen.queryByTestId("loading")).toBeNull();
     });
 
-    it("renders Authenticated when a token is seeded", () => {
-        expect.assertions(2);
+    it("holds the loading gate for a seeded token until its identity resolve settles", async () => {
+        expect.hasAssertions();
 
         const mock = createMockClient();
 
         mock.getAuthToken.mockReturnValue("seeded-token");
+        mock.setCurrentUser({ id: "u_1" });
 
         render(
             <LunoraProvider client={mock.asClient}>
@@ -62,14 +63,24 @@ describe("auth gate components", () => {
             </LunoraProvider>,
         );
 
-        expect(screen.getByTestId("in").textContent).toBe("in");
+        // The shared `AuthStatus` contract: a held credential whose first
+        // identity resolve is still in flight is `loading`, in every adapter.
+        expect(screen.getByTestId("loading").textContent).toBe("loading");
+        expect(screen.queryByTestId("in")).toBeNull();
+
+        await waitFor(() => {
+            expect(screen.getByTestId("in").textContent).toBe("in");
+        });
+
         expect(screen.queryByTestId("out")).toBeNull();
     });
 
-    it("flips from Unauthenticated to Authenticated when a token is set", () => {
-        expect.assertions(2);
+    it("flips from Unauthenticated through loading to Authenticated when a token is set", async () => {
+        expect.hasAssertions();
 
         const mock = createMockClient();
+
+        mock.setCurrentUser({ id: "u_1" });
 
         render(
             <LunoraProvider client={mock.asClient}>
@@ -83,6 +94,10 @@ describe("auth gate components", () => {
             setTokenHandle!("jwt-123");
         });
 
-        expect(screen.getByTestId("in").textContent).toBe("in");
+        expect(screen.getByTestId("loading").textContent).toBe("loading");
+
+        await waitFor(() => {
+            expect(screen.getByTestId("in").textContent).toBe("in");
+        });
     });
 });

@@ -1,3 +1,31 @@
+## @lunora/values [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.45...@lunora/values@1.0.0-alpha.46) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **values:** `v.bytes()` no longer throws on an `ArrayBufferView`. Code that
+relied on the rejection (to detect a view before converting it) now receives a
+normalised `ArrayBuffer` instead of a `ValidationError`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **values:** accept a buffer view in v.bytes() ([#704](https://github.com/anolilab/lunora/issues/704)) ([6ef377b](https://github.com/anolilab/lunora/commit/6ef377b5b73d4caa6214276934eee0f49288031a))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+## @lunora/values [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.44...@lunora/values@1.0.0-alpha.45) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
 ## @lunora/values [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.43...@lunora/values@1.0.0-alpha.44) (2026-09-11)
 
 ### Bug Fixes

@@ -1,3 +1,23 @@
+## @lunora/nuxt [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.129...@lunora/nuxt@1.0.0-alpha.130) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
+## @lunora/nuxt [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.128...@lunora/nuxt@1.0.0-alpha.129) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+
 ## @lunora/nuxt [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.127...@lunora/nuxt@1.0.0-alpha.128) (2026-09-12)
 
 

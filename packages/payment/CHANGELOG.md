@@ -1,3 +1,23 @@
+## @lunora/payment [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.124...@lunora/payment@1.0.0-alpha.125) (2026-09-12)
+
+### Bug Fixes
+
+* **payment:** correct refund totals and entitlements ([#725](https://github.com/anolilab/lunora/issues/725)) ([2ca1d28](https://github.com/anolilab/lunora/commit/2ca1d28a81fb0c85d91e302c45205b7c44099389))
+* **payment:** stop the ledger recording money that never moved ([#727](https://github.com/anolilab/lunora/issues/727)) ([f9f0630](https://github.com/anolilab/lunora/commit/f9f0630b7c67b1ece56c63873c73a76d38d04411))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+## @lunora/payment [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.123...@lunora/payment@1.0.0-alpha.124) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/payment [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.122...@lunora/payment@1.0.0-alpha.123) (2026-09-12)
 
 

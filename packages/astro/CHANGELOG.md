@@ -1,3 +1,23 @@
+## @lunora/astro [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.136...@lunora/astro@1.0.0-alpha.137) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
+## @lunora/astro [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.135...@lunora/astro@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+
 ## @lunora/astro [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.134...@lunora/astro@1.0.0-alpha.135) (2026-09-12)
 
 

@@ -28,8 +28,16 @@ export const me = query.query(async ({ ctx }): Promise<Doc<"profiles"> | null> =
         .first();
 });
 
-/** Every player, for resolving display names next to a board. Small by construction in a demo. */
-export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => ctx.db.query("profiles").collect());
+/**
+ * Players, for resolving display names next to a board.
+ *
+ * Capped rather than collected whole: the lobby subscribes to this, so an
+ * uncapped read would re-send every profile to every seated client on each
+ * `claim` or rating update. A name that falls outside the cap renders as
+ * "Unknown" — past a few hundred players, resolve names per game instead of
+ * shipping the directory.
+ */
+export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => ctx.db.query("profiles").take(200));
 
 export const leaderboard = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => ctx.db.query("profiles").withIndex("by_rating").order("desc").take(20));
 

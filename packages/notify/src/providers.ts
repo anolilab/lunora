@@ -1,5 +1,5 @@
-import { LunoraError } from "@lunora/errors";
-import type { Middleware, Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result } from "@visulima/notification";
+import { isLunoraError, LunoraError } from "@lunora/errors";
+import type { Middleware, Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result, SendContext } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
 import { retryMiddleware } from "@visulima/notification/middleware";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
@@ -42,6 +42,22 @@ const webPushEndpoint = (target: unknown): string | undefined => {
 
     return typeof endpoint === "string" ? endpoint : undefined;
 };
+
+/**
+ * Which transport a routed push target belongs to. The endpoint IS the decision —
+ * the same one {@link routingPushProvider} partitions `to` on.
+ */
+type PushTransport = "fcm" | "web-push";
+
+/** @see PushTransport */
+const pushTransportOf = (target: unknown): PushTransport => (webPushEndpoint(target) === undefined ? "fcm" : "web-push");
+
+/**
+ * The router's provider id. The engine reports it to the middleware chain as
+ * `SendContext.provider` for EVERY push send, whichever transport ends up
+ * handling it — which is why {@link breakerKeys} exists.
+ */
+const PUSH_ROUTER_ID = "lunora-push-router";
 
 /**
  * Per-isolate memo of the send-time rebinding verdict, keyed by hostname. A
@@ -136,29 +152,6 @@ const mergeSendResults = (first: NotificationResult, second: NotificationResult)
 };
 
 /**
- * Fold the two group outcomes of a mixed-kind push into the single `Result` the
- * caller gets back.
- *
- * Nothing may be dropped in the fold: two successes merge their delivery data
- * (or the receipt names only half the send), two failures keep both causes, and
- * a mixed outcome reports the failure — a partially delivered send is never
- * reported as a success.
- */
-const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
-    if (!webPush.success || !fcm.success) {
-        if (webPush.success || fcm.success) {
-            return webPush.success ? fcm : webPush;
-        }
-
-        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
-    }
-
-    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
-
-    return data === undefined ? { success: true } : { data, success: true };
-};
-
-/**
  * The failure text of a middleware `Result`, or `undefined` when there is none to
  * read. Providers answer with an `Error` (the engine wraps a provider's own
  * failure in a `NotificationError` whose message carries the provider text
@@ -171,6 +164,87 @@ const failureText = (error: unknown): string | undefined => {
     }
 
     return typeof error === "string" ? error : undefined;
+};
+
+/**
+ * The `code` of the error a mixed-kind push answers with when one transport
+ * group delivered and the other did not. Uncatalogued on purpose: it never
+ * reaches the wire — it lands in the `Result` the engine turns into a receipt.
+ */
+const PARTIAL_DELIVERY_CODE = "PUSH_PARTIALLY_DELIVERED";
+
+/**
+ * Whether a failure is the "one group delivered, the other did not" verdict
+ * {@link mergeGroupResults} returns — the one failure that must NOT be retried,
+ * because the retry re-sends the whole payload and the delivered group would get
+ * the notification again on every attempt.
+ */
+const isPartialDelivery = (error: unknown): boolean => isLunoraError(error) && error.code === PARTIAL_DELIVERY_CODE;
+
+/**
+ * The transport whose group failed in a partial delivery, or `undefined` when the
+ * failure is not one.
+ *
+ * {@link mergeGroupResults} records it on the error's `data` as well as in its
+ * prose because {@link perTransportCircuitBreaker} has to charge the failure to the
+ * transport that produced it, and the prose is a message, not a contract.
+ */
+const partialFailedTransport = (error: unknown): PushTransport | undefined => {
+    if (!isPartialDelivery(error)) {
+        return undefined;
+    }
+
+    const { data } = error as LunoraError;
+
+    return data === "fcm" || data === "web-push" ? data : undefined;
+};
+
+/**
+ * Fold the two group outcomes of a mixed-kind push into the single `Result` the
+ * caller gets back.
+ *
+ * Nothing may be dropped in the fold: two successes merge their delivery data
+ * (or the receipt names only half the send), two failures keep both causes, and
+ * a mixed outcome reports the failure — a partially delivered send is never
+ * reported as a success.
+ *
+ * A mixed outcome reports it as a PARTIAL failure, distinct from the
+ * both-groups-failed one, because retrying the two is not the same operation.
+ * The router is one provider to the engine, so the retry middleware re-runs
+ * `send` with the whole payload: retrying a partial re-POSTs the group that
+ * already delivered, three extra notifications per device for a failure that was
+ * never theirs. Two failures carry no delivery to duplicate and stay retryable.
+ *
+ * This is the shape `runRetryIds` already keeps one layer up: a run that
+ * delivered to SOME recipients resolves and names the ones still outstanding, so
+ * the caller re-sends the strictly narrower set instead of the whole message.
+ * Targets are deliberately not named in the message — a web-push target is the
+ * stringified subscription, keys included, and this text is logged.
+ */
+const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
+    if (!webPush.success || !fcm.success) {
+        if (webPush.success || fcm.success) {
+            const [delivered, failed] = webPush.success ? (["web-push", "fcm"] as const) : (["fcm", "web-push"] as const);
+            const cause = webPush.success ? fcm.error : webPush.error;
+
+            return {
+                error: new LunoraError(
+                    PARTIAL_DELIVERY_CODE,
+                    `@lunora/notify: push partially delivered — the ${delivered} group was accepted, the ${failed} group failed (${failureText(cause) ?? "unknown error"}). Not retried: a retry would re-send to the ${delivered} targets that already received it. Re-send to the ${failed} targets only.`,
+                    // `data` carries the failed transport verbatim for the breaker
+                    // — see `partialFailedTransport`. It never reaches the wire.
+                    { cause, data: failed },
+                ),
+                success: false,
+            };
+        }
+
+        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
+    }
+
+    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
+
+    return data === undefined ? { success: true } : { data, success: true };
 };
 
 /**
@@ -197,14 +271,79 @@ const failureText = (error: unknown): string | undefined => {
  */
 const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
 
-/** Consecutive non-permanent failures on one provider before its circuit opens. */
+/** Consecutive non-permanent failures on one transport before its circuit opens. */
 const CIRCUIT_THRESHOLD = 5;
 
-/** How long a provider's circuit stays open before a single trial send. */
+/** How long a transport's circuit stays open before a single trial send. */
 const CIRCUIT_RESET_MS = 30_000;
 
 /**
- * A circuit breaker keyed PER PROVIDER that does not count a permanently-gone
+ * The circuit keys a send counts against — one per transport it actually needs.
+ *
+ * For every provider but the push router that is the provider id, which is what a
+ * breaker is for: one key per service that can be down. The router is the
+ * exception because it is ONE provider hiding TWO: the engine reports
+ * `provider: "lunora-push-router"` to the middleware chain whether the targets are
+ * browser subscriptions or FCM tokens, so a single key charges an FCM outage to
+ * web push. Five failing FCM sends then shed every browser subscriber — the
+ * transport that had not failed once.
+ *
+ * The split is derived from `to` rather than from the result, because it has to be
+ * known BEFORE the send to decide whether to shed it, and `to` is the same input
+ * the router itself partitions on. A send naming no transport (an empty `to`,
+ * which the router rejects on its own terms) keeps the provider key so the refusal
+ * it gets is the router's, not a circuit it was never measured against.
+ */
+const breakerKeys = (context: SendContext): string[] => {
+    if (context.provider !== PUSH_ROUTER_ID) {
+        return [context.provider];
+    }
+
+    const { to } = context.payload as PushPayload;
+    const targets = Array.isArray(to) ? to : [to];
+    const transports = new Set(targets.map((target) => pushTransportOf(target)));
+
+    return transports.size === 0 ? [context.provider] : [...transports].map((transport) => `${context.provider}:${transport}`);
+};
+
+/** One circuit's consecutive-failure count and the moment it last opened. */
+interface CircuitState {
+    failures: number;
+    openedAt: number;
+}
+
+/** Whether `state`'s circuit is open and still inside its reset window at `now`. */
+const isCircuitOpen = (state: CircuitState, now: number): boolean => state.failures >= CIRCUIT_THRESHOLD && now - state.openedAt < CIRCUIT_RESET_MS;
+
+/**
+ * Apply one failed send's evidence to the circuits it is actually about.
+ *
+ * A partial names the transport whose group failed (see
+ * {@link partialFailedTransport}): charge that one, and CLEAR the other — it just
+ * delivered, which is the same evidence about ITS health that an outright success
+ * is. Charging both is how an FCM outage used to shed web push. Any other failure
+ * is charged to every transport the send needed, since nothing distinguishes them.
+ */
+const chargeFailure = (error: unknown, keys: ReadonlyArray<string>, entries: ReadonlyArray<CircuitState>): void => {
+    const failed = partialFailedTransport(error);
+    const failedKey = failed === undefined ? undefined : `${PUSH_ROUTER_ID}:${failed}`;
+    const attributable = failedKey !== undefined && keys.includes(failedKey);
+
+    for (const [index, state] of entries.entries()) {
+        if (attributable && keys[index] !== failedKey) {
+            state.failures = 0;
+        } else {
+            state.failures += 1;
+
+            if (state.failures >= CIRCUIT_THRESHOLD) {
+                state.openedAt = Date.now();
+            }
+        }
+    }
+};
+
+/**
+ * A circuit breaker keyed PER TRANSPORT that does not count a permanently-gone
  * recipient as evidence the service is down.
  *
  * Both halves replace real behaviour of the engine's own `circuitBreakerMiddleware`,
@@ -217,48 +356,71 @@ const CIRCUIT_RESET_MS = 30_000;
  * was never pruned and came back on the next broadcast to do it again. A retry job
  * over known-failing ids reproduced it every redelivery.
  *
- * A breaker is for a provider that is DOWN. An unsubscribed browser is not that.
+ * A breaker is for a service that is DOWN. An unsubscribed browser is not that,
+ * and neither is the sibling transport of one that is.
  */
-const perProviderCircuitBreaker = (): Middleware => {
-    const states = new Map<string, { failures: number; openedAt: number }>();
+const perTransportCircuitBreaker = (): Middleware => {
+    const states = new Map<string, CircuitState>();
+
+    const stateOf = (key: string): CircuitState => {
+        const existing = states.get(key);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        const fresh: CircuitState = { failures: 0, openedAt: 0 };
+
+        states.set(key, fresh);
+
+        return fresh;
+    };
 
     return async (context, next) => {
-        const state = states.get(context.provider) ?? { failures: 0, openedAt: 0 };
+        const keys = breakerKeys(context);
+        const entries = keys.map((key) => stateOf(key));
+        const now = Date.now();
 
-        states.set(context.provider, state);
+        // Shed only when EVERY transport this send needs is open. A mixed send
+        // with one healthy transport still has a delivery to make, and refusing
+        // it is exactly what a router-wide key got wrong; the open transport's
+        // leg fails fast at the provider and the fold reports the partial.
+        if (entries.every((state) => isCircuitOpen(state, now))) {
+            return {
+                error: new LunoraError(
+                    "SERVICE_UNAVAILABLE",
+                    `@lunora/notify: circuit open for "${keys.join('", "')}" after ${CIRCUIT_THRESHOLD.toString()} consecutive failures`,
+                ),
+                success: false,
+            };
+        }
 
-        if (state.failures >= CIRCUIT_THRESHOLD) {
-            if (Date.now() - state.openedAt < CIRCUIT_RESET_MS) {
-                return {
-                    error: new LunoraError(
-                        "SERVICE_UNAVAILABLE",
-                        `@lunora/notify: circuit open for provider "${context.provider}" after ${CIRCUIT_THRESHOLD.toString()} consecutive failures`,
-                    ),
-                    success: false,
-                };
+        // Half-open: drop back under the threshold so the next send is
+        // tried. It either clears the counter or puts it straight back over.
+        // Not "exactly one": the counter only rises again once a trial
+        // SETTLES, so sends that start while one is in flight pass too — a
+        // broadcast's concurrent batch probes a recovering provider with as
+        // many sends as it has in flight. Bounded and self-correcting (the
+        // first failure to land re-opens), and a shared in-flight gate would
+        // serialise every send through this middleware to get it.
+        //
+        // Applied to every over-threshold circuit this send touches, the still-open
+        // one included: the send is going out either way, so that circuit IS being
+        // probed and pretending otherwise would only hide the trial's verdict.
+        for (const state of entries) {
+            if (state.failures >= CIRCUIT_THRESHOLD) {
+                state.failures = CIRCUIT_THRESHOLD - 1;
             }
-
-            // Half-open: drop back under the threshold so the next send is
-            // tried. It either clears the counter or puts it straight back over.
-            // Not "exactly one": the counter only rises again once a trial
-            // SETTLES, so sends that start while one is in flight pass too — a
-            // broadcast's concurrent batch probes a recovering provider with as
-            // many sends as it has in flight. Bounded and self-correcting (the
-            // first failure to land re-opens), and a shared in-flight gate would
-            // serialise every send through this middleware to get it.
-            state.failures = CIRCUIT_THRESHOLD - 1;
         }
 
         const result = await next(context);
 
         if (result.success) {
-            state.failures = 0;
-        } else if (!isPermanentFailure(result.error)) {
-            state.failures += 1;
-
-            if (state.failures >= CIRCUIT_THRESHOLD) {
-                state.openedAt = Date.now();
+            for (const state of entries) {
+                state.failures = 0;
             }
+        } else if (!isPermanentFailure(result.error)) {
+            chargeFailure(result.error, keys, entries);
         }
 
         return result;
@@ -300,7 +462,7 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
 
     return {
         channel: "push",
-        id: "lunora-push-router",
+        id: PUSH_ROUTER_ID,
         initialize: async () => {
             await options.webPush?.initialize();
             await options.fcm?.initialize();
@@ -408,7 +570,7 @@ export interface ResilienceOptions {
 
 /**
  * Attach the engine's resilience middleware — retry with backoff, then a circuit
- * breaker to shed load when a push service is down.
+ * breaker to shed load off the transport that is down, and only that one.
  *
  * Exported so a TEST engine is wired by this function rather than by a copy of
  * it. `buildEngine` is the only production caller; a double that assembles a bare
@@ -423,8 +585,13 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
         // budget — four POSTs and ~2.2 s of backoff each — against an endpoint the
         // very next line of the facade deletes, and those attempts were what fed
         // the breaker below.
-        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) }))
-        .use(perProviderCircuitBreaker());
+        //
+        // It also refuses a PARTIAL delivery (see `mergeGroupResults`): the retry
+        // re-runs the provider with the whole payload, so retrying a send whose
+        // other transport group already delivered notifies those devices again on
+        // every attempt.
+        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) && !isPartialDelivery(error) }))
+        .use(perTransportCircuitBreaker());
 
 /**
  * Assemble the `@visulima/notification` engine from resolved channel configs and
