@@ -217,6 +217,11 @@ export interface TrackInput {
      * resets to, rather than reading the current total and appending a delta. Concurrent `"set"` calls
      * for the same reference therefore resolve last-writer-wins instead of over- or under-counting, and
      * a replayed `"set"` is idempotent — neither mode needs a serialized context or a per-reference lock.
+     *
+     * `"set"` reconciles the LOCAL period total only, so `track` rejects it with `VALIDATION_ERROR` on a
+     * provider that meters usage upstream: those meters are additive and cannot take a period total, and
+     * a set that LOWERS usage has no negative delta to forward — the provider would keep billing the
+     * higher figure while the local ledger holds the lower one. Use `"add"` with a metered provider.
      */
     readonly mode?: "add" | "set";
 

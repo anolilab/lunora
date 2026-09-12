@@ -265,7 +265,8 @@ always updated.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` — the only mode Stripe accepts. Its meter is additive, so
+    // `mode: "set"` (a period total) throws VALIDATION_ERROR here.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
