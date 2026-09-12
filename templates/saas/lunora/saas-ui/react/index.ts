@@ -11,6 +11,8 @@ export type { ActivityFeedProps } from "./activity";
 export { ActivityFeed } from "./activity";
 export type { AdminOrganizationsProps } from "./admin";
 export { AdminOrganizations } from "./admin";
+export type { BillingPanelProps, GatedProps, PricingTableProps } from "./billing";
+export { BillingPanel, Gated, PricingTable } from "./billing";
 export type { OverviewProps } from "./overview";
 export { OverviewStats } from "./overview";
 export type { CardProps, EmptyProps, FieldErrorProps } from "./primitives";

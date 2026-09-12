@@ -1,32 +1,37 @@
-// lunora:add:saas:start
-import { saas } from "./saas/schema";
-// lunora:add:saas:end
-// lunora:add:ratelimit:start
-import { ratelimit } from "./ratelimit/schema";
-// lunora:add:ratelimit:end
-import { defineSchema, defineTable, v } from "lunorash/server";
+/**
+ * Payment tables — copied to `lunora/payment/schema.ts` by `lunora add payment`.
+ *
+ * **These five tables must be declared in your OWN `lunora/schema.ts`, inline.**
+ * Copy the block below into your `defineSchema({ … })` call. That is not a style
+ * preference, it is what works:
+ *
+ *   - Codegen discovers tables by parsing `lunora/schema.ts` as an AST. A spread
+ *     (`defineSchema({ ...paymentTables })`) is not a property assignment, so it
+ *     is silently skipped and you get a schema with zero payment tables.
+ *   - The `.extend(plugin.extension)` route auto-prefixes extension tables with
+ *     the plugin key (`payment_subscriptions`), and `@lunora/payment`'s store
+ *     reads the bare names (`subscriptions`, `customers`, …) — so a prefixed
+ *     merge would leave `ctx.payments` reading tables that don't exist.
+ *
+ * Without them, the first `ctx.payments.*` call — and `mySubscriptions` — fails
+ * with `UNKNOWN_TABLE`.
+ *
+ * Declaring them inline also lets you chain `.global()` on read-heavy tables
+ * (e.g. `subscriptions`) so cross-region reads are served from D1.
+ *
+ * The columns mirror `@lunora/payment`'s exported `paymentTables`, which is the
+ * canonical reference for what the store reads and writes. Money is stored as
+ * `(amountMinor: bigint, currency: string)`; every row carries a `provider`
+ * discriminator so two providers can coexist during a migration.
+ */
+import { defineTable, v } from "lunorash/server";
 
 /**
- * Your tables go in the `defineSchema({ … })` call; the kit's arrive through the
- * managed `.extend()` blocks below, which `lunora registry add` maintains.
- *
- * The default export is load-bearing — codegen's generated `app.ts` and
- * `shard.ts` import this module's default.
+ * The payment store's tables. Exported as a value so a test or migration check
+ * can read the column reference — **not** to spread into `defineSchema` (see the
+ * module docstring). Copy the declarations into `lunora/schema.ts` verbatim.
  */
-export default defineSchema({
-    /*
-     * The payment store's tables, declared INLINE and UNPREFIXED because that is
-     * what works: codegen parses this file as an AST, so a spread is silently
-     * skipped, and a `.extend()` merge would prefix names the store reads bare.
-     *
-     * They are root-scoped rather than `.shardBy("referenceId")`, and that is a
-     * deliberate asymmetry with the rest of this app. A provider webhook arrives
-     * with no session and no tenant — there is nothing to resolve a shard from —
-     * so billing rows live at the root and carry the tenant in `referenceId`
-     * instead. The organization id goes in that field (see `lunora/server.ts`),
-     * which is what keeps a subscription tenant-scoped logically even though it
-     * is not tenant-sharded physically.
-     */
+export const paymentTables = {
     customers: defineTable({
         createdAt: v.number(),
         email: v.optional(v.string()),
@@ -92,10 +97,7 @@ export default defineSchema({
     })
         .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
         .index("by_reference_feature", ["referenceId", "featureId"]),
-})
-    // lunora:add:ratelimit:start
-    .extend(ratelimit.extension)
-    // lunora:add:ratelimit:end
-    // lunora:add:saas:start
-    .extend(saas.extension);
-// lunora:add:saas:end
+};
+
+/** The `subscriptions` table name, referenced by `mySubscriptions` in `./index.ts`. */
+export const SUBSCRIPTIONS_TABLE = "subscriptions";

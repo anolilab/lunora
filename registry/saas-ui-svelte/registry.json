@@ -9,6 +9,7 @@
     "files": [
         { "from": "core/activity.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/activity.ts" },
         { "from": "core/admin-organizations.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/admin-organizations.ts" },
+        { "from": "core/billing.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/billing.ts" },
         { "from": "core/create-form-controller.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/create-form-controller.ts" },
         { "from": "core/format.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/format.ts" },
         { "from": "core/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/index.ts" },
@@ -21,9 +22,12 @@
         { "from": "styles.css", "merge": "create-or-skip", "to": "lunora/saas-ui/styles.css" },
         { "from": "svelte/ActivityFeed.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/ActivityFeed.svelte" },
         { "from": "svelte/AdminOrganizations.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/AdminOrganizations.svelte" },
+        { "from": "svelte/BillingPanel.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/BillingPanel.svelte" },
         { "from": "svelte/Card.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/Card.svelte" },
         { "from": "svelte/Empty.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/Empty.svelte" },
+        { "from": "svelte/Gated.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/Gated.svelte" },
         { "from": "svelte/OverviewStats.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/OverviewStats.svelte" },
+        { "from": "svelte/PricingTable.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/PricingTable.svelte" },
         { "from": "svelte/ProjectsCard.svelte", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/ProjectsCard.svelte" },
         { "from": "svelte/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/index.ts" },
         { "from": "svelte/use-form.svelte.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/svelte/use-form.svelte.ts" }
