@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { Middleware, Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
 import { retryMiddleware } from "@visulima/notification/middleware";
@@ -136,29 +136,6 @@ const mergeSendResults = (first: NotificationResult, second: NotificationResult)
 };
 
 /**
- * Fold the two group outcomes of a mixed-kind push into the single `Result` the
- * caller gets back.
- *
- * Nothing may be dropped in the fold: two successes merge their delivery data
- * (or the receipt names only half the send), two failures keep both causes, and
- * a mixed outcome reports the failure — a partially delivered send is never
- * reported as a success.
- */
-const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
-    if (!webPush.success || !fcm.success) {
-        if (webPush.success || fcm.success) {
-            return webPush.success ? fcm : webPush;
-        }
-
-        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
-    }
-
-    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
-
-    return data === undefined ? { success: true } : { data, success: true };
-};
-
-/**
  * The failure text of a middleware `Result`, or `undefined` when there is none to
  * read. Providers answer with an `Error` (the engine wraps a provider's own
  * failure in a `NotificationError` whose message carries the provider text
@@ -171,6 +148,67 @@ const failureText = (error: unknown): string | undefined => {
     }
 
     return typeof error === "string" ? error : undefined;
+};
+
+/**
+ * The `code` of the error a mixed-kind push answers with when one transport
+ * group delivered and the other did not. Uncatalogued on purpose: it never
+ * reaches the wire — it lands in the `Result` the engine turns into a receipt.
+ */
+const PARTIAL_DELIVERY_CODE = "PUSH_PARTIALLY_DELIVERED";
+
+/**
+ * Whether a failure is the "one group delivered, the other did not" verdict
+ * {@link mergeGroupResults} returns — the one failure that must NOT be retried,
+ * because the retry re-sends the whole payload and the delivered group would get
+ * the notification again on every attempt.
+ */
+const isPartialDelivery = (error: unknown): boolean => isLunoraError(error) && error.code === PARTIAL_DELIVERY_CODE;
+
+/**
+ * Fold the two group outcomes of a mixed-kind push into the single `Result` the
+ * caller gets back.
+ *
+ * Nothing may be dropped in the fold: two successes merge their delivery data
+ * (or the receipt names only half the send), two failures keep both causes, and
+ * a mixed outcome reports the failure — a partially delivered send is never
+ * reported as a success.
+ *
+ * A mixed outcome reports it as a PARTIAL failure, distinct from the
+ * both-groups-failed one, because retrying the two is not the same operation.
+ * The router is one provider to the engine, so the retry middleware re-runs
+ * `send` with the whole payload: retrying a partial re-POSTs the group that
+ * already delivered, three extra notifications per device for a failure that was
+ * never theirs. Two failures carry no delivery to duplicate and stay retryable.
+ *
+ * This is the shape `runRetryIds` already keeps one layer up: a run that
+ * delivered to SOME recipients resolves and names the ones still outstanding, so
+ * the caller re-sends the strictly narrower set instead of the whole message.
+ * Targets are deliberately not named in the message — a web-push target is the
+ * stringified subscription, keys included, and this text is logged.
+ */
+const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
+    if (!webPush.success || !fcm.success) {
+        if (webPush.success || fcm.success) {
+            const [delivered, failed] = webPush.success ? (["web-push", "fcm"] as const) : (["fcm", "web-push"] as const);
+            const cause = webPush.success ? fcm.error : webPush.error;
+
+            return {
+                error: new LunoraError(
+                    PARTIAL_DELIVERY_CODE,
+                    `@lunora/notify: push partially delivered — the ${delivered} group was accepted, the ${failed} group failed (${failureText(cause) ?? "unknown error"}). Not retried: a retry would re-send to the ${delivered} targets that already received it. Re-send to the ${failed} targets only.`,
+                    { cause },
+                ),
+                success: false,
+            };
+        }
+
+        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
+    }
+
+    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
+
+    return data === undefined ? { success: true } : { data, success: true };
 };
 
 /**
@@ -423,7 +461,12 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
         // budget — four POSTs and ~2.2 s of backoff each — against an endpoint the
         // very next line of the facade deletes, and those attempts were what fed
         // the breaker below.
-        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) }))
+        //
+        // It also refuses a PARTIAL delivery (see `mergeGroupResults`): the retry
+        // re-runs the provider with the whole payload, so retrying a send whose
+        // other transport group already delivered notifies those devices again on
+        // every attempt.
+        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) && !isPartialDelivery(error) }))
         .use(perProviderCircuitBreaker());
 
 /**
