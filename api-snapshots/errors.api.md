@@ -324,6 +324,15 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Cron job not found";
     };
+    readonly EXPORT_SHARD_FAILED: {
+        readonly hint: readonly [
+            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
+            "",
+            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows."
+        ];
+        readonly status: 502;
+        readonly title: "Export failed on one or more shards";
+    };
     readonly EXPORT_TAP_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Export tap not configured";
@@ -335,6 +344,15 @@ const ERROR_CATALOG: {
     readonly GLOBALS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global-table introspector not configured";
+    };
+    readonly ID_COLLISION: {
+        readonly hint: readonly [
+            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
+            "",
+            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it."
+        ];
+        readonly status: 409;
+        readonly title: "Document id already belongs to another table";
     };
     readonly KV_NOT_CONFIGURED: {
         readonly status: 400;
