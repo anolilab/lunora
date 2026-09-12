@@ -1,3 +1,9 @@
+## @lunora/react [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.107...@lunora/react@1.0.0-alpha.108) (2026-09-12)
+
+### Bug Fixes
+
+* **react:** mirror the priceIds field payment now declares ([#738](https://github.com/anolilab/lunora/issues/738)) ([335e4c7](https://github.com/anolilab/lunora/commit/335e4c73c162437e1f021611861d299c48d5b23b))
+
 ## @lunora/react [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.106...@lunora/react@1.0.0-alpha.107) (2026-09-12)
 
 ### Bug Fixes
