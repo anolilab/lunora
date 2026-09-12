@@ -173,6 +173,54 @@ describe("createWorker — admin export endpoint", () => {
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
     });
 
+    it("errors the stream when a shard's export failed instead of serving a short snapshot", async () => {
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                failed: 1,
+                ok: 1,
+                shards: [
+                    { rows: [{ doc: { _id: "u1" }, table: "users" }], shardKey: "c1" },
+                    { error: { message: 'shard "c2" failed: boom', timedOut: false }, shardKey: "c2" },
+                ],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // The status line is committed before the fan-out runs, so the only
+        // honest signal left is an aborted body — which a consumer cannot mistake
+        // for a complete dump the way it can mistake a short one.
+        expect(response.status).toBe(200);
+        await expect(response.text()).rejects.toThrow(/c2/u);
+    });
+
     it("streams D1 globals when exportGlobals is configured", async () => {
         expect.assertions(2);
 
