@@ -6,10 +6,10 @@
  * (`ctx.notify.send`, `ctx.notify.chat/inApp/webhook`, `ctx.push.send`,
  * `ctx.push.broadcast`).
  *
- * A notification send is external I/O (a `fetch` to a push service / FCM): it is
- * non-deterministic like `fetch`, so it breaks the determinism the coordinator
- * relies on when re-running a query on subscription re-evaluation or a mutation on
- * OCC retry (a retried mutation would re-send). It therefore belongs **only** in
+ * A notification send is external I/O (a `fetch` to a push service / FCM) that
+ * cannot be taken back: a live subscription re-runs a `query` handler on every
+ * change to a table it reads, and a `mutation` handler runs inside a transaction
+ * that can roll back while the send cannot. It therefore belongs **only** in
  * `action(...)` handlers. Calls inside `action(...)` are intentionally **not**
  * recorded — actions are the escape hatch. Runtime callers don't supply this, so
  * the lint finds nothing there.

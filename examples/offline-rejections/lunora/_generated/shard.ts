@@ -1134,10 +1134,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
-            // Query/mutation handlers must be deterministic (they may be re-run on
-            // OCC retry / subscription re-eval), so they must read time through
-            // `ctx.now` instead of `Date.now()` — the `nondeterministic_query_mutation`
-            // advisor flags the latter. Actions may still use ambient `Date.now()`.
+            // A `query` handler is re-run by every live subscription that reads it,
+            // so `Date.now()` there flickers between re-evaluations. A `mutation`
+            // handler does not replay under ordinary dispatch (an OCC conflict throws
+            // to the caller rather than retrying internally), but one called from a
+            // workflow step or queue consumer runs again when that step replays. Both
+            // read time through `ctx.now` — the `nondeterministic_query_mutation`
+            // advisor flags `Date.now()`. Actions may still use ambient `Date.now()`.
             const now = Date.now();
 
             const ctx: Record<string, unknown> = {
