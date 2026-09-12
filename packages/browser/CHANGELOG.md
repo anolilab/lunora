@@ -1,3 +1,10 @@
+## @lunora/browser [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.45...@lunora/browser@1.0.0-alpha.46) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
 ## @lunora/browser [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.44...@lunora/browser@1.0.0-alpha.45) (2026-09-12)
 
 
