@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.117",
+    "version": "1.0.0-alpha.118",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -63,15 +63,15 @@
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.58",
         "@lunora/errors": "1.0.0-alpha.36",
-        "@lunora/observability": "1.0.0-alpha.74",
+        "@lunora/observability": "1.0.0-alpha.75",
         "@lunora/platform": "1.0.0-alpha.30"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.136",
-        "@lunora/shard-engine": "1.0.0-alpha.64",
+        "@lunora/do": "1.0.0-alpha.137",
+        "@lunora/shard-engine": "1.0.0-alpha.65",
         "@lunora/workflow": "1.0.0-alpha.52",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
