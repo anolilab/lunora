@@ -1,3 +1,17 @@
+## @lunora/hyperdrive [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.115...@lunora/hyperdrive@1.0.0-alpha.116) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **hyperdrive:** show the real ctx.sql wiring ([#707](https://github.com/anolilab/lunora/issues/707)) ([caab3fb](https://github.com/anolilab/lunora/commit/caab3fbb6aa629b360267be5c38ba016439581df))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/hyperdrive [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.114...@lunora/hyperdrive@1.0.0-alpha.115) (2026-09-12)
 
 
