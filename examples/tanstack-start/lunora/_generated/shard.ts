@@ -382,8 +382,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
         }
 
-        protected override isQueryFunction(functionPath: string): boolean {
-            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        protected override isCacheableQuery(functionPath: string): boolean {
+            // NOT `kind === "query"` alone. A cache hit answers without running
+            // `handleRpc`, so the `internal` refusal at the top of it is skipped —
+            // and an `internalQuery` primed by a trusted system dispatch was then
+            // served to an anonymous client that the refusal would have 404'd.
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            return registered?.kind === "query" && registered.visibility !== "internal";
         }
 
         protected override isPaidFunction(functionPath: string): boolean {
@@ -1127,7 +1133,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // is visible and its spans join this trace. Degrades to the bare
                 // global when no sink is configured.
                 fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
-                ip,
+                // A GETTER, not a plain field, so the reactive cache can tell a
+                // handler that reads the caller's address from the majority that
+                // never do. `ctx.ip` is per-request state the memo must be keyed
+                // by — otherwise two anonymous callers share one entry and the
+                // second is served the first's address — but keying every entry
+                // by address would shard the cache per client for every query.
+                // Reading it here marks the dispatch's scope; `runCachedQuery`
+                // folds the address into the key for this function from then on.
+                get ip() {
+                    options.scope?.markIpRead();
+
+                    return ip;
+                },
                 log,
                 metrics,
                 now,

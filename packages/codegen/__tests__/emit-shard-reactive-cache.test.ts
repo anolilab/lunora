@@ -42,17 +42,20 @@ describe("emitShard — reactive cache wiring", () => {
         expect(emitted).toContain("...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),");
     });
 
-    it("overrides isQueryFunction against the generated registry", () => {
-        expect.assertions(1);
+    it("overrides isCacheableQuery against the generated registry, excluding internal functions", () => {
+        expect.assertions(2);
 
         // The single point where the whole feature goes silently inert: the base
-        // class has no function registry, so its `isQueryFunction` answers `false`
+        // class has no function registry, so its `isCacheableQuery` answers `false`
         // and `runCachedQuery` returns early on every call — a wired cache that
         // memoizes nothing.
-        expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).toContain(
-            // eslint-disable-next-line no-secrets/no-secrets -- false positive: generated-code text asserted verbatim, not a credential
-            'protected override isQueryFunction(functionPath: string): boolean {\n            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";',
-        );
+        const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        expect(emitted).toContain("protected override isCacheableQuery(functionPath: string): boolean {");
+        // And the half that is a security boundary, not a performance knob: a hit
+        // skips `handleRpc` and with it the `internal` refusal, so an internal
+        // function must never reach the cache in the first place.
+        expect(emitted).toContain('return registered?.kind === "query" && registered.visibility !== "internal";');
     });
 
     it("overrides isPaidFunction against the generated registry", () => {
@@ -139,6 +142,26 @@ describe("emitApp — reactive cache wiring", () => {
 
         expect(output).toContain("public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {");
         expect(output).toContain("reactiveCache: this.reactiveCacheConfig,");
+    });
+});
+
+/**
+ * The other half of the address-keyed memo. `@lunora/do` widens a cached query's
+ * key with the caller's IP only for function paths it has SEEN read `ctx.ip`,
+ * and the only thing that reports such a read is this getter. Emitted as a plain
+ * field — which is what it was — the mark never fires, the key never widens, and
+ * two anonymous callers share one entry with one of their addresses in it.
+ */
+describe("emitShard — ctx.ip marks the reactive-cache read scope", () => {
+    it("emits `ip` as a getter that marks the dispatch's read scope", () => {
+        expect.assertions(2);
+
+        const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        expect(emitted).toContain("get ip() {\n                    options.scope?.markIpRead();");
+        // The plain field is what the mark replaced; leaving one behind would
+        // hand handlers an unmarked route to the same value.
+        expect(emitted).not.toContain("\n                ip,\n");
     });
 });
 
