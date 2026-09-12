@@ -778,28 +778,59 @@ type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" 
  * `currentRequest*` fields while this dispatch waits its turn. Kept as one named
  * shape so the capture list lives in exactly one place instead of being an
  * unenforced "remember to add the next field here too" invariant.
+ *
+ * It stays a hand-written LIST rather than "snapshot every `currentRequest*`
+ * field", because membership is a judgement, not a category: `currentRequestTrace`
+ * is threaded by value as `dispatchTrace` and has its own claim/release
+ * lifecycle, `currentResponseBookmark` is PRODUCED by the dispatch (the restore
+ * clears it on purpose), and `mutationBookkeeping` is written DURING the handler
+ * — re-pinning the captured `undefined` at the tail would wipe the handshake the
+ * post-dispatch bookkeeping reads next. A mechanism that cannot forget a field
+ * would still have to be told which of those three answers each new field wants,
+ * so it would relocate the judgement rather than remove it. What the shape does
+ * buy is that adding a field here is a compile error in
+ * {@link ShardDO.captureRequestScope}'s object literal until it is captured —
+ * the answer stays a judgement, but a half-made one cannot compile.
  */
 interface RequestScope {
     /**
-     * The inbound `x-d1-bookmark`. In the scope for the same reason the identity
-     * fields are: a queued mutation admitted after a sibling's prologue would
-     * otherwise have `getInboundBookmark()` hand its `.global()` reads ANOTHER
-     * request's D1 session pin, which is read-your-writes reading someone else's.
+     * The inbound `x-d1-bookmark`. In the scope for the same reason `userId` is:
+     * a queued mutation admitted after a sibling's prologue would otherwise have
+     * `getInboundBookmark()` hand its `.global()` reads ANOTHER request's D1
+     * session pin, which is read-your-writes reading someone else's.
      */
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
 
     /**
-     * The caller's IP. In the scope for the same reason `userId` is, and it is
-     * the field with the most recent proof: a nested call that re-pins the
-     * identity fields but not this one leaves `ctx.ip` reading whatever the
-     * guest left behind.
+     * The caller's CLAIMS — active org, role, tenant. Distinct from `userId` and
+     * far more load-bearing than the pairing suggests: RLS grants roles from this
+     * object (`readIdentityRoles`), and it is what `ctx.auth.getIdentity()`
+     * returns. Left out of the scope, a mutation admitted at the gate ran under
+     * its own `userId` and the SIBLING's role and tenant — an admin sibling
+     * handed it admin RLS; a finished one handed it no claims at all.
+     */
+    identity: Record<string, unknown> | undefined;
+
+    /**
+     * The caller's IP. In the scope for the same reason `userId` is: a nested
+     * call that re-pins the identity fields but not this one leaves `ctx.ip`
+     * reading whatever the guest left behind.
      */
     ip: string | undefined;
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
     system: boolean;
+
+    /**
+     * The inbound W3C `traceparent`, which `buildCtx` hands to
+     * `createContainerContext` so an outbound container fetch joins the caller's
+     * trace. Telemetry rather than authorization, but the same shared field with
+     * the same interleaving — a guest dispatch that did not re-pin it filed its
+     * container spans under a parked request's trace.
+     */
+    traceparent: string | undefined;
     userId: string | undefined;
 }
 
@@ -6099,6 +6130,27 @@ abstract class ShardDO {
         // hand the thrown value straight through to the span's error classifier.
         let dispatchError: { thrown: unknown } | undefined;
 
+        // Hoisted for the `catch` in the same way and for the same reason: the
+        // error path files a durable `__lunora_reqlog__` row (and a Logpush/SIEM
+        // event with it) that reads the caller off `this`, after every await this
+        // dispatch took — so without a re-pin a failed request is attributed to
+        // whichever sibling's prologue ran last.
+        //
+        // Captured TWICE, deliberately, and this first one has to be here rather
+        // than at the second site: the relation fan-out branch below awaits a
+        // whole schema-aware child-table read before that site is reached, and a
+        // throw from inside it would otherwise find nothing to restore. Taken
+        // straight after `beginDispatch`, so it is exactly the prologue's own
+        // values (`mutatorClass` included — still `undefined` here, which is the
+        // truthful answer for a dispatch that has not been classified yet).
+        //
+        // The second capture, after the classification is stamped, is the one the
+        // replay gate and the tail re-pin: it is the only one that carries a real
+        // `currentMutatorClass`, so hoisting it in place of this would re-pin a
+        // blank classification over the real one and break the in-transaction
+        // watermark handshake.
+        let dispatchScope: RequestScope = this.captureRequestScope();
+
         try {
             // Reserved cross-shard relation read/count (reverse cross-backend
             // relations). Served BEFORE user dispatch and returned BARE (row
@@ -6122,7 +6174,13 @@ abstract class ShardDO {
             if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
                 const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
 
-                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(this.currentResponseBookmark));
+                // THIS dispatch's own by-value sink, never the shared field: a
+                // fan-out read performs no `.global()` write, so the sink is
+                // `undefined` and no bookmark is echoed — which is the honest
+                // answer. Read off `this` instead, the header could only ever
+                // carry a bookmark a sibling wrote during the await above, i.e. a
+                // stranger's D1 write position reported as this caller's.
+                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(dispatchBookmark.value));
             }
 
             // Custom-mutator ordering: a watermarked push (`clientId` +
@@ -6186,6 +6244,8 @@ abstract class ShardDO {
             // one field over. (`dispatchTrace`/`dispatchHeadroom` above capture
             // the same way, for the same reason, on the other side of `handleRpc`.)
             const requestScope = this.captureRequestScope();
+
+            dispatchScope = requestScope;
 
             // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
             // leaves) ONLY for the handler, so `validateArgs` sees real
@@ -6327,6 +6387,15 @@ abstract class ShardDO {
 
             return response;
         } catch (error: unknown) {
+            // Re-pin before anything below attributes the failure, exactly as the
+            // ok path does before ITS `recordRequestLog`. `recordRequestLog` reads
+            // `currentRequestIdentity` and `getCurrentUserId()` straight off
+            // `this`, and the throw can come from any await in the dispatch — by
+            // which point a sibling `fetch()`'s prologue may own those fields. The
+            // row it writes is durable and ships to Logpush/SIEM, so a mis-pinned
+            // one blames a principal that never made the call.
+            this.restoreRequestScope(dispatchScope);
+
             this.metrics.errors += 1;
             dispatchError = { thrown: error };
             const durationMs = Date.now() - dispatchStartedAt;
@@ -6534,10 +6603,12 @@ abstract class ShardDO {
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
+            identity: this.currentRequestIdentity,
             ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
             system: this.currentRequestSystem,
+            traceparent: this.currentRequestTraceparent,
             userId: this.currentRequestUserId,
         };
     }
@@ -6555,10 +6626,12 @@ abstract class ShardDO {
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
         this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestIdentity = scope.identity;
         this.currentRequestIp = scope.ip;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
         this.currentRequestSystem = scope.system;
+        this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
     }
 
@@ -8205,11 +8278,16 @@ abstract class ShardDO {
      * mutation dispatched through `runAs` could commit a dedup row and advance a
      * client watermark under the parked request's identity.
      *
-     * `currentRequestIp` is the third, and is cleared rather than carried: the
-     * admin plane genuinely has no caller IP to offer (nothing on this branch
-     * ever reads the header), so leaving the field alone would let a `runAs`
-     * dispatch run — and log, and rate-limit — under a parked `/rpc`'s address.
-     * `undefined` is the honest answer.
+     * `currentRequestIdentity` is the third, and the sharpest: it is the claims
+     * object RLS grants roles from, so a `runAs` dispatch that inherited a parked
+     * `/rpc`'s claims would evaluate row policies as that caller's role and tenant.
+     *
+     * `currentRequestIp` and `currentRequestTraceparent` are the remainder, and
+     * are cleared rather than carried for the same reason: the admin plane
+     * genuinely has neither to offer (nothing on this branch reads either header),
+     * so leaving them alone would let a `runAs` dispatch run — and log, and
+     * rate-limit — under a parked `/rpc`'s address, and file its container spans
+     * under that request's trace. `undefined` is the honest answer for both.
      *
      * Restoring rather than clearing on exit is deliberate: an admin call is a
      * guest on a thread another dispatch may own, and clearing would take that
@@ -8222,7 +8300,6 @@ abstract class ShardDO {
      */
     private async withAdminRequestScope<R>(run: () => Promise<R>): Promise<R> {
         const previousScope = this.captureRequestScope();
-        const previousIdentity = this.currentRequestIdentity;
         const previousBookkeeping = this.mutationBookkeeping;
 
         this.currentRequestBookmark = undefined;
@@ -8236,12 +8313,12 @@ abstract class ShardDO {
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
         this.currentRequestSystem = false;
+        this.currentRequestTraceparent = undefined;
 
         try {
             return await run();
         } finally {
             this.restoreRequestScope(previousScope);
-            this.currentRequestIdentity = previousIdentity;
             this.mutationBookkeeping = previousBookkeeping;
         }
     }
@@ -8278,8 +8355,9 @@ abstract class ShardDO {
      * threading the whole caller context into `handleRpc` so the hook's ctx never
      * touches the shared fields at all, which is a signature change across
      * codegen and moves all three fields at once. The `/rpc` tail re-pins its own
-     * scope (`ip` included, since {@link RequestScope} now carries it) after every
-     * await, so the exposure is bounded by that window and does not survive it.
+     * scope (`ip` and the claims included, since {@link RequestScope} carries
+     * both) after every await, so the exposure is bounded by that window and does
+     * not survive it.
      *
      * Subscriptions deliberately do NOT use this primitive at all: they thread an
      * explicit {@link SubscriptionIdentity} into `executeSubscription` by value,
