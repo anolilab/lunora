@@ -70,8 +70,15 @@ import { SUBSCRIPTIONS_TABLE } from "./schema.js";
  * manifest) and in `.dev.vars`. The first is what puts it on the generated env
  * TYPE — `CloudflareBindings` is built from wrangler's config, so a var that
  * lives only in `.dev.vars` reaches the running Worker and not the
- * type-checker, and reading it here is a `TS7053`. The second is what lets you
- * override it locally without editing committed config.
+ * type-checker, and reading it here is a `TS7053`. The second supplies the value
+ * locally, and wins over `vars` under `wrangler dev`.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
  */
 const appOrigin = (): string => {
     const value = env["APP_BASE_URL"];
