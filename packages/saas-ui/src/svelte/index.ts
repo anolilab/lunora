@@ -12,6 +12,7 @@ export { default as Card } from "./Card.svelte";
 export { default as Empty } from "./Empty.svelte";
 export { default as Gated } from "./Gated.svelte";
 export { default as OverviewStats } from "./OverviewStats.svelte";
+export { default as PresenceBar } from "./PresenceBar.svelte";
 export { default as PricingTable } from "./PricingTable.svelte";
 export { default as ProjectsCard } from "./ProjectsCard.svelte";
 export { createFormState } from "./use-form.svelte";
