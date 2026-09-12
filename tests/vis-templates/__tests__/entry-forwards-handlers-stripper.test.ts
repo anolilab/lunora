@@ -23,7 +23,7 @@
 import { describe, expect, it } from "vitest";
 
 // eslint-disable-next-line import/no-relative-parent-imports -- the gate is a repo script, not a package export
-import { reExportsDefault, reExportsImportedDefault, stripToCode } from "../../../scripts/assert-entry-forwards-handlers.mjs";
+import { defaultExportName, reExportsDefault, reExportsImportedDefault, stripToCode } from "../../../scripts/assert-entry-forwards-handlers.mjs";
 
 /** What the gate itself asks of the stripped source. */
 const declaresCron = (source: string): boolean => /\bcronJobs\s*\(/u.test(stripToCode(source));
@@ -117,6 +117,45 @@ describe("assert-entry-forwards-handlers — opaque default re-exports", () => {
  * only visible in the import.
  */
 const reExportsImportedDefaultAsGateSeesIt = (source: string, name: string): boolean => reExportsImportedDefault(stripToCode(source), name);
+
+/**
+ * The gate reaches its opaque-handler check only for a default export it can
+ * name. ASI makes the terminating semicolon optional, and while it was required
+ * `export default worker` (no semicolon) left the name unset — so the check was
+ * skipped and the scaffold passed without proving its handlers are forwarded.
+ *
+ * The two `reExportsImportedDefault` blocks above pass the name in directly, so
+ * neither of them can see this: the extraction is the untested half.
+ */
+describe("assert-entry-forwards-handlers — naming the default export", () => {
+    it.each([
+        ["terminated by a semicolon", 'import worker from "./worker";\nexport default worker;'],
+        ["relying on ASI", 'import worker from "./worker";\nexport default worker'],
+        ["followed by a trailing newline only", 'import worker from "./worker";\nexport default worker\n'],
+    ])("names the binding when %s", (_label, source) => {
+        expect.assertions(1);
+
+        expect(defaultExportName(source)).toBe("worker");
+    });
+
+    it("does not name a hand-built object literal", () => {
+        expect.assertions(1);
+
+        expect(defaultExportName("export default { fetch };")).toBeUndefined();
+    });
+
+    it.each([
+        ["a function declaration", "export default function handler() {}"],
+        ["a class declaration", "export default class Worker {}"],
+    ])("captures the keyword for %s, which stays inert", (_label, source) => {
+        expect.assertions(2);
+
+        // Captured, but it names no imported default and binds no object
+        // literal, so the gate falls through exactly as it did before.
+        expect(reExportsImportedDefault(source, defaultExportName(source) ?? "")).toBe(false);
+        expect(/(?:const|let|var)\s+(?:function|class)\s*=/u.test(source)).toBe(false);
+    });
+});
 
 describe("assert-entry-forwards-handlers — default exports of an imported binding", () => {
     it.each([
