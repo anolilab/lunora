@@ -57,7 +57,7 @@ Lunora validator directly.
 | `v.timestamp()`        | `number`                      | Epoch milliseconds; pair with `.defaultNow()`          |
 | `v.date()`             | `number`                      | Calendar date as epoch ms; pair with `.defaultNow()`   |
 | `v.storage(bucket?)`   | `string`                      | An R2 object key; ties the data model to a bucket      |
-| `v.from(schema)`       | inferred from `schema`        | Wrap a Standard Schema validator. **Args-only**        |
+| `v.from(schema)`       | inferred from `schema`        | Wrap a Standard Schema validator (args or column)      |
 
 Every factory returns a `Validator` with `parse(value)` (throws
 [`ValidationError`](#validationerror)) and `safeParse(value)` (returns
@@ -104,9 +104,10 @@ idempotent.
 </Callout>
 
 <Callout type="warn">
-    `v.from(...)` validators are **args-only**: pass them to `query`/`mutation`/`action` args, never to a `defineTable` column. `defineTable` rejects them
-    (anywhere in the column, including nested) because a Standard Schema value has no SQL column type. The wrapped `validate` must be synchronous; an async
-    result throws.
+    `v.from(...)` works both as `query`/`mutation`/`action` args and as a `defineTable` column; the Standard Schema runs on every write. A column is stored by
+    the value's runtime type — a scalar verbatim (typed plain text on a `.global()` table), an object or array JSON-encoded — so a stored string that itself
+    looks like JSON is ambiguous on read. `@lunora/seed` cannot invent a conforming value, so it refuses to seed such a column. The wrapped `validate` must be
+    synchronous; an async result throws.
 </Callout>
 
 ## Column modifiers

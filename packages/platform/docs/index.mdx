@@ -22,13 +22,13 @@ import type { ShardHost, SocketHost, PlatformCapabilities } from "@lunora/platfo
 
 ## The contracts
 
-| Contract         | What it owns                                                                                         |
-| ---------------- | ---------------------------------------------------------------------------------------------------- |
-| `ShardHost`      | One shard's execution slot: `runSerialized`, `transaction`, `sql`, `alarms`, `waitUntil`, `shardKey` |
-| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, `idFor`, optional retagging         |
-| `ShardDirectory` | Name → stub resolution, with optional jurisdiction pinning                                           |
-| `ShardKvStore`   | Ordered key-value with prefix scan, which `ShardHost` deliberately omits                             |
-| `SchedulerHost`  | `runAfter`/`runAt`, at-least-once, optional config-time `cron`                                       |
+| Contract         | What it owns                                                                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ShardHost`      | One shard's execution slot: `runSerialized`, `transaction`, `sql`, `alarms`, `waitUntil`, `shardKey`                                                     |
+| `SocketHost`     | Hibernatable sockets: `accept`, `getSockets(tag?)`, `handleFor`, `idFor`, optional retagging                                                             |
+| `ShardDirectory` | Name → stub resolution, with optional jurisdiction pinning                                                                                               |
+| `ShardKvStore`   | Ordered key-value with prefix scan, which `ShardHost` deliberately omits                                                                                 |
+| `SchedulerHost`  | `schedule`/`cancel`, at-least-once, optional `list`/`deadLetter`, optional **runtime** `cron` registration (absent on hosts whose crons are declarative) |
 
 Each is documented at its definition. Two contract notes are worth repeating
 here because they are behavioural, not type-level, and a host that ignores them
