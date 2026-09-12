@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /** Signed-in app, so limits key on the player rather than the IP. */
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
@@ -15,12 +15,12 @@ const K_FACTOR = 32;
 const RATING_FLOOR = 100;
 const STARTING_RATING = 1200;
 
-export const me = query.query(async ({ ctx }): Promise<Doc<"profiles"> | null> => {
+export const me = query.query(async ({ ctx }): Promise<Document_<"profiles"> | null> => {
     if (!ctx.auth.userId) {
         return null;
     }
 
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
 
     return ctx.db
         .query("profiles")
@@ -37,9 +37,11 @@ export const me = query.query(async ({ ctx }): Promise<Doc<"profiles"> | null> =
  * "Unknown" — past a few hundred players, resolve names per game instead of
  * shipping the directory.
  */
-export const list = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => ctx.db.query("profiles").take(200));
+export const list = query.query(async ({ ctx }): Promise<Document_<"profiles">[]> => ctx.db.query("profiles").take(200));
 
-export const leaderboard = query.query(async ({ ctx }): Promise<Doc<"profiles">[]> => ctx.db.query("profiles").withIndex("by_rating").order("desc").take(20));
+export const leaderboard = query.query(async ({ ctx }): Promise<Document_<"profiles">[]> =>
+    ctx.db.query("profiles").withIndex("by_rating").order("desc").take(20),
+);
 
 /**
  * Create this account's profile if it has none. `by_user` is unique, so two
@@ -53,7 +55,7 @@ export const claim = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in first");
         }
 
-        const userId = ctx.auth.userId;
+        const { userId } = ctx.auth;
         const existing = await ctx.db
             .query("profiles")
             .withIndex("by_user", (q) => q.eq("userId", userId))
@@ -101,11 +103,12 @@ export type RatingUpdate = {
  * is testable without a database.
  */
 export const ratingUpdates = (
-    white: Doc<"profiles">,
-    black: Doc<"profiles">,
+    white: Document_<"profiles">,
+    black: Document_<"profiles">,
     result: "black_wins" | "draw" | "white_wins",
 ): { black: RatingUpdate; white: RatingUpdate } => {
-    const whiteScore = result === "white_wins" ? 1 : result === "draw" ? 0.5 : 0;
+    const drawScore = result === "draw" ? 0.5 : 0;
+    const whiteScore = result === "white_wins" ? 1 : drawScore;
 
     return {
         black: {

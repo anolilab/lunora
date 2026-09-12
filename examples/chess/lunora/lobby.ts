@@ -1,22 +1,23 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /** Signed-in app, so limits key on the player rather than the IP. */
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byPlayer = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 /** Ambiguous glyphs (0/O, 1/I) are left out so a code can be read aloud. */
+// eslint-disable-next-line no-secrets/no-secrets -- the invite-code alphabet, not a credential; each glyph appears once so it scans as high entropy.
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const newInviteCode = (): string =>
     Array.from(globalThis.crypto.getRandomValues(new Uint8Array(6)), (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
 
-export const listOpen = query.query(async ({ ctx }): Promise<Doc<"lobbies">[]> =>
+export const listOpen = query.query(async ({ ctx }): Promise<Document_<"lobbies">[]> =>
     ctx.db
         .query("lobbies")
         .withIndex("by_open_public", (q) => q.eq("isPrivate", false).eq("isOpen", true))
@@ -25,12 +26,12 @@ export const listOpen = query.query(async ({ ctx }): Promise<Doc<"lobbies">[]> =
 );
 
 /** The lobby this player is in, whether they host it or joined it. */
-export const mine = query.query(async ({ ctx }): Promise<(Doc<"lobbies"> & { isHost: boolean }) | null> => {
+export const mine = query.query(async ({ ctx }): Promise<(Document_<"lobbies"> & { isHost: boolean }) | null> => {
     if (!ctx.auth.userId) {
         return null;
     }
 
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
     const hosted = await ctx.db
         .query("lobbies")
         .withIndex("by_host", (q) => q.eq("hostId", userId))
@@ -61,7 +62,7 @@ export const create = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in to open a lobby");
         }
 
-        const userId = ctx.auth.userId;
+        const { userId } = ctx.auth;
         const existing = await ctx.db
             .query("lobbies")
             .withIndex("by_host", (q) => q.eq("hostId", userId))
@@ -152,7 +153,7 @@ export const quickMatch = mutation.use(rateLimit(mutationLimiter, "write", byPla
         throw new LunoraError("UNAUTHENTICATED", "sign in to play");
     }
 
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
     const hosted = await ctx.db
         .query("lobbies")
         .withIndex("by_host", (q) => q.eq("hostId", userId))

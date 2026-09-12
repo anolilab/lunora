@@ -19,11 +19,13 @@ import type { LunoraAuthOptions } from "@lunora/auth";
  * which is correct in dev and in production. Set `AUTH_URL` and pass it here if
  * you need to pin one.
  */
-export const authOptions = (env: { AUTH_SECRET: string }): LunoraAuthOptions => ({
-    appName: "Lunora Chess",
-    emailAndPassword: {
-        enabled: true,
-        revokeSessionsOnPasswordReset: true,
-    },
-    secret: env.AUTH_SECRET,
-});
+export const authOptions = (env: { AUTH_SECRET: string }): LunoraAuthOptions => {
+    return {
+        appName: "Lunora Chess",
+        emailAndPassword: {
+            enabled: true,
+            revokeSessionsOnPasswordReset: true,
+        },
+        secret: env.AUTH_SECRET,
+    };
+};
