@@ -4,7 +4,7 @@
 # Same shape as `run-all.sh`: independent toolchains, per-language exit-status
 # files rather than output grepping, and only a failing language prints a log.
 #
-#   ./sdks/lint-all.sh            # all seven
+#   ./sdks/lint-all.sh            # all eight
 #   ./sdks/lint-all.sh go rust    # a subset
 #
 # WHAT IS CHECKED: the hand-written transports, their suites, and the consumer
@@ -28,8 +28,8 @@ set -uo pipefail
 
 REQUIRE_TOOLS="${SDK_LINT_REQUIRE_TOOLS:-0}"
 
-# The swift-format minor these Swift sources are formatted against. Six of the
-# seven linters are pinned by the workflow's install step; swift-format ships no
+# The swift-format minor these Swift sources are formatted against. Seven of the
+# eight linters are pinned by the workflow's install step; swift-format ships no
 # installable artifact, so its pin lives here — see the `swift)` leg.
 #
 # Overridable because the same release reports two different versions: the copy
@@ -213,7 +213,7 @@ lint_suite() {
             }
 
             # A different minor is a different rule set, which is exactly what
-            # the other six pins prevent. The runner image's default Xcode moves
+            # the other seven pins prevent. The runner image's default Xcode moves
             # on GitHub's schedule, so this drift is real and must be loud.
             local swift_format_drifted=0
             local swift_format_note="swift-format $swift_format_version"

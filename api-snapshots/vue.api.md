@@ -410,6 +410,7 @@ interface UseAgentToolEventsResult {
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: DeepReadonly<Ref<AuthStatus>>;
     token: DeepReadonly<Ref<string | null>>;
     user: DeepReadonly<Ref<User | null>>;
 }

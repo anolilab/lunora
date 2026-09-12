@@ -38,7 +38,7 @@ interface WranglerSummary {
     /**
      * Every binding the config declares, as `type:name`.
      *
-     * Derived by the same function `lunora bindings` and `--emit-bindings` use.
+     * Derived by the same function `lunora info --bindings` and `--emit-bindings` use.
      * This used to hand-roll its own read of three sections — d1, durable
      * objects, vectorize — so a project with R2, KV, queues, AI or any of the
      * other nine types was told it had none of them. A summary that silently

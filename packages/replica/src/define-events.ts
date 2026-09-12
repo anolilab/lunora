@@ -96,18 +96,7 @@ export type EventsDefinition<TDefinition extends Record<string, Record<string, u
 
 // ─── Implementation ──────────────────────────────────────────────────────
 
-/**
- * Declare typed event types for event sourcing.
- *
- * Each key under a namespace becomes a factory function that produces
- * an {@link InputEvent} — an optimistic / command event that the event
- * log will assign a sequence number to on append.
- * @param definition A nested object where the outer keys are namespaces
- * and the inner keys are event names mapped to their
- * payload schemas (or simple type-descriptor objects).
- * @returns An object with the same nesting structure, where each leaf is
- * a factory function plus a `.type` property.
- */
+/** Options accepted by {@link defineEvents}. */
 export interface DefineEventsOptions {
     /**
      * Optional version prefix for all event types.
@@ -122,7 +111,19 @@ export interface DefineEventsOptions {
 }
 
 /**
+ * Declare typed event types for event sourcing.
+ *
+ * Each key under a namespace becomes a factory function that produces
+ * an {@link InputEvent} — an optimistic / command event that the event
+ * log will assign a sequence number to on append.
+ *
  * `defineEvents` is part of the experimental `@lunora/replica` API and may change without a major version bump.
+ * @param definition A nested object where the outer keys are namespaces
+ * and the inner keys are event names mapped to their
+ * payload schemas (or simple type-descriptor objects).
+ * @param options Optional {@link DefineEventsOptions} — currently a `version` prefix.
+ * @returns An object with the same nesting structure, where each leaf is
+ * a factory function plus a `.type` property.
  * @experimental
  */
 export const defineEvents = <TDefinition extends Record<string, Record<string, unknown>>>(
