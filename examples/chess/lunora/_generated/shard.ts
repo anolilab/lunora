@@ -3,7 +3,7 @@
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
 import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
-import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
+import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 
 import schema from "../schema.js";
@@ -1300,18 +1300,30 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * has no savepoints and `runInTransaction` rejects a second open, so it
          * rides the enclosing span, which also owns its commit and therefore its
          * scheduler flush.
+         *
+         * Both deferral windows are opened here and settled against the SAME
+         * outcome. The delete window is what keeps a composed mutation's queued
+         * object deletes off the caller's flush when it rolls back: `ctx` is
+         * shared, so without a window the keys are indistinguishable from the
+         * action's own and the action's flush destroys objects whose rows the
+         * rollback put back.
          */
         private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
             const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
+            // Synchronous and non-throwing (it only moves queue entries), so it can
+            // settle first on every path and cannot mask the outcome.
+            const settleDeletes = beginDeferredDeletes(ctx);
 
             if (this.isInTransaction()) {
                 try {
                     const nested = await work();
 
+                    settleDeletes(true);
                     await settleSchedules(true);
 
                     return nested;
                 } catch (error) {
+                    settleDeletes(false);
                     await settleSchedules(false);
 
                     throw error;
@@ -1327,10 +1339,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // to run "after I commit" must go with them. Dropping them is the
                 // whole point of buffering: a persisted job for a write that never
                 // landed fires against state that does not exist.
+                //
+                // The queued object deletes go the same way, and for a sharper
+                // reason: the rows they were to clean up after are still there, and
+                // an R2 delete cannot be undone.
+                settleDeletes(false);
                 await settleSchedules(false);
 
                 throw error;
             }
+
+            // Committed, so this span's queued keys join whatever the flush below
+            // (or an enclosing span's) will drain.
+            settleDeletes(true);
 
             // Committed. Schedules first and AWAITED: `runAfter(0, ...)` is
             // documented as the deterministic equivalent of an `afterCommit` hook,

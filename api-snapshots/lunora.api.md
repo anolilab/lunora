@@ -1105,6 +1105,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `beginDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `beginDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5900,6 +5904,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredDeletes` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

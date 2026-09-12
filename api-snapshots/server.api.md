@@ -2931,6 +2931,12 @@ const asBucketStorage: (raw: unknown) => unknown;
 const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
 ```
 
+### `beginDeferredDeletes` (const)
+
+```ts
+const beginDeferredDeletes: (context: unknown) => ((committed: boolean) => void);
+```
+
 ### `beginDeferredSchedules` (const)
 
 ```ts
