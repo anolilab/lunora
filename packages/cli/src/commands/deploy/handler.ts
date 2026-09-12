@@ -364,12 +364,24 @@ const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape |
     };
 };
 
-/** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
+/**
+ * Every IPv4 loopback address, not just `127.0.0.1`: the whole `127.0.0.0/8`
+ * block is loopback (RFC 1122), so `127.0.0.2` is exactly as unreachable from a
+ * deployed Worker. Matched as a dotted quad rather than a `"127."` prefix,
+ * because `127.example.com` is a routable DNS name and must not be blocked.
+ *
+ * The shorter numeric spellings need no pattern of their own — `new URL()`
+ * canonicalises them for http(s), so `127.1`, `0x7f.1` and `2130706433` all
+ * arrive here as `127.0.0.1`.
+ */
+const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
+
+/** True when a URL string resolves to a loopback host (localhost / 127.0.0.0/8 / ::1). */
 const isLocalhostUrl = (value: string): boolean => {
     try {
         const { hostname } = new URL(value);
 
-        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+        return hostname === "localhost" || IPV4_LOOPBACK.test(hostname) || hostname === "::1" || hostname === "[::1]";
     } catch {
         return false;
     }

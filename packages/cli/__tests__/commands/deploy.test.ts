@@ -699,6 +699,47 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 expect(reported).not.toContain("SOME_FLAG");
             });
 
+            it("blocks a loopback address outside 127.0.0.1, and only a real one", async () => {
+                expect.assertions(4);
+
+                // The whole 127.0.0.0/8 block is loopback, so a deployed Worker cannot
+                // reach 127.0.0.2 either — the gate keyed on the literal `127.0.0.1` and
+                // let the rest of the range through. `127.example.com` is the other half
+                // of the invariant: a dotted quad is an address, a "127."-prefixed NAME is
+                // a routable host and blocking it would be a false alarm.
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "vars": {
+        "APP_BASE_URL": "http://127.0.0.2:8787",
+        "SHORTHAND_URL": "http://127.1:8787",
+        "NAMED_HOST_URL": "https://127.example.com"
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+                const reported = errors.join(" ");
+
+                expect(calls).toHaveLength(0);
+                expect(reported).toContain("APP_BASE_URL");
+                // `new URL()` canonicalises 127.1 to 127.0.0.1, so the gate sees a quad.
+                expect(reported).toContain("SHORTHAND_URL");
+                expect(reported).not.toContain("NAMED_HOST_URL");
+            });
+
             it("does not block on a localhost origin the deployed environment overrides", async () => {
                 expect.assertions(1);
 
