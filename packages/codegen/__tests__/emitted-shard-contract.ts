@@ -68,7 +68,7 @@ class EmittedShardContract extends ShardDO {
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
-        identity?: { identity?: Record<string, unknown>; userId?: string },
+        identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string },
     ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         return {
             iterator: () =>

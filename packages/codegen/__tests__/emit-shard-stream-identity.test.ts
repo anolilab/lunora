@@ -42,9 +42,22 @@ describe("emitted executeStream identity", () => {
         const shard = emit();
 
         expect(shard).toContain(
-            "protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string })",
+            "protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string })",
         );
         // Never a bare `buildCtx({ functionPath })` — that is the per-request fallback.
         expect(shard).toContain("this.buildCtx({ functionPath, identity })");
+    });
+
+    it("builds ctx.ip from the threaded value, not the shared per-request field", () => {
+        expect.assertions(2);
+
+        const shard = emit();
+
+        // `getCurrentIp()` is the per-request field a CONCURRENT dispatch owns. A
+        // subscription refresh runs inside the writing dispatch's flush, before its
+        // `endDispatch`, so reading it there hands every subscriber the mutating
+        // caller's IP. It survives only as the `/rpc` fallback.
+        expect(shard).not.toContain("ip: this.getCurrentIp()");
+        expect(shard).toContain("const ip = options.identity ? options.identity.ip : this.getCurrentIp();");
     });
 });

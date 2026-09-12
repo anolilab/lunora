@@ -268,6 +268,18 @@ export interface SocketAttachment {
     identity?: Record<string, unknown>;
 
     /**
+     * The subscriber's IP, captured at upgrade from the `x-lunora-client-ip`
+     * header the runtime forwards (Cloudflare's `CF-Connecting-IP`, stamped by
+     * the edge — off the edge nothing trustworthy says, so the header is absent
+     * and so is this). Stashed here for the same reason `identity` is: every
+     * later read a socket drives — the subscription seed, a write-flush re-run,
+     * a stream pull, a shape `where` — runs DEFERRED, so the shared per-request
+     * IP field either says nothing or says whoever happens to be writing right
+     * now. Threaded by value as {@link SubscriptionIdentity.ip}.
+     */
+    ip?: string;
+
+    /**
      * `true` when the socket's `connect` envelope announced the `pageDelta`
      * capability — i.e. this client can merge a row delta into the `page` of a
      * paginated result, so the server may diff one instead of re-sending it.
@@ -323,9 +335,9 @@ export interface ResolvedShape {
 }
 
 /**
- * Identity a subscription/shape query is executed under, threaded EXPLICITLY
- * into the codegen `resolveShape`/`buildCtx` rather than read from the shared,
- * per-request identity fields. The value passed is the socket's OWN verified
+ * Caller context a subscription/shape query is executed under, threaded
+ * EXPLICITLY into the codegen `resolveShape`/`buildCtx` rather than read from
+ * the shared, per-request fields. The value passed is the socket's OWN verified
  * identity (stamped on the {@link SocketAttachment} at the WS upgrade from the
  * runtime-minted `x-lunora-userid`/`x-lunora-identity` headers the client can't
  * forge), passed BY VALUE so a deferred refresh or interleaved RPC can't clobber
@@ -334,6 +346,16 @@ export interface ResolvedShape {
  */
 export interface SubscriptionIdentity {
     identity?: Record<string, unknown>;
+
+    /**
+     * The socket's own client IP (see {@link SocketAttachment.ip}), threaded by
+     * value for exactly the reason the identity claims are: `ctx.ip` on a
+     * deferred read must be the SUBSCRIBER's, never the shared per-request field
+     * — which a concurrent mutating dispatch owns while the write flush that
+     * triggered the re-run is still running. Absent off the Cloudflare edge, and
+     * on any socket whose upgrade carried no forwarded IP.
+     */
+    ip?: string;
     userId?: string;
 }
 

@@ -3421,7 +3421,7 @@ const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: "boolean" | "number" 
 
     // eslint-disable-next-line no-secrets/no-secrets -- the emitted ShardDO override method name, not a secret
     const subscriptionOverride = `
-        protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
+        protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
             const key = typeof args.key === "string" ? args.key : "";
 
             // SECURITY: the reactive channel is public (any socket, no auth). Serve
@@ -4575,7 +4575,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
     const shapeResolveOverride = hasShapes
         ? `
-        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
+        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
             const shape = LUNORA_SHAPES[name];
 
             if (!shape) {
@@ -5024,7 +5024,7 @@ ${vectorNamespaceField}
     const globalShapeReaderOverride =
         hasShapes && hasGlobalTables
             ? `
-        protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
+        protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
             const env = this.env as Record<string, unknown>;
             // A shape read performs no writes, so the widened request only needs
             // the inbound bookmark (pin the membership drain to the caller's own
@@ -5712,7 +5712,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
         }
 ${relationFanout.override}
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -5733,7 +5733,7 @@ ${relationFanout.override}
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -6059,7 +6059,7 @@ ${
 `
         : ""
 }
-        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // When the caller threads an explicit identity (subscription seed /
             // refresh — both run in deferred/interleaved contexts), use it by
@@ -6068,6 +6068,12 @@ ${
             // dispatch path) fall back to the per-request fields as before.
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
+            // \`ctx.ip\` rides the SAME by-value channel, and must: a subscription
+            // refresh runs inside the writing dispatch's \`flushChangedTables\`,
+            // BEFORE its \`endDispatch\` clears the shared field — so reading
+            // \`getCurrentIp()\` here would report the mutating caller's IP to every
+            // subscriber. A socket carries its own, captured at upgrade.
+            const ip = options.identity ? options.identity.ip : this.getCurrentIp();
 ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the \`ctx.run*\` caller guard; a ctx built for an
@@ -6189,7 +6195,7 @@ ${notifyBuild}
                 // is visible and its spans join this trace. Degrades to the bare
                 // global when no sink is configured.
                 fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
-                ip: this.getCurrentIp(),
+                ip,
                 log,
                 metrics,
                 now,${ormContextField}
@@ -6223,7 +6229,7 @@ ${isActionLine}${actionOnlyBlock}
                     reference.__lunoraRef,
                     fnArgs,
                     runOptions?.untracked === true
-                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
+                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: { identity, ip, userId }, scope: options.scope })
                         : ctx,
                     contextKind,
                 );

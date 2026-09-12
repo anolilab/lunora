@@ -652,6 +652,8 @@ export interface LifecycleEvent {
 export interface LifecycleDispatchInfo {
     event: LifecycleEvent;
     identity: Record<string, unknown> | undefined;
+    /** The socket's own client IP, captured at upgrade, so `ctx.ip` inside a connect/disconnect hook is the connecting client's and not whoever the shared per-request field happens to hold. */
+    ip: string | undefined;
     userId: string | undefined;
 }
 
