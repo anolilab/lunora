@@ -1,7 +1,7 @@
+import { expo } from "@better-auth/expo";
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { bearer } from "@lunora/auth/plugins";
-import { expo } from "@better-auth/expo";
 
 /** The app's URL scheme (see `app.json` → `expo.scheme`) — a trusted origin for native requests. */
 const APP_SCHEME = "expoexample";
@@ -26,23 +26,28 @@ const APP_SCHEME = "expoexample";
  * The password-reset delivery hook logs to the console — the standard dev
  * pattern. In production swap it for an `@lunora/mail` send.
  */
-const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOptions => ({
-    appName: "Lunora Expo Example",
-    baseURL: env.AUTH_URL,
-    emailAndPassword: {
-        enabled: true,
-        sendResetPassword: async ({ user }) => {
-            // Log only a non-sensitive identifier — never the reset URL (a
-            // credential) or the user's email (PII). In production swap this for
-            // an `@lunora/mail` send that delivers the `url` to the user.
-            // eslint-disable-next-line no-console
-            console.log(`[auth] password reset requested for user ${user.id}`);
+const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOptions => {
+    return {
+        appName: "Lunora Expo Example",
+        baseURL: env.AUTH_URL,
+        emailAndPassword: {
+            enabled: true,
+            sendResetPassword: ({ user }) => {
+                // Log only a non-sensitive identifier — never the reset URL (a
+                // credential) or the user's email (PII). In production swap this for
+                // an `@lunora/mail` send that delivers the `url` to the user.
+
+                console.log(`[auth] password reset requested for user ${user.id}`);
+
+                // The contract is async; this dev-only delivery has nothing to await.
+                return Promise.resolve();
+            },
         },
-    },
-    plugins: [expo(), bearer()],
-    secret: env.AUTH_SECRET,
-    trustedOrigins: [`${APP_SCHEME}://`],
-});
+        plugins: [expo(), bearer()],
+        secret: env.AUTH_SECRET,
+        trustedOrigins: [`${APP_SCHEME}://`],
+    };
+};
 
 /**
  * Runtime auth instance, backed by `@lunora/auth`'s SQL adapter over D1.

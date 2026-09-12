@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * This board has no sign-in, so a deployed instance is reachable by anyone and
@@ -38,14 +38,14 @@ const BOARD_LIMIT = 200;
  */
 export const list = query
     .input({ status: v.optional(feedbackStatus), sortBy: v.optional(v.union(v.literal("votes"), v.literal("recent"))) })
-    .query(async ({ args: { sortBy, status }, ctx }): Promise<Doc<"feedback">[]> => {
+    .query(async ({ args: { sortBy, status }, ctx }): Promise<Document_<"feedback">[]> => {
         if (status) {
             const rows = await ctx.db
                 .query("feedback")
                 .withIndex("by_status", (q) => q.eq("status", status))
                 .take(BOARD_LIMIT);
 
-            return sortBy === "votes" ? [...rows].sort((a, b) => b.upvoteCount - a.upvoteCount) : [...rows].sort((a, b) => b._creationTime - a._creationTime);
+            return sortBy === "votes" ? rows.toSorted((a, b) => b.upvoteCount - a.upvoteCount) : rows.toSorted((a, b) => b._creationTime - a._creationTime);
         }
 
         if (sortBy === "votes") {
@@ -57,15 +57,15 @@ export const list = query
 
 export const get = query
     .input({ id: v.id("feedback") })
-    .query(async ({ args: { id }, ctx }): Promise<Doc<"feedback"> | null> => (await ctx.db.get(id)) ?? null);
+    .query(async ({ args: { id }, ctx }): Promise<Document_<"feedback"> | null> => (await ctx.db.get(id)) ?? null);
 
-export const comments = query.input({ feedbackId: v.id("feedback") }).query(async ({ args: { feedbackId }, ctx }): Promise<Doc<"comments">[]> => {
+export const comments = query.input({ feedbackId: v.id("feedback") }).query(async ({ args: { feedbackId }, ctx }): Promise<Document_<"comments">[]> => {
     const rows = await ctx.db
         .query("comments")
         .withIndex("by_feedback", (q) => q.eq("feedbackId", feedbackId))
         .collect();
 
-    return [...rows].sort((a, b) => a._creationTime - b._creationTime);
+    return rows.toSorted((a, b) => a._creationTime - b._creationTime);
 });
 
 /** Which of these posts the given voter has already upvoted — one query for the whole page, rather than one per card. */
@@ -177,18 +177,14 @@ export const remove = mutation
             .withIndex("by_feedback_and_voter", (q) => q.eq("feedbackId", id))
             .collect();
 
-        for (const vote of votes) {
-            await ctx.db.delete(vote._id);
-        }
+        await Promise.all(votes.map(async (vote) => ctx.db.delete(vote._id)));
 
         const rows = await ctx.db
             .query("comments")
             .withIndex("by_feedback", (q) => q.eq("feedbackId", id))
             .collect();
 
-        for (const comment of rows) {
-            await ctx.db.delete(comment._id);
-        }
+        await Promise.all(rows.map(async (comment) => ctx.db.delete(comment._id)));
 
         ctx.log.info("feedback removed", { comments: rows.length, id, votes: votes.length });
         await ctx.db.delete(id);

@@ -25,9 +25,18 @@ export const App = (): ReactElement => {
     return (
         <main style={{ fontFamily: "system-ui", margin: "0 auto", maxWidth: 480, padding: 24 }}>
             <h1>Lunora Payment Demo</h1>
-            <label style={{ display: "block", marginBottom: 8 }}>
+            {/* Nested AND htmlFor/id: implicit association alone is valid HTML but
+                assistive tech handles it unevenly, so both are wired up. */}
+            <label htmlFor="price-id" style={{ display: "block", marginBottom: 8 }}>
                 Stripe price id
-                <input onChange={(event) => setPriceId(event.target.value)} style={{ display: "block", width: "100%" }} value={priceId} />
+                <input
+                    id="price-id"
+                    onChange={(event) => {
+                        setPriceId(event.target.value);
+                    }}
+                    style={{ display: "block", width: "100%" }}
+                    value={priceId}
+                />
             </label>
             <CheckoutButton onCheckout={() => client.action(api.billing.checkout, { priceId })}>Subscribe</CheckoutButton>{" "}
             <CustomerPortalButton onPortal={() => client.action(api.billing.portal, {})}>Manage billing</CustomerPortalButton>

@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "@lunora/react";
-import type { FormEvent, ReactElement } from "react";
+import type { ReactElement, SyntheticEvent } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_, Id } from "../../lunora/_generated/dataModel.js";
 
 /**
  * Tiny CRUD demo: list + create + toggle + delete, with optimistic updates.
@@ -12,19 +12,19 @@ import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
  * immediately; if the server rejects the call the runtime rolls the cache
  * back automatically. It names `api.todos.list` because that is the query the
  * write affects — `add`/`toggle`/`remove` are different functions, and no
- * client can infer which queries a write changes. (The per-call `optimistic`
- * shortcut patches only a subscription on the mutation's own reference and
- * args, which is not this shape.)
+ * client can infer which queries a write changes. The per-call `optimistic`
+ * shortcut is a different tool: it patches only a subscription on the
+ * mutation's own reference and args, which is not this shape.
  */
 export const App = (): ReactElement => {
     const [draft, setDraft] = useState("");
 
-    const todos = useQuery(api.todos.list, {}) as Doc<"todos">[] | undefined;
+    const todos = useQuery(api.todos.list, {}) as Document_<"todos">[] | undefined;
     const { mutate: add, pending: addPending } = useMutation(api.todos.add);
     const { mutate: toggle } = useMutation(api.todos.toggle);
     const { mutate: remove } = useMutation(api.todos.remove);
 
-    const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    const submit = async (event: SyntheticEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
 
         const text = draft.trim();
@@ -39,9 +39,9 @@ export const App = (): ReactElement => {
             { text },
             {
                 optimisticUpdate: (store) => {
-                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
-                    const provisional: Doc<"todos"> = {
-                        _id: `optimistic_${Date.now()}` as Id<"todos">,
+                    const list = (store.getQuery(api.todos.list, {}) as Document_<"todos">[] | undefined) ?? [];
+                    const provisional: Document_<"todos"> = {
+                        _id: `optimistic_${String(Date.now())}` as Id<"todos">,
                         _creationTime: Date.now(),
                         text,
                         done: false,
@@ -54,12 +54,12 @@ export const App = (): ReactElement => {
         );
     };
 
-    const onToggle = async (todo: Doc<"todos">): Promise<void> => {
+    const onToggle = async (todo: Document_<"todos">): Promise<void> => {
         await toggle(
             { id: todo._id, done: !todo.done },
             {
                 optimisticUpdate: (store) => {
-                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
+                    const list = (store.getQuery(api.todos.list, {}) as Document_<"todos">[] | undefined) ?? [];
 
                     store.setQuery(
                         api.todos.list,
@@ -77,12 +77,12 @@ export const App = (): ReactElement => {
         );
     };
 
-    const onDelete = async (todo: Doc<"todos">): Promise<void> => {
+    const onDelete = async (todo: Document_<"todos">): Promise<void> => {
         await remove(
             { id: todo._id },
             {
                 optimisticUpdate: (store) => {
-                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
+                    const list = (store.getQuery(api.todos.list, {}) as Document_<"todos">[] | undefined) ?? [];
 
                     store.setQuery(
                         api.todos.list,
@@ -97,7 +97,12 @@ export const App = (): ReactElement => {
     return (
         <main style={{ maxWidth: 520, margin: "3rem auto", fontFamily: "system-ui" }}>
             <h1>Todos</h1>
-            <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <form
+                onSubmit={(event) => {
+                    void submit(event);
+                }}
+                style={{ display: "flex", gap: 8, marginBottom: 16 }}
+            >
                 <input
                     onChange={(event) => {
                         setDraft(event.target.value);
@@ -113,9 +118,20 @@ export const App = (): ReactElement => {
             <ul style={{ listStyle: "none", padding: 0 }}>
                 {(todos ?? []).map((todo) => (
                     <li key={todo._id} style={{ display: "flex", gap: 8, padding: 8, alignItems: "center" }}>
-                        <input checked={todo.done} onChange={() => void onToggle(todo)} type="checkbox" />
+                        <input
+                            checked={todo.done}
+                            onChange={() => {
+                                void onToggle(todo);
+                            }}
+                            type="checkbox"
+                        />
                         <span style={{ flex: 1, textDecoration: todo.done ? "line-through" : "none" }}>{todo.text}</span>
-                        <button onClick={() => void onDelete(todo)} type="button">
+                        <button
+                            onClick={() => {
+                                void onDelete(todo);
+                            }}
+                            type="button"
+                        >
                             Delete
                         </button>
                     </li>

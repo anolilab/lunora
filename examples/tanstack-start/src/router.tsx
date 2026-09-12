@@ -4,7 +4,11 @@ import { LunoraClient } from "lunorash/client";
 
 import { routeTree } from "./routeTree.gen";
 
-const isServer = typeof globalThis.window === "undefined";
+// An `in` check, not `globalThis.window === undefined`: `lib.dom` declares
+// `window` as always present, so the comparison is dead per the types while
+// being exactly right at runtime on the server. (`typeof … === "undefined"`
+// trades one lint rule for another.)
+const isServer = !("window" in globalThis);
 
 /**
  * Where the loaders and the browser talk to Lunora.

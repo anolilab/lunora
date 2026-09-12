@@ -17,9 +17,7 @@ export const purgeStaleDrafts = internalMutation.mutation(async ({ ctx }): Promi
         .withIndex("by_updated", (range) => range.lt("updatedAt", cutoff))
         .collect();
 
-    for (const draft of stale) {
-        await ctx.db.delete(draft._id);
-    }
+    await Promise.all(stale.map(async (draft) => ctx.db.delete(draft._id)));
 
     return { deleted: stale.length };
 });

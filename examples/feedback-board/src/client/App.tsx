@@ -3,9 +3,24 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_, Id } from "../../lunora/_generated/dataModel.js";
 import { Detail } from "./Detail.js";
-import { STATUSES, StatusBadge } from "./status.js";
+import { STATUSES } from "./status.js";
+import { StatusBadge } from "./StatusBadge.js";
+
+/**
+ * One text field out of a `FormData`.
+ *
+ * `FormData.get` is typed `string | File | null`, so `String(form.get(name) ?? "")`
+ * stringifies a `File` to `"[object File]"` — a file input sharing a text field's
+ * name would submit that verbatim. Narrowing instead yields `""` for anything
+ * that is not text.
+ */
+const textField = (form: FormData, name: string): string => {
+    const value = form.get(name);
+
+    return typeof value === "string" ? value : "";
+};
 
 /** Stands in for a signed-in identity — swap for `ctx.auth.userId` and `useAuth()` when you add auth. */
 const VOTER_EMAIL = "you@example.com";
@@ -16,7 +31,7 @@ export const App = (): ReactElement => {
     const client = useLunora();
 
     const [sortBy, setSortBy] = useState<Sort>("votes");
-    const [filter, setFilter] = useState<Doc<"feedback">["status"] | "">("");
+    const [filter, setFilter] = useState<Document_<"feedback">["status"] | "">("");
     const [selected, setSelected] = useState<Id<"feedback"> | null>(null);
     const [composing, setComposing] = useState(false);
     const [summarising, setSummarising] = useState(false);
@@ -30,7 +45,7 @@ export const App = (): ReactElement => {
 
     // A Set, not `myVotes.includes(...)` inside the row loop: that is a linear
     // scan per row, so rendering the board is quadratic in the number of votes.
-    const votedIds = new Set(myVotes ?? []);
+    const votedIds = new Set(myVotes);
 
     /**
      * Flip the vote in the cache before the round trip. The count and the
@@ -49,9 +64,7 @@ export const App = (): ReactElement => {
                 localStore.setQuery(
                     api.feedback.list,
                     args,
-                    (value as Doc<"feedback">[]).map((post) =>
-                        post._id === feedbackId ? { ...post, upvoteCount: Math.max(0, post.upvoteCount + (isVoted ? -1 : 1)) } : post,
-                    ),
+                    value.map((post) => (post._id === feedbackId ? { ...post, upvoteCount: Math.max(0, post.upvoteCount + (isVoted ? -1 : 1)) } : post)),
                 );
             }
         }
@@ -64,10 +77,10 @@ export const App = (): ReactElement => {
         try {
             // Actions are not subscriptions — call them straight on the client.
             await client.action(api.summaries.generate, {});
-        } catch (cause: unknown) {
+        } catch (error_: unknown) {
             // Inference is the one call here that leaves the shard, so it is the
             // one that fails for reasons the board cannot fix — say so.
-            setError(cause instanceof Error ? cause.message : "could not generate a summary");
+            setError(error_ instanceof Error ? error_.message : "could not generate a summary");
         }
 
         // After the catch, not in a `finally`: the React Compiler cannot lower a
@@ -76,7 +89,15 @@ export const App = (): ReactElement => {
     };
 
     if (selected) {
-        return <Detail id={selected} onBack={() => setSelected(null)} voterEmail={VOTER_EMAIL} />;
+        return (
+            <Detail
+                id={selected}
+                onBack={() => {
+                    setSelected(null);
+                }}
+                voterEmail={VOTER_EMAIL}
+            />
+        );
     }
 
     return (
@@ -88,10 +109,22 @@ export const App = (): ReactElement => {
                 </div>
 
                 <div className="row">
-                    <button disabled={summarising} onClick={() => void onSummarise()} type="button">
+                    <button
+                        disabled={summarising}
+                        onClick={() => {
+                            void onSummarise();
+                        }}
+                        type="button"
+                    >
                         {summarising ? "Summarising…" : "✨ Summarise"}
                     </button>
-                    <button className="primary" onClick={() => setComposing((previous) => !previous)} type="button">
+                    <button
+                        className="primary"
+                        onClick={() => {
+                            setComposing((previous) => !previous);
+                        }}
+                        type="button"
+                    >
                         {composing ? "Cancel" : "Submit feedback"}
                     </button>
                 </div>
@@ -106,8 +139,8 @@ export const App = (): ReactElement => {
                         event.preventDefault();
 
                         const form = new FormData(event.currentTarget);
-                        const title = String(form.get("title") ?? "").trim();
-                        const authorName = String(form.get("authorName") ?? "").trim();
+                        const title = textField(form, "title").trim();
+                        const authorName = textField(form, "authorName").trim();
 
                         if (!title || !authorName) {
                             return;
@@ -116,15 +149,15 @@ export const App = (): ReactElement => {
                         void create({
                             authorEmail: VOTER_EMAIL,
                             authorName,
-                            description: String(form.get("description") ?? "").trim(),
+                            description: textField(form, "description").trim(),
                             title,
                         });
 
                         setComposing(false);
                     }}
                 >
-                    <input required aria-label="Your name" name="authorName" placeholder="Your name" />
-                    <input required aria-label="Title" name="title" placeholder="Short, specific title" />
+                    <input aria-label="Your name" name="authorName" placeholder="Your name" required />
+                    <input aria-label="Title" name="title" placeholder="Short, specific title" required />
                     <textarea aria-label="Description" name="description" placeholder="What problem does this solve?" rows={3} />
                     <button className="primary" type="submit">
                         Post
@@ -134,15 +167,33 @@ export const App = (): ReactElement => {
 
             <div className="row toolbar">
                 <div className="tabs">
-                    <button aria-pressed={sortBy === "votes"} onClick={() => setSortBy("votes")} type="button">
+                    <button
+                        aria-pressed={sortBy === "votes"}
+                        onClick={() => {
+                            setSortBy("votes");
+                        }}
+                        type="button"
+                    >
                         Top
                     </button>
-                    <button aria-pressed={sortBy === "recent"} onClick={() => setSortBy("recent")} type="button">
+                    <button
+                        aria-pressed={sortBy === "recent"}
+                        onClick={() => {
+                            setSortBy("recent");
+                        }}
+                        type="button"
+                    >
                         Newest
                     </button>
                 </div>
 
-                <select aria-label="Filter by status" onChange={(event) => setFilter(event.target.value as Doc<"feedback">["status"] | "")} value={filter}>
+                <select
+                    aria-label="Filter by status"
+                    onChange={(event) => {
+                        setFilter(event.target.value as Document_<"feedback">["status"] | "");
+                    }}
+                    value={filter}
+                >
                     <option value="">All statuses</option>
                     {STATUSES.map((value) => (
                         <option key={value} value={value}>
@@ -167,20 +218,28 @@ export const App = (): ReactElement => {
                         const voted = votedIds.has(post._id);
 
                         return (
-                            <li key={post._id} className="card post">
+                            <li className="card post" key={post._id}>
                                 <button
                                     // The visible label is a caret and a number, which reads as
                                     // "▲ 3" to a screen reader — no indication of what it does.
                                     aria-label={`${voted ? "Remove upvote from" : "Upvote"} ${post.title}`}
                                     aria-pressed={voted}
                                     className={voted ? "vote voted" : "vote"}
-                                    onClick={() => void toggleVote({ feedbackId: post._id, voterEmail: VOTER_EMAIL })}
+                                    onClick={() => {
+                                        void toggleVote({ feedbackId: post._id, voterEmail: VOTER_EMAIL });
+                                    }}
                                     type="button"
                                 >
                                     ▲<span>{post.upvoteCount}</span>
                                 </button>
 
-                                <button className="post-body" onClick={() => setSelected(post._id)} type="button">
+                                <button
+                                    className="post-body"
+                                    onClick={() => {
+                                        setSelected(post._id);
+                                    }}
+                                    type="button"
+                                >
                                     <span className="post-title">{post.title}</span>
                                     <span className="muted">{post.description}</span>
                                     <span className="row">

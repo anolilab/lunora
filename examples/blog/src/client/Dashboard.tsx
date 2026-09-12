@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_ } from "../../lunora/_generated/dataModel.js";
 
 /**
  * Author dashboard. Lets a signed-in user write a markdown post, attach a
@@ -16,7 +16,7 @@ export const Dashboard = (): ReactElement => {
     const [imageKey, setImageKey] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const posts = useQuery(api.posts.list, {}) as Array<Doc<"posts">> | undefined;
+    const posts = useQuery(api.posts.list, {}) as Document_<"posts">[] | undefined;
 
     const { mutate: requestUpload } = useMutation(api.posts.requestImageUpload);
     const { mutate: publish, pending: publishing } = useMutation(api.posts.publish);
@@ -58,11 +58,12 @@ export const Dashboard = (): ReactElement => {
                     style={{ fontFamily: "monospace", padding: 8 }}
                     value={body}
                 />
-                <label>
+                <label htmlFor="dashboard-field1">
                     Featured image
                     <input
                         accept="image/*"
                         disabled={uploadingImage}
+                        id="dashboard-field1"
                         onChange={(event) => {
                             const file = event.target.files?.[0];
 
@@ -75,13 +76,13 @@ export const Dashboard = (): ReactElement => {
 
                             void (async () => {
                                 try {
-                                    const { url, key } = (await requestUpload({ contentType: file.type })) as { key: string; url: string };
+                                    const { url, key } = await requestUpload({ contentType: file.type });
 
                                     // Stream the bytes straight to R2 — the Worker never proxies them.
                                     const upload = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
 
                                     if (!upload.ok) {
-                                        throw new Error(`R2 PUT failed (${upload.status})`);
+                                        throw new Error(`R2 PUT failed (${String(upload.status)})`);
                                     }
 
                                     setImageKey(key);

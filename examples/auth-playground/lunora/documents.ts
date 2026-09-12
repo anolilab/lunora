@@ -1,9 +1,9 @@
-import { LunoraError } from "lunorash/server";
 import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * The limiter comes from `lunora/ratelimit/schema.ts`, which owns the named
@@ -21,11 +21,11 @@ const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): 
 
 interface DocumentRow {
     _id: Id<"documents">;
+    body: string;
+    createdAt: number;
     organizationId: string;
     ownerId: string;
     title: string;
-    body: string;
-    createdAt: number;
 }
 
 /**
