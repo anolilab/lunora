@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.252...@lunora/cli@1.0.0-alpha.253) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `NodePgLike`, `PostgresJsLike` and `Mysql2Like` declare their
+members with method syntax and an explicit `this: void`. An implementation that
+assigned a bare arrow property still satisfies them; code that aliased the
+member type keeps working.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* four defects found by building a SaaS kit on the packages ([#736](https://github.com/anolilab/lunora/issues/736)) ([3a92fed](https://github.com/anolilab/lunora/commit/3a92fedd31d7571ccbdc1b4589131758f579a938)), closes [#539](https://github.com/anolilab/lunora/issues/539) [#541](https://github.com/anolilab/lunora/issues/541)
+* unbreak the first five minutes of a new project ([#746](https://github.com/anolilab/lunora/issues/746)) ([9915245](https://github.com/anolilab/lunora/commit/9915245c32e6891f098ebece5a3243f5fa5d3c5d))
+
+### Documentation
+
+* **cli:** name the files these two checks read ([#742](https://github.com/anolilab/lunora/issues/742)) ([081f76b](https://github.com/anolilab/lunora/commit/081f76bc709ef38730f6d566cf9f8d57beca35de))
+
 ## @lunora/cli [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.251...@lunora/cli@1.0.0-alpha.252) (2026-09-12)
 
 ### Bug Fixes
