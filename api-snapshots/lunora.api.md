@@ -1965,11 +1965,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ## `lunorash/client/auth`
 
+### `AuthStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `IdentityStore` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `getIdentityStore` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isAuthenticatedStatus` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isLoadingStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

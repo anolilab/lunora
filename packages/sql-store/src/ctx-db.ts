@@ -188,9 +188,10 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
 };
 
 /**
- * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id` tiebreak appended
- * unless an id field is already ordered (keeps paging deterministic).
+ * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/shard-engine`'s
+ * string `compileOrderByText`: each key as `<col> ASC|DESC`, with an `id`
+ * tiebreak appended unless an id field is already ordered (keeps paging
+ * deterministic).
  *
  * The tiebreak follows the last key's direction, via the shared
  * `tiebreakDirectionFor`. Declared indexes here now carry the same

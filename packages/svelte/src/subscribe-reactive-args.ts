@@ -1,5 +1,6 @@
 import type { Readable, Unsubscriber } from "svelte/store";
 
+import { stableWireKey } from "../../../shared/wire-key";
 import { isReadableStore } from "./is-readable-store";
 
 /**
@@ -8,11 +9,17 @@ import { isReadableStore } from "./is-readable-store";
  * `paginatedQuery`) all depend on.
  *
  * A static value opens exactly once. A `Readable` source opens on every
- * emission, tearing the previous subscription down **before** opening the
- * next — so an emission that resolves to nothing (the `"skip"` sentinel, whose
- * `open` returns a no-op teardown) cannot leak the subscription it replaced.
- * The returned stop function detaches the args source and tears down whatever
- * is currently open.
+ * emission whose args **content** differs from the open one, tearing the
+ * previous subscription down **before** opening the next — so an emission that
+ * resolves to nothing (the `"skip"` sentinel, whose `open` returns a no-op
+ * teardown) cannot leak the subscription it replaced. The returned stop
+ * function detaches the args source and tears down whatever is currently open.
+ *
+ * Emissions are compared by `stableWireKey`, not object identity: a store
+ * derived from several inputs (`derived([a, b], … => ({ id, limit: Math.min(b, 10) }))`)
+ * re-emits a fresh object whenever any input ticks, and re-opening on that
+ * would blank the rendered value and re-snapshot from the server for args that
+ * did not actually change. An equal-content emission is a no-op.
  *
  * `open` returns the teardown for the subscription it opened; anything a fresh
  * emission must reset (a stale error, pagination state) belongs in that
@@ -35,6 +42,10 @@ export const subscribeReactiveArgs = <T>(args: T | Readable<T>, open: (value: T)
     let opening = false;
     // A one-slot queue, not a value: `T` itself may legitimately be undefined.
     let queued: [T] | undefined;
+    // Content key of the currently-open args; `undefined` until the first open,
+    // and `stableWireKey` never returns `undefined`, so the first emission
+    // always opens.
+    let openKey: string | undefined;
 
     const unsubscribeArgs = args.subscribe((resolved) => {
         if (opening) {
@@ -53,8 +64,14 @@ export const subscribeReactiveArgs = <T>(args: T | Readable<T>, open: (value: T)
             let next: [T] | undefined = [resolved];
 
             while (next) {
-                teardown();
-                teardown = open(next[0]);
+                const nextKey = stableWireKey(next[0]);
+
+                if (nextKey !== openKey) {
+                    openKey = nextKey;
+                    teardown();
+                    teardown = open(next[0]);
+                }
+
                 next = queued;
                 queued = undefined;
             }

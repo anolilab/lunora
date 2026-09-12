@@ -376,7 +376,7 @@ Each returns an `AgentToolDefinition` you drop into the `tools` map:
 import { agentAsTool, functionTool, mcpTools } from "@lunora/agent";
 
 tools: {
-    lookupOrder: functionTool({ description: "Look up an order by id.", functionPath: "orders:byId", inputSchema }),
+    lookupOrder: functionTool("orders:byId", { description: "Look up an order by id.", inputSchema }),
     research: agentAsTool({ description: "Delegate deep research.", name: "researcher" }),
     ...mcpTools({ client: docsClient, prefix: "docs_" }),
 }
