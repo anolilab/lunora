@@ -1,5 +1,6 @@
 import type { IndexKeyEntry } from "./read-write-set";
 import type { SystemDatabaseReader } from "./system-reader";
+import type { SubscriptionIdentity } from "./types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -648,11 +649,18 @@ export interface LifecycleEvent {
     userId: string | null;
 }
 
-/** Per-socket lifecycle dispatch payload. */
-export interface LifecycleDispatchInfo {
+/**
+ * Per-socket lifecycle dispatch payload: the hook's argument, plus the caller
+ * context to replay it under.
+ *
+ * That context is {@link SubscriptionIdentity} itself rather than a restatement
+ * of its members. It used to restate them, which is why it was the one place a
+ * socket's context was assembled by hand instead of through the shared helper —
+ * and why `ip` had to be added here separately. Extending means the helper's
+ * output spreads straight in, and the next member added is not a second edit.
+ */
+export interface LifecycleDispatchInfo extends SubscriptionIdentity {
     event: LifecycleEvent;
-    identity: Record<string, unknown> | undefined;
-    userId: string | undefined;
 }
 
 /** Per-row change notification emitted by the CDC layer. */

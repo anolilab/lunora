@@ -25,7 +25,7 @@
  *
  * When the emitter starts using a new base member, add it here.
  */
-import type { TraceRefLike } from "@lunora/do";
+import type { SubscriptionIdentity, TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
 import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
 
@@ -60,15 +60,21 @@ class EmittedShardContract extends ShardDO {
 
     /**
      * Mirrors the generated `executeStream` override. Its third parameter is the
-     * socket's verified identity, which the generated body threads by value into
-     * `buildCtx` — if the base signature ever drops it, the generated shard stops
-     * compiling and this file is where that surfaces.
+     * socket's verified caller context, which the generated body threads by value
+     * into `buildCtx` — if the base signature ever drops it, the generated shard
+     * stops compiling and this file is where that surfaces.
+     *
+     * Named as `SubscriptionIdentity`, not restated inline. An inline structural
+     * copy compiles against the base even when it is missing a member the base
+     * declares — method parameters are bivariant — so a restated shape here would
+     * pass while the emitted shard silently stopped seeing a field. Naming the
+     * type is what makes `tsc` the enforcer rather than this file's author.
      */
     // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reaches `this.buildCtx`
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
-        identity?: { identity?: Record<string, unknown>; userId?: string },
+        identity?: SubscriptionIdentity,
     ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         return {
             iterator: () =>

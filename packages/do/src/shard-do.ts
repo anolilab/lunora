@@ -789,6 +789,14 @@ interface RequestScope {
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
+
+    /**
+     * The caller's IP. In the scope for the same reason `userId` is, and it is
+     * the field with the most recent proof: a nested call that re-pins the
+     * identity fields but not this one leaves `ctx.ip` reading whatever the
+     * guest left behind.
+     */
+    ip: string | undefined;
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
     system: boolean;
@@ -1099,6 +1107,22 @@ const memoProvesUnchanged = (
     changed: Set<string>,
     changedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined,
 ): boolean => memo !== undefined && !memo.tables.has(ADMIN_WILDCARD) && (!setsIntersect(memo.tables, changed) || !writeTouchesMemo(memo, changed, changedKeys));
+
+/**
+ * The caller context a socket's DEFERRED work runs under, read off its
+ * hibernation attachment and passed BY VALUE.
+ *
+ * One place, not six: every socket-driven read — the subscription seed, a
+ * write-flush re-run, a stream pull, a shape seed/poke/global-poll — runs
+ * outside the dispatch that triggered it, so each must take the socket's own
+ * identity AND ip from here rather than from the shared per-request fields a
+ * concurrent `/rpc` owns. Adding a field to {@link SubscriptionIdentity} and
+ * missing one call site is exactly how `ip` came to be read from the shared
+ * field on every one of them.
+ */
+const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
+    return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
+};
 
 /**
  * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
@@ -2421,7 +2445,7 @@ abstract class ShardDO {
                 // enforces the internal-visibility gate, which the system flag
                 // satisfies.
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
-                await this.withRequestIdentity(info.userId, info.identity, () =>
+                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
                     this.withSystemDispatch(() => this.handleRpc(functionPath, info.event as unknown as Record<string, unknown>)),
                 );
             } catch (error: unknown) {
@@ -2890,7 +2914,21 @@ abstract class ShardDO {
      * forwarded server-side by the runtime, and only while running on Cloudflare
      * — off the edge that header is client-written, so the runtime forwards
      * nothing), or `undefined` when nothing trustworthy says. Use this to populate
-     * `ctx.ip` inside `buildCtx`.
+     * `ctx.ip` inside `buildCtx` on the SYNCHRONOUS `/rpc` dispatch path only.
+     *
+     * A deferred caller must NOT read it: subscription seeds and refreshes,
+     * stream pulls and shape reads all run outside the dispatch that owns this
+     * field — a refresh in particular runs inside the writing dispatch's own
+     * `flushChangedTables`, before its `endDispatch`, so it would read the
+     * MUTATING caller's IP and hand it to every subscriber. Those paths take the
+     * socket's own IP by value instead, via {@link SubscriptionIdentity.ip}.
+     *
+     * Owning the FIELD is not the same as owning the value: `runCachedQuery`'s
+     * reactive-cache key folds userId + claims and not `ip`, so under
+     * `.reactiveCache(true)` an anonymous query reading `ctx.ip` can still be
+     * served one caller's answer for another. Pre-existing and tracked
+     * separately — noted so the next reader does not conclude this accessor is
+     * now safe everywhere.
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
@@ -4403,12 +4441,15 @@ abstract class ShardDO {
      * disables server re-execution and leaves the legacy `broadcastDelta`
      * path as the only live-update mechanism.
      *
-     * `identity` is the EXPLICIT subscriber identity the query runs under. It
-     * is passed by value (anonymous by default — see {@link SubscriptionIdentity})
-     * and forwarded straight into the codegen subclass's `buildCtx`, so a
-     * subscription re-run never reads or mutates the shared, per-request
-     * `currentRequestUserId`/`currentRequestIdentity` instance fields from a
-     * deferred (`waitUntil`) or concurrently-interleaved context.
+     * `identity` is the EXPLICIT subscriber context the query runs under —
+     * identity claims, userId, and the socket's own `ip`. It is passed by value
+     * (anonymous by default — see {@link SubscriptionIdentity}) and forwarded
+     * straight into the codegen subclass's `buildCtx`, so a subscription re-run
+     * never reads the shared, per-request
+     * `currentRequestUserId`/`currentRequestIdentity`/`currentRequestIp` instance
+     * fields from a deferred (`waitUntil`) or concurrently-interleaved context.
+     * A refresh runs while the write that triggered it still owns those fields,
+     * so reading `ip` there would hand every subscriber the MUTATING caller's IP.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
     protected executeSubscription(
@@ -4708,13 +4749,13 @@ abstract class ShardDO {
      * the cancel signal pluggable per-call without coupling this signature to
      * the wire-frame loop in `handleStream`.
      *
-     * `identity` is the socket's verified identity, threaded BY VALUE exactly as
-     * {@link ShardDO.executeSubscription} threads it and for the same reason: a
-     * `stream` frame is dispatched fire-and-forget and its iterator is pulled
-     * long after, interleaved with unrelated `/rpc` dispatches, so reading the
-     * shared per-request identity fields instead would run an `rls()` /
-     * `ctx.auth`-scoped stream as nobody while the shard is idle — and as
-     * whoever else is mid-flight while it is not.
+     * `identity` is the socket's verified identity plus its `ip`, threaded BY
+     * VALUE exactly as {@link ShardDO.executeSubscription} threads it and for the
+     * same reason: a `stream` frame is dispatched fire-and-forget and its
+     * iterator is pulled long after, interleaved with unrelated `/rpc`
+     * dispatches, so reading the shared per-request fields instead would run an
+     * `rls()` / `ctx.auth`-scoped stream as nobody (and report no `ctx.ip`) while
+     * the shard is idle — and as whoever else is mid-flight while it is not.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
     protected executeStream(
@@ -6382,6 +6423,7 @@ abstract class ShardDO {
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
+            ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
             system: this.currentRequestSystem,
@@ -6402,6 +6444,7 @@ abstract class ShardDO {
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
         this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestIp = scope.ip;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
         this.currentRequestSystem = scope.system;
@@ -6766,7 +6809,7 @@ abstract class ShardDO {
             ...(attachment.context === undefined ? {} : { context: attachment.context }),
         };
 
-        return { event, identity: attachment.identity, userId: attachment.userId };
+        return { event, ...socketIdentity(attachment) };
     }
 
     /**
@@ -7769,7 +7812,12 @@ abstract class ShardDO {
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);
 
-        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, () => this.handleRpc(parsed.functionPath, parsed.args));
+        // No IP, deliberately. The admin branch of `fetch` answers before
+        // `beginDispatch`, so `x-lunora-client-ip` is never read on this path and
+        // `currentRequestIp` holds either nothing or a concurrently-parked
+        // `/rpc`'s address — the admin request scope clears it for exactly that
+        // reason. The identity is forged here; an IP would be borrowed.
+        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () => this.handleRpc(parsed.functionPath, parsed.args));
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -8046,6 +8094,12 @@ abstract class ShardDO {
      * mutation dispatched through `runAs` could commit a dedup row and advance a
      * client watermark under the parked request's identity.
      *
+     * `currentRequestIp` is the third, and is cleared rather than carried: the
+     * admin plane genuinely has no caller IP to offer (nothing on this branch
+     * ever reads the header), so leaving the field alone would let a `runAs`
+     * dispatch run — and log, and rate-limit — under a parked `/rpc`'s address.
+     * `undefined` is the honest answer.
+     *
      * Restoring rather than clearing on exit is deliberate: an admin call is a
      * guest on a thread another dispatch may own, and clearing would take that
      * dispatch's scope with it. (The `/rpc` tail re-pins its own scope after every
@@ -8066,6 +8120,7 @@ abstract class ShardDO {
         this.currentRequestIdentity = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestIp = undefined;
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
@@ -8104,22 +8159,42 @@ abstract class ShardDO {
      * after an await would observe the other dispatch's identity, and the
      * `finally` here would then restore values captured before that interleaving.
      *
+     * `ip` is scoped here on the same terms as `userId`/`identity`, and inherits
+     * the same accepted limitation rather than a new one: for the width of a
+     * lifecycle hook the shared field holds the SOCKET's address, so a concurrent
+     * `/rpc` whose `buildCtx` runs inside that window reads it as its own. Stated
+     * rather than closed, because closing it is not an `ip` change — it means
+     * threading the whole caller context into `handleRpc` so the hook's ctx never
+     * touches the shared fields at all, which is a signature change across
+     * codegen and moves all three fields at once. The `/rpc` tail re-pins its own
+     * scope (`ip` included, since {@link RequestScope} now carries it) after every
+     * await, so the exposure is bounded by that window and does not survive it.
+     *
      * Subscriptions deliberately do NOT use this primitive at all: they thread an
      * explicit {@link SubscriptionIdentity} into `executeSubscription` by value,
-     * which is the pattern to reach for when a new deferred caller appears.
+     * which is the pattern to reach for when a new deferred caller appears — and
+     * the pattern to convert lifecycle dispatch to, when someone does.
      */
-    private async withRequestIdentity<R>(userId: string | undefined, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
+    private async withRequestIdentity<R>(
+        userId: string | undefined,
+        identity: Record<string, unknown> | undefined,
+        ip: string | undefined,
+        run: () => Promise<R> | R,
+    ): Promise<R> {
         const previousUserId = this.currentRequestUserId;
         const previousIdentity = this.currentRequestIdentity;
+        const previousIp = this.currentRequestIp;
 
         this.currentRequestUserId = userId;
         this.currentRequestIdentity = identity;
+        this.currentRequestIp = ip;
 
         try {
             return await run();
         } finally {
             this.currentRequestUserId = previousUserId;
             this.currentRequestIdentity = previousIdentity;
+            this.currentRequestIp = previousIp;
         }
     }
 
@@ -9255,7 +9330,7 @@ abstract class ShardDO {
         // captured BEFORE the first await and passed by value, because the
         // iterator is pulled long after this frame was dispatched.
         const attachment = this.readAttachment(ws);
-        const iterable = this.executeStream(functionPath, args, { identity: attachment.identity, userId: attachment.userId });
+        const iterable = this.executeStream(functionPath, args, socketIdentity(attachment));
 
         if (!iterable) {
             trySendFrame(ws, JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
@@ -9819,7 +9894,7 @@ abstract class ShardDO {
                         functionPath,
                         query.args ?? {},
                         isAdmin,
-                        { identity: attachment.identity, userId: attachment.userId },
+                        socketIdentity(attachment),
                         reactiveRunCache,
                     );
 
@@ -9927,10 +10002,7 @@ abstract class ShardDO {
         // what makes an `rls()` / `ctx.auth`-scoped live query return the
         // subscriber's own rows instead of evaluating anonymous.
         const attachment = this.readAttachment(ws);
-        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, {
-            identity: attachment.identity,
-            userId: attachment.userId,
-        });
+        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
 
         if (!outcome) {
             return;
@@ -10058,7 +10130,7 @@ abstract class ShardDO {
      */
     private async seedShapeSubscription(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): Promise<"ok" | { code: string; message: string }> {
         const attachment = this.readAttachment(ws);
-        const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+        const identity = socketIdentity(attachment);
 
         // Relay tier (plan 075 Phase 3): a relay holds no op-log, so it forwards the
         // seed to the owner — the only DO that can resolve the shape against real
@@ -10266,7 +10338,7 @@ abstract class ShardDO {
             const connectionId = attachment.connectionId ?? "";
 
             try {
-                const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+                const identity = socketIdentity(attachment);
                 const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(
                     ws,
                     connectionId,
@@ -11307,7 +11379,7 @@ abstract class ShardDO {
         const tick = await this.openGlobalPollTick(trace);
 
         for (const { attachment, ws } of pending) {
-            const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+            const identity = socketIdentity(attachment);
 
             // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
             remaining += await this.pollSocketGlobalShapes(ws, attachment.shapes ?? {}, identity, attachment.connectionId ?? "", tick, trace);
@@ -11984,6 +12056,13 @@ abstract class ShardDO {
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
         const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
+        // The subscriber's IP, forwarded on the upgrade exactly as it is on
+        // `/rpc`. Captured HERE and nowhere else: the upgrade is the only request
+        // this socket ever makes, and every read it later drives is deferred, so
+        // the shared per-request field is either empty (a `subscribe` frame
+        // carries no request) or belongs to a concurrent writer. An IP is tens of
+        // bytes against the attachment's 16 KiB ceiling.
+        const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
 
         // Fingerprint of the token that authorized this socket, so a later
         // rotation of `LUNORA_ADMIN_TOKEN` revokes it rather than leaving a
@@ -12014,6 +12093,7 @@ abstract class ShardDO {
             ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
+            ...(ip === undefined ? {} : { ip }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies SocketAttachment);
 
