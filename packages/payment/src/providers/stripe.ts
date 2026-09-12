@@ -93,14 +93,36 @@ const SUBSCRIPTION_STATE_BY_STRIPE_STATUS: Record<string, SubscriptionState> = {
 const readReferenceId = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.metadata), "referenceId") ?? readString(object, "client_reference_id");
 
-const firstItem = (object: Record<string, unknown>): Record<string, unknown> => {
+const subscriptionItems = (object: Record<string, unknown>): ReadonlyArray<unknown> => {
     const items = asRecord(object.items);
-    const data = Array.isArray(items.data) ? items.data : [];
 
-    return asRecord(data[0]);
+    return Array.isArray(items.data) ? items.data : [];
 };
 
+const firstItem = (object: Record<string, unknown>): Record<string, unknown> => asRecord(subscriptionItems(object)[0]);
+
 const firstPriceId = (object: Record<string, unknown>): string | undefined => readString(asRecord(firstItem(object).price), "id");
+
+/**
+ * Every price id the subscription bills, in Stripe's item order.
+ *
+ * A Stripe subscription is a LIST of items: a base plan alongside an add-on or a metered price is
+ * ordinary, and the customer is paying for all of them. Keeping only `items.data[0]` denied every
+ * non-first price — `check({ priceId })` said no and a plan keyed on it never resolved.
+ */
+const allPriceIds = (object: Record<string, unknown>): string[] => {
+    const ids: string[] = [];
+
+    for (const item of subscriptionItems(object)) {
+        const id = readString(asRecord(asRecord(item).price), "id");
+
+        if (id !== undefined && id !== "") {
+            ids.push(id);
+        }
+    }
+
+    return ids;
+};
 
 const firstQuantity = (object: Record<string, unknown>): number | undefined => readNumber(firstItem(object), "quantity");
 
@@ -145,6 +167,7 @@ const intentToSession = (input: unknown): PaymentSession => {
 const subscriptionFromStripe = (input: unknown): Subscription => {
     const subscription = asRecord(input);
     const now = Date.now();
+    const priceIds = allPriceIds(subscription);
 
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? false,
@@ -152,7 +175,10 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
         currentPeriodEnd: periodEndMs(subscription),
         currentPeriodStart: periodStartMs(subscription),
         id: readString(subscription, "id") ?? "",
-        priceId: firstPriceId(subscription) ?? "",
+        priceId: priceIds[0] ?? "",
+        // Carry the whole set, not just the primary: `resolveEntitlements` tests membership here, so
+        // an add-on or metered item is only granted when it is reported.
+        priceIds,
         provider: "stripe",
         quantity: firstQuantity(subscription) ?? 1,
         referenceId: readReferenceId(subscription) ?? "",

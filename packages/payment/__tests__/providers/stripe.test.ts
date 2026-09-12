@@ -854,6 +854,65 @@ describe("stripe adapter", () => {
         expect(updated.type).toBe("subscription.past_due");
     });
 
+    it("carries every item's price id, not just items.data[0] (regression)", async () => {
+        expect.assertions(3);
+
+        // A Stripe subscription is a LIST of items: a base plan alongside an add-on or a metered price
+        // is ordinary, and the customer is paying for all of them. Keeping only the first denied every
+        // other price — `check({ priceId })` said no and any plan keyed on it never resolved.
+        const base = makeClient([]) as unknown as Record<string, unknown>;
+        const client = {
+            ...base,
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    return {
+                        id,
+                        items: {
+                            data: [
+                                { id: "si_1", price: { id: "price_base" }, quantity: 2 },
+                                { id: "si_2", price: { id: "price_addon" }, quantity: 1 },
+                                { id: "si_3", price: { id: "price_metered" } },
+                            ],
+                        },
+                        metadata: { referenceId: "user_1" },
+                        status: "active",
+                    };
+                },
+            },
+        } as unknown as Stripe;
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        const subscription = await adapter.getSubscriptionStatus("sub_1");
+
+        expect(subscription.priceIds).toEqual(["price_base", "price_addon", "price_metered"]);
+        // `priceId` stays the primary (first) item, for display and single-item plan changes.
+        expect(subscription.priceId).toBe("price_base");
+        expect(subscription.quantity).toBe(2);
+    });
+
+    it("reports an empty price set for an itemless subscription instead of a blank id", async () => {
+        expect.assertions(2);
+
+        const base = makeClient([]) as unknown as Record<string, unknown>;
+        const client = {
+            ...base,
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    return { id, items: { data: [] }, metadata: { referenceId: "user_1" }, status: "active" };
+                },
+            },
+        } as unknown as Stripe;
+
+        const subscription = await createStripeAdapter({ client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+
+        // No id is granted rather than a blank one — `""` in the set would match a plan configured
+        // with an empty price id.
+        expect(subscription.priceIds).toEqual([]);
+        expect(subscription.priceId).toBe("");
+    });
+
     it("fails closed on an unknown subscription status (regression)", async () => {
         expect.assertions(1);
 
