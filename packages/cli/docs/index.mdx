@@ -334,7 +334,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `r2-lifecycle-unset`             | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                 |
 | `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.       |
 | `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.      |
-| `stale-lunora-json`              | warn  | `lunora.config.*` is present but no longer read (`lunora.config.*` replaced it).    |
+| `stale-lunora-json`              | warn  | `lunora.json` is present but no longer read (`lunora.config.*` replaced it).        |
 | `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.              |
 | `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                          |
 | `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).        |
@@ -794,7 +794,7 @@ lunora env unset FOO         # remove a key
 lunora env push              # upload to Cloudflare (prompts unless --yes)
 lunora env push --prod --yes # push to the production environment
 lunora env diff              # compare local .dev.vars keys against Cloudflare
-lunora env doctor            # validate .dev.vars against wrangler.jsonc bindings
+lunora env doctor            # validate .dev.vars against .dev.vars.example
 ```
 
 `diff` reads the deployed Worker's secret **names** via `wrangler secret list`
