@@ -1,8 +1,8 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
-import type { ExportCommandData } from "../data-transfer";
-import { runExportCommand } from "../data-transfer";
+import type { ExportCommandData } from "../data-transfer/export";
+import { runExportCommand } from "../data-transfer/export";
 import type { ExportOptions } from "./index";
 
 /**

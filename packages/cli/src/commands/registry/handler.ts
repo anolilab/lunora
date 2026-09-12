@@ -2,7 +2,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { RegistryOptions } from "./command";
-import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./index";
+import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./commands";
 import type { RegistryCommandData } from "./types";
 
 /**

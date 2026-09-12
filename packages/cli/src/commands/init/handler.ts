@@ -38,7 +38,7 @@ import {
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { detectAuthUiItem, isReactNativeProject } from "../add/features";
-import { runAddCommand } from "../registry";
+import { runAddCommand } from "../registry/commands";
 import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
