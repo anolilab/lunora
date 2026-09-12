@@ -1,3 +1,14 @@
+## @lunora/flags [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.50...@lunora/flags@1.0.0-alpha.51) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
 ## @lunora/flags [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.49...@lunora/flags@1.0.0-alpha.50) (2026-09-12)
 
 
