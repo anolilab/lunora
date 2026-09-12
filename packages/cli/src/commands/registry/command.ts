@@ -13,7 +13,7 @@ const registryCommand: Command = {
     examples: [
         ["lunora registry list", "List available registry items"],
         ["lunora registry add presence", "Scaffold a registry item into lunora/"],
-        ["lunora registry build --check", "Verify the committed catalog is current"],
+        ["lunora registry build --from ./registry --check", "Verify the committed catalog is current"],
     ],
     group: "Project",
     loader: () =>

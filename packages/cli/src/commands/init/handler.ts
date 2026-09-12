@@ -81,7 +81,7 @@ type Template =
 interface InitCommandOptions {
     /**
      * Add features non-interactively after scaffolding (the `--add` flag): a
-     * comma-separated list of `ai | auth | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
+     * comma-separated list of `ai | auth | auth-ui | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
      * Bypasses the interactive multi-select and sub-prompts —
      * each named feature is applied with its shipped defaults.
      */

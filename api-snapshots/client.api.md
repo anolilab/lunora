@@ -1730,10 +1730,17 @@ const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectRes
 
 ## `@lunora/client/auth`
 
+### `AuthStatus` (type)
+
+```ts
+type AuthStatus = "authenticated" | "loading" | "unauthenticated" | "unreachable";
+```
+
 ### `IdentityStore` (interface)
 
 ```ts
 interface IdentityStore {
+    getStatus: () => AuthStatus;
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
@@ -1743,6 +1750,18 @@ interface IdentityStore {
 
 ```ts
 const getIdentityStore: (client: LunoraClient) => IdentityStore;
+```
+
+### `isAuthenticatedStatus` (const)
+
+```ts
+const isAuthenticatedStatus: (status: AuthStatus) => boolean;
+```
+
+### `isLoadingStatus` (const)
+
+```ts
+const isLoadingStatus: (status: AuthStatus) => boolean;
 ```
 
 ## `@lunora/client/pagination`
