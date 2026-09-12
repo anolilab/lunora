@@ -155,7 +155,15 @@ export interface LunoraPayment {
     /** Resolve every configured feature's allowance for a reference in one call. Requires `entitlements`. */
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
-    /** Refund the caller's own captured payment (authorized, derived idempotency key, store synced). */
+
+    /**
+     * Refund the caller's own captured payment (authorized, derived idempotency key, store synced).
+     *
+     * The derived key makes "same session, same amount, same reason" ONE operation, so a retried
+     * request cannot refund twice. Two *intentional* refunds of the same amount on one session are
+     * therefore indistinguishable from that retry: pass a distinct `RefundInput.idempotencyKey` for
+     * the second one, or the provider replays the first and the second moves no money.
+     */
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
     readonly store: PaymentStore;
 
@@ -163,6 +171,10 @@ export interface LunoraPayment {
      * Record metered usage for a reference's feature — durably (exactly-once by idempotency key) and,
      * when the provider supports it, forwarded to its metering API. Best-effort upstream: a reporting
      * failure is observed, never thrown, and the local ledger that `check` reads is always updated.
+     *
+     * `mode: "set"` is rejected with `VALIDATION_ERROR` on a provider that meters usage: its meter is
+     * additive, so a period total is not expressible on it and a lowering set would leave the provider
+     * billing more than the local ledger holds. Use `mode: "add"` there.
      */
     track: (input: TrackInput) => Promise<TrackResult>;
 }
@@ -363,9 +375,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_subscription", adapter.identifier, subscriptionId);
             const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
 
-            await store.upsertSubscription(updated);
+            // Keep the stored `referenceId` over the adapter's. The adapter maps a MUTATION response,
+            // which is even less likely than a read to echo the checkout metadata the reference is
+            // pinned in: without it Creem and Dodo fall back to the provider's own customer id and
+            // Stripe/Polar resolve to `""`, either of which orphans the row from `by_reference`,
+            // `check`/`hasActivePrice` and the default authorizer — and permanently, because `sync.ts`
+            // never rewrites the field. Same rule `reconcile` applies on its own write.
+            const synced = { ...updated, referenceId: existing.referenceId === "" ? updated.referenceId : existing.referenceId };
 
-            return updated;
+            await store.upsertSubscription(synced);
+
+            return synced;
         },
 
         capturePayment: async (input) => {
@@ -557,6 +577,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // session are legitimate and must not collide on the provider's idempotency window. It is
             // the amount actually sent that keys it, so a full-refund-of-a-remainder and an explicit
             // refund of the same remainder are one operation rather than two.
+            //
+            // The cost of that is deliberate and documented on {@link LunoraPayment.refundPayment}: two
+            // INTENTIONAL refunds of the same amount inside the provider's idempotency window are the
+            // same key too, and the provider replays the first instead of issuing a second. The caller
+            // passes a distinct `input.idempotencyKey` for that; the replay guard below is what keeps
+            // the ledger honest when they do not.
             const key =
                 input.idempotencyKey ??
                 (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(providerAmount), input.reason ?? ""));
@@ -593,7 +619,22 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             //
             // The state is derived locally too — from the amount this call refunds, not from the
             // adapter's own state, which Polar pins to "refunded" for a partial refund as well.
-            await store.markEventProcessed(adapter.identifier, marker, LOCAL_REFUND_CLAIM_TYPE);
+            const freshRefund = await store.markEventProcessed(adapter.identifier, marker, LOCAL_REFUND_CLAIM_TYPE);
+
+            // The marker for this provider REFUND ID is already claimed, so this response is a replay of
+            // a refund the ledger has: the key above collided (two same-amount refunds on one session)
+            // and the provider answered with the original rather than moving money a second time. Adding
+            // to the ledger here records money that never left — and the damage compounds, because the
+            // over-refund guard then blocks the real refund and "refund the rest" hands back a remainder
+            // computed from an inflated total, leaving the customer short by exactly the phantom amount.
+            //
+            // Only a provider-supplied `refundId` proves identity. The amount fallback (a provider that
+            // reports no id) is shared by two genuinely distinct same-amount refunds, so treating it as a
+            // replay would drop a real one; that case keeps the old behaviour and the collision documented
+            // on `localRefundKey`.
+            if (!freshRefund && issuedRefund.refundId !== undefined) {
+                return existing;
+            }
 
             try {
                 return await persistSession(existing, {
@@ -661,6 +702,23 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // (its increment is independent of the current total).
             const isSet = input.mode === "set";
 
+            // A provider meter is ADDITIVE, and a period total is not expressible on one. The forward
+            // below can only send a delta against the total it just read, and a LOWERING "set" has no
+            // negative delta to send — so it stays local and every later raise re-sends ground the
+            // meter already has: `set 10 → set 5 → set 8` forwards 10 then 3, billing 13 against a
+            // local period total of 8, and the gap widens with every cycle.
+            //
+            // Correcting it needs a durable last-forwarded total per (reference, feature), which this
+            // append-only ledger does not carry. So reject the mode where a forward would happen rather
+            // than silently over-bill. `mode: "add"` is exact on both sides and is what a metered
+            // provider wants anyway; `"set"` stays available wherever usage is enforced locally.
+            if (isSet && adapter.capabilities.usageMetering && adapter.reportUsage) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `track(): \`mode: "set"\` is not supported on "${adapter.identifier}", whose meter is additive — a lowering set cannot be forwarded, so the provider would over-bill against the local period total. Use \`mode: "add"\`.`,
+                );
+            }
+
             // Advisory ONLY: skip a "set" that already matches, and an explicit
             // `add 0`, so the ledger doesn't grow for a no-op. A stale read here
             // can only cost a redundant marker — never a wrong total — because the
@@ -673,12 +731,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return { recorded: false, reportedToProvider: false };
             }
 
-            // What this event moves the period total BY — the increment for "add",
-            // and for "set" the best-effort difference from the total just read.
-            // Local enforcement never uses it (the fold does); it exists only for
-            // the additive upstream meter below, which is already best-effort and
-            // reconciled separately.
-            const delta = isSet ? target - current : target;
+            // What this event forwards to the additive upstream meter below. Only
+            // "add" ever reaches it — a "set" is rejected above wherever a forward
+            // is possible — so the increment IS the delta, and the two sides of the
+            // ledger cannot drift. Local enforcement never reads this (the fold does).
+            const delta = target;
 
             const recorded = await store.recordUsage({
                 createdAt: nextUsageStamp(),

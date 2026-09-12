@@ -1,5 +1,22 @@
-import type { Id } from "./_generated/server.js";
+import { rateLimit } from "lunorash/ratelimit";
+
+import { makeRateLimiter } from "./ratelimit/schema.js";
+import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/**
+ * The limiter comes from `lunora/ratelimit/schema.ts`, which owns both named
+ * limits — `join` for the once-per-session upsert, `move` for the position
+ * stream. See that file for why `move` is deliberately loose.
+ *
+ * There is no sign-in here, so `ctx.ip` keys the buckets. Never key on
+ * `args.sessionId`: a client picks that value and can rotate it per request, so
+ * it would never share a bucket with itself. `ctx.ip` is Cloudflare's
+ * server-side `CF-Connecting-IP` and is `undefined` off Cloudflare, where every
+ * caller then shares the one `"anon"` bucket.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
 interface CursorDoc {
     _id: Id<"cursors">;
@@ -32,6 +49,7 @@ export const listCursors = query.input({ roomId: v.string().max(64) }).query(asy
  * the session is new, otherwise it patches the existing row in place.
  */
 export const joinRoom = mutation
+    .use(rateLimit(limiter, "join", byCaller))
     .input({
         roomId: v.string().max(64),
         sessionId: v.string().max(64),
@@ -66,6 +84,7 @@ export const joinRoom = mutation
  * server will broadcast every accepted write as a delta to every subscriber.
  */
 export const updateCursor = mutation
+    .use(rateLimit(limiter, "move", byCaller))
     .input({
         roomId: v.string().max(64),
         sessionId: v.string().max(64),

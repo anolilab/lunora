@@ -23,10 +23,18 @@ const feedbackStatus = v.union(
     v.literal("closed"),
 );
 
+/** How many posts the board ships in one read — see {@link list}. */
+const BOARD_LIMIT = 200;
+
 /**
  * The board. `status` narrows through the `by_status` index; `sortBy` picks the
  * ordering. Sorting by votes reads the `by_upvotes` index rather than sorting in
  * JS, so the ordering is the database's job and stays right as the board grows.
+ *
+ * Every branch is capped at {@link BOARD_LIMIT}. Clients subscribe to this, so
+ * an uncapped read re-sends the whole board to every open tab on each post,
+ * comment count change, or vote. Give the board real paging
+ * (`.paginate(args.paginationOpts)`) before it outgrows one page.
  */
 export const list = query
     .input({ status: v.optional(feedbackStatus), sortBy: v.optional(v.union(v.literal("votes"), v.literal("recent"))) })
@@ -35,16 +43,16 @@ export const list = query
             const rows = await ctx.db
                 .query("feedback")
                 .withIndex("by_status", (q) => q.eq("status", status))
-                .collect();
+                .take(BOARD_LIMIT);
 
             return sortBy === "votes" ? [...rows].sort((a, b) => b.upvoteCount - a.upvoteCount) : [...rows].sort((a, b) => b._creationTime - a._creationTime);
         }
 
         if (sortBy === "votes") {
-            return ctx.db.query("feedback").withIndex("by_upvotes").order("desc").collect();
+            return ctx.db.query("feedback").withIndex("by_upvotes").order("desc").take(BOARD_LIMIT);
         }
 
-        return ctx.db.query("feedback").order("desc").collect();
+        return ctx.db.query("feedback").order("desc").take(BOARD_LIMIT);
     });
 
 export const get = query
