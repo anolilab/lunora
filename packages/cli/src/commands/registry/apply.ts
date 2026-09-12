@@ -524,7 +524,18 @@ const isCustomRegistrySource = (options: { from?: string; source?: string }): bo
  * writes that fire on `wrangler dev`/`deploy` without the victim importing
  * anything). Returns `true` to proceed, `false` to abort (after logging).
  */
-const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<boolean> => {
+
+/**
+ * Why a confirmation did not happen — the two cases a bare `false` conflated.
+ *
+ * A non-TTY run without `--yes` is the INVOCATION being wrong (nothing could
+ * have asked), while a declined prompt is the operator deliberately saying no.
+ * They deserve different exit codes, and callers cannot tell them apart from a
+ * boolean.
+ */
+type ConfirmOutcome = { ok: true } | { ok: false; reason: "declined" | "non-interactive" };
+
+const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<ConfirmOutcome> => {
     const hasDeps = items.some(({ manifest }) => Object.keys(manifest.deps ?? {}).length > 0 || Object.keys(manifest.devDependencies ?? {}).length > 0);
     const hasBindings = items.some(({ manifest }) => (manifest.bindings ?? []).length > 0);
     // A custom `--source`/`--from` registry is untrusted: require a conscious
@@ -533,7 +544,7 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     const nonDefaultSource = isCustomRegistrySource(options);
 
     if ((!hasDeps && !hasBindings && !nonDefaultSource) || options.yes) {
-        return true;
+        return { ok: true };
     }
 
     const reasons: string[] = [];
@@ -558,7 +569,7 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     if (!process.stdin.isTTY && options.confirm === undefined) {
         options.logger.error(`add: stdin is not a TTY and the requested items ${reasonText} — re-run with --yes to confirm`);
 
-        return false;
+        return { ok: false, reason: "non-interactive" };
     }
 
     const confirmer = options.confirm ?? tuiConfirm;
@@ -566,9 +577,12 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
 
     if (!confirmed) {
         options.logger.info("add: aborted");
+
+        return { ok: false, reason: "declined" };
     }
 
-    return confirmed;
+    return { ok: true };
 };
 
+export type { ConfirmOutcome };
 export { applyDeps, applyItemResources, confirmDepMutation, isCustomRegistrySource, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };

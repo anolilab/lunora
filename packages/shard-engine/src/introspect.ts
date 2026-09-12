@@ -72,6 +72,7 @@ const ADMIN_FUNCTIONS = {
     explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
+    findRelated: "__lunora_admin__:findRelated",
     getAdvisories: "__lunora_admin__:getAdvisories",
     getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",

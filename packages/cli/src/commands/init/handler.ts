@@ -15,9 +15,10 @@ import type { DetectedFramework, FrameworkDetection } from "../../util/detect-fr
 import { detectFramework } from "../../util/detect-framework";
 import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
 import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { PromptCancelledError } from "../../util/prompt-cancelled";
+import PromptCancelledError from "../../util/prompt-cancelled";
 import { resolveDistTag, resolvePinnedRepoRef, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -37,7 +38,7 @@ import {
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { detectAuthUiItem, isReactNativeProject } from "../add/features";
-import { runAddCommand } from "../registry";
+import { runAddCommand } from "../registry/commands";
 import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
@@ -80,7 +81,7 @@ type Template =
 interface InitCommandOptions {
     /**
      * Add features non-interactively after scaffolding (the `--add` flag): a
-     * comma-separated list of `ai | auth | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
+     * comma-separated list of `ai | auth | auth-ui | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
      * Bypasses the interactive multi-select and sub-prompts —
      * each named feature is applied with its shipped defaults.
      */
@@ -563,7 +564,7 @@ const logWould = (logger: Logger, action: string): void => {
 const failEmptyScaffold = (logger: Logger, target: string, source: string): InitCommandResult => {
     logger.error(`init: the template at ${source} contains no files — nothing was scaffolded. Check the template name, \`--source\` layout and \`--ref\`.`);
 
-    return { code: 1, files: [], target };
+    return { code: EXIT_CODE.NOT_FOUND, files: [], target };
 };
 
 /**
@@ -825,7 +826,7 @@ const scaffoldFromLocal = async (
     if (!existsSync(templateDirectory)) {
         logger.error(`template not found in local source: ${templateDirectory}`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.NOT_FOUND, files: [], target };
     }
 
     const written = await copyTemplate(templateDirectory, target, name);
@@ -989,7 +990,7 @@ const scaffoldViteOverlay = async (options: {
             if (!existsSync(localBase)) {
                 logger.error(`create-vite base not found on disk: ${localBase}`);
 
-                return { code: 1, files: [], target };
+                return { code: EXIT_CODE.NOT_FOUND, files: [], target };
             }
         }
 
@@ -1568,7 +1569,7 @@ const scaffoldOverlayPath = async (
     if (!isOverlayFramework(framework)) {
         options.logger.error(`init: unknown framework "${framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.USAGE, files: [], target };
     }
 
     if (!(await verifyRemoteTemplate({ isLocal: options.overlayBaseFrom !== undefined, logger: options.logger }))) {
@@ -1602,7 +1603,7 @@ const scaffoldTemplatePath = async (
                 " Re-run with --allow-unsafe-source if you really want this.",
         );
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.USAGE, files: [], target };
     }
 
     if (!(await verifyRemoteTemplate({ isLocal: false, logger: options.logger, source: resolveTemplateSource(templateType, options.source, options.ref) }))) {
@@ -1622,7 +1623,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (blocked !== undefined) {
         options.logger.error(blocked);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
@@ -1643,7 +1644,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (name.length === 0) {
         options.logger.error(`init: refusing an empty project name — pass a directory name (e.g. \`lunora init my-app\`).`);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // Guard the project name against path traversal: it becomes a directory
@@ -1652,7 +1653,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (name.includes("/") || name.includes("\\") || name === ".." || name === ".") {
         options.logger.error(`init: refusing project name "${name}" — must not contain path separators or be "." / "..".`);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // The name is substituted verbatim into `wrangler.jsonc`'s `name` field, and
@@ -1668,7 +1669,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
                 `(starting with a letter, digit or "_"), and wrangler rejects anything else. Try \`${suggestWorkerName(name)}\`.`,
         );
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     const target = resolve(cwd, name);
@@ -1684,7 +1685,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (existing?.isSymbolicLink() === true) {
         options.logger.error(`init: refusing to scaffold into "${target}" — it is a symlink. Remove it, or scaffold into a different directory name.`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.CONFLICT, files: [], target };
     }
 
     const targetPreExisted = existing !== undefined;
@@ -1695,7 +1696,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
         if (entries.length > 0) {
             options.logger.error(`target directory not empty: ${target}`);
 
-            return { code: 1, files: [], target };
+            return { code: EXIT_CODE.CONFLICT, files: [], target };
         }
     }
 
@@ -1974,7 +1975,7 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     if ("error" in template) {
         logger.error(template.error);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return runInitCommand({

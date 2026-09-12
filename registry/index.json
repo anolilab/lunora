@@ -127,7 +127,7 @@
             "title": "Storage"
         },
         {
-            "description": "Durable, long-running workflows for Lunora — declare a `defineWorkflow` export in lunora/workflows.ts with steps inspired by Temporal (step.do, step.sleep, fan-out via `branch()`). Codegen generates the WorkflowEntrypoint class and wires `ctx.workflows.<name>.start()` on mutation/action context.",
+            "description": "Durable, long-running workflows for Lunora — declare a `defineWorkflow` export in lunora/workflows.ts with steps inspired by Temporal (step.do, step.sleep, fan-out via `branch()`). Codegen generates the WorkflowEntrypoint class and wires a typed `ctx.workflows.get(\"<name>\")` handle (`create` / `createBatch`) on mutation/action context.",
             "name": "workflow",
             "title": "Workflows"
         }

@@ -93,6 +93,7 @@ import type {
     ReactorMetadata,
     ReactorState,
     ReadFootprint,
+    RelatedPage,
     RelayHost,
     RelayMember,
     ReplicaOwnerHost,
@@ -262,6 +263,7 @@ import type {
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
@@ -286,6 +288,7 @@ import {
     parseClientSeqHeader,
     parseCreateWorkflowInstanceArgs,
     parseEmit,
+    parseFindRelatedArgs,
     parseGetWorkflowInstanceStatusArgs,
     parseIdentityHeader,
     parseIssueHash,
@@ -2505,7 +2508,7 @@ abstract class ShardDO {
      *
      * A no-op seam here; the generated subclass overrides it, because running a
      * reactor needs two things the base cannot build — a ctx (for `select` and the
-     * handler) and a read footprint around it. Mirrors `runSubscription`, which
+     * handler) and a read footprint around it. Mirrors `executeSubscription`, which
      * has the identical shape for the socket-terminated side of reactivity.
      * @returns the run's digest and read footprint, or `undefined` when the path
      * resolves to nothing (a manifest naming a function this build does not have).
@@ -3333,6 +3336,22 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
         return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "rankBefore is not implemented in base ShardDO", { status: 500 }));
+    }
+
+    /**
+     * Walk this shard's relation graph out of `{ table, id }` — the read-only
+     * `ctx.db.related(...)` traversal behind `__lunora_admin__:findRelated`, so
+     * an agent can follow the schema's foreign keys without the app having to
+     * write a query for it.
+     *
+     * Same base/codegen split as {@link runShardRankBefore}, and for the same
+     * reason: the edge set is derived from the user's `schema.ts`, which the
+     * base class cannot see, so the codegen subclass overrides this to call
+     * `related(...)` on a live `createShardCtxDb(...)` writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "findRelated is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -7861,7 +7880,7 @@ abstract class ShardDO {
                     // is the signal that a reactor is watching more than it needs to.
                     result: outcome.ran ? "ran" : "suppressed",
                     // The sentinel is stripped for the same reason the delta frame
-                    // strips it (see `pushSubscriptionDelta`): `tables` is persisted
+                    // strips it (see `pushSubscriptionData`): `tables` is persisted
                     // in `__reactor_state` and rendered as the reactor's watched-table
                     // list in the Studio, so a reactor that read `ctx.kv` would show an
                     // internal marker to an operator. Inert either way —
@@ -8264,10 +8283,26 @@ abstract class ShardDO {
         return adminResponse(result);
     }
 
-    /** The single-shape admin writes (decode args → Response), keyed by function path. */
+    /**
+     * Serve `__lunora_admin__:findRelated` — a read-only relation-graph
+     * traversal. No `flushChangedTables()`: it writes nothing, so there is
+     * nothing for live subscribers to re-run against. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleFindRelated(args: Record<string, unknown>): Promise<Response> {
+        return adminResponse(await this.runShardFindRelated(parseFindRelatedArgs(args)));
+    }
+
+    /**
+     * The single-shape admin ops (decode args → Response), keyed by function
+     * path. Mostly writes; a read belongs here too when it needs an async,
+     * schema-aware writer — `readAdminOp` is synchronous and shared with the
+     * live-subscription bridge, so it cannot serve one.
+     */
     private simpleAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response> | Response> {
         return {
             [ADMIN_FUNCTIONS.backfillSearch]: (args) => this.handleBackfillSearch(args),
+            [ADMIN_FUNCTIONS.findRelated]: (args) => this.handleFindRelated(args),
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
             [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
@@ -12197,6 +12232,7 @@ export type {
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,

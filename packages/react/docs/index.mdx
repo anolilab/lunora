@@ -1,6 +1,6 @@
 ---
 title: "@lunora/react"
-description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
+description: React 19 hooks built on @lunora/client, with React Server Component data loading.
 related:
     - to: /docs/packages/client
     - to: /docs/packages/storage#end-user-uploads-rls-gated
@@ -52,10 +52,26 @@ what you need:
 
 ```tsx
 const { mutate, pending } = useMutation(api.messages.send);
-await mutate({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+
+await mutate(
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
 ```
 
-For a multi-query optimistic update bound to every call, use
+`optimisticUpdate` names the query it patches, which is what the `send`/`list`
+shape needs: the per-call `optimistic: (current) => next` shortcut only patches a
+subscription registered under the **mutation's own** reference and args, so it
+fits a query and a mutation that share a path (a counter, a document by id) and
+quietly does nothing for anything else.
+
+To bind the same update to every call of a handle, use
 `withOptimisticUpdate(update)`, which returns the same handle with the update
 applied by default.
 
@@ -272,7 +288,7 @@ export function Uploader() {
         endpointMultipart: "/upload",
         // Send the user's session so the server's `authorize` gate can identify them.
         headers: async () => ({ authorization: `Bearer ${await getSessionToken()}` }),
-        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedTypes: ["video/*", "image/*"] },
+        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedFileTypes: ["video/*", "image/*"] },
         onSuccess: (file) => console.log("uploaded", file.id),
     });
 

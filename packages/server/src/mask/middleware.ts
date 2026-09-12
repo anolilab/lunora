@@ -204,6 +204,18 @@ interface MaskDatabase {
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
     /** Cross-shard companion to `rankPage`, gated the same way `rankPage` is masked below. */
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+
+    /**
+     * Relation-graph traversal. Its rows come from tables the caller never
+     * names, at every hop — exactly the `with`-hop problem — so it is masked
+     * through the same `relationMask` hook rather than by a per-table wrapper
+     * here. Structural mirror of `@lunora/shard-engine`'s `RelatedOptions` /
+     * `RelatedPage`, narrowed to what this wrapper touches.
+     */
+    related?: (
+        start: Record<string, unknown>,
+        options?: { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] },
+    ) => Promise<{ continueCursor: null | string; isDone: boolean; nodes: { document: Record<string, unknown> }[] }>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -285,7 +297,7 @@ const maskPage = <Context>(page: QueryPage, columns: MaskColumns<Context>, base:
  * `assertWhereAllowed` (below) closes on the `where` path, reached instead
  * through the index builder.
  *
- * Unlike `where` (a plain object walked by `collectWhereFields`), the
+ * Unlike `where` (a plain object walked by `assertWhereScope`), the
  * range/search is a builder CALLBACK (`q => q.eq("ssn", x)`), so the referenced
  * fields aren't statically inspectable. Run the callback once against a
  * recording proxy: its blanket `get` trap turns EVERY property access into a
@@ -973,6 +985,18 @@ const wrapDatabase = <Context>(
 
             return maskRow(row, columns, context);
         },
+
+        // Every row a traversal returns comes from a table the caller never
+        // named, so it is masked exactly like a `with`-hydrated child: by
+        // handing the walk the composed `relationMask` hook, which it applies
+        // per hop with that hop's target table. The `...base` spread would
+        // otherwise publish an unmasked reader over the whole schema.
+        related: base.related
+            ? async (
+                  start: Record<string, unknown>,
+                  options?: { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] },
+              ) => await (base.related as NonNullable<MaskDatabase["related"]>)(start, withRelationMask(options))
+            : undefined,
 
         // Delegates to `base.lookupById` directly, not `locate` above (which
         // folds the table name away) — the `...base` spread would otherwise expose it unmasked.

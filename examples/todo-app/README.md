@@ -52,13 +52,18 @@ const { mutate: add } = useMutation(api.todos.add);
 await add(
     { text },
     {
-        optimistic: (current) => {
-            const list = current ?? [];
-            return [{ ...provisional }, ...list];
+        optimisticUpdate: (store) => {
+            const list = store.getQuery(api.todos.list, {}) ?? [];
+            store.setQuery(api.todos.list, {}, [{ ...provisional }, ...list]);
         },
     },
 );
 ```
+
+`optimisticUpdate` names the query the write affects — `todos.add` and
+`todos.list` are different functions, so nothing can infer the link. (The
+per-call `optimistic: (current) => next` shortcut patches only a subscription
+registered under the mutation's own reference and args.)
 
 If the server rejects the mutation the runtime rolls the cache back; if it
 succeeds the server-side delta replaces the optimistic entry.

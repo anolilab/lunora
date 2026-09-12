@@ -1234,3 +1234,54 @@ describe("mixed-kind push routing", () => {
         expect(receipt.success).toBe(false);
     });
 });
+
+describe("mixed-kind push routing under the resilience middleware", () => {
+    // The router is ONE provider to the engine, so the retry middleware re-runs
+    // `send` with the WHOLE payload. These drive the real facade, the real router
+    // and the real `attachResilience` (through `mockEngine`) because the
+    // interaction between the three is the behaviour under test.
+    const origins = { allowedPushOrigins: ["https://push.example"] };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    const mixedSend = (to: ReadonlyArray<string>) => {
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const engine = mockEngine({ push: routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider }) });
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
+
+        return { fcm, send: async () => notify.send({ push: { body: "b", to: [...to] } }), webPush };
+    };
+
+    it("does not re-send to the group that already delivered when the other fails", async () => {
+        expect.hasAssertions();
+
+        // The web-push target is accepted; the FCM token answers a transient 503.
+        const { fcm, send, webPush } = mixedSend([sub("ok"), "fail-token"]);
+        const [receipt] = await send();
+
+        // One send each: retrying the router re-POSTs the accepted web-push
+        // target, delivering that notification to the device four times over.
+        expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(1);
+        expect(receipt?.successful).toBe(false);
+
+        // The caller is told the send was partial and which group still needs it
+        // — the same "re-send the narrower set" contract `runRetryIds` offers.
+        const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
+
+        expect(errors).toContain("partially delivered");
+        expect(errors).toContain("the fcm group failed");
+    });
+
+    it("still retries when BOTH groups fail — there is no delivery to duplicate", async () => {
+        expect.hasAssertions();
+
+        const { fcm, send, webPush } = mixedSend([sub("fail"), "fail-token"]);
+
+        await send();
+
+        // The engine's budget: the initial attempt plus three retries.
+        expect(webPush.sends).toHaveLength(4);
+        expect(fcm.sends).toHaveLength(4);
+    });
+});

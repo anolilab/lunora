@@ -294,4 +294,173 @@ describe("durable read cache on a bearer-token reload", () => {
 
         client.close();
     });
+
+    /**
+     * Navigating away from a route and back, offline. The hydrated entry was
+     * one-shot per key: `subscribe()` consumed it, the last unsubscribe dropped
+     * the state that held its value, and nothing re-seeded — so the remount
+     * rendered `undefined` for the rest of the offline session while the durable
+     * store still held the rows. React masked it behind TanStack's `gcTime`;
+     * every other adapter showed it on the first navigation.
+     */
+    it("seeds again when a route remounts after its last subscriber detached", async () => {
+        expect.hasAssertions();
+
+        const queryCache = createInMemoryQueryCache();
+
+        await writeCache(queryCache, "tok-abc");
+
+        sockets.length = 0;
+
+        const client = makeClient(queryCache);
+
+        await client.whenReady();
+        client.setAuthToken("tok-abc");
+
+        let first: unknown;
+
+        const unsubscribe = client.subscribe(fnRef("todos.list"), {}, (value) => {
+            first = value;
+        });
+
+        expect(first).toStrictEqual([{ _id: "t1", text: "cached row" }]);
+
+        // Navigate away: the last subscriber detaches and the state is removed.
+        unsubscribe();
+
+        // Navigate back, still offline — no socket has delivered anything.
+        let second: unknown;
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            second = value;
+        });
+
+        expect(second).toStrictEqual([{ _id: "t1", text: "cached row" }]);
+        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ present: true, value: [{ _id: "t1", text: "cached row" }] });
+
+        client.close();
+    });
+
+    /** The other half of the same move: a seed a server frame has replaced must never come back. */
+    it("does not replay a seed a server frame has superseded", async () => {
+        expect.hasAssertions();
+
+        const queryCache = createInMemoryQueryCache();
+
+        await writeCache(queryCache, "tok-abc");
+
+        sockets.length = 0;
+
+        const client = makeClient(queryCache);
+
+        await client.whenReady();
+        client.setAuthToken("tok-abc");
+
+        let live: unknown;
+
+        const unsubscribe = client.subscribe(fnRef("todos.list"), {}, (value) => {
+            live = value;
+        });
+
+        const socket = sockets.at(-1);
+
+        socket?.open();
+
+        const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
+
+        socket?.receive({ cursor: 9, data: [{ _id: "t2", text: "fresh row" }], id: subscribeId, type: "data" });
+
+        expect(live).toStrictEqual([{ _id: "t2", text: "fresh row" }]);
+
+        unsubscribe();
+
+        let remounted: unknown;
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            remounted = value;
+        });
+
+        expect(remounted).toBeUndefined();
+        expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
+
+        client.close();
+    });
+});
+
+/**
+ * A cookie session has no client-held credential: the cookie is `HttpOnly`, so
+ * the client can neither read it nor prove it still holds it, and offline
+ * `/get-session` never answers. Entries are therefore cached under `subj:<id>`
+ * with no `credential`, and the identity gate has nothing to match them
+ * against.
+ *
+ * That is the documented limitation, not an oversight — seeding on a persisted
+ * subject label would hand the rows to whoever opens the browser profile, with
+ * no evidence they are that subject. Revoking on a later mismatch does not
+ * close it: the check can only run once connectivity returns, which is exactly
+ * the state where the offline seed was not needed. Offline-first READS require
+ * a bearer token.
+ */
+describe("durable read cache on a cookie-session cold start", () => {
+    it("refuses to seed when nothing on this client can evidence the cached identity", async () => {
+        expect.hasAssertions();
+
+        const queryCache = createInMemoryQueryCache();
+
+        // Session 1: a cookie session — no bearer token was ever set, the
+        // subject arrived from `/get-session`.
+        sockets.length = 0;
+
+        const writer = makeClient(queryCache);
+
+        await writer.whenReady();
+        writer.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const writeSocket = sockets.at(-1);
+
+        writeSocket?.open();
+
+        const subscribeId = writeSocket?.sent.find((message) => message.type === "subscribe")?.id;
+
+        writer.setAuthToken(null, "user-1");
+        writeSocket?.receive({ cursor: 7, data: [{ _id: "t1", text: "cached row" }], id: subscribeId, type: "data" });
+
+        await settle();
+
+        writer.close();
+
+        const stored = await queryCache.load();
+
+        expect(stored.map((entry) => [entry.identity, entry.credential])).toStrictEqual([["subj:user-1", undefined]]);
+
+        // Session 2: an offline cold start. No token to restore, and
+        // `/get-session` cannot be reached.
+        sockets.length = 0;
+
+        const client = new LunoraClient({
+            fetch: async () => {
+                throw new Error("offline");
+            },
+            heartbeatIntervalMs: 0,
+            hydrateOnStart: true,
+            persistence: false,
+            queryCache,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+
+        await client.whenReady();
+
+        let seeded: unknown;
+
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            seeded = value;
+        });
+
+        expect(seeded).toBeUndefined();
+        expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
+        await expect(client.getCurrentUser()).resolves.toBeNull();
+
+        client.close();
+    });
 });

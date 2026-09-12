@@ -117,41 +117,18 @@ bun add @lunora/payment creem
 
 ## Configure
 
-The adapter takes a structural **`CreemClientLike`** shim by injection. This keeps
-`@lunora/payment` free of a hard `creem` dependency and lets you map the real
-SDK's argument shapes onto the small, stable surface the adapter calls. The shim
-shape is:
-
-```ts
-interface CreemClientLike {
-    checkouts: {
-        create: (request) => Promise<Record<string, unknown>>;
-        retrieve: (checkoutId: string) => Promise<Record<string, unknown>>;
-    };
-    customers: {
-        create: (request) => Promise<Record<string, unknown>>;
-        generateBillingLinks: (request) => Promise<Record<string, unknown>>;
-        retrieve?: (request) => Promise<Record<string, unknown>>; // optional: recover a duplicate-email create
-    };
-    subscriptions: {
-        cancel: (subscriptionId: string, request?) => Promise<Record<string, unknown>>;
-        get: (subscriptionId: string) => Promise<Record<string, unknown>>;
-        resume: (subscriptionId: string) => Promise<Record<string, unknown>>;
-        upgrade: (subscriptionId: string, request) => Promise<Record<string, unknown>>;
-    };
-}
-```
-
-<Callout type="warn">
-    Do **not** just cast `new Creem()` to `CreemClientLike`. Two methods on the real SDK don't match the shim's shape and one isn't on the SDK's `customers`
-    resource at all; see [The client shim](#the-client-shim). Write the small translating shim below instead; the pass-through methods are one-liners.
-</Callout>
+The adapter takes the `creem` client by injection, typed as the structural
+**`CreemClientLike`** (its `checkouts`, `customers`, and `subscriptions`
+resources). A real `Creem` instance satisfies it without a cast — the shape
+exists only to keep `@lunora/payment` free of a hard `creem` dependency and the
+SDK's full types out of the published declarations; internally the adapter calls
+the real SDK methods.
 
 <Steps>
 <Step>
 
 **Construct the real Creem SDK client.** The current `creem` SDK takes the API key
-at construction (not per call) and selects test mode via `serverIdx: 1` (or an
+at construction (not per call) and selects test mode via `server: "test"` (or an
 explicit `serverURL`):
 
 ```ts
@@ -159,50 +136,8 @@ import { Creem } from "creem";
 
 const creem = new Creem({
     apiKey: env.CREEM_API_KEY,
-    // serverIdx: 1, // → https://test-api.creem.io while developing
+    // server: "test", // → https://test-api.creem.io while developing
 });
-```
-
-</Step>
-<Step>
-
-<a id="the-client-shim" />
-
-**Build the `CreemClientLike` shim.** Most methods pass straight through: the
-adapter already sends the SDK's camelCase field names (`productId`, `units`,
-`customer`, `metadata`, `successUrl`, `requestId`, and `{ productId, updateBehavior }`
-for upgrades). Only two need translation:
-
-- `customers.retrieve` on the real SDK is **positional**: `retrieve(customerId?, email?)`, _not_ `retrieve({ email })`. Map the email lookup.
-- The SDK's `customers` resource has **no `create`** (only `list`, `retrieve`, `generateBillingLinks`). Creem's REST API does expose `POST /v1/customers`, so provide `create` via a direct call (or drop it and rely on implicit creation at checkout; see [Customers](#customers-and-getorcreatecustomer)).
-
-```ts
-import type { CreemClientLike } from "@lunora/payment/creem";
-
-const client: CreemClientLike = {
-    checkouts: {
-        create: (request) => creem.checkouts.create(request),
-        retrieve: (checkoutId) => creem.checkouts.retrieve(checkoutId),
-    },
-    customers: {
-        generateBillingLinks: (request) => creem.customers.generateBillingLinks(request),
-        // Real SDK signature is positional: retrieve(customerId?, email?)
-        retrieve: (request) => creem.customers.retrieve(undefined, request.email as string),
-        // Not on the SDK's `customers` resource — call the REST endpoint directly.
-        create: async (request) =>
-            (await fetch("https://api.creem.io/v1/customers", {
-                body: JSON.stringify({ email: request.email, name: request.name }),
-                headers: { "content-type": "application/json", "x-api-key": env.CREEM_API_KEY },
-                method: "POST",
-            }).then((response) => response.json())) as Record<string, unknown>,
-    },
-    subscriptions: {
-        cancel: (id, request) => creem.subscriptions.cancel(id, request ?? {}),
-        get: (id) => creem.subscriptions.get(id),
-        resume: (id) => creem.subscriptions.resume(id),
-        upgrade: (id, request) => creem.subscriptions.upgrade(id, request),
-    },
-};
 ```
 
 </Step>
@@ -220,8 +155,7 @@ import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     payment: (env) => {
-        const creem = new Creem({ apiKey: env.CREEM_API_KEY });
-        const client = buildCreemShim(creem, env); // the shim from the previous step
+        const client = new Creem({ apiKey: env.CREEM_API_KEY });
 
         return {
             adapter: createCreemAdapter({ client, webhookSecret: env.CREEM_WEBHOOK_SECRET }),
@@ -390,8 +324,11 @@ export const processWebhook = internalAction
 </Steps>
 
 Once verified, `handleWebhook` normalizes the event through Lunora's state machine
-and always returns `200` so Creem stops retrying; duplicate or out-of-order
-deliveries are safe by construction (the event `id` keys an append-only log).
+and returns `200` once applied or deduplicated, so Creem stops retrying; a
+duplicate is safe by construction (the event `id` keys an append-only log). The
+one exception is an **orphaned** event — one whose subscription or customer row
+has not been created yet, i.e. an out-of-order delivery — which returns `500` so
+Creem redelivers it after the parent row lands.
 
 ### Event mapping
 
@@ -433,14 +370,14 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 </Callout>
 
 <Callout type="warn">
-    **`create is not a function` / customer creation errors.** The `creem` SDK's `customers` resource has no `create`, so a bare `new Creem()` cast leaves
-    `customers.create` undefined. Use the translating shim above (which calls `POST /v1/customers`, or omit `create` and let checkout create the customer
-    implicitly).
+    **Customer creation errors.** `customers.create` returns `400` when a customer with that email already exists, so it is not idempotent by email. The adapter
+    recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches; a mismatch fails closed. If you see the
+    create rejected for another reason, check the API key's store and mode (test vs. live).
 </Callout>
 
 <Callout type="warn">
-    **Wrong customer returned by `retrieve`.** The real SDK's `retrieve` is positional: `retrieve(customerId?, email?)`. Passing `{email}` directly puts the
-    object in the `customerId` slot. The shim maps `{email}` → `retrieve(undefined, email)`.
+    **Wrong customer returned by `retrieve`.** The SDK's `retrieve` is positional: `retrieve(customerId?, email?)`. Passing `{email}` directly puts the object
+    in the `customerId` slot. The adapter calls `retrieve(undefined, email)` for its email lookup; do the same in any direct SDK call of your own.
 </Callout>
 
 <Callout type="warn">
@@ -449,22 +386,22 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 </Callout>
 
 <Callout type="info">
-    **Test mode.** Build against `serverIdx: 1` (`https://test-api.creem.io`) with your test API key and a test webhook endpoint before switching to live keys.
+    **Test mode.** Build against `server: "test"` (`https://test-api.creem.io`) with your test API key and a test webhook endpoint before switching to live
+    keys.
 </Callout>
 
 ## Customers and `getOrCreateCustomer`
 
-The facade only calls `getOrCreateCustomer` when a reference has no stored Creem
-customer and no `customerId` was passed, i.e. the first checkout. The adapter
-tries `customers.create` first, then (on the duplicate-email error Creem returns
-for an existing email) falls back to `customers.retrieve` by email, an idempotent
-get-or-create. Because Creem also creates the customer implicitly at checkout (the
-checkout accepts `customer.email`), you can alternatively omit `create` from the
-shim and let checkout mint the customer.
+The facade only calls `getOrCreateCustomer` when the store holds no Creem customer
+for the `referenceId`, i.e. the first checkout (a caller-supplied `customerId` is
+ignored — the customer is always derived from the store for the authorized
+reference). The adapter tries `customers.create` first, then (on the
+duplicate-email error Creem returns for an existing email) falls back to
+`customers.retrieve` by email, an idempotent get-or-create.
 
 ## Related
 
 - [`@lunora/payment`](/docs/packages/payment): the provider-agnostic API, `ctx.payments`, entitlements, and the store schema.
 - [`@lunora/scheduler`](/docs/packages/scheduler): drive the `reconcile` sweep that re-fetches provider truth for drifted rows.
-- [Studio](/docs/packages/studio): the Payments panel (under Logs) shows synced customers, subscriptions, and Creem webhook events.
+- [Studio](/docs/packages/studio): the Payments panel (under Operations) shows synced customers, subscriptions, and Creem webhook events.
 - [Creem docs](https://docs.creem.io) · [Webhooks](https://docs.creem.io/code/webhooks) · [Managing subscriptions](https://docs.creem.io/features/subscriptions/managing) · [Customer Portal](https://docs.creem.io/features/customer-portal)

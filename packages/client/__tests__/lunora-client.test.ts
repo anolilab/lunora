@@ -2273,6 +2273,86 @@ describe("lunoraClient", () => {
             expect(received).toEqual([0, 9]);
         });
 
+        it("a per-call optimistic does not reach a query registered under a different reference", async () => {
+            expect.assertions(2);
+
+            // The targeting rule, pinned: `optimistic` patches the subscription
+            // registered under the WRITE's own (ref, args, shard) and nothing else.
+            // The shape apps actually have — a `messages:send` mutation and a
+            // `messages:list` query — shares neither, so there is nothing to patch.
+            // `optimisticUpdate` (below) is the option for that shape.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            await client.mutation(
+                fnRef("messages:send"),
+                { channelId: "c1", text: "hi" },
+                { optimistic: (current) => [...((current as unknown[]) ?? []), { _id: "tmp" }] },
+            );
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+
+            // Same reference, different args: also no match — the args are part of
+            // the key, so a list-wide patch can't ride a per-row write either.
+            await client.mutation(fnRef("messages:list"), { channelId: "c2" }, { optimistic: () => ["wrong channel"] });
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+        });
+
+        it("optimisticUpdate patches the list query a send mutation targets (the documented shape)", async () => {
+            expect.assertions(2);
+
+            // Distinct refs AND distinct args, which is what every doc and example
+            // shows: `messages:send({ channelId, text })` appending to the
+            // `messages:list({ channelId })` a component is watching.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "FORBIDDEN", message: "nope" } }, { status: 403 }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            const draft = { _id: "tmp", text: "hi" };
+
+            await expect(
+                client.mutation(
+                    fnRef("messages:send"),
+                    { channelId: "c1", text: "hi" },
+                    {
+                        optimisticUpdate: (store, args) => {
+                            const current = store.getQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }) as
+                                undefined | unknown[];
+
+                            store.setQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }, [...(current ?? []), draft]);
+                        },
+                    },
+                ),
+            ).rejects.toMatchObject({ message: "nope" });
+
+            // Painted on the list immediately, then rolled back when the server said no.
+            expect(received).toEqual([[{ _id: "m1" }], [{ _id: "m1" }, draft], [{ _id: "m1" }]]);
+        });
+
         it("stacked optimistic mutations: an older failure rebases the newer pending write onto the base", async () => {
             expect.assertions(2);
 
@@ -4100,7 +4180,7 @@ describe("lunoraClient", () => {
             await expect(client.getCurrentUser()).resolves.toBeNull();
         });
 
-        it("returns null when the fetch rejects", async () => {
+        it("rejects when the fetch rejects — unreachable is not signed out", async () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
@@ -4111,7 +4191,9 @@ describe("lunoraClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await expect(client.getCurrentUser()).resolves.toBeNull();
+            // Folding this into `null` made it indistinguishable from "the server
+            // says you have no session" — see `auth-gate-contract.test.ts`.
+            await expect(client.getCurrentUser()).rejects.toThrow("offline");
         });
 
         it("honours a custom authBasePath", async () => {

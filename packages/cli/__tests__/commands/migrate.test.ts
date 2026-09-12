@@ -2,18 +2,32 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import {
-    execute as migrateExecute,
-    runMigrateCreateCommand,
-    runMigrateDataCommand,
-    runMigrateGenerateCommand,
-    runMigrateToHyperdriveCommand,
-} from "../../src/commands/migrate/handler";
+import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
+import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** Run `body` with `process.stdout.write` captured, and return what it wrote. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        chunks.push(String(chunk));
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return chunks.join("");
+};
 
 const silentLogger = (): Logger => {
     return {
@@ -44,6 +58,112 @@ describe("lunora migrate", () => {
 
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
 
+    /**
+     * `--format json` across the subcommand dispatch.
+     *
+     * This is the branch's largest single refactor — the if-chain became a
+     * `switch` over four `dispatch*` shells, each owning its own document — and
+     * it landed with no `--format` coverage at all. Two independent signals said
+     * so: the code-quality review, and Codecov reporting 54% patch coverage on
+     * this file. The documents are a contract an agent parses, so they are
+     * pinned here rather than left to the first caller to discover.
+     */
+    describe("--format json", () => {
+        it("generate emits its document on stdout and keeps prose off it", async () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global(),
+});
+`,
+            );
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate", "init"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { empty: boolean; migrationFile?: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("generate");
+            expect(document.data.empty).toBe(false);
+            expect(document.data.migrationFile).toMatch(/init/u);
+            // Exactly one document — stdout stays pipeable, the human lines go to stderr.
+            expect(
+                stdout
+                    .trimEnd()
+                    .split("\n")
+                    .filter((line) => line === "}"),
+            ).toHaveLength(1);
+        });
+
+        it("create carries the name and the scaffolded file", async () => {
+            expect.assertions(2);
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["create", "backfill_emails"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { file?: string; name: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("create");
+            expect(document.data.name).toBe("backfill_emails");
+        });
+
+        it("refuses an unknown --format with the usage exit code, before dispatching", async () => {
+            expect.assertions(2);
+
+            let exitCode: number | undefined;
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate"],
+                    options: { format: "yaml" },
+                    process: {
+                        cwd: workdir,
+                        exit: (code: number) => {
+                            exitCode = code;
+                        },
+                    },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+            // Refused before anything ran, so no document was written.
+            expect(stdout).toBe("");
+        });
+
+        it("exits USAGE on an unknown subcommand", async () => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: ["nope"],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+        });
+    });
+
     describe("lunora migrate generate", () => {
         it("errors when schema.ts is missing", () => {
             expect.assertions(3);
@@ -54,7 +174,7 @@ describe("lunora migrate", () => {
                 logger: { ...silentLogger(), error: (m) => errors.push(m) },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
 
             const message = errors.join("\n");
 
@@ -444,7 +564,7 @@ export const schema = defineSchema({
                 table: "a",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("already exists");
         });
 
@@ -454,7 +574,7 @@ export const schema = defineSchema({
             const errors: string[] = [];
             const result = await runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -469,7 +589,7 @@ export const schema = defineSchema({
                 table: "messages",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -490,7 +610,7 @@ export const schema = defineSchema({
                     name: "needs_table",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
             } finally {
                 Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalIsTty });
             }
@@ -541,7 +661,7 @@ export const schema = defineSchema({
                 promptTable: async () => undefined,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("no table selected");
             expect(existsSync(migrationsFile())).toBe(false);
         });
@@ -557,7 +677,7 @@ export const schema = defineSchema({
                 promptTable: async () => 'x", evil: "y',
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid table");
         });
     });
@@ -758,7 +878,7 @@ export const backfillReadBy = defineMigration({
                 },
             } as unknown as Parameters<typeof migrateExecute>[0]);
 
-            expect(exitCode).toBe(1);
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
         });
 
         it("errors when no admin token is available", async () => {
@@ -778,7 +898,7 @@ export const backfillReadBy = defineMigration({
                     subcommand: "up",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;
@@ -802,7 +922,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain('"ghost" not found');
         });
 
@@ -822,7 +942,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
@@ -843,7 +963,7 @@ export const backfillReadBy = defineMigration({
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -954,7 +1074,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.PERMISSION);
         });
     });
 });
@@ -1082,7 +1202,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             toUrl: "https://new.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("--yes");
     });
 
@@ -1096,7 +1216,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });
@@ -1121,7 +1241,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             yes: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });

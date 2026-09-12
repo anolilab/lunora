@@ -99,3 +99,45 @@ describe("emitShard — deferred storage deletes", () => {
         expect(emitted).toContain("await this.deferPastResponse(flushDeferredDeletes(ctx));");
     });
 });
+
+describe("emitShard — the deferred-delete window", () => {
+    it("imports the window opener alongside the flush", () => {
+        expect.assertions(1);
+
+        expect(shard()).toContain("import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules,");
+    });
+
+    it("opens the window before the span and settles it against the outcome", () => {
+        expect.assertions(4);
+
+        const helper = methodBody(shard(), "private async runMutationTransaction<T>(");
+        const open = helper.indexOf("beginDeferredDeletes(ctx)");
+        const span = helper.indexOf("await this.runInTransaction(work)");
+        const flush = helper.indexOf("flushDeferredDeletes(ctx)");
+
+        // Opened before the span, so every key the handler queues lands in THIS
+        // window and not in the caller's flushable list.
+        expect(open).toBeGreaterThan(-1);
+        expect(open).toBeLessThan(span);
+        // Dropped on rollback, and made flushable on commit — before the flush,
+        // which is what turns the commit settle into an actual delete.
+        expect(helper.indexOf("settleDeletes(false);", span)).toBeGreaterThan(span);
+        expect(helper.lastIndexOf("settleDeletes(true);")).toBeLessThan(flush);
+    });
+
+    it("settles the window on both exits of the nested branch", () => {
+        expect.assertions(2);
+
+        const helper = methodBody(shard(), "private async runMutationTransaction<T>(");
+        const nested = helper.indexOf("if (this.isInTransaction()) {");
+        const span = helper.indexOf("await this.runInTransaction(work)");
+
+        // A `ctx.runMutation` from inside a mutation rides the enclosing span, so
+        // it never reaches the outer settles below. Leaving its window open would
+        // strand every key it queued in a list nothing drains — and leaving it
+        // unsettled on the throw would hand a rolled-back sub-mutation's keys to
+        // the span that commits.
+        expect(helper.slice(nested, span)).toContain("settleDeletes(true);");
+        expect(helper.slice(nested, span)).toContain("settleDeletes(false);");
+    });
+});
