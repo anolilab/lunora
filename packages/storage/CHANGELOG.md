@@ -1,3 +1,25 @@
+## @lunora/storage [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.69...@lunora/storage@1.0.0-alpha.70) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** `list()` throws on a `limit` that is not a positive integer (`0` was previously
+clamped up to a one-row page, a fractional limit floored), and `upload()`/`store()` accept
+`ArrayBufferView` and `string` bodies.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **storage:** close four silently-bypassed guards ([#740](https://github.com/anolilab/lunora/issues/740)) ([3b9f5b1](https://github.com/anolilab/lunora/commit/3b9f5b1ed61db7b6552786b5ac60c240f0f61e67))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
 ## @lunora/storage [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.68...@lunora/storage@1.0.0-alpha.69) (2026-09-12)
 
 
