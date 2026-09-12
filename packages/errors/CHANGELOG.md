@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.36...@lunora/errors@1.0.0-alpha.37) (2026-09-12)
+
+### Bug Fixes
+
+* **errors:** register the two export/import codes ([#749](https://github.com/anolilab/lunora/issues/749)) ([d864462](https://github.com/anolilab/lunora/commit/d8644629043cd635752207c68a320c73576c033c))
+
 ## @lunora/errors [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.35...@lunora/errors@1.0.0-alpha.36) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
