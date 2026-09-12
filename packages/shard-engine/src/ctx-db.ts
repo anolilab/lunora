@@ -2063,6 +2063,33 @@ const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<str
     }
 };
 
+/**
+ * The system fields a `patch` object may not set. `_id` and `_creationTime` are
+ * the row's identity and its insertion time; `_commitSeq` is minted per write.
+ */
+const PATCH_RESERVED_FIELDS: ReadonlyArray<string> = ["_commitSeq", "_creationTime", "_id"];
+
+/**
+ * Drop the system fields from a patch object.
+ *
+ * A patch is a partial document, and the merge that builds the written row put
+ * whatever it carried straight into the stored blob. A forged `_creationTime`
+ * therefore reached `__doc__` ONLY — `get` re-reads that field off the real
+ * column and disagreed, while the CDC row, the broadcast delta and every replica
+ * applying them carried the forgery. Stripping here, at the one place a patch is
+ * merged, keeps the row's own copy of a system field authoritative.
+ *
+ * Returns the argument untouched when it carries none of them, which is every
+ * ordinary patch — the copy is only paid for by a caller that actually sent one.
+ */
+const stripReservedPatchFields = (patch: Record<string, unknown>): Record<string, unknown> => {
+    if (!PATCH_RESERVED_FIELDS.some((field) => field in patch)) {
+        return patch;
+    }
+
+    return Object.fromEntries(Object.entries(patch).filter(([field]) => !PATCH_RESERVED_FIELDS.includes(field)));
+};
+
 /** workerd and node:sqlite both phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
 const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
@@ -4234,7 +4261,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // would silently strip them, deleting the field instead of updating it.
             assertNoExplicitUndefined("patch", patch);
 
-            const merged = { ...existing, ...patch, ...commitSeqFields(tableName), _id: id };
+            const merged = { ...existing, ...stripReservedPatchFields(patch), ...commitSeqFields(tableName), _id: id };
 
             applyOnUpdate(tableDefinition, patch, merged, auth);
 
@@ -4663,12 +4690,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // would silently strip them, deleting the field instead of writing it.
             assertNoExplicitUndefined("replace", document);
 
+            // `_creationTime` is when the row was INSERTED, so a rewrite carries
+            // the stored one forward — the same thing `patch` does. Minting a
+            // fresh `clock()` here moved every replaced row to the end of every
+            // `_creationTime`-ordered index and past every live keyset cursor, so
+            // a paginating client saw it twice or never.
+            //
             // A client-supplied `_creationTime` is honored only under the
             // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
-            // rewrite — both replay a row's original creation time). The default
-            // mutation path mints from `clock()` so a forged document
-            // `_creationTime` can't overwrite the persisted timestamp.
-            const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // rewrite — both replay a row's original creation time); a forged one
+            // on the default mutation path cannot overwrite the persisted
+            // timestamp.
+            const replayed = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : undefined;
+            const stored = typeof previous["_creationTime"] === "number" ? previous["_creationTime"] : undefined;
+            // `clock()` is the last resort, for a row with no readable stored
+            // timestamp; the `??` chain keeps it unevaluated on the normal paths.
+            const creationTime = replayed ?? stored ?? clock();
             const replaced: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
             applyOnUpdate(tableDefinition, document, replaced, auth);
@@ -4817,7 +4854,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
-export { assertNoExplicitUndefined };
+export { assertNoExplicitUndefined, stripReservedPatchFields };
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,

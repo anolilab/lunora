@@ -4849,6 +4849,12 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
+### `stripReservedPatchFields` (const)
+
+```ts
+const stripReservedPatchFields: (patch: Record<string, unknown>) => Record<string, unknown>;
+```
+
 ### `subscriptionFrames` (const)
 
 ```ts
