@@ -126,7 +126,7 @@ Auth failures are their own category because the identity is resolved before you
 function runs. Work through it in this order:
 
 1. **Is an identity present at all?** Log `ctx.auth.userId` at the top of the
-   function. `undefined` means the token never resolved, so the problem is in the
+   function. `null` means the token never resolved, so the problem is in the
    client or the auth wiring, not your handler.
 2. **Is the token reaching the worker?** Check the request carries the bearer
    token. `AUTH_HEADERS_MISSING` means auth is not wired up correctly.
