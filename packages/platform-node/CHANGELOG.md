@@ -1,3 +1,34 @@
+## @lunora/platform-node [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.67...@lunora/platform-node@1.0.0-alpha.68) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,do:** `TablePage` now carries `sqlColumns`, the table's physical
+column names. A caller feeding columns to anything SQL-shaped wants that list,
+not `columns`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **platform-node:** emulate workflow step retries and rollbacks ([#719](https://github.com/anolilab/lunora/issues/719)) ([80c71da](https://github.com/anolilab/lunora/commit/80c71dab952e8718ca92306aff2799834e2d722d))
+* **studio,do:** make SQL surfaces report what the DB holds ([#729](https://github.com/anolilab/lunora/issues/729)) ([b756d58](https://github.com/anolilab/lunora/commit/b756d58859dce16ad1fd2d7050e6f97bb437cbfc))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.117
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/queue:** upgraded to 1.0.0-alpha.55
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.118
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.41
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/storage:** upgraded to 1.0.0-alpha.69
+
 ## @lunora/platform-node [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.66...@lunora/platform-node@1.0.0-alpha.67) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
