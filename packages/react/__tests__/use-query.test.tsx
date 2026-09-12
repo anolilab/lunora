@@ -15,6 +15,11 @@ const makeRef = (ref: string): FunctionReference => {
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
+// Two DISTINCT objects with identical content — what a re-render produces when
+// the args are rebuilt from dependencies that changed without changing the args
+// (`Math.min(15, 10)` and `Math.min(20, 10)` are both 10).
+const EQUAL_ARGS_FIRST: Record<string, unknown> = { a: 1, limit: 10 };
+const EQUAL_ARGS_SECOND: Record<string, unknown> = { a: 1, limit: 10 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
     const data = useQuery(makeRef("posts:list"), args);
@@ -122,6 +127,39 @@ describe("useQuery", () => {
 
         expect(mock.query).toHaveBeenCalledTimes(1);
         expect(mock.subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-subscribe when a re-render produces an equal-but-new args object", async () => {
+        expect.hasAssertions();
+
+        // The contract every adapter in this repo shares: the live subscription
+        // is keyed on the args' CONTENT, not on object identity. A re-render
+        // that rebuilds the args object without changing what it contains must
+        // not tear the subscription down and re-snapshot from the server.
+        const mock = createMockClient(() => {
+            return { count: 3 };
+        });
+
+        const { rerender } = render(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={EQUAL_ARGS_FIRST} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 3 }));
+        });
+
+        expect(mock.subscribe).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={EQUAL_ARGS_SECOND} />
+            </LunoraProvider>,
+        );
+
+        expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 3 }));
     });
 
     it("surfaces a server-pushed subscription error through onError", async () => {
