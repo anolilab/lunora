@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.129...@lunora/advisor@1.0.0-alpha.130) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen:** clear auth advisory on signed webhooks ([#697](https://github.com/anolilab/lunora/issues/697)) ([ab14072](https://github.com/anolilab/lunora/commit/ab140721c483a0560f53de7d7d98eebaeb447f84))
+
 ## @lunora/advisor [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.128...@lunora/advisor@1.0.0-alpha.129) (2026-09-12)
 
 ### Documentation
