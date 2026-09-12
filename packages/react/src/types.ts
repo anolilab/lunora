@@ -12,6 +12,14 @@ export interface UseQueryOptions {
 }
 
 export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    /**
+     * Single-query shortcut forwarded to `client.mutation`: the transform is
+     * layered onto the subscription registered under **this write's own**
+     * `(reference, args, shardKey)` and nothing else. A `messages:send` mutation
+     * and a `messages:list` query share neither, so for that shape — nearly every
+     * shape — reach for {@link UseMutationCallOptions.optimisticUpdate}, whose
+     * store names the query it patches.
+     */
     optimistic?: (current: TCurrent | undefined) => TValue;
 
     /**
