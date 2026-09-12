@@ -10,9 +10,9 @@ endpoint without rewriting it:
 
 ```ts
 export const list = query
-    .args({ limit: v.optional(v.number()) })
+    .input({ limit: v.optional(v.number()) })
     .expose({ rest: true }) // ← publishes GET /_lunora/rest/messages/list
-    .handler(async (ctx, { limit }) => ctx.db.query("messages").take(limit ?? 20));
+    .query(async ({ ctx, args }) => ctx.db.query("messages").take(args.limit ?? 20));
 ```
 
 The call is routed **through the procedure**, so everything that guards it over

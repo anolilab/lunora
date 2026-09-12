@@ -1,3 +1,13 @@
+## @lunora/bindings [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.57...@lunora/bindings@1.0.0-alpha.58) (2026-09-12)
+
+### Bug Fixes
+
+* **bindings:** scope vector compensation to what was written ([#716](https://github.com/anolilab/lunora/issues/716)) ([ba5a1d5](https://github.com/anolilab/lunora/commit/ba5a1d5f889ea567713b8d47efde7bfbe5db4cc9))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
 ## @lunora/bindings [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.56...@lunora/bindings@1.0.0-alpha.57) (2026-09-12)
 
 

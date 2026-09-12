@@ -14,11 +14,11 @@ description: "Astro integration: single-worker composition plus reactive-loader 
 pnpm add @lunora/astro
 ```
 
-`astro` is an optional peer dependency (`^6.0.0`); the host app provides it.
+`astro` is an optional peer dependency (`>=6.0.0`); the host app provides it.
 
 ## Composition
 
-Add the `lunora` integration to `astro.config`, then wrap the Cloudflare adapter's SSR handler in `src/worker.ts`.
+Add the `lunora` integration to `astro.config`, then wrap the Cloudflare adapter's SSR handler in `src/server.ts`.
 
 <Steps>
 <Step>
@@ -42,7 +42,7 @@ export default defineConfig({
 
 Compose the worker. On Astro 6 / `@astrojs/cloudflare` v13 the adapter no longer emits a `dist/_worker.js` bundle, so import `handle` (the adapter's built-in SSR fetch function) and wrap it:
 
-```ts title="src/worker.ts"
+```ts title="src/server.ts"
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -60,7 +60,7 @@ Point wrangler at the composed entry:
 
 ```jsonc title="wrangler.jsonc"
 {
-    "main": "src/worker.ts",
+    "main": "src/server.ts",
 }
 ```
 
@@ -85,7 +85,7 @@ withLunora(host, optionsInput);
 
 ### `lunora(options)`
 
-The `astro.config` integration object (`{ name, hooks }`). The only option is `serverEntry` (default `"src/worker.ts"`), the module that calls `withLunora` and is the composed worker's `export default`.
+The `astro.config` integration object (`{ name, hooks }`). The only option is `serverEntry` (default `"src/server.ts"`), the module that calls `withLunora` and is the composed worker's `export default`. It is deliberately **not** `src/worker.ts`: `lunora deploy` treats that exact path as a SvelteKit-shaped composed entry and passes it to wrangler positionally, which together with the `@astrojs/cloudflare` redirect's `no_bundle: true` would upload the raw TypeScript source as the worker.
 
 ## Server helpers
 

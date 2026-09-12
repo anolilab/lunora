@@ -507,6 +507,7 @@ interface UseAgentToolEventsResult {
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: AuthStatus;
     token: string | null;
     user: User | null;
 }
