@@ -218,6 +218,42 @@ describe("stripe adapter", () => {
         expect(action.type).toBe("subscription.past_due");
     });
 
+    it("carries every price id on a subscription webhook, and none at all when the list is truncated (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const eventFor = (items: Record<string, unknown>) => {
+            return {
+                data: { object: { customer: "cus_1", id: "sub_1", items, metadata: { referenceId: "user_1" }, status: "active" } },
+                id: "evt_prices",
+                type: "customer.subscription.updated",
+            };
+        };
+
+        const complete = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify(
+                eventFor({ data: [{ price: { id: "price_base" }, quantity: 1 }, { price: { id: "price_addon" } }], has_more: false, object: "list" }),
+            ),
+        });
+
+        expect(complete.priceIds).toEqual(["price_base", "price_addon"]);
+        expect(complete.priceId).toBe("price_base");
+
+        // A webhook cannot paginate. Reporting the first page as if it were the whole set would make
+        // `sync.ts` — which replaces the stored set wholesale — DELETE every price past page one
+        // from a row that already had them. Report nothing and let reconcile fetch the rest.
+        const truncated = await adapter.parseWebhook({
+            headers: webhookHeaders,
+            payload: JSON.stringify(eventFor({ data: [{ price: { id: "price_base" }, quantity: 1 }], has_more: true, object: "list" })),
+        });
+
+        expect(truncated.priceIds).toBeUndefined();
+        // The primary still travels — the first page always carries the first item.
+        expect(truncated.priceId).toBe("price_base");
+    });
+
     it("reads the billing period from the subscription item, not the top level (Stripe basil) (regression)", async () => {
         expect.assertions(2);
 
@@ -746,6 +782,7 @@ describe("stripe adapter", () => {
             customers: undefined,
             paymentIntents: undefined,
             refunds: undefined,
+            subscriptionItems: undefined,
             subscriptions: {
                 retrieve: async (id: string) => {
                     return { id, items: { data: [] }, metadata: { referenceId: "user_1" }, status: "active" };
@@ -889,6 +926,91 @@ describe("stripe adapter", () => {
         // `priceId` stays the primary (first) item, for display and single-item plan changes.
         expect(subscription.priceId).toBe("price_base");
         expect(subscription.quantity).toBe(2);
+    });
+
+    it("pages past a truncated item list on a status read, and only then (regression)", async () => {
+        expect.assertions(5);
+
+        // `Subscription.items` is an `ApiList`, not an array: Stripe's list default is 10 per page
+        // and it sets `has_more` when there are more, so a subscription with enough items embeds
+        // only its first page — losing the tail to the same defect the multi-item fix closes.
+        const calls: string[] = [];
+        const base = makeClient([]) as unknown as Record<string, unknown>;
+        const client = {
+            ...base,
+            subscriptionItems: {
+                list: (parameters: { limit?: number; subscription?: string }) => {
+                    calls.push(`list:${String(parameters.subscription)}:${String(parameters.limit)}`);
+
+                    // `ApiListPromise` is an AsyncIterableIterator — stripe-node's auto-pagination.
+                    const items = [
+                        { id: "si_1", price: { id: "price_base" } },
+                        { id: "si_2", price: { id: "price_addon" } },
+                        { id: "si_3", price: { id: "price_metered" } },
+                    ];
+
+                    return {
+                        [Symbol.asyncIterator]: () => {
+                            const iterator = items[Symbol.iterator]();
+
+                            return { next: async () => iterator.next() };
+                        },
+                    };
+                },
+            },
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    calls.push(`retrieve:${id}`);
+
+                    return {
+                        id,
+                        items: { data: [{ id: "si_1", price: { id: "price_base" }, quantity: 1 }], has_more: true, object: "list" },
+                        metadata: { referenceId: "user_1" },
+                        status: "active",
+                    };
+                },
+            },
+        } as unknown as Stripe;
+
+        const subscription = await createStripeAdapter({ client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+
+        expect(subscription.priceIds).toEqual(["price_base", "price_addon", "price_metered"]);
+        // `limit: 100` is the endpoint maximum, so one request covers any real subscription.
+        expect(calls).toEqual(["retrieve:sub_1", "list:sub_1:100"]);
+
+        // …and a complete list costs NO second round-trip. This runs on every status read, so an
+        // unconditional extra call would double the cost of every reconcile sweep.
+        const cheapCalls: string[] = [];
+        const cheapClient = {
+            ...base,
+            subscriptionItems: {
+                list: () => {
+                    cheapCalls.push("list");
+
+                    throw new Error("must not paginate a complete item list");
+                },
+            },
+            subscriptions: {
+                ...(base.subscriptions as Record<string, unknown>),
+                retrieve: async (id: string) => {
+                    cheapCalls.push(`retrieve:${id}`);
+
+                    return {
+                        id,
+                        items: { data: [{ id: "si_1", price: { id: "price_base" }, quantity: 1 }], has_more: false, object: "list" },
+                        metadata: { referenceId: "user_1" },
+                        status: "active",
+                    };
+                },
+            },
+        } as unknown as Stripe;
+
+        const cheap = await createStripeAdapter({ client: cheapClient, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+
+        expect(cheap.priceIds).toEqual(["price_base"]);
+        expect(cheapCalls).toEqual(["retrieve:sub_1"]);
+        expect(cheap.priceId).toBe("price_base");
     });
 
     it("reports an empty price set for an itemless subscription instead of a blank id", async () => {

@@ -431,6 +431,17 @@ export interface WebhookAction {
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;
     readonly priceId?: string;
+
+    /**
+     * EVERY price/product id the subscription bills, when the adapter could establish the whole set.
+     * `sync.ts` applies it as a WHOLESALE replacement, so it must be complete or absent — never a
+     * subset, which would silently drop prices the stored row already had.
+     *
+     * `undefined` leaves the stored set standing (see {@link Subscription.priceIds}). That is the
+     * single-price providers' case, and the fail-closed answer for a provider whose embedded item
+     * list is paginated and whose event carries only the first page.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity?: number;
     /** Raw provider event, retained for the events log / debugging. */

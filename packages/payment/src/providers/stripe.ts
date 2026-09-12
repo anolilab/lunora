@@ -48,6 +48,8 @@ interface StripeClientLike {
     readonly customers: unknown;
     readonly paymentIntents: unknown;
     readonly refunds: unknown;
+    /** Only reached when a subscription's embedded `items` list is paginated — see `itemsComplete`. */
+    readonly subscriptionItems: unknown;
     readonly subscriptions: unknown;
     readonly webhooks: unknown;
 }
@@ -104,13 +106,16 @@ const firstItem = (object: Record<string, unknown>): Record<string, unknown> => 
 const firstPriceId = (object: Record<string, unknown>): string | undefined => readString(asRecord(firstItem(object).price), "id");
 
 /**
- * Every price id the subscription bills, in Stripe's item order.
+ * The price ids on the embedded item page, in Stripe's item order.
  *
  * A Stripe subscription is a LIST of items: a base plan alongside an add-on or a metered price is
  * ordinary, and the customer is paying for all of them. Keeping only `items.data[0]` denied every
  * non-first price — `check({ priceId })` said no and a plan keyed on it never resolved.
+ *
+ * This reads one PAGE. Pair it with {@link itemsComplete} before reporting the result as the whole
+ * set; `getSubscriptionStatus` fetches the rest when it isn't.
  */
-const allPriceIds = (object: Record<string, unknown>): string[] => {
+const pagePriceIds = (object: Record<string, unknown>): string[] => {
     const ids: string[] = [];
 
     for (const item of subscriptionItems(object)) {
@@ -123,6 +128,24 @@ const allPriceIds = (object: Record<string, unknown>): string[] => {
 
     return ids;
 };
+
+/**
+ * Whether `items` is the complete set rather than the first page of a longer one.
+ *
+ * `Subscription.items` is an `ApiList`, not a plain array: Stripe's list default is 10 per page
+ * (`PaginationParams.limit`) and it sets `has_more` when there are more. So a subscription with
+ * enough items embeds only its first page.
+ *
+ * An INCOMPLETE page must never be reported as the price set. `sync.ts` applies a reported set as a
+ * wholesale replacement, so handing it a truncated one would delete the prices past the first page
+ * from a row that already had them — turning this fix into the same entitlement loss it closes, just
+ * at a higher item count. Every caller that cannot paginate (the webhook mapper, and the
+ * cancel/resume/update responses) therefore reports no set at all and leaves the stored one standing.
+ */
+const itemsComplete = (object: Record<string, unknown>): boolean => readBoolean(asRecord(object.items), "has_more") !== true;
+
+/** The full price set when the embedded list carries it, else `undefined` — never a partial set. */
+const completePriceIds = (object: Record<string, unknown>): string[] | undefined => (itemsComplete(object) ? pagePriceIds(object) : undefined);
 
 const firstQuantity = (object: Record<string, unknown>): number | undefined => readNumber(firstItem(object), "quantity");
 
@@ -167,7 +190,6 @@ const intentToSession = (input: unknown): PaymentSession => {
 const subscriptionFromStripe = (input: unknown): Subscription => {
     const subscription = asRecord(input);
     const now = Date.now();
-    const priceIds = allPriceIds(subscription);
 
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? false,
@@ -175,10 +197,13 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
         currentPeriodEnd: periodEndMs(subscription),
         currentPeriodStart: periodStartMs(subscription),
         id: readString(subscription, "id") ?? "",
-        priceId: priceIds[0] ?? "",
+        // Always the first item, which the first page always carries — truncation cannot move it.
+        priceId: firstPriceId(subscription) ?? "",
         // Carry the whole set, not just the primary: `resolveEntitlements` tests membership here, so
-        // an add-on or metered item is only granted when it is reported.
-        priceIds,
+        // an add-on or metered item is only granted when it is reported. Absent when the embedded
+        // list is only the first page — `getSubscriptionStatus` is the one caller that can fetch
+        // the rest, and it fills this in.
+        priceIds: completePriceIds(subscription),
         provider: "stripe",
         quantity: firstQuantity(subscription) ?? 1,
         referenceId: readReferenceId(subscription) ?? "",
@@ -355,6 +380,11 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 currentPeriodStart: periodStartMs(object),
                 customerId: readString(object, "customer"),
                 priceId: firstPriceId(object),
+                // Absent when the event embeds only the first page of a longer item list: a webhook
+                // cannot paginate, and a partial set would DELETE the prices past page one from the
+                // stored row (`sync.ts` replaces wholesale). The stored set stands until the next
+                // reconcile sweep, which can fetch the rest.
+                priceIds: completePriceIds(object),
                 quantity: firstQuantity(object),
                 referenceId: readReferenceId(object),
                 subscriptionId: readString(object, "id"),
@@ -473,7 +503,30 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
         getPaymentStatus: async (sessionId) => intentToSession(await client.paymentIntents.retrieve(sessionId)),
 
-        getSubscriptionStatus: async (subscriptionId) => subscriptionFromStripe(await client.subscriptions.retrieve(subscriptionId)),
+        getSubscriptionStatus: async (subscriptionId) => {
+            const raw = await client.subscriptions.retrieve(subscriptionId);
+            const subscription = subscriptionFromStripe(raw);
+
+            if (subscription.priceIds !== undefined) {
+                return subscription;
+            }
+
+            // Only here — when the retrieve embedded `has_more: true` — does this cost a second
+            // round-trip. `limit: 100` is the endpoint's maximum, so one request covers any
+            // subscription in practice; the async iterator pages further only if one ever exceeds
+            // it, and stops as soon as Stripe reports no more.
+            const priceIds: string[] = [];
+
+            for await (const item of client.subscriptionItems.list({ limit: 100, subscription: subscriptionId })) {
+                const priceId = readString(asRecord(asRecord(item).price), "id");
+
+                if (priceId !== undefined && priceId !== "") {
+                    priceIds.push(priceId);
+                }
+            }
+
+            return { ...subscription, priceIds };
+        },
 
         identifier: "stripe",
 
