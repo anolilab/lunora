@@ -368,6 +368,27 @@ describe("auth audit trail", () => {
             expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/metadata" })?.event).toBeUndefined();
         });
 
+        /**
+         * Both SAML logout endpoints terminate the local session — the
+         * SP-initiated `/sso/saml2/logout/:providerId` and the IdP-initiated
+         * receiver `/sso/saml2/sp/slo/:providerId` each call `deleteSession`
+         * plus `deleteSessionCookie` before redirecting. Neither ends in
+         * `/sign-out`, so both went unrecorded: the trail showed the SAML
+         * sign-in and then nothing, leaving a reader unable to tell "still
+         * signed in" from "we stopped watching".
+         */
+        it("classifies both SAML logout endpoints as `sign-out`", () => {
+            expect.assertions(4);
+
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/logout/okta" })?.event).toBe("sign-out");
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/slo/okta" })?.event).toBe("sign-out");
+
+            // Neighbouring SSO reads must not be dragged in by the substrings:
+            // provider config is not a session event.
+            expect(buildAuditEntry({ path: "/api/auth/sso/providers" })?.event).toBeUndefined();
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/metadata" })?.event).toBeUndefined();
+        });
+
         it("classifies every sign-in COMPLETION endpoint as `sign-in` (previously unrecorded)", () => {
             expect.assertions(5);
 

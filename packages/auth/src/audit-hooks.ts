@@ -94,6 +94,22 @@ interface AuditHookContext {
  * any other branch, it classified as `undefined` — the endpoint that issues
  * every SAML session left no audit row at all.
  *
+ * SAML sign-OUT has the mirror-image problem, and two endpoints rather than
+ * one. Neither ends in `/sign-out`, and both terminate the local session before
+ * redirecting, so both are `sign-out` rather than an initiated event:
+ *
+ * - `/sso/saml2/logout/:providerId` — SP-initiated. Deletes the SAML session
+ * keys, calls `deleteSession` on the current session token and
+ * `deleteSessionCookie`, then redirects to the IdP's logout URL.
+ * - `/sso/saml2/sp/slo/:providerId` — the SP's single-logout receiver, for the
+ * IdP-initiated direction and for the response leg of an SP-initiated one.
+ * Both `handleLogoutRequest` and `handleLogoutResponse` call `deleteSession`
+ * and `deleteSessionCookie` the same way.
+ *
+ * Recording the SAML sign-in while leaving these silent is worse than either
+ * gap alone: the trail would show a session opening and never closing, so a
+ * reader cannot tell "still signed in" from "we stopped watching".
+ *
  * There is no dedicated `/oauth2/callback/*` branch because the generic
  * `/callback/` check above already covers it, and covering it is CORRECT: an
  * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
@@ -131,7 +147,7 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
         return "sign-in";
     }
 
-    if (ends("/sign-out")) {
+    if (ends("/sign-out") || normalized.includes("/saml2/logout/") || normalized.includes("/saml2/sp/slo/")) {
         return "sign-out";
     }
 
