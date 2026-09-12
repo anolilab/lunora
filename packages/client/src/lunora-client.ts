@@ -1660,9 +1660,16 @@ class LunoraClient {
      * Fetch the currently authenticated user from better-auth's `get-session`
      * endpoint, returning the `user` record or `null` when signed out. Sends
      * the stored bearer token (if any) and `credentials: "include"` so a
-     * cookie-session is also honoured. A network/parse failure or a non-OK
-     * response resolves to `null` rather than throwing — callers treat "couldn't
-     * resolve identity" as "signed out".
+     * cookie-session is also honoured.
+     *
+     * `null` means the **server answered** that there is no session — an empty
+     * body, no `user` field, or a non-OK status such as 401. A network or parse
+     * failure **rejects** instead, because "the endpoint was unreachable" is not
+     * the same answer as "you are signed out": collapsing the two made an
+     * offline reload with a valid stored token read as a sign-out in every
+     * adapter's auth gate. Callers that cannot act on the difference can still
+     * `.catch(() => null)`; `@lunora/client/auth`'s identity store maps the
+     * rejection to the `"unreachable"` status instead.
      *
      * Framework-agnostic: pair it with {@link onAuthTokenChange} to refetch when
      * the token changes (that's what `@lunora/react`'s `useAuth` does).
@@ -1689,31 +1696,29 @@ class LunoraClient {
             headers["authorization"] = `Bearer ${this.authToken}`;
         }
 
-        try {
-            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
-                credentials: "include",
-                headers,
-                method: "GET",
-            });
+        // Deliberately un-caught: a rejection here means the endpoint was
+        // unreachable, and nothing about the session is known — including for
+        // `adoptResolvedSubject`, which must not run on a non-answer.
+        const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+            credentials: "include",
+            headers,
+            method: "GET",
+        });
 
-            if (!response.ok) {
-                // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
-                return null;
-            }
-
-            // better-auth returns `{ user, session }` when authenticated and
-            // `null` (or an empty body) when not. Narrow defensively.
-            const body: { user?: User } | null = await response.json();
-            // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
-            const user = body?.user ?? null;
-
-            this.adoptResolvedSubject(requestToken, user);
-
-            return user;
-        } catch {
-            // eslint-disable-next-line unicorn/no-null -- network/parse failure ⇒ treat as signed out
+        if (!response.ok) {
+            // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
             return null;
         }
+
+        // better-auth returns `{ user, session }` when authenticated and
+        // `null` (or an empty body) when not. Narrow defensively.
+        const body: { user?: User } | null = await response.json();
+        // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
+        const user = body?.user ?? null;
+
+        this.adoptResolvedSubject(requestToken, user);
+
+        return user;
     }
 
     /**
