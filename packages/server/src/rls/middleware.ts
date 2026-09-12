@@ -1250,7 +1250,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // bypass the secure-by-default guard and leak every row of a protected
             // table. Defer to the GUARDED `base.get` instead: a protected table
             // fails closed under `.rls("required")` and a `.public()` one returns
-            // the row. Mirrors the `route`/`readRoute` fail-closed parity.
+            // the row. Mirrors the `route`/`guardWriter` fail-closed parity.
             if (!restricts) {
                 return base.get(id, expectedTable);
             }

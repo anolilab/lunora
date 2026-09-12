@@ -285,7 +285,7 @@ const maskPage = <Context>(page: QueryPage, columns: MaskColumns<Context>, base:
  * `assertWhereAllowed` (below) closes on the `where` path, reached instead
  * through the index builder.
  *
- * Unlike `where` (a plain object walked by `collectWhereFields`), the
+ * Unlike `where` (a plain object walked by `assertWhereScope`), the
  * range/search is a builder CALLBACK (`q => q.eq("ssn", x)`), so the referenced
  * fields aren't statically inspectable. Run the callback once against a
  * recording proxy: its blanket `get` trap turns EVERY property access into a

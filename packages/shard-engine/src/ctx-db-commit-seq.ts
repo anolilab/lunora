@@ -119,7 +119,7 @@ const readCommitSeq = (sql: SqlExec): number => {
  * `durable-stream.ts`, which declines it for the same reason).
  *
  * Callers must memoize the result for the life of one mutation — see
- * `createShardCtxDb`'s `commitSeqForWrite`. Calling this per row would make
+ * `createShardCtxDb`'s `commitSeqFields`. Calling this per row would make
  * `_commitSeq` a row counter rather than a commit counter, and rows written by
  * one mutation would no longer compare equal.
  * @returns the freshly allocated sequence (always `>= 1`).

@@ -3428,7 +3428,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Cloudflare serialises as JSON into durable storage — so a decoded
             // `bigint` fails creation outright and a decoded `Date` silently arrives
             // as a string. The wire form IS JSON-safe, so it travels intact and
-            // `createRunContext` decodes it where the handler reads `params`.
+            // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
+            // handler reads `params`.
             await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);

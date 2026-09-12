@@ -7101,7 +7101,7 @@ class LunoraClient {
      * instead of the flush guard discarding them as a mismatch.
      *
      * That map alone was not enough: it is consumed and DELETED on the first
-     * flush attempt (`passesReplayIdentityGate`), while the queue entry and its
+     * flush attempt (`replayIdentityVerdict`), while the queue entry and its
      * persisted record keep the original stamp. So a reload, or a requeue after a
      * transient failure, fell back to the old token hash — and once the token had
      * been refreshed, `isSameCredentialUnderTokenHash` no longer recognised it
@@ -7182,11 +7182,11 @@ class LunoraClient {
      * (see `queuedOfflineShardKeys`). Used on a FOLLOWER tab when the
      * mirrored leader status transitions to `"connected"` — a follower has no
      * per-shard `ShardConnection` reconnect event to hang the usual
-     * single-shard `flushOfflineQueue(shardKey)` call off of (see the
-     * `handleConnect` call site), so this walks every shard that might have
-     * something queued instead. Flushing an already-empty shard is a cheap
-     * no-op (`flushOfflineQueue` returns immediately once `drain` yields
-     * nothing), so over-inclusion here is harmless.
+     * single-shard `flushOfflineQueue(shardKey)` call off of (see the `onOpen`
+     * callback that calls `flushOfflineQueue(shardKey)`), so this walks every
+     * shard that might have something queued instead. Flushing an already-empty
+     * shard is a cheap no-op (`flushOfflineQueue` returns immediately once
+     * `drain` yields nothing), so over-inclusion here is harmless.
      */
     private flushAllOfflineQueues(): void {
         for (const shardKey of this.queuedOfflineShardKeys) {
@@ -7623,7 +7623,7 @@ class LunoraClient {
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     captureBookmark: true,
                     // The id that queued the write, not the live session's — see the
-                    // `clientId` stamp in `enqueueOffline`.
+                    // `clientId` stamp in `enqueueOfflineMutation`.
                     clientId: item.clientId ?? this.clientId,
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {

@@ -2240,7 +2240,7 @@ interface SpanOptions {
  * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
  * and put the varying part in `attributes` — a name built from an id makes every
  * span its own group in a collector.
- * @param fn The body to time, receiving a tracer bound to this span for any
+ * @param function_ The body to time, receiving a tracer bound to this span for any
  * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
  * attributes. May be sync or async; the result is awaited.
  * @param attributes Either a plain attribute bag to stamp on the span at start
