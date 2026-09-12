@@ -420,7 +420,9 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
-            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], total: 2 },
+            // `sqlColumns` is the physical list, reported alongside the
+            // display list so a SQL surface knows which names it may write.
+            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], sqlColumns: ["__id__", "text"], total: 2 },
         });
     });
 

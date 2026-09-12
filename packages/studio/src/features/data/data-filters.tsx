@@ -6,6 +6,28 @@ import type { FilterClause, FilterOperator } from "../../lib/admin";
 /** A filter row as edited in the UI — the value is always a string until coerced for the wire. */
 interface EditableFilter {
     column: string;
+
+    /**
+     * The exact wire value this row carries, when the row did NOT come from the
+     * operator typing into the box: a facet-value click, or hydration from a URL
+     * / saved query. Present as a one-element tuple so `null` — itself a
+     * meaningful filter value — is distinguishable from "no literal".
+     *
+     * `value` still holds that value's display text (the box has to show
+     * something), but {@link toFilterClauses} sends the literal instead of
+     * re-deriving a value from the text. Re-deriving is what made a facet
+     * disagree with the rows it summarises: a TEXT column faceted as `12345 (2)`
+     * round-tripped through {@link coerceFilterValue} as the NUMBER `12345`, and
+     * the server compares it against `json_extract(__doc__, …)`, which has no
+     * type affinity — so `12345 = '12345'` is false and the grid came back
+     * empty under a sidebar still reading "2". A NULL group fared the same way,
+     * flattening to `""`.
+     *
+     * Cleared the moment the operator edits the column or the value, because
+     * from then on the text IS the source of truth and must be coerced like any
+     * typed value (`age > 18` has to compare numerically).
+     */
+    literal?: [unknown];
     operator: FilterOperator;
     value: string;
 }
@@ -47,18 +69,38 @@ const coerceFilterValue = (value: string): number | string => {
  * an `eq` on a numeric column still matches — see {@link coerceFilterValue} for why a
  * numeric-looking but non-canonical string like a zip code stays text). `contains`
  * always stays a string.
+ *
+ * A row carrying a {@link EditableFilter.literal} skips coercion entirely and
+ * sends that value verbatim: it was produced by a facet or a saved view, not
+ * typed, so its type is already known and guessing one from its text can only
+ * lose. `contains` is the exception — it is a substring test over text, so it
+ * takes the text either way.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
     // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the operator's own filter rows — a handful, edited by hand
     filters
         .filter((filter) => filter.column !== "")
         .map((filter) => {
+            if (filter.operator === "contains") {
+                return { column: filter.column, operator: filter.operator, value: filter.value };
+            }
+
             return {
                 column: filter.column,
                 operator: filter.operator,
-                value: filter.operator === "contains" ? filter.value : coerceFilterValue(filter.value),
+                value: filter.literal === undefined ? coerceFilterValue(filter.value) : filter.literal[0],
             };
         });
+
+/**
+ * Apply an edit to a filter row, dropping any pinned literal: the operator has
+ * touched the row, so its text is the source of truth again. Rebuilt field by
+ * field rather than spread-and-delete, so a field added to `EditableFilter`
+ * later has to be considered here rather than silently surviving an edit.
+ */
+const typedFilter = (filter: EditableFilter, patch: Partial<EditableFilter>): EditableFilter => {
+    return { column: filter.column, operator: filter.operator, value: filter.value, ...patch };
+};
 
 /**
  * The data browser's filtering controls: the substring search box plus a stack
@@ -144,7 +186,7 @@ const DataFilters = ({
         const index = Number(event.currentTarget.dataset.index);
         const next = event.currentTarget.value;
 
-        onFiltersChange(filters.map((filter, position) => (position === index ? { ...filter, column: next } : filter)));
+        onFiltersChange(filters.map((filter, position) => (position === index ? typedFilter(filter, { column: next }) : filter)));
     };
 
     const changeOperator = (event: ChangeEvent<HTMLSelectElement>): void => {
@@ -158,7 +200,7 @@ const DataFilters = ({
         const index = Number(event.currentTarget.dataset.index);
         const next = event.currentTarget.value;
 
-        onFiltersChange(filters.map((filter, position) => (position === index ? { ...filter, value: next } : filter)));
+        onFiltersChange(filters.map((filter, position) => (position === index ? typedFilter(filter, { value: next }) : filter)));
     };
 
     return (
