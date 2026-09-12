@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
+import { ScriptTarget, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseManifest, runAddCommand, runBuildIndexCommand } from "../../src/commands/registry/index";
@@ -149,6 +150,84 @@ const itemImports = (): { scanned: string[]; undeclared: string[] } => {
     }
 
     return { scanned, undeclared };
+};
+
+/**
+ * The dependencies an item pulls in through the code CODEGEN emits, not through
+ * the code the item itself imports.
+ *
+ * `itemImports()` above cannot see these: `lunora/crons.ts` imports `cronJobs`
+ * from `@lunora/server` and nothing else, yet the declaration it makes is what
+ * puts `import { createScheduler } from "@lunora/scheduler"` into
+ * `_generated/app.ts`. An item that declares a cron without declaring
+ * `@lunora/scheduler` therefore scaffolds cleanly and then fails the project's
+ * very next `lunora codegen` with "this schema's generated code imports packages
+ * the project does not declare" — exit 1, no dev server.
+ *
+ * So the signals here mirror the signal-driven arms of
+ * `packages/codegen/src/assert-required-packages.ts`: the declaration codegen
+ * reads, and the package the emitted output will import because of it. Keep the
+ * two in step when a new signal is added there.
+ *
+ * The storage row currently matches nothing in the registry — no shipped item
+ * declares a `v.storage()` column or reads `ctx.storage` outside a comment. It
+ * is the other half of the same contract, not evidence of coverage; the guard
+ * below pins only what the scan really finds.
+ */
+const EMITTED_DEPENDENCY_SIGNALS: ReadonlyArray<{ package: string; pattern: RegExp }> = [
+    { package: "@lunora/scheduler", pattern: /\bcronJobs\s*\(|\bcrons\.(?:cron|daily|interval|monthly|weekly)\s*\(/u },
+    { package: "@lunora/storage", pattern: /\bctx\.storage\b|\bv\.storage\s*\(/u },
+];
+
+/**
+ * Comments removed, so prose counts for nothing.
+ *
+ * Codegen discovers these declarations by AST, so a sentence mentioning
+ * `ctx.storage` is not a `ctx.storage` read — and `backup.ts`, `crons/jobs.ts`
+ * and `mail.ts` all mention `ctx.scheduler` in a doc comment. A comment-blind
+ * scan would demand a dependency the generated code never imports.
+ */
+const withoutComments = (source: string): string =>
+    transpileModule(source, { compilerOptions: { removeComments: true, target: ScriptTarget.ESNext } }).outputText;
+
+/**
+ * Every (item, package) pair the emitted output will need, and whether the
+ * manifest declares it.
+ *
+ * The scan surface is what `lunora add <item>` puts in front of the user: the
+ * `.ts` files it writes, AND the manifest's `docs` string, which the command
+ * prints as the item's next step. `backup` ships no cron of its own — its `docs`
+ * tells the reader to add two `crons.daily(...)` lines — so a files-only scan
+ * would read it as clean and leave the same defect standing in the item that
+ * documents the cron rather than writing it.
+ */
+const emittedDependencies = (): { needed: string[]; undeclared: string[] } => {
+    const needed: string[] = [];
+    const undeclared: string[] = [];
+
+    for (const { manifest, name } of manifests) {
+        const declared = new Set(Object.keys(manifest.deps ?? {}));
+        const surfaces: ReadonlyArray<[string, string]> = [
+            ["docs", manifest.docs ?? ""],
+            ...manifest.files
+                .filter((file) => /\.tsx?$/u.test(file.from))
+                .map((file): [string, string] => [file.from, withoutComments(readFileSync(join(registryRoot, name, file.from), "utf8"))]),
+        ];
+
+        for (const signal of EMITTED_DEPENDENCY_SIGNALS) {
+            for (const [where] of surfaces.filter(([, text]) => signal.pattern.test(text))) {
+                const entry = `${name} → ${signal.package} (${where})`;
+
+                needed.push(entry);
+
+                if (!declared.has(signal.package)) {
+                    undeclared.push(entry);
+                }
+            }
+        }
+    }
+
+    return { needed, undeclared };
 };
 
 /** Every `createMailerFromEnv(` call site in the registry, split by whether it guards `cloudflareSend`. */
@@ -327,6 +406,24 @@ describe("shipped registry items", () => {
         // `.svelte` file — turns it green rather than red. Require positive
         // evidence that the SFC ports were read.
         expect(scanned.filter((entry) => /\((?:vue|svelte)\/[^)]+\.(?:vue|svelte)\)$/u.test(entry))).not.toHaveLength(0);
+    });
+
+    it("every package an item's GENERATED code needs is declared in its `deps`", () => {
+        expect.assertions(2);
+
+        // The dependency no import scan can see. `crons` declared `@lunora/server`
+        // and stopped there, so `lunora add crons` succeeded ("2 written") and the
+        // project's next `lunora codegen` exited 1 on `@lunora/scheduler` — a
+        // package the item never imports and `_generated/app.ts` does. `backup`,
+        // whose docs instruct the same cron registration, carried the same gap.
+        const { needed, undeclared } = emittedDependencies();
+
+        expect(undeclared).toStrictEqual([]);
+        // Guard the guard: this passes by finding nothing undeclared, so a pattern
+        // that stops matching, or a scan surface that stops being read, turns it
+        // green instead of red. Demand the two signals that are really there — one
+        // from a scaffolded file, one from a manifest's `docs`.
+        expect(needed).toStrictEqual(expect.arrayContaining(["crons → @lunora/scheduler (crons.ts)", "backup → @lunora/scheduler (docs)"]));
     });
 
     it("no item hands `createMailerFromEnv` an unguarded `cloudflareSend`", () => {
