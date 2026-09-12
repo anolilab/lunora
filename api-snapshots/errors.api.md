@@ -730,6 +730,15 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown mutation function";
     };
+    readonly LOCAL_DEPENDENCY_MISSING: {
+        readonly hint: readonly [
+            "The command Lunora tried to run is not on your PATH, so nothing ran.",
+            "",
+            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately."
+        ];
+        readonly status: 500;
+        readonly title: "Required local tool not found";
+    };
 };
 ```
 

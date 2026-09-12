@@ -118,8 +118,9 @@ Configuration comes from the environment, so the spawn config stays a plain
 Each tool maps onto a method `LunoraClient` already provides.
 `toolDefinitions(allowWrites, allowObservability, allowDataReads)` returns the
 advertised tool surface for a given set of gates (the tiers are also exported on
-their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS` and
-`WRITE_TOOL_DEFINITIONS`); `callTool` dispatches a call against a client.
+their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS`,
+`ROW_READ_TOOL_DEFINITIONS` and `WRITE_TOOL_DEFINITIONS`); `callTool` dispatches
+a call against a client.
 
 | Tool                          | Input                                                                                  | What it does                                                                                                                                                                                          |
 | ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

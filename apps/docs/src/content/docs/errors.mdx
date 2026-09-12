@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 141 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 142 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -370,6 +370,14 @@ Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs
 ### `KV_NOT_CONFIGURED`
 
 `400` — KV introspector not configured
+
+### `LOCAL_DEPENDENCY_MISSING`
+
+`500` — Required local tool not found
+
+The command Lunora tried to run is not on your PATH, so nothing ran.
+
+Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately.
 
 ### `LUNORA_RUNTIME_UNAVAILABLE`
 
