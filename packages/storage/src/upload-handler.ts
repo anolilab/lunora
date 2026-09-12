@@ -18,6 +18,7 @@
  * (create, chunk PATCH, resume HEAD, delete) and denies fail-closed — a thrown
  * callback is a deny, never a 500.
  */
+import { LunoraError } from "@lunora/errors";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
 import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
@@ -77,7 +78,9 @@ interface CreateUploadHandlerOptions {
      * `Upload-Length` (TUS), `X-Total-Size` (chunked REST) and `Content-Length`
      * — see {@link declaredUploadSize}. Defaults to
      * {@link DEFAULT_MAX_UPLOAD_BYTES} (100 MiB) — pass this to raise or lower
-     * the ceiling; there is no unbounded option.
+     * the ceiling; there is no unbounded option. Must be a finite, non-negative
+     * number: anything else (notably a `NaN` from an unset env var) throws at
+     * construction rather than disabling the cap.
      */
     maxFileSize?: number;
     /** Which protocol to speak. Default `"tus"` (the resumable, pause/resume-capable one). */
@@ -236,6 +239,17 @@ const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHand
 const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler => {
     const protocol = options.protocol ?? "tus";
     const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_UPLOAD_BYTES;
+
+    // `??` only fills in a nullish value, so an unset upload-limit env var
+    // coerced with `Number(...)` survives as `NaN` — and `declaredSize > NaN` is
+    // always false, which silently removes the ONLY cap this handler enforces
+    // for the TUS and chunked-REST protocols. A negative cap is the opposite
+    // failure (every upload rejected). Both are configuration bugs, caught at
+    // construction rather than acted on per request, mirroring the same guard on
+    // `UploadOptions.maxSize` in `createStorage`.
+    if (!Number.isFinite(maxFileSize) || maxFileSize < 0) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
+    }
 
     const handlerOptions: UploadHandlerOptions = {
         maxFileSize,

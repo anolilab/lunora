@@ -101,6 +101,9 @@ export interface ListOptions {
     /**
      * Defaults to 100, capped at 1000 (R2 limit). A ceiling, not a promise: R2
      * may return fewer per page to fit the entry metadata.
+     *
+     * Must be a positive integer when given — `0`, `12.5` and `NaN` throw rather
+     * than being coerced into a page size the caller never asked for.
      */
     limit?: number;
 }
@@ -232,8 +235,25 @@ export interface Storage {
      * alias for {@link Storage.upload} — it accepts the same {@link UploadOptions}
      * so the `maxSize` / `allowedContentTypes` guards aren't lost behind the alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
+    store: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
+
+    /**
+     * Upload `body` to `key`, returning the stored key + etag.
+     *
+     * The accepted shapes mirror what R2's `put` stores bytes from — a view
+     * (`Uint8Array`) and a `string` included. They are listed here because
+     * `maxSize` measures every one of them; a shape the cap cannot measure is
+     * refused rather than uploaded uncapped.
+     */
+    upload: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
 }
 
 export {

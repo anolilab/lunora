@@ -19,8 +19,19 @@ import type {
     UploadOptions,
 } from "./types";
 
-/** Accepted upload body shapes (bytes, blob, or a byte stream). */
-type UploadBody = ReadableStream | ArrayBuffer | Blob;
+/**
+ * Accepted upload body shapes — every shape R2's `put` takes bytes from (see
+ * `R2BucketLike.put` in `@lunora/platform`).
+ *
+ * `ArrayBufferView` and `string` are here because R2 accepts them and callers
+ * hand them over: a `Uint8Array` is the most natural thing to give a byte store,
+ * and `v.bytes()` already accepts a view because views arrive on the wire. While
+ * this type listed only `ArrayBuffer`/`Blob`/`ReadableStream`, {@link applyMaxSize}
+ * measured a body as `body instanceof ArrayBuffer ? byteLength : body.size` —
+ * both `undefined` for a view or a string, and `undefined > maxSize` is false,
+ * so an uncapped body was forwarded to R2 verbatim.
+ */
+type UploadBody = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string;
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
@@ -228,6 +239,54 @@ const collectStreamWithinMaxSize = async (stream: ReadableStream, maxSize: numbe
     return await new Response(stream.pipeThrough(counter)).blob();
 };
 
+/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
+const TEXT_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a key. R2's ceiling is documented in **bytes**, so a key
+ * of multi-byte (CJK/emoji) characters can sit well under 1024 UTF-16 code units
+ * yet exceed 1024 bytes — `String.length` waved it through only for R2 to reject
+ * it remotely, which defeats the point of validating here. `@lunora/bindings/kv`
+ * already measures this way and its comment describes exactly this failure; the
+ * error strings on this side said "byte limit" while counting code units.
+ */
+const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
+
+/**
+ * Byte length of a non-stream body, or `undefined` when the value is none of the
+ * shapes R2 stores bytes from — the caller then refuses it rather than uploading
+ * something it could not measure.
+ *
+ * A string is measured in UTF-8 **bytes**, not UTF-16 code units: that is what
+ * R2 stores and what `maxSize` is expressed in, and a multi-byte character would
+ * otherwise under-count (a 100-character emoji string is 400 bytes).
+ *
+ * `size` is read duck-typed rather than behind `instanceof Blob` so a Blob-like
+ * double still measures, which is how the fakes in this package's tests supply
+ * bodies.
+ */
+const measureBody = (body: unknown): number | undefined => {
+    if (body instanceof ArrayBuffer) {
+        return body.byteLength;
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return body.byteLength;
+    }
+
+    if (typeof body === "string") {
+        return byteLength(body);
+    }
+
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { size } = body as { size?: unknown };
+
+    return typeof size === "number" ? size : undefined;
+};
+
 /**
  * Apply a `maxSize` cap, returning the body to hand R2.
  *
@@ -263,7 +322,14 @@ const applyMaxSize = async (body: UploadBody, maxSize: number): Promise<UploadBo
         return await collectStreamWithinMaxSize(body, maxSize);
     }
 
-    const size = body instanceof ArrayBuffer ? body.byteLength : body.size;
+    const size = measureBody(body);
+
+    // An unmeasurable body is refused rather than waved through: the previous
+    // `body.size` read answered `undefined` for every shape it didn't know, and
+    // `undefined > maxSize` is false, so the cap silently did nothing.
+    if (size === undefined) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: cannot measure body length, so maxSize cannot be enforced");
+    }
 
     if (size > maxSize) {
         throw new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: body exceeds maxSize (${String(size)} > ${String(maxSize)})`);
@@ -271,19 +337,6 @@ const applyMaxSize = async (body: UploadBody, maxSize: number): Promise<UploadBo
 
     return body;
 };
-
-/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
-const TEXT_ENCODER = new TextEncoder();
-
-/**
- * UTF-8 byte length of a key. R2's ceiling is documented in **bytes**, so a key
- * of multi-byte (CJK/emoji) characters can sit well under 1024 UTF-16 code units
- * yet exceed 1024 bytes — `String.length` waved it through only for R2 to reject
- * it remotely, which defeats the point of validating here. `@lunora/bindings/kv`
- * already measures this way and its comment describes exactly this failure; the
- * error strings on this side said "byte limit" while counting code units.
- */
-const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
 
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
@@ -437,12 +490,25 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         validateKey(key);
 
         // Prefer a true HEAD (no body transfer) when the binding exposes one.
-        // Fall back to a 0-length ranged GET (`{ length: 0 }`) so we still avoid
-        // streaming the body when running against a `head`-less double or runtime.
-        // Either way `size` is the FULL object size — R2 reports the object's
-        // size, not the returned window's — which is what makes this enough to
-        // resolve a `Range` against.
-        const object = options.bucket.head ? await options.bucket.head(key) : await options.bucket.get(key, { range: { length: 0 } });
+        //
+        // The fallback for a `head`-less binding used to ask for a 0-length range
+        // (`{ length: 0 }`), which R2 refuses outright — `get: The requested
+        // range is not satisfiable (10039)` — so the documented degradation threw
+        // instead of degrading. A 1-byte range is no fix either: it fails the
+        // same way on a 0-byte object. So the fallback reads the object and
+        // discards the body without consuming it; `size` is the object's full
+        // size either way, which is what makes this enough to resolve a `Range`
+        // against.
+        let object: R2ObjectLike | null;
+
+        if (options.bucket.head) {
+            object = await options.bucket.head(key);
+        } else {
+            const withBody = await options.bucket.get(key);
+
+            await withBody?.body?.cancel();
+            object = withBody;
+        }
 
         // The `toListObject` projection, not `download()`'s `withSha256` Proxy: a
         // head result has no body to keep native accessors alive for, and it IS
@@ -469,8 +535,20 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: prefix contains NUL byte");
         }
 
-        const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
-        const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
+        // Reject a non-integer or non-positive limit here rather than coercing
+        // it. `Math.floor(NaN)` is `NaN` and passes both clamps, so a
+        // `limit: Number(env.PAGE_SIZE)` with the variable unset forwarded `NaN`
+        // to R2, which answers `MaxKeys params must be positive integer <= 1000.
+        // (10022)` — a remote error naming a parameter the caller never wrote.
+        // Silently clamping instead would hide the same configuration bug behind
+        // a page size nobody asked for. Mirrors `@lunora/bindings/kv`'s `list`.
+        if (listOptions.limit !== undefined && (!Number.isInteger(listOptions.limit) || listOptions.limit <= 0)) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: list limit must be a positive integer (received ${String(listOptions.limit)})`);
+        }
+
+        // The upper bound stays a clamp, as documented on `Storage.list`
+        // ("Defaults to 100, capped at 1000").
+        const limit = Math.min(listOptions.limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
         const result = await options.bucket.list({
             cursor: listOptions.cursor,
             delimiter: listOptions.delimiter,
