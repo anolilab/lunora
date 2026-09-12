@@ -3302,7 +3302,9 @@ interface ValidatorLike {
     readonly _meta?: {
         readonly column?: ColumnMetaLike;
         readonly inner?: ValidatorLike;
+        readonly members?: ReadonlyArray<ValidatorLike>;
         readonly tableName?: string;
+        readonly value?: unknown;
     };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;

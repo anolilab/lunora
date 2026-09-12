@@ -85,8 +85,22 @@ export interface ValidatorLike {
      * chain; `inner` is the child of a `v.optional(...)` / `v.array(...)`
      * wrapper; `tableName` is a `v.id("target")`'s target table — the fact the
      * relation-graph edge set is derived from.
+     *
+     * `members` (a `v.union(...)`'s alternatives) and `value` (a
+     * `v.literal(...)`'s one permitted value) are here because storage reads
+     * them: a literal's column type and codec pair are the ones its VALUE's type
+     * needs, and whether a NULL in a column means `null` or means "field unset"
+     * turns on whether any union member accepts `null`. Both were read off an
+     * untyped bag before, which is how each stayed wrong without a compiler
+     * anywhere in a position to say so.
      */
-    readonly _meta?: { readonly column?: ColumnMetaLike; readonly inner?: ValidatorLike; readonly tableName?: string };
+    readonly _meta?: {
+        readonly column?: ColumnMetaLike;
+        readonly inner?: ValidatorLike;
+        readonly members?: ReadonlyArray<ValidatorLike>;
+        readonly tableName?: string;
+        readonly value?: unknown;
+    };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
 }
