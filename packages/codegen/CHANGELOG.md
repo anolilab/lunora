@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.182...@lunora/codegen@1.0.0-alpha.183) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardDO`'s protected `isQueryFunction` is renamed to `isCacheableQuery`, and
+`QueryReadScope` gains a required `markIpRead` member. A hand-written subclass overriding the
+former, or constructing the latter, must be updated; generated shards are regenerated.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen,advisor:** drop the OCC-retry claim from advisories ([#710](https://github.com/anolilab/lunora/issues/710)) ([e5b7734](https://github.com/anolilab/lunora/commit/e5b77343804dc5e0683233bb9547ad5ba4ed3624))
+* **do:** key the reactive cache on the whole caller ([#714](https://github.com/anolilab/lunora/issues/714)) ([0bbf506](https://github.com/anolilab/lunora/commit/0bbf506c1982cd58aa2aafc4f7c6be79c4c44efb))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.133
+* **@lunora/do:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/codegen [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.181...@lunora/codegen@1.0.0-alpha.182) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
