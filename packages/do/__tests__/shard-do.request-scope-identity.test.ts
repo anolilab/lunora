@@ -66,6 +66,19 @@ class ScopeObservingShard extends ShardDO {
         return { ran: functionPath };
     }
 
+    /**
+     * The reserved cross-shard relation read, served BEFORE the ordinary
+     * dispatch path. The generated override is `async` and awaits a whole
+     * schema-aware child-table read, so a throw from it lands in the dispatch's
+     * `catch` having crossed an await — with the shared caller fields possibly
+     * belonging to a sibling by then.
+     */
+    public override async runRelationFanoutRead(functionPath: string): Promise<unknown> {
+        await this.parks.get(functionPath);
+
+        throw new Error("relation fan-out exploded");
+    }
+
     /** Park `functionPath` inside the handler until the returned callback runs. */
     public park(functionPath: string): () => void {
         let release: () => void = () => {};
@@ -239,6 +252,48 @@ describe("shardDO per-request scope (caller claims)", () => {
             expect(row?.outcome).toBe("error");
             // Before the fix: the viewer — a principal that never made this call,
             // in a durable row that also ships to Logpush/SIEM.
+            expect(row?.userId).toBe(ADMIN.userId);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("files a FAILED relation fan-out read under the caller that made it", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new ScopeObservingShard(makeState(database), {});
+
+            // The reserved relation prefix is served ahead of the ordinary
+            // dispatch path — before the mutator classification, and so before
+            // the capture the rest of the dispatch re-pins from. It awaits the
+            // child-table read first, which is the window.
+            const releaseAdmin = shard.park("__lunora_relation__:read");
+            const failing = shard.fetch(rpcRequest("__lunora_relation__:read", "m-relation", ADMIN));
+
+            await tick();
+
+            const releaseViewer = shard.park("messages:poll");
+            const viewerAction = shard.fetch(rpcRequest("messages:poll", "m-viewer", VIEWER));
+
+            await tick();
+
+            releaseAdmin();
+
+            const response = await failing;
+
+            expect(response.status).toBe(500);
+
+            releaseViewer();
+            await viewerAction;
+
+            const row = readRequestLog(database.sql).find((entry) => entry.functionPath === "__lunora_relation__:read");
+
+            expect(row?.outcome).toBe("error");
             expect(row?.userId).toBe(ADMIN.userId);
         } finally {
             database.close();

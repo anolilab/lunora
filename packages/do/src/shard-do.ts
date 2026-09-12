@@ -6023,11 +6023,22 @@ abstract class ShardDO {
         // error path files a durable `__lunora_reqlog__` row (and a Logpush/SIEM
         // event with it) that reads the caller off `this`, after every await this
         // dispatch took — so without a re-pin a failed request is attributed to
-        // whichever sibling's prologue ran last. `undefined` until the capture
-        // below, which is deliberately NOT hoisted with it: the capture has to
-        // run after `currentMutatorClass` is stamped, or the gate would re-pin a
-        // blank mutator classification over the real one.
-        let dispatchScope: RequestScope | undefined;
+        // whichever sibling's prologue ran last.
+        //
+        // Captured TWICE, deliberately, and this first one has to be here rather
+        // than at the second site: the relation fan-out branch below awaits a
+        // whole schema-aware child-table read before that site is reached, and a
+        // throw from inside it would otherwise find nothing to restore. Taken
+        // straight after `beginDispatch`, so it is exactly the prologue's own
+        // values (`mutatorClass` included — still `undefined` here, which is the
+        // truthful answer for a dispatch that has not been classified yet).
+        //
+        // The second capture, after the classification is stamped, is the one the
+        // replay gate and the tail re-pin: it is the only one that carries a real
+        // `currentMutatorClass`, so hoisting it in place of this would re-pin a
+        // blank classification over the real one and break the in-transaction
+        // watermark handshake.
+        let dispatchScope: RequestScope = this.captureRequestScope();
 
         try {
             // Reserved cross-shard relation read/count (reverse cross-backend
@@ -6052,7 +6063,13 @@ abstract class ShardDO {
             if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
                 const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
 
-                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(this.currentResponseBookmark));
+                // THIS dispatch's own by-value sink, never the shared field: a
+                // fan-out read performs no `.global()` write, so the sink is
+                // `undefined` and no bookmark is echoed — which is the honest
+                // answer. Read off `this` instead, the header could only ever
+                // carry a bookmark a sibling wrote during the await above, i.e. a
+                // stranger's D1 write position reported as this caller's.
+                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(dispatchBookmark.value));
             }
 
             // Custom-mutator ordering: a watermarked push (`clientId` +
@@ -6265,13 +6282,8 @@ abstract class ShardDO {
             // `this`, and the throw can come from any await in the dispatch — by
             // which point a sibling `fetch()`'s prologue may own those fields. The
             // row it writes is durable and ships to Logpush/SIEM, so a mis-pinned
-            // one blames a principal that never made the call. `undefined` only
-            // when the throw beat the capture (a relation fan-out read, a
-            // watermark short-circuit), where the prologue's values are still this
-            // dispatch's own and there is nothing to restore.
-            if (dispatchScope !== undefined) {
-                this.restoreRequestScope(dispatchScope);
-            }
+            // one blames a principal that never made the call.
+            this.restoreRequestScope(dispatchScope);
 
             this.metrics.errors += 1;
             dispatchError = { thrown: error };
