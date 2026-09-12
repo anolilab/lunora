@@ -116,6 +116,14 @@ It is declared in **two** places, and both are load-bearing:
 - **`wrangler.jsonc` `vars`** is what puts it on the generated env _type_. Binding types come from wrangler's config, so a var living only in `.dev.vars` reaches the running Worker and not the type-checker, and reading it is a `TS7053`. If it still errors after `wrangler types`, your `tsconfig.json`'s `include` is missing the generated `worker-configuration.d.ts` — that file is where every binding type lives.
 - **`.dev.vars`** is what supplies the value locally, and it takes precedence over `vars` under `wrangler dev`.
 
+If you deploy with a **named wrangler environment** (`wrangler deploy --env
+production`), set `APP_BASE_URL` inside that `env.<name>.vars` block, not only at
+the top level. Cloudflare does not inherit bindings into a named environment —
+"Bindings, such as `vars` or `kv_namespaces`, are not inheritable and need to be
+defined explicitly" — and `lunora registry add` writes the top-level block
+because it has no way to know which environments a project uses. A top-level-only
+value is simply absent under `--env production`, so `appOrigin()` throws there.
+
 The item ships the `vars` entry **empty on purpose**. `vars` is deployed configuration, so a committed `http://localhost:…` placeholder would be consumed only in production — the one place it is wrong — and `checkout` would hand Stripe a `success_url` pointing at the customer's own machine. Empty instead means `appOrigin()` throws its actionable error, and `lunora deploy` blocks any loopback `var` before it ships. **Set it to your public origin before deploying.**
 
 Then run `lunora codegen` to wire `ctx.payments` onto `ActionCtx`.
