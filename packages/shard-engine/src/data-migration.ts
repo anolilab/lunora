@@ -440,18 +440,26 @@ const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusRow[] =>
 const MIGRATION_ORDER_KEYS: OrderKey[] = [{ direction: "asc", field: "_creationTime", nullable: false }];
 
 /**
- * The cursor prefix this runner's persisted resume points were minted under
- * before {@link CURSOR_PREFIX} was bumped to `"~3"`.
+ * Every cursor prefix this runner's persisted resume points were minted under
+ * before {@link CURSOR_PREFIX} reached its current value.
+ *
+ * All of them, not just the immediately preceding one: a migration that paused
+ * two bumps ago is exactly as stuck as one that paused under the last. Each
+ * bump must ADD its predecessor here after re-verifying the payload claim below,
+ * which is why this is a set of prefixes rather than a "anything older" test.
  */
-const PRIOR_CURSOR_PREFIX = "~2";
+const PRIOR_CURSOR_PREFIXES = /^~[23]/u;
 
 /**
- * Re-stamp a persisted resume cursor that was minted under {@link PRIOR_CURSOR_PREFIX}.
+ * Re-stamp a persisted resume cursor that was minted under one of
+ * {@link PRIOR_CURSOR_PREFIXES}.
  *
- * The bump exists because a `.withIndex(q => q.eq(f, v)).paginate()` cursor
- * changed payload — `[value, id]` became `[creationTime, id]`, the same length,
- * so nothing downstream could catch it — and `decodeCursor` therefore refuses
- * any older prefix outright. Correct there; fatal here. This runner PERSISTS its
+ * Each bump exists because some OTHER read's cursor changed payload at the same
+ * length, so nothing downstream could catch it — `~2` -> `~3` when a
+ * `.withIndex(q => q.eq(f, v)).paginate()` cursor went from `[value, id]` to
+ * `[creationTime, id]`, `~3` -> `~4` when `normalizeOrderKeys` learned to drop
+ * keys and so made some lists SHORTER. `decodeCursor` therefore refuses any
+ * older prefix outright. Correct there; fatal here. This runner PERSISTS its
  * cursor, so a resume fed the stored value straight back into `findMany`, threw
  * `invalid cursor`, and re-persisted `failed` with the same doomed cursor: every
  * later run of that migration wedged on it, with no reset short of running the
@@ -460,18 +468,72 @@ const PRIOR_CURSOR_PREFIX = "~2";
  *
  * Safe HERE and only here, for one reason: this path's key list is
  * {@link MIGRATION_ORDER_KEYS}, a fixed constant that bypasses
- * `normalizeOrderKeys` entirely, so its payload is `[_creationTime, _id]` on
- * BOTH sides of the bump — byte-for-byte valid, stale prefix and all. Nothing
- * general may be inferred from that: making `decodeCursor` itself lenient would
- * restore exactly the silently-wrong page the bump was minted to stop.
+ * `normalizeOrderKeys` entirely, and it has held that same value across both
+ * bumps — so its payload is `[_creationTime, _id]` under `~2`, `~3` and `~4`
+ * alike, byte-for-byte valid, stale prefix and all. Nothing general may be
+ * inferred from that: making `decodeCursor` itself lenient would restore exactly
+ * the silently-wrong page the bumps were minted to stop.
  *
- * A FUTURE prefix bump must re-verify this before adding its own predecessor
- * here — if the encoded payload for `[_creationTime, _id]` ever changes, the
- * cursor is not merely mis-prefixed and re-stamping it would seek to the wrong
- * row.
+ * A FUTURE prefix bump must re-verify this before adding its own predecessor to
+ * {@link PRIOR_CURSOR_PREFIXES} — if the encoded payload for
+ * `[_creationTime, _id]` ever changes, the cursor is not merely mis-prefixed and
+ * re-stamping it would seek to the wrong row.
  */
-const restampResumeCursor = (cursor: null | string): null | string =>
-    typeof cursor === "string" && cursor.startsWith(PRIOR_CURSOR_PREFIX) ? CURSOR_PREFIX + cursor.slice(PRIOR_CURSOR_PREFIX.length) : cursor;
+const restampResumeCursor = (cursor: null | string): null | string => {
+    if (typeof cursor !== "string") {
+        return cursor;
+    }
+
+    const prior = PRIOR_CURSOR_PREFIXES.exec(cursor);
+
+    return prior === null ? cursor : CURSOR_PREFIX + cursor.slice(prior[0].length);
+};
+
+/**
+ * Rewrite one row, reporting it settled the moment its write LANDS rather than
+ * when this call returns.
+ *
+ * Those are not the same moment: `replace` commits its guarded UPDATE and only
+ * THEN awaits its after-update triggers and `onWrite`, so a throw out of it is
+ * not proof the write failed. The runner has to know which it was — leaving the
+ * cursor behind a row that IS rewritten makes the resume re-apply a
+ * non-idempotent transform to it, and moving the cursor past one that is NOT
+ * leaves it unmigrated for good.
+ *
+ * Only the stored row can say, so it is read back: a row that still matches what
+ * `replace` compare-and-swapped on was never written (a before-update trigger
+ * threw, or the CAS lost), while one that moved was. The single case the two
+ * collapse into is a transform whose output is byte-identical to its input,
+ * where re-applying it on resume is by definition harmless.
+ */
+const rewriteRow = async (options: {
+    document: Record<string, unknown>;
+    id: string;
+    onSettled: (outcome: "changed" | "unchanged") => void;
+    /** The row image `replace` was handed, as read immediately before the write. */
+    previous: Record<string, unknown>;
+    table: string;
+    writer: DatabaseWriterLike;
+}): Promise<void> => {
+    const { document, id, onSettled, previous, table, writer } = options;
+
+    try {
+        // Trusted rewrite: replay the row's original `_creationTime` via the
+        // `allowExplicitId` opt-in, so the rewrite is explicit about the
+        // timestamp it means rather than leaning on `replace`'s default.
+        await writer.replace(id, document, undefined, { allowExplicitId: true });
+    } catch (error) {
+        const after = await writer.get(id, table);
+
+        if (after !== null && stableWireKey(after) !== stableWireKey(previous)) {
+            onSettled("changed");
+        }
+
+        throw error;
+    }
+
+    onSettled("changed");
+};
 
 /**
  * How many times one row's transform is re-applied against a fresher read before
@@ -501,17 +563,25 @@ const MAX_ROW_ATTEMPTS = 3;
  * failed, which would let one hot row abort a whole shard's run) — and a row
  * that keeps moving eventually raises, because a transform that can never see a
  * stable row is not something to paper over.
- * @returns whether the row was rewritten (`changed`) or left alone
+ *
+ * `onSettled` reports the row as fully handled, and fires from INSIDE rather
+ * than on return, because those two are not the same moment: `replace` commits
+ * its guarded UPDATE and only then awaits its after-update triggers and
+ * `onWrite`, so a throw from there still leaves the row rewritten. Counting from
+ * the caller left the cursor behind such a row and the resume re-applied a
+ * non-idempotent transform to it. A row this gives up on (see
+ * {@link MAX_ROW_ATTEMPTS}) is deliberately never settled — it is not handled.
  */
 const applyTransformToRow = async (options: {
     context: DataMigrationContext;
     document: DataMigrationDocument;
     dryRun: boolean;
+    onSettled: (outcome: "changed" | "unchanged") => void;
     table: string;
     transform: DataMigrationTransform;
     writer: DatabaseWriterLike;
-}): Promise<"changed" | "unchanged"> => {
-    const { context, document, dryRun, table, transform, writer } = options;
+}): Promise<void> => {
+    const { context, document, dryRun, onSettled, table, transform, writer } = options;
     const id = String(document["_id"]);
     let source = document;
 
@@ -520,11 +590,15 @@ const applyTransformToRow = async (options: {
         const next = await transform(source, context);
 
         if (next === undefined) {
-            return "unchanged";
+            onSettled("unchanged");
+
+            return;
         }
 
         if (dryRun) {
-            return "changed";
+            onSettled("changed");
+
+            return;
         }
 
         // Pinned to the migration's own table: a bare `get` probes every table in
@@ -535,16 +609,23 @@ const applyTransformToRow = async (options: {
         if (latest === null) {
             // Deleted under us. Rewriting it would resurrect a row the
             // application removed, so leave it: counted processed, not changed.
-            return "unchanged";
+            onSettled("unchanged");
+
+            return;
         }
 
         if (stableWireKey(latest) === stableWireKey(source)) {
-            // Trusted rewrite: preserve the row's original `_creationTime` via
-            // the `allowExplicitId` opt-in (default replace mints a fresh clock()).
             // eslint-disable-next-line no-await-in-loop -- writes share one SQLite handle; parallelizing would interleave statements on a single connection.
-            await writer.replace(id, { ...next, _creationTime: source["_creationTime"], _id: source["_id"] }, undefined, { allowExplicitId: true });
+            await rewriteRow({
+                document: { ...next, _creationTime: source["_creationTime"], _id: source["_id"] },
+                id,
+                onSettled,
+                previous: latest,
+                table,
+                writer,
+            });
 
-            return "changed";
+            return;
         }
 
         source = latest;
@@ -660,25 +741,43 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
 
     try {
         while (!isDone && batches < maxBatches) {
+            // `includeDeleted` because a soft-deleted row is still a row: the
+            // tombstone keeps its document, `restore(id)` hands it back to the
+            // application, and a migration that skipped it resurrects a
+            // pre-migration document into a schema that has moved on. Without
+            // this the run also records `completed` while `countLegacyRows` —
+            // which counts tombstones, being raw SQL — never reaches zero.
+            //
             // eslint-disable-next-line no-await-in-loop -- batches must run sequentially: each page's cursor depends on the prior page, and all rewrites share one SQLite handle.
-            const batch = await writer.findMany(migration.table, { cursor, limit: batchSize });
+            const batch = await writer.findMany(migration.table, { cursor, includeDeleted: true, limit: batchSize });
 
             for (const document of batch.page) {
+                // Counted and cursor-advanced only once the row is fully handled,
+                // and from INSIDE the call rather than after it. Both used to move
+                // BEFORE the transform / at the end of the batch, so a mid-batch
+                // throw persisted the page-START cursor with the failed row
+                // already counted; moving them here but after the `await` then
+                // left the cursor behind a row whose write had COMMITTED and only
+                // whose after-update trigger threw. Either way the resume
+                // re-walked rows it had already rewritten, bumping a
+                // `version + 1` transform twice.
                 // eslint-disable-next-line no-await-in-loop -- rows share one SQLite handle; a transform's cross-table read must complete before the next row's rewrite
-                const outcome = await applyTransformToRow({ context: migrationContext, document, dryRun, table: migration.table, transform, writer });
+                await applyTransformToRow({
+                    context: migrationContext,
+                    document,
+                    dryRun,
+                    onSettled: (outcome) => {
+                        if (outcome === "changed") {
+                            changed += 1;
+                        }
 
-                if (outcome === "changed") {
-                    changed += 1;
-                }
-
-                // Counted and cursor-advanced only once the row is fully handled.
-                // Both used to move BEFORE the transform / at the end of the batch,
-                // so a mid-batch throw persisted the page-start cursor with the
-                // failed row already counted: the resume re-walked rows it had
-                // already rewritten (bumping a `version + 1` transform twice) and
-                // re-counted them.
-                processed += 1;
-                cursor = encodeCursor(document, MIGRATION_ORDER_KEYS);
+                        processed += 1;
+                        cursor = encodeCursor(document, MIGRATION_ORDER_KEYS);
+                    },
+                    table: migration.table,
+                    transform,
+                    writer,
+                });
 
                 // Mid-batch heartbeat: keep the claim fresh so a batch that runs
                 // longer than the stale-claim window can't be reclaimed out from
