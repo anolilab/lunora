@@ -59,15 +59,16 @@ the job id for `_scheduled_functions`, and the object key for `_storage`.
 
 One row per pending invocation:
 
-| Field          | Type                      | Meaning                                           |
-| -------------- | ------------------------- | ------------------------------------------------- |
-| `id`           | `string`                  | The job id                                        |
-| `functionPath` | `string`                  | Fully-qualified function to invoke                |
-| `args`         | `Record<string, unknown>` | Arguments it will be dispatched with              |
-| `scheduledFor` | `number`                  | When it fires (epoch ms)                          |
-| `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                   |
-| `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry    |
-| `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard |
+| Field          | Type                      | Meaning                                                                          |
+| -------------- | ------------------------- | -------------------------------------------------------------------------------- |
+| `id`           | `string`                  | The job id                                                                       |
+| `functionPath` | `string \| undefined`     | Fully-qualified function to invoke; absent when the row targets a workflow/agent |
+| `workflow`     | `string \| undefined`     | The `WORKFLOW_*` / `AGENT_*` binding started instead of `functionPath`           |
+| `args`         | `Record<string, unknown>` | Arguments it will be dispatched with                                             |
+| `scheduledFor` | `number`                  | When it fires (epoch ms)                                                         |
+| `enqueuedAt`   | `number`                  | When it was enqueued (epoch ms)                                                  |
+| `attempts`     | `number \| undefined`     | Dispatch attempts so far; absent until a retry                                   |
+| `shardKey`     | `string \| undefined`     | Routing hint so dispatch lands on the right shard                                |
 
 ## `_storage`
 

@@ -598,7 +598,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // more than one collection (see `getShardCheckpoints`). A `shape` carries its
     // own shard key; the `list` path uses the top-level one. The sync callbacks
     // re-resolve rather than close over the capture below, because
-    // {@link disposeShardCheckpoints} drops the whole per-client map: a
+    // {@link releaseShardCheckpoints} drops the whole per-client map: a
     // collection still mounted across that teardown must advance the registry a
     // later {@link getShardCheckpoints} mints, not the disposed one it was built
     // with (whose gates resolve to `Infinity`, so every overlay drops ungated).

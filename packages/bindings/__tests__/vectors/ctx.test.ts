@@ -577,6 +577,37 @@ describe("createVectorSyncHook", () => {
         expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
+    it("on a failed UPDATE compensates only the indexes the fan-out actually wrote", async () => {
+        expect.assertions(3);
+
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
+
+        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
+
+            vectors.upserts.push([indexName, input]);
+        });
+
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
+
+        await expect(hook({ doc: { body: "edited" }, id: "d1", op: "update", table: "docs" })).rejects.toBe(original);
+
+        // The hook runs inside the mutation's transaction, so this throw rolls the
+        // row back UNCHANGED. `docs-fulltext` was never written, so it still holds
+        // the prior row's vector — which the rollback makes correct again. Purging
+        // it would leave a live, unchanged row unsearchable in an index that never
+        // failed. `docs-body` did get the (now discarded) new vector and must go.
+        expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
+    });
+
     it("runs compensation only after every in-flight upsert has settled (no stale-vector race)", async () => {
         // Regression for the compensating-delete race: when one index's upsert
         // fails, a slow SIBLING upsert must fully settle before compensation

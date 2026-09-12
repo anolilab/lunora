@@ -8,12 +8,11 @@
  * (`input(stream).transform(opts).output(opts)` + `info(stream)`), not the full
  * hosted-images CRUD surface.
  *
- * TODO(workers-types): the 2026-06-16 optimization features — the `aspect-crop`
- * / `scale-up` fit modes and the `upscale` param — are modeled here by hand
- * because `@cloudflare/workers-types` (through 4.20260616.1) does not type them
- * yet. Re-check on the next `@cloudflare/workers-types` bump: once `ImageTransform`
- * carries `fit: "aspect-crop" | "scale-up"` and `upscale`, drop our hand-rolled
- * additions and lean on the upstream type.
+ * TODO(workers-types): the `aspect-crop` fit mode is modeled here by hand because
+ * `@cloudflare/workers-types` still does not type it — checked at the pinned
+ * 5.20260811.1, whose `ImageTransform` now carries `fit: "scale-up"` and `upscale`.
+ * Re-check on the next bump: once `ImageTransform` also carries
+ * `fit: "aspect-crop"`, drop our hand-rolled addition and lean on the upstream type.
  */
 
 /**

@@ -42,9 +42,10 @@ test for whether something belongs in this package.
 `@lunora/shard-engine/conformance` ships the engine half of the platform TCK:
 
 ```ts
+import { describe, expect, it } from "vitest";
 import { defineEngineContractSuite } from "@lunora/shard-engine/conformance";
 
-defineEngineContractSuite("my host", createHost);
+defineEngineContractSuite("my host", createHost, { describe, expect, it });
 ```
 
 The split across two packages is forced rather than chosen. `@lunora/platform`

@@ -1,5 +1,6 @@
 import type { User } from "@lunora/client";
-import { getIdentityStore } from "@lunora/client/auth";
+import type { AuthStatus } from "@lunora/client/auth";
+import { getIdentityStore, isAuthenticatedStatus, isLoadingStatus } from "@lunora/client/auth";
 import type { Accessor } from "solid-js";
 import { createComponent, createSignal, onCleanup, Show } from "solid-js";
 
@@ -8,6 +9,13 @@ import type { SolidChildren, SolidElement } from "./solid-compat";
 
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+
+    /**
+     * The resolved auth state. Branch on this, not on `user() === null` — see the
+     * contract in `@lunora/client/auth`; `user` is `null` both when signed out
+     * and when a held credential's identity could not be resolved.
+     */
+    status: Accessor<AuthStatus>;
     token: Accessor<string | null>;
     user: Accessor<User | null>;
 }
@@ -25,6 +33,7 @@ const createAuth = (): UseAuthResult => {
     const [token, setTokenSignal] = createSignal<string | null>(client.getAuthToken());
 
     const [user, setUserSignal] = createSignal<User | null>(store.getUser());
+    const [status, setStatusSignal] = createSignal<AuthStatus>(store.getStatus());
 
     const unsubToken = client.onAuthTokenChange((next) => {
         setTokenSignal(() => next);
@@ -32,6 +41,7 @@ const createAuth = (): UseAuthResult => {
 
     const unsubUser = store.subscribe(() => {
         setUserSignal(() => store.getUser());
+        setStatusSignal(() => store.getStatus());
     });
 
     onCleanup(() => {
@@ -43,7 +53,7 @@ const createAuth = (): UseAuthResult => {
         client.setAuthToken(next);
     };
 
-    return { setToken, token, user };
+    return { setToken, status, token, user };
 };
 
 // Auth-gate helpers — plain function components over `Show`, which both Solid
@@ -93,22 +103,26 @@ const authGate =
     };
 
 /**
- * Render `children` only after authentication has settled and a token + user
- * are both present.
+ * Render `children` once authentication has settled in the caller's favour — a
+ * credential is held and nothing has contradicted it.
+ *
+ * Gated on the shared `AuthStatus` contract in `@lunora/client/auth`, not on
+ * `user() !== null`: an unreachable identity endpoint leaves `user` at `null`
+ * while the credential is still perfectly valid.
  */
-const Authenticated: AuthGate = authGate(({ token, user }) => (token() === null ? false : user() !== null));
+const Authenticated: AuthGate = authGate(({ status }) => isAuthenticatedStatus(status()));
 
 /**
- * Render `children` while authentication is still in progress — token is set
- * but the user has not yet resolved.
+ * Render `children` while authentication is still in progress — a credential is
+ * held and the first identity resolve has not come back yet.
  */
-const AuthLoading: AuthGate = authGate(({ token, user }) => (token() === null ? false : user() === null));
+const AuthLoading: AuthGate = authGate(({ status }) => isLoadingStatus(status()));
 
 /**
- * Render `children` only when auth has settled and no token is present (the
- * signed-out state).
+ * Render `children` only when auth has settled and there is no session — no
+ * credential, or the server answered that the credential has none.
  */
-const Unauthenticated: AuthGate = authGate(({ token, user }) => (token() === null ? user() === null : false));
+const Unauthenticated: AuthGate = authGate(({ status }) => status() === "unauthenticated");
 
 export type { UseAuthResult };
 export { Authenticated, AuthLoading, createAuth, Unauthenticated };

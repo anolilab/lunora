@@ -112,7 +112,7 @@ console.log(map.score, map.grade); // e.g. 84 "good"
 console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
 ```
 
-Each procedure starts at 100 and loses each fired **rule's** weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
+Each procedure starts at 100 and loses each fired **rule's** severity weight (`ERROR` 20 / `WARN` 10 / `INFO` 5 — severity is the only input; a lint carries no weight of its own) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
 
 The verdicts are `clean` / `warned` / `failing` / `exempt` — named for severity, because the score is driven by every lint family rather than an observability family.
 
@@ -124,8 +124,10 @@ import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
 const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
 
 if (baseline === undefined) {
-    // Missing, hand-edited, or written by an older MAP_VERSION. Fail loudly —
-    // treating it as "no regression" would silently disable the gate forever.
+    // Missing or unreadable (hand-edited, truncated). Fail loudly — treating it
+    // as "no regression" would silently disable the gate forever. A version
+    // mismatch is not rejected here: `compareToBaseline` reports it as
+    // `comparable: false`.
     throw new Error("advisor baseline is unreadable; regenerate lunora.advisor.map.json");
 }
 
