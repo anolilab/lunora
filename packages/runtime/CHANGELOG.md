@@ -1,3 +1,52 @@
+## @lunora/runtime [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.120...@lunora/runtime@1.0.0-alpha.121) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* a cross-table `_id` collision on import is now an entry in
+`errors` instead of a silent increment of `conflicts`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(runtime): stop exports reporting a partial snapshot as whole
+
+Two ways a deployment export came back short and said nothing.
+
+Shard discovery unioned each requested table's registered keys and only fell
+back to the default shard when the whole union was empty. A root-DO table has no
+registry entry and never will, so its empty key list means "ask the default
+shard" — but one registered `.shardBy(...)` key was enough to answer that
+question for the entire request, dropping the default shard and with it every
+root-table row. The fallback now applies per table, before the union, which
+fixes the same discovery on the CDC sync fan-out.
+
+A shard whose export failed was skipped outright, so the admin route answered
+200 with a short NDJSON body and the scheduled backup wrote a manifest vouching
+for a snapshot missing that shard's rows — while its own comment claimed no
+manifest could ever be written for a failed export. The fan-out failure is now
+raised before a single row is written: the backup writes nothing, and the
+streamed response ends as an errored body rather than a clean short one, which
+is the one signal a consumer cannot mistake for success (the status line is
+committed before the fan-out runs, and an NDJSON row stream has no envelope to
+carry a failure record a naive reader would not ignore). The CLI already
+discards its staged partial file on exactly that.
+* an export whose shard fan-out lost a shard now fails instead of
+returning the reachable shards' rows.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* four data-loss defects on the export/import/backup path ([#744](https://github.com/anolilab/lunora/issues/744)) ([09f580f](https://github.com/anolilab/lunora/commit/09f580ffe6f1d098f62020be36a5363b50c9eb5a))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.78
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
 ## @lunora/runtime [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.119...@lunora/runtime@1.0.0-alpha.120) (2026-09-12)
 
 
