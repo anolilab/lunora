@@ -240,6 +240,18 @@ export interface OutboxSink {
      * the caller can surface back-pressure to the issuing mutation.
      */
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+
+    /**
+     * Whether the sink still holds writes that have not replayed. The client
+     * consults this before sending a fresh mutation live, so a new write can
+     * never overtake an older one the sink is still holding (a write deferred
+     * because its identity isn't re-confirmed yet is held indefinitely, with
+     * nothing for the client's flush barrier to wait on).
+     *
+     * Optional: a sink that cannot answer never engages the ordering gate, so
+     * such a sink behaves exactly as before.
+     */
+    pending?: () => boolean;
 }
 
 /**

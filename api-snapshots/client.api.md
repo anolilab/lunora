@@ -904,6 +904,7 @@ class OfflineQueue {
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
+    hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -970,6 +971,7 @@ interface OutboxMutation {
 ```ts
 interface OutboxSink {
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+    pending?: () => boolean;
 }
 ```
 

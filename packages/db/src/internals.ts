@@ -172,6 +172,15 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
     const mutationFunctionName = options.mutationFnName ?? OUTBOX_MUTATION_FN_NAME;
 
     return {
+        /**
+         * FIFO signal for the client's ordering gate: while the executor still
+         * holds unreplayed transactions, a fresh `client.mutation` is routed
+         * through this sink instead of going out live and landing first. Covers
+         * a write the replay handler defers on an unconfirmed identity, which
+         * stays pending until the session resolves.
+         */
+        pending: (): boolean => executor.getPendingCount() > 0,
+
         enqueue(mutation: OutboxMutation): Promise<void> {
             // Cap: reject at capacity before persisting, so an already-queued
             // durable write is never silently lost. Mirrors `OfflineQueue` and the
