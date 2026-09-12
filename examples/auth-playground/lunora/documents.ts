@@ -1,7 +1,23 @@
 import { LunoraError } from "lunorash/server";
+import { rateLimit } from "lunorash/ratelimit";
 
-import type { Id } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
+import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+/**
+ * The limiter comes from `lunora/ratelimit/schema.ts`, which owns the named
+ * limits and the durable store.
+ *
+ * Keyed on the signed-in user so one account cannot spend another's budget. The
+ * `ctx.ip` fallback matters: the rate-limit middleware runs *before* the handler
+ * calls `assertSignedIn`, so every unauthenticated attempt is keyed here before
+ * it is rejected. `ctx.ip` is Cloudflare's server-side `CF-Connecting-IP` and is
+ * `undefined` off Cloudflare, where those attempts then share one `"anon"`
+ * bucket.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 interface DocumentRow {
     _id: Id<"documents">;
@@ -59,6 +75,7 @@ export const list = query.input({ organizationId: v.string().max(128) }).query(a
 
 /** File a new document. `ownerId` comes from the session, never from `args`. */
 export const create = mutation
+    .use(rateLimit(limiter, "write", byUser))
     .input({
         organizationId: v.string().max(128),
         title: v.string().max(256),
