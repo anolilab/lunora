@@ -79,12 +79,12 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                                                                           |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                            |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                                           |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                    |
+| Option          | Type                 | Notes                                                                                                                                                       |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                                        |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
 
 ### Provider adapters
 

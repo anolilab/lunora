@@ -205,6 +205,31 @@ describe("query store with reactive args", () => {
         expect([...live]).toStrictEqual([]);
     });
 
+    it("does not re-subscribe when the args store re-emits equal content", () => {
+        // A store fed by a derivation that clamps its input: two distinct
+        // upstream values produce byte-identical args, so the live subscription
+        // must survive untouched instead of tearing down and re-snapshotting.
+        const { client, emit, subscribe, unsubscribe } = createFakeClient();
+        const argsStore = writable<unknown>({ limit: 10, room: "general" });
+        const store = query(client, fnRef, argsStore);
+
+        const stop = store.subscribe(() => {});
+
+        expect(subscribe).toHaveBeenCalledTimes(1);
+
+        emit([{ id: 1 }]);
+
+        expect(get(store)).toStrictEqual([{ id: 1 }]);
+
+        argsStore.set({ limit: 10, room: "general" });
+
+        expect(unsubscribe).not.toHaveBeenCalled();
+        expect(subscribe).toHaveBeenCalledTimes(1);
+        expect(get(store)).toStrictEqual([{ id: 1 }]);
+
+        stop();
+    });
+
     it("tears down without re-opening and resets to undefined on a 'skip' emission", () => {
         const { client, emit, subscribe, unsubscribe } = createFakeClient();
         const argsStore = writable<unknown>({ room: "general" });

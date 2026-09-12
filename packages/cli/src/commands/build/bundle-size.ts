@@ -24,7 +24,7 @@ interface BundleSize {
  *
  * The out-dir also carries artifacts Cloudflare never sees: sourcemaps (which
  * are larger than the script itself — counting them would roughly triple the
- * number), the esbuild metafile `lunora deploy --outdir` writes alongside the
+ * number), the esbuild metafile `lunora build --out-dir` writes alongside the
  * bundle, and the README wrangler drops in to explain the directory.
  */
 const isUploaded = (name: string): boolean => !name.endsWith(".map") && name !== "bundle-meta.json" && name !== "README.md";

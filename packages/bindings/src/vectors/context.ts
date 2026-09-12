@@ -403,9 +403,11 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * Vectorize diverged. We mitigate, not eliminate: upserts/deletes are
  * idempotent (keyed by row id), so a retry of the same write converges; and on
  * a fan-out failure we attempt a best-effort compensating delete of the row's
- * id from every affected index before re-throwing. A delete after a failed
- * upsert can itself fail — this is best-effort, the authoritative recovery is
- * re-running the (idempotent) write.
+ * id before re-throwing — from every index of the table on an insert, and on an
+ * update from the indexes this fan-out actually wrote, since the rollback leaves
+ * the untouched ones holding the prior row's still-correct vector. A delete
+ * after a failed upsert can itself fail — this is best-effort, the authoritative
+ * recovery is re-running the (idempotent) write.
  */
 const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
     const { allowSharedNamespace, namespace, schema, vectors } = options;
@@ -470,6 +472,11 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
         // the fan-out with the same cap as `upsertMany`: a table with many
         // vector indexes (or a bulk apply reusing this hook) must not spawn an
         // unbounded number of concurrent embedder + Vectorize subrequests.
+        //
+        // Each upsert records its index only once it has RESOLVED, which is what
+        // scopes the compensation below to the indexes this fan-out actually
+        // wrote (see there).
+        const upsertedIndexNames: string[] = [];
         const operations: (() => Promise<void>)[] = [
             ...inlineToClear.map((entry) => async (): Promise<void> => {
                 await vectors.deleteByIds(entry.index.name, [event.id]);
@@ -486,6 +493,8 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
                     metadata: entry.index.metadata ? pickMetadata(row, entry.index.metadata) : undefined,
                     namespace,
                 });
+
+                upsertedIndexNames.push(entry.index.name);
             }),
             ...standaloneIndexes.map(([name, definition]) => async (): Promise<void> => {
                 if (!allowSharedNamespace && namespace === undefined) {
@@ -499,6 +508,8 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
                     metadata: definition.metadata?.(row),
                     namespace,
                 });
+
+                upsertedIndexNames.push(name);
             }),
         ];
 
@@ -506,10 +517,31 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
             await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
         } catch (error) {
             // Best-effort compensation: a partial fan-out leaves some indexes
-            // mutated. Purge this row's id from every affected index so the
-            // diverged state is at least empty rather than stale-but-present,
-            // then surface the original failure to the write path.
-            await Promise.allSettled(allIndexNames.map((name) => vectors.deleteByIds(name, [event.id])));
+            // mutated. Purge this row's id from them so the diverged state is at
+            // least empty rather than stale-but-present, then surface the
+            // original failure to the write path.
+            //
+            // WHICH indexes depends on the op, because the throw below rolls the
+            // mutation back (the hook runs inside the mutation's transaction) and
+            // what a rollback restores is not the same in the two cases:
+            //
+            // - insert: the row will not exist, and no vector for this id existed
+            // before the fan-out either, so purging every index on the table is
+            // free of collateral damage and also clears an upsert that landed
+            // remotely before failing on the response.
+            // - update: the row survives UNCHANGED, so an index this fan-out never
+            // wrote still holds the prior row's vector — which the rollback makes
+            // correct again. Deleting that unsearchables a live, unchanged row in
+            // an index that never failed. Only the indexes whose upsert RESOLVED
+            // hold a vector for a row version that is about to vanish.
+            //
+            // The residual case an update cannot resolve: an upsert that applied
+            // remotely and then failed keeps a stale-but-present vector. Live and
+            // slightly wrong beats absent, and re-running the (idempotent) write
+            // converges either way — the recovery this whole hook defers to.
+            const toCompensate = event.op === "insert" ? allIndexNames : upsertedIndexNames;
+
+            await Promise.allSettled(toCompensate.map((name) => vectors.deleteByIds(name, [event.id])));
 
             throw error;
         }

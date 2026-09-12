@@ -111,7 +111,8 @@ databaseHooks: {
         create: {
             after: async (user) => {
                 // Idempotent by construction: upsert on the user id, never insert.
-                await client.mutation(internal.profiles.ensureForUser, { userId: user.id });
+                // `shard` is a createShardClient(env.SHARD).forShard(user.id) handle.
+                await shard.call(internal.profiles.ensureForUser, { userId: user.id });
             },
         },
     },

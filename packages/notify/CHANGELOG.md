@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.55...@lunora/notify@1.0.0-alpha.56) (2026-09-12)
+
+### Bug Fixes
+
+* **notify:** do not retry a partially delivered push ([#715](https://github.com/anolilab/lunora/issues/715)) ([7a28260](https://github.com/anolilab/lunora/commit/7a282608f86f27f0bbcd424d5fef9418317d57d0))
+
 ## @lunora/notify [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.54...@lunora/notify@1.0.0-alpha.55) (2026-09-12)
 
 
