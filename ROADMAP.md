@@ -32,7 +32,7 @@ We know a pre-1.0 framework asks for trust. Here is what backs it:
   not just on laptops. Coverage floors, a nightly full-matrix run, and an
   end-to-end `init → codegen → deploy` smoke back every release.
 - **We ship in the open.** Every change is planned in [`plans/`](./plans) and
-  driven by Conventional Commits and independent per-package semantic-release.
+  driven by Conventional Commits and independent per-package releases.
   The "Recently shipped" list below is regenerated from real merged work.
 
 ---

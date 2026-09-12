@@ -145,3 +145,7 @@ __pycache__/
 # into. They live beside the fixtures (not in os.tmpdir()) so codegen resolves
 # types through the workspace tsconfig + node_modules the way a real app does.
 packages/codegen/__tests__/fixtures/.workdir-*/
+
+# vis release subsystem
+.vis/release/.state.json
+.vis/release/.lock

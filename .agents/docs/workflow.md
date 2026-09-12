@@ -17,7 +17,22 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 ## Release
 
-Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+Independent per-package versioning via `vis release` — the `release` block in `vis.config.ts` is the whole configuration; there is no per-package release file. Conventional Commits drive bumps; `.github/workflows/semantic-release.yml` publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+
+The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 52 entries are updated.
+
+### What the release does on a push
+
+1. `vis release generate --from ${{ github.event.before }}` derives a change file from the commits this push added (vis is changesets-style and `ci release` does not derive them itself), and commits it — `ci release` refuses a dirty tree.
+2. `vis release ci release --auto-publish` versions, writes changelogs, commits, tags, publishes to npm and pushes. It exits 0 with "Nothing to release" when the push carried nothing releasable.
+3. The lockfile is re-synced and pushed, and a CodSpeed baseline run is dispatched, exactly as before.
+
+Locally: `vis release status --channel alpha` prints the pending plan, `vis release version --dry-run` shows what it would write, and `vis release doctor` checks the setup.
+
+### Two rules the release depends on
+
+- **`release.updateInternalDependencies: "out-of-range"`.** Sibling `peerDependencies` are promotion-safe ranges that a new alpha still satisfies, so they are left alone; sibling `dependencies` are rewritten to `^<new version>` when the release moves past them. `scripts/check-sibling-peer-ranges.js` fails the install if that setting disappears — under an unconditional rewrite every published consumer breaks at the 1.0.0 promotion.
+- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` renders the public changelog feed by parsing `packages/*/CHANGELOG.md`, and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections. Neither built-in formatter emits those, so the feed would silently go quiet. The formatter also drops the machine `chore(release):` commits that `generate` transcribes verbatim.
 
 ## Internal scaffolding (`vis generate`)
 

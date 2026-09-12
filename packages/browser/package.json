@@ -85,5 +85,8 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
+    },
+    "vis-release": {
+        "managed": true
     }
 }
