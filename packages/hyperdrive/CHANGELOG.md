@@ -1,3 +1,19 @@
+## @lunora/hyperdrive [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.116...@lunora/hyperdrive@1.0.0-alpha.117) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `NodePgLike`, `PostgresJsLike` and `Mysql2Like` declare their
+members with method syntax and an explicit `this: void`. An implementation that
+assigned a bare arrow property still satisfies them; code that aliased the
+member type keeps working.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* unbreak the first five minutes of a new project ([#746](https://github.com/anolilab/lunora/issues/746)) ([9915245](https://github.com/anolilab/lunora/commit/9915245c32e6891f098ebece5a3243f5fa5d3c5d))
+
 ## @lunora/hyperdrive [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.115...@lunora/hyperdrive@1.0.0-alpha.116) (2026-09-12)
 
 ### Documentation
