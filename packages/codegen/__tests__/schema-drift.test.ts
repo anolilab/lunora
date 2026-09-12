@@ -78,7 +78,9 @@ describe("schema-drift", () => {
             );
 
             expect(snapshot.tables.a?.shardMode).toBe("root");
-            expect(snapshot.tables.b?.shardMode).toBe("global");
+            // `.global()` carries its BACKEND, because that is which physical
+            // store it lives in — see `schema-drift-table-modifiers.test.ts`.
+            expect(snapshot.tables.b?.shardMode).toBe("global:d1");
             expect(snapshot.tables.c?.shardMode).toBe("shardBy:tenantId");
         });
     });

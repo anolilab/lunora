@@ -194,7 +194,7 @@ interface DriftChange {
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
-    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
+    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
 
@@ -929,10 +929,13 @@ interface TableIR {
 
 ```ts
 interface TableSnapshot {
+    commitOrdered?: boolean;
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
+    memory?: boolean;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
+    ttl?: TtlSnapshot;
 }
 ```
 
@@ -2410,6 +2413,15 @@ interface StorageUploadIR {
 
 ```ts
 interface TtlIR {
+    after?: number;
+    field: string;
+}
+```
+
+### `TtlSnapshot` (interface)
+
+```ts
+interface TtlSnapshot {
     after?: number;
     field: string;
 }
