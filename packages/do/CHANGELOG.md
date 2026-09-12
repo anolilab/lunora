@@ -1,3 +1,29 @@
+## @lunora/do [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.137...@lunora/do@1.0.0-alpha.138) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,do:** `TablePage` now carries `sqlColumns`, the table's physical
+column names. A caller feeding columns to anything SQL-shaped wants that list,
+not `columns`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,do:** make SQL surfaces report what the DB holds ([#729](https://github.com/anolilab/lunora/issues/729)) ([b756d58](https://github.com/anolilab/lunora/commit/b756d58859dce16ad1fd2d7050e6f97bb437cbfc))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.76
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.41
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.59
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/do [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.136...@lunora/do@1.0.0-alpha.137) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
