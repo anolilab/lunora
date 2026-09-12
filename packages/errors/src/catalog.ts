@@ -300,9 +300,27 @@ export const ERROR_CATALOG = {
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    EXPORT_SHARD_FAILED: {
+        hint: [
+            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
+            "",
+            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows.",
+        ],
+        status: 502,
+        title: "Export failed on one or more shards",
+    },
     EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
     FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
     GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
+    ID_COLLISION: {
+        hint: [
+            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
+            "",
+            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.",
+        ],
+        status: 409,
+        title: "Document id already belongs to another table",
+    },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
