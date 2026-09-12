@@ -95,6 +95,32 @@
     line-height: 1.1;
 }
 
+/* The plan you are on, in a pricing table. A border rather than a fill: the
+   table is read left-to-right and a filled card pulls the eye out of order. */
+.lu-saas-stat--current {
+    border-color: var(--primary, hsl(240 14% 10%));
+}
+
+.lu-saas-meter {
+    width: 100%;
+    height: 0.5rem;
+    margin-block: 0.25rem 0.5rem;
+    border: 0;
+    border-radius: 999px;
+    background: var(--muted, hsl(240 5% 96%));
+}
+
+.lu-saas-meter::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--muted, hsl(240 5% 96%));
+}
+
+.lu-saas-meter::-webkit-progress-value,
+.lu-saas-meter::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary, hsl(240 14% 10%));
+}
+
 .lu-saas-stat__label {
     font-size: 0.8125rem;
 }

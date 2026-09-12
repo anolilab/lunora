@@ -11,6 +11,8 @@ export { describeAction, describeActivity, groupActivityByDay } from "./activity
  */
 export type { AdminView, OrganizationSort } from "./admin-organizations";
 export { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "./admin-organizations";
+export type { Plan, SeatUsage } from "./billing";
+export { currentPlan, ENTITLING_STATES, formatMoney, isEntitled, isEntitling, pricingRows, seatUsage, subscriptionNotice } from "./billing";
 export type { FieldSpec, FormController, FormOptions, FormState } from "./create-form-controller";
 export { createFormController } from "./create-form-controller";
 export { dayKey, initials, planLabel, relativeTime } from "./format";
@@ -22,4 +24,4 @@ export type { ProjectSort, ProjectsView } from "./projects";
 export { DEFAULT_VIEW, projectCounts, selectProjects } from "./projects";
 export type { Store } from "./store";
 export { createStore } from "./store";
-export type { ActivityRow, FlowStatus, OrganizationRow, OverviewPayload, ProjectRow } from "./types";
+export type { ActivityRow, FlowStatus, OrganizationRow, OverviewPayload, ProjectRow, SubscriptionLike } from "./types";

@@ -26,7 +26,9 @@
         "lunorash": "^0.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
-        "@lunora/errors": "alpha"
+        "@lunora/errors": "alpha",
+        "@lunora/payment": "alpha",
+        "stripe": "^22.0.0"
     },
     "devDependencies": {
         "@cloudflare/vite-plugin": "^1.29.0",
