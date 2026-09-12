@@ -168,7 +168,14 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await readLooseJsonBody(request, "Workflows status")) as { action?: unknown; id?: unknown; name?: unknown } | undefined;
+        // Read under the shared byte budget, like every sibling admin route: a
+        // bare `request.json()` drains whatever is sent, so a chunked body slips
+        // the cap the `Content-Length` fast path only loosely enforces.
+        // `| null`, not `| undefined`: the reader returns `{}` for an empty body,
+        // the parsed value, or throws — so it never resolves `undefined`, but
+        // `JSON.parse("null")` is a perfectly good parsed value, and reading a
+        // property off it would 500 a request that deserves the 400 below.
+        const body = (await readLooseJsonBody(request, "Workflows status")) as { action?: unknown; id?: unknown; name?: unknown } | null;
 
         if (typeof body?.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
             throw new LunoraError("Workflows status action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });
