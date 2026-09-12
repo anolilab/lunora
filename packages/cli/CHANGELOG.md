@@ -1,3 +1,16 @@
+## @lunora/cli [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.251...@lunora/cli@1.0.0-alpha.252) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen,advisor:** drop the OCC-retry claim from advisories ([#710](https://github.com/anolilab/lunora/issues/710)) ([e5b7734](https://github.com/anolilab/lunora/commit/e5b77343804dc5e0683233bb9547ad5ba4ed3624))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.133
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.183
+* **@lunora/config:** upgraded to 1.0.0-alpha.219
+
 ## @lunora/cli [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.250...@lunora/cli@1.0.0-alpha.251) (2026-09-12)
 
 
