@@ -1,3 +1,29 @@
+## @lunora/server [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.121...@lunora/server@1.0.0-alpha.122) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** a table declaring both `.shardBy()` and `.global()` now throws
+at load time instead of silently keeping whichever came last.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** reject a table declaring two shard tiers ([#705](https://github.com/anolilab/lunora/issues/705)) ([96d7ea8](https://github.com/anolilab/lunora/commit/96d7ea8f40d0cd2a76f55009bedf4aa9ef469fe1))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.46
+
 ## @lunora/server [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.120...@lunora/server@1.0.0-alpha.121) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

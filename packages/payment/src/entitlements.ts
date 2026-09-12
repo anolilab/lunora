@@ -13,6 +13,14 @@ import type { Subscription } from "./types";
 const ACTIVE_STATES: ReadonlySet<Subscription["state"]> = new Set<Subscription["state"]>(["active", "trialing"]);
 
 /**
+ * Every price/product id a subscription bills. `priceIds` when the adapter carried the whole set
+ * (a multi-item Stripe subscription: base plan + add-on + metered price), else the single
+ * `priceId` — which is what every other provider has and what a row written before `priceIds`
+ * existed carries. Testing only `priceId` denied the add-on to the customer paying for it.
+ */
+const priceIdsOf = (subscription: Subscription): ReadonlyArray<string> => subscription.priceIds ?? [subscription.priceId];
+
+/**
  * `PlanDefinition` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
@@ -91,14 +99,16 @@ export const featureNames = (config: EntitlementsConfig): string[] => {
  * @experimental
  */
 export const hasActivePrice = (subscriptions: ReadonlyArray<Subscription>, priceId: string): boolean =>
-    subscriptions.some((subscription) => subscription.priceId === priceId && ACTIVE_STATES.has(subscription.state));
+    subscriptions.some((subscription) => ACTIVE_STATES.has(subscription.state) && priceIdsOf(subscription).includes(priceId));
 
 /**
  * Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`.
  * @experimental
  */
 export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: ReadonlyArray<Subscription>): Entitlements => {
-    const activePriceIds = new Set(subscriptions.filter((subscription) => ACTIVE_STATES.has(subscription.state)).map((subscription) => subscription.priceId));
+    const activePriceIds = new Set(
+        subscriptions.filter((subscription) => ACTIVE_STATES.has(subscription.state)).flatMap((subscription) => priceIdsOf(subscription)),
+    );
 
     const plans: string[] = [];
     const features = new Set<string>();

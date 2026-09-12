@@ -14,3 +14,14 @@ export const documents = sqliteTable("documents", {
 }, (t) => ({
     by_org_owner_created: index("by_org_owner_created").on(t.organizationId, t.ownerId, t.createdAt),
 }));
+
+export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    key: text("key").notNull(),
+    value: real("value").notNull(),
+    ts: real("ts").notNull(),
+    prev: real("prev"),
+}, (t) => ({
+    by_key: index("by_key").on(t.key),
+}));

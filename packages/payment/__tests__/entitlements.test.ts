@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EntitlementsConfig } from "../src/entitlements";
-import { entitlementsForReference, resolveEntitlements, usagePeriodStart } from "../src/entitlements";
+import { entitlementsForReference, hasActivePrice, resolveEntitlements, usagePeriodStart } from "../src/entitlements";
 import { MemoryPaymentStore } from "../src/store";
 import type { Subscription } from "../src/types";
 
@@ -76,6 +76,42 @@ describe("resolveEntitlements", () => {
         expect(new Set(entitlements.plans)).toEqual(new Set(["pro", "team"]));
         expect(entitlements.features).toEqual(new Set(["advanced", "export", "sso"]));
         expect(entitlements.limit("seats")).toBe(25);
+    });
+});
+
+describe("multi-item subscriptions", () => {
+    it("grants every price the subscription bills, not just the primary one (regression)", () => {
+        expect.assertions(4);
+
+        // One Stripe subscription billing a base plan AND an add-on. Keeping only `items.data[0]`
+        // denied the add-on to the customer paying for it, and any plan keyed on it never resolved.
+        const multi: Subscription = { ...subscription("price_pro", "active"), priceIds: ["price_pro", "price_team"] };
+        const entitlements = resolveEntitlements(config, [multi]);
+
+        expect(new Set(entitlements.plans)).toEqual(new Set(["pro", "team"]));
+        expect(entitlements.has("sso")).toBe(true);
+        expect(hasActivePrice([multi], "price_team")).toBe(true);
+        // Most-generous still wins across the two plans one subscription now grants.
+        expect(entitlements.limit("seats")).toBe(25);
+    });
+
+    it("falls back to the single priceId when no set was reported (no backfill needed)", () => {
+        expect.assertions(2);
+
+        // Every non-Stripe adapter, the webhook path, and any row stored before `priceIds` existed.
+        const single = subscription("price_pro", "active");
+
+        expect(resolveEntitlements(config, [single]).plans).toEqual(["pro"]);
+        expect(hasActivePrice([single], "price_pro")).toBe(true);
+    });
+
+    it("ignores the extra prices of a non-entitling subscription", () => {
+        expect.assertions(2);
+
+        const canceled: Subscription = { ...subscription("price_pro", "canceled"), priceIds: ["price_pro", "price_team"] };
+
+        expect(hasActivePrice([canceled], "price_team")).toBe(false);
+        expect(resolveEntitlements(config, [canceled]).plans).toEqual([]);
     });
 });
 
