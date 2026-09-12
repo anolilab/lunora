@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.71...@lunora/scheduler@1.0.0-alpha.72) (2026-09-12)
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/scheduler [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.70...@lunora/scheduler@1.0.0-alpha.71) (2026-09-12)
 
 
