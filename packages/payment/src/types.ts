@@ -95,7 +95,18 @@ export interface Subscription {
     /** Start of the current billing period — the window `check` sums metered usage over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+    /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe subscription
+     * can carry an add-on or a metered price alongside the base plan, and a customer paying for one is
+     * entitled to it — so entitlements test membership here (see `hasActivePrice`).
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only `priceId`; absent
+     * reads as `[priceId]`, which is exactly right for the single-item case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
@@ -420,6 +431,17 @@ export interface WebhookAction {
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;
     readonly priceId?: string;
+
+    /**
+     * EVERY price/product id the subscription bills, when the adapter could establish the whole set.
+     * `sync.ts` applies it as a WHOLESALE replacement, so it must be complete or absent — never a
+     * subset, which would silently drop prices the stored row already had.
+     *
+     * `undefined` leaves the stored set standing (see {@link Subscription.priceIds}). That is the
+     * single-price providers' case, and the fail-closed answer for a provider whose embedded item
+     * list is paginated and whose event carries only the first page.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity?: number;
     /** Raw provider event, retained for the events log / debugging. */
