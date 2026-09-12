@@ -459,7 +459,15 @@ describe("durable read cache on a cookie-session cold start", () => {
 
         expect(seeded).toBeUndefined();
         expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
-        await expect(client.getCurrentUser()).resolves.toBeNull();
+
+        // `getCurrentUser()` REJECTS here rather than resolving `null`: an
+        // unreachable endpoint is not the same answer as "you are signed out",
+        // and collapsing the two made an offline reload with a valid stored
+        // token read as a sign-out in every adapter's auth gate. The property
+        // this case pins is the refusal to seed above — the identity call is
+        // asserted only to show the client still learns nothing about the
+        // cached subject, which is why it cannot evidence it.
+        await expect(client.getCurrentUser()).rejects.toThrow("offline");
 
         client.close();
     });

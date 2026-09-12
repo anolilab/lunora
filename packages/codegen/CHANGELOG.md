@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.179...@lunora/codegen@1.0.0-alpha.180) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen:** clear auth advisory on signed webhooks ([#697](https://github.com/anolilab/lunora/issues/697)) ([ab14072](https://github.com/anolilab/lunora/commit/ab140721c483a0560f53de7d7d98eebaeb447f84))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.130
+
 ## @lunora/codegen [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.178...@lunora/codegen@1.0.0-alpha.179) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

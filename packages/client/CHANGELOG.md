@@ -1,3 +1,19 @@
+## @lunora/client [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.101...@lunora/client@1.0.0-alpha.102) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** align the cookie-seed case with the identity contract ([#737](https://github.com/anolilab/lunora/issues/737)) ([021baa8](https://github.com/anolilab/lunora/commit/021baa80816790ae921e5cc4b23f77639585df1b))
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
 ## @lunora/client [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.100...@lunora/client@1.0.0-alpha.101) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

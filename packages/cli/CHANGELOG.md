@@ -1,3 +1,25 @@
+## @lunora/cli [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.249...@lunora/cli@1.0.0-alpha.250) (2026-09-12)
+
+### Bug Fixes
+
+* **ci:** read the worker-size measurement from the json envelope ([#724](https://github.com/anolilab/lunora/issues/724)) ([2563840](https://github.com/anolilab/lunora/commit/256384003fb3f052d0be782bf857847128c92a2d))
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **cli,runtime:** name the commands these comments describe ([#700](https://github.com/anolilab/lunora/issues/700)) ([b4f7d98](https://github.com/anolilab/lunora/commit/b4f7d9842b611a23c1bb720b923d4e25f4148ede))
+* **sdks,templates,registry:** correct stale claims ([#708](https://github.com/anolilab/lunora/issues/708)) ([ebad61a](https://github.com/anolilab/lunora/commit/ebad61a6505150f96ea139eb24ab39893158e58b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.130
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.180
+* **@lunora/config:** upgraded to 1.0.0-alpha.217
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
 ## @lunora/cli [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.248...@lunora/cli@1.0.0-alpha.249) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
