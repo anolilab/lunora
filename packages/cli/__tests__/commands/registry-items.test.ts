@@ -67,6 +67,14 @@ const REQUIRED_BINDING_FIELDS: Record<string, ReadonlyArray<string>> = {
     hyperdrive: ["binding", "id"],
     r2_buckets: ["binding", "bucket_name"],
     send_email: ["name"],
+    /*
+     * `vars` is the one binding kind that is a NAME→VALUE map rather than a list
+     * of resource entries, so there is no field wrangler requires on it — the
+     * key is the binding name and the value is the value. Present with an empty
+     * list rather than absent, because absent means "unknown kind" and is what
+     * the check reports for a kind nobody has thought about.
+     */
+    vars: [],
 };
 
 /** Bindings whose scaffolded value omits something wrangler requires. */

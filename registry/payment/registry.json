@@ -3,7 +3,7 @@
     "name": "payment",
     "title": "Payment",
     "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions plus the payment tables to declare in your schema. The provider adapter is wired into createShardDO (see docs).",
-    "docs": "FIRST: declare the payment tables in your own lunora/schema.ts by copying the block from the scaffolded lunora/payment/schema.ts (customers, events, paymentSessions, subscriptions, usageEvents). They must be declared INLINE and UNPREFIXED — codegen parses lunora/schema.ts as an AST so defineSchema({ ...paymentTables }) is silently skipped, and a .extend() merge would prefix the names @lunora/payment's store reads. Skip this step and the first ctx.payments.* call fails with UNKNOWN_TABLE. THEN wire the adapter into your Worker entry's createShardDO({ payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }), webhookSecret: env.STRIPE_WEBHOOK_SECRET }), authorize: (ref) => ref === ctx.auth.userId, entitlements: { plans: { pro: { features: ['export'], limits: { api_calls: 1000 }, priceIds: ['price_xxx'] } } } }) }) — createStripeAdapter takes a single options object. Then add the POST /payment/webhook HTTP route (see the generated file header for the snippet), run `lunora codegen`, and set APP_BASE_URL, STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in .dev.vars (wrangler secret put for the two secrets in production).",
+    "docs": "FIRST: declare the payment tables in your own lunora/schema.ts by copying the block from the scaffolded lunora/payment/schema.ts (customers, events, paymentSessions, subscriptions, usageEvents). They must be declared INLINE and UNPREFIXED — codegen parses lunora/schema.ts as an AST so defineSchema({ ...paymentTables }) is silently skipped, and a .extend() merge would prefix the names @lunora/payment's store reads. Skip this step and the first ctx.payments.* call fails with UNKNOWN_TABLE. THEN wire the adapter into your Worker entry's createShardDO({ payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }), webhookSecret: env.STRIPE_WEBHOOK_SECRET }), authorize: (ref) => ref === ctx.auth.userId, entitlements: { plans: { pro: { features: ['export'], limits: { api_calls: 1000 }, priceIds: ['price_xxx'] } } } }) }) — createStripeAdapter takes a single options object. Then add the POST /payment/webhook HTTP route (see the generated file header for the snippet), run `lunora codegen`, and set APP_BASE_URL, STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in .dev.vars. APP_BASE_URL is also written into wrangler.jsonc's `vars` so it reaches the generated env TYPE and not just the running Worker — if reading it still errors with TS7053, your tsconfig's `include` is missing wrangler's generated `worker-configuration.d.ts`, which is where every binding type lives (wrangler secret put for the two secrets in production).",
     "requires": [],
     "deps": {
         "@lunora/payment": "workspace:*",
@@ -39,6 +39,14 @@
             "from": "payment.ts",
             "to": "lunora/payment/index.ts",
             "merge": "create-or-skip"
+        }
+    ],
+    "bindings": [
+        {
+            "path": ["vars"],
+            "value": {
+                "APP_BASE_URL": "http://localhost:5173"
+            }
         }
     ]
 }

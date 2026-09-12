@@ -64,7 +64,14 @@ import { SUBSCRIPTIONS_TABLE } from "./schema.js";
  * the billing-portal return URL. Read from env rather than the request: a Lunora
  * context carries no `Request` (a mutation can be replayed, a query re-run from
  * a live subscription), so there is nothing to derive an origin from at handler
- * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. The first is what puts it on the generated env
+ * TYPE — `CloudflareBindings` is built from wrangler's config, so a var that
+ * lives only in `.dev.vars` reaches the running Worker and not the
+ * type-checker, and reading it here is a `TS7053`. The second is what lets you
+ * override it locally without editing committed config.
  */
 const appOrigin = (): string => {
     const value = env["APP_BASE_URL"];
@@ -153,7 +160,14 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
 });
 
 interface SubscriptionRow {
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    /** What a screen matches against its plan catalog. Without it there is no plan to name. */
+    priceId: string;
     providerSubscriptionId: string;
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
+    quantity: number;
     referenceId: string;
     state: string;
 }
@@ -184,7 +198,11 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .collect();
 
     return rows.map((row) => ({
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: typeof row["currentPeriodEnd"] === "number" ? row["currentPeriodEnd"] : undefined,
+        priceId: row["priceId"] as string,
         providerSubscriptionId: row["providerSubscriptionId"] as string,
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
         referenceId: row["referenceId"] as string,
         state: row["state"] as string,
     }));

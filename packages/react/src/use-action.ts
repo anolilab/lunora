@@ -70,6 +70,11 @@ interface ActionHook<F extends FunctionReference> {
  *
  * await runCommand({ command: "lunora", args: ["verify"] });
  * ```
+ *
+ * **The returned value is not callable.** `const run = useAction(api.x.y);
+ * run({ … })` is a `TS2349: This expression is not callable` — a shape that
+ * reads like a function but is a handle. Destructure: `const { call: run } =
+ * useAction(api.x.y)`. Same for `useMutation`, whose invoker is `mutate`.
  */
 const useAction = <F extends FunctionReference>(function_: F): ActionHook<F> => {
     const client = useLunora();

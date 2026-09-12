@@ -321,6 +321,24 @@ describe("lunora add", () => {
             expect(afterSecond).toStrictEqual(afterFirst);
         });
 
+        it("scaffolds a schema whose DEFAULT export codegen can read", async () => {
+            expect.assertions(3);
+
+            // No schema.ts at all — the path that used to write a named-only
+            // export, which codegen's emitted app.ts/shard.ts cannot import, so
+            // every such project failed tsc with TS2613 until someone fixed the
+            // export by hand.
+            rmSync(join(workdir, "lunora", "schema.ts"));
+
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+            const scaffolded = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
+
+            expect(result.code).toBe(0);
+            expect(scaffolded).toContain("export default defineSchema({})");
+            // And the extension still splices into that shape.
+            expect(scaffolded).toContain(".extend(ratelimit.extension)");
+        });
+
         it("applies deps to package.json and bindings to wrangler.jsonc", async () => {
             expect.assertions(3);
 

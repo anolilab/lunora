@@ -86,7 +86,13 @@ const reconcileSchemaExtension = (
     const baseModule = useUmbrella ? "lunorash/server" : "@lunora/server";
     const existingSchema = existsSync(schemaPath)
         ? readFileSync(schemaPath, "utf8")
-        : `import { defineSchema } from "${baseModule}";\n\nexport const schema = defineSchema({});\n`;
+        : // A DEFAULT export, not a named one: codegen's emitted `app.ts` and
+          // `shard.ts` import this module's default, so a named-only stub makes
+          // every scaffolded project fail `tsc` with TS2613 until someone changes
+          // the export by hand. `insertSchemaExtension` resolves the chain from
+          // the `defineSchema(...)` call rather than a variable binding, so it
+          // splices into either shape.
+          `import { defineSchema } from "${baseModule}";\n\nexport default defineSchema({});\n`;
 
     const result = insertSchemaExtension(existingSchema, itemKey);
 
