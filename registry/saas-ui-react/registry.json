@@ -9,6 +9,7 @@
     "files": [
         { "from": "core/activity.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/activity.ts" },
         { "from": "core/admin-organizations.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/admin-organizations.ts" },
+        { "from": "core/billing.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/billing.ts" },
         { "from": "core/create-form-controller.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/create-form-controller.ts" },
         { "from": "core/format.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/format.ts" },
         { "from": "core/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/index.ts" },
@@ -20,6 +21,7 @@
         { "from": "core/types.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/core/types.ts" },
         { "from": "react/activity.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/activity.tsx" },
         { "from": "react/admin.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/admin.tsx" },
+        { "from": "react/billing.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/billing.tsx" },
         { "from": "react/index.ts", "merge": "create-or-skip", "to": "lunora/saas-ui/react/index.ts" },
         { "from": "react/overview.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/overview.tsx" },
         { "from": "react/primitives.tsx", "merge": "create-or-skip", "to": "lunora/saas-ui/react/primitives.tsx" },

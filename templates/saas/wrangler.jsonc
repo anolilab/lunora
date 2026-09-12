@@ -9,5 +9,9 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    // The public origin the payment provider redirects back to. A plain var, not
+    // a secret — `lunora deploy` and `wrangler dev` both need it typed into
+    // `CloudflareBindings`, which only happens for bindings declared here.
+    "vars": { "APP_BASE_URL": "http://localhost:5173" },
     "observability": { "enabled": true, "head_sampling_rate": 1 },
 }
