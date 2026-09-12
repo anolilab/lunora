@@ -1,3 +1,16 @@
+## @lunora/client [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.102...@lunora/client@1.0.0-alpha.103) (2026-09-12)
+
+### Tests
+
+* fail suites that can register zero cases ([#712](https://github.com/anolilab/lunora/issues/712)) ([eca1eaa](https://github.com/anolilab/lunora/commit/eca1eaad82fb9bb9c3aead43af135a9a488bb268))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/client [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.101...@lunora/client@1.0.0-alpha.102) (2026-09-12)
 
 ### Bug Fixes
