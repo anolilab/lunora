@@ -273,9 +273,15 @@ export interface SocketAttachment {
      * the edge — off the edge nothing trustworthy says, so the header is absent
      * and so is this). Stashed here for the same reason `identity` is: every
      * later read a socket drives — the subscription seed, a write-flush re-run,
-     * a stream pull, a shape `where` — runs DEFERRED, so the shared per-request
-     * IP field either says nothing or says whoever happens to be writing right
-     * now. Threaded by value as {@link SubscriptionIdentity.ip}.
+     * a stream pull, an owner-served shape `where` — runs DEFERRED, so the
+     * shared per-request IP field either says nothing or says whoever happens to
+     * be writing right now. Threaded by value as {@link SubscriptionIdentity.ip}.
+     *
+     * One path it does NOT reach: a shape held by a socket on a RELAY is seeded
+     * through the owner, and the relay wire (`RelayShapeSubscribe`) carries flat
+     * `identity`/`userId` fields with no room for an address — so `ctx.ip` inside
+     * a relayed shape's `where` is `undefined`. Fail-closed, and never a
+     * stranger's IP; widening the wire is a protocol change of its own.
      */
     ip?: string;
 

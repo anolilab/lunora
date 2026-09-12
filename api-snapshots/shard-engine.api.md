@@ -1258,10 +1258,8 @@ interface KeyRange {
 ### `LifecycleDispatchInfo` (interface)
 
 ```ts
-interface LifecycleDispatchInfo {
+interface LifecycleDispatchInfo extends SubscriptionIdentity {
     event: LifecycleEvent;
-    identity: Record<string, unknown> | undefined;
-    userId: string | undefined;
 }
 ```
 
@@ -2745,6 +2743,7 @@ interface SocketAttachment {
     context?: Record<string, unknown>;
     expiresAt?: number;
     identity?: Record<string, unknown>;
+    ip?: string;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;
@@ -2937,6 +2936,7 @@ interface SubscriptionEnvelope {
 ```ts
 interface SubscriptionIdentity {
     identity?: Record<string, unknown>;
+    ip?: string;
     userId?: string;
 }
 ```
@@ -3968,10 +3968,7 @@ const geoTableName: (table: string, indexName: string) => string;
 ### `globalShapeReadKey` (const)
 
 ```ts
-const globalShapeReadKey: (resolved: ResolvedShape, identity: {
-    identity?: Record<string, unknown>;
-    userId?: string;
-}) => string | undefined;
+const globalShapeReadKey: (resolved: ResolvedShape, identity: SubscriptionIdentity) => string | undefined;
 ```
 
 ### `guardWriter` (const)

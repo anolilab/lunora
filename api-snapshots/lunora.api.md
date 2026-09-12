@@ -2489,6 +2489,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SubscriptionIdentity` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `SubscriptionOutcome` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.

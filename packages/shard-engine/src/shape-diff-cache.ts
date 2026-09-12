@@ -24,7 +24,7 @@
 
 import { stableWireKey } from "../../../shared/wire-key";
 import type { CdcChangeKey } from "./ctx-db-cdc";
-import type { ResolvedShape } from "./types";
+import type { ResolvedShape, SubscriptionIdentity } from "./types";
 
 /**
  * Join composite key parts unambiguously by length-prefixing each one.
@@ -174,8 +174,15 @@ const createShapeDiffCache = (): ShapeDiffCache => new ShapeDiffCache();
  *
  * Returns `undefined` when either half cannot be stably encoded, which degrades
  * to an unshared read rather than a shared wrong one.
+ *
+ * The caller half is `identity` + `userId` and nothing else, which holds only
+ * because those are the only two members of {@link SubscriptionIdentity} the
+ * emitted `readGlobalShapeRows` puts on the request it builds the global writer
+ * from — `ip` is deliberately left off there so this key stays complete. Adding
+ * a member to that request without adding it here is how equal keys stop meaning
+ * equal rows.
  */
-const globalShapeReadKey = (resolved: ResolvedShape, identity: { identity?: Record<string, unknown>; userId?: string }): string | undefined => {
+const globalShapeReadKey = (resolved: ResolvedShape, identity: SubscriptionIdentity): string | undefined => {
     try {
         return joinKeyParts([resolved.table, predicateKey(resolved), stableWireKey({ identity: identity.identity, userId: identity.userId })]);
     } catch {

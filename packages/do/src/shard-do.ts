@@ -789,6 +789,14 @@ interface RequestScope {
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
+
+    /**
+     * The caller's IP. In the scope for the same reason `userId` is, and it is
+     * the field with the most recent proof: a nested call that re-pins the
+     * identity fields but not this one leaves `ctx.ip` reading whatever the
+     * guest left behind.
+     */
+    ip: string | undefined;
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
     system: boolean;
@@ -2914,6 +2922,13 @@ abstract class ShardDO {
      * `flushChangedTables`, before its `endDispatch`, so it would read the
      * MUTATING caller's IP and hand it to every subscriber. Those paths take the
      * socket's own IP by value instead, via {@link SubscriptionIdentity.ip}.
+     *
+     * Owning the FIELD is not the same as owning the value: `runCachedQuery`'s
+     * reactive-cache key folds userId + claims and not `ip`, so under
+     * `.reactiveCache(true)` an anonymous query reading `ctx.ip` can still be
+     * served one caller's answer for another. Pre-existing and tracked
+     * separately — noted so the next reader does not conclude this accessor is
+     * now safe everywhere.
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
@@ -6408,6 +6423,7 @@ abstract class ShardDO {
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
+            ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
             system: this.currentRequestSystem,
@@ -6428,6 +6444,7 @@ abstract class ShardDO {
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
         this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestIp = scope.ip;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
         this.currentRequestSystem = scope.system;
@@ -6792,7 +6809,7 @@ abstract class ShardDO {
             ...(attachment.context === undefined ? {} : { context: attachment.context }),
         };
 
-        return { event, identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
+        return { event, ...socketIdentity(attachment) };
     }
 
     /**
@@ -7795,11 +7812,12 @@ abstract class ShardDO {
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);
 
-        // The identity is forged; the IP is NOT — it stays the admin caller's own,
-        // which is the only one this dispatch actually has.
-        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, this.currentRequestIp, () =>
-            this.handleRpc(parsed.functionPath, parsed.args),
-        );
+        // No IP, deliberately. The admin branch of `fetch` answers before
+        // `beginDispatch`, so `x-lunora-client-ip` is never read on this path and
+        // `currentRequestIp` holds either nothing or a concurrently-parked
+        // `/rpc`'s address — the admin request scope clears it for exactly that
+        // reason. The identity is forged here; an IP would be borrowed.
+        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () => this.handleRpc(parsed.functionPath, parsed.args));
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -8076,6 +8094,12 @@ abstract class ShardDO {
      * mutation dispatched through `runAs` could commit a dedup row and advance a
      * client watermark under the parked request's identity.
      *
+     * `currentRequestIp` is the third, and is cleared rather than carried: the
+     * admin plane genuinely has no caller IP to offer (nothing on this branch
+     * ever reads the header), so leaving the field alone would let a `runAs`
+     * dispatch run — and log, and rate-limit — under a parked `/rpc`'s address.
+     * `undefined` is the honest answer.
+     *
      * Restoring rather than clearing on exit is deliberate: an admin call is a
      * guest on a thread another dispatch may own, and clearing would take that
      * dispatch's scope with it. (The `/rpc` tail re-pins its own scope after every
@@ -8096,6 +8120,7 @@ abstract class ShardDO {
         this.currentRequestIdentity = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestIp = undefined;
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
@@ -8134,13 +8159,21 @@ abstract class ShardDO {
      * after an await would observe the other dispatch's identity, and the
      * `finally` here would then restore values captured before that interleaving.
      *
+     * `ip` is scoped here on the same terms as `userId`/`identity`, and inherits
+     * the same accepted limitation rather than a new one: for the width of a
+     * lifecycle hook the shared field holds the SOCKET's address, so a concurrent
+     * `/rpc` whose `buildCtx` runs inside that window reads it as its own. Stated
+     * rather than closed, because closing it is not an `ip` change — it means
+     * threading the whole caller context into `handleRpc` so the hook's ctx never
+     * touches the shared fields at all, which is a signature change across
+     * codegen and moves all three fields at once. The `/rpc` tail re-pins its own
+     * scope (`ip` included, since {@link RequestScope} now carries it) after every
+     * await, so the exposure is bounded by that window and does not survive it.
+     *
      * Subscriptions deliberately do NOT use this primitive at all: they thread an
      * explicit {@link SubscriptionIdentity} into `executeSubscription` by value,
-     * which is the pattern to reach for when a new deferred caller appears.
-     *
-     * `ip` is scoped here for the same reason `userId`/`identity` are — a
-     * connect/disconnect hook's `ctx.ip` must be the socket's own (captured at
-     * upgrade), not whatever a concurrent `/rpc` left in the shared field.
+     * which is the pattern to reach for when a new deferred caller appears — and
+     * the pattern to convert lifecycle dispatch to, when someone does.
      */
     private async withRequestIdentity<R>(
         userId: string | undefined,
