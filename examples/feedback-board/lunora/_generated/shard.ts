@@ -298,26 +298,6 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "unbounded_collect:feedback:47:feedback",
-        "categories": [
-            "PERFORMANCE"
-        ],
-        "description": "A query calls `.collect()` with no `.withIndex()` and no `.filter()`, so it materializes every row of the table. Any live subscription over it also re-sends that whole result to every subscribed client on every write to the table.",
-        "detail": "Query on \"feedback\" at feedback:47 calls .collect() with no index and no filter — it loads every row of \"feedback\" from the root Durable Object's SQLite into memory. A live subscription over this query records a whole-table dependency, so every write to \"feedback\" re-runs it and re-sends the full result to each subscribed socket.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "exportName": "list",
-            "file": "feedback",
-            "line": 47,
-            "shardKind": "root",
-            "table": "feedback"
-        },
-        "name": "unbounded_collect",
-        "remediation": "Narrow the read with `.withIndex(\"name\", (q) => q.eq(...))`, cap it with `.take(n)`, or page it with `.paginate(args.paginationOpts)` so neither the scan nor the subscription payload grows with the table.",
-        "title": "Unbounded collect"
-    },
-    {
         "cacheKey": "nondeterministic_query_mutation:summaries:90:Date.now",
         "categories": [
             "SCHEMA"
@@ -338,12 +318,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "output_projection_missing_on_public_read:feedback:44",
+        "cacheKey": "output_projection_missing_on_public_read:feedback:52",
         "categories": [
             "SECURITY"
         ],
         "description": "A `.public()` `query` returns raw table rows (no `.output(...)` projection, no `.use(mask(...))`) from a table carrying PII-named columns (`email`, `phone`, `ssn`, …). Every column ships to the caller, and a column added to the table later leaks by default.",
-        "detail": "Public query `list` (feedback:44) returns raw `feedback` rows with no `.output(...)` projection — shipping PII column(s) authorEmail to every caller, and any column added to `feedback` later leaks by default. Project the return with `.output(v.object({ … }).strip())` or mask the PII columns.",
+        "detail": "Public query `list` (feedback:52) returns raw `feedback` rows with no `.output(...)` projection — shipping PII column(s) authorEmail to every caller, and any column added to `feedback` later leaks by default. Project the return with `.output(v.object({ … }).strip())` or mask the PII columns.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
@@ -352,7 +332,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             ],
             "exportName": "list",
             "file": "feedback",
-            "line": 44,
+            "line": 52,
             "table": "feedback"
         },
         "name": "output_projection_missing_on_public_read",

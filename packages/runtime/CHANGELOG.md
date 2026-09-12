@@ -1,3 +1,15 @@
+## @lunora/runtime [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.116...@lunora/runtime@1.0.0-alpha.117) (2026-09-12)
+
+### Bug Fixes
+
+* **runtime:** cap admin JSON bodies at the reader ([#699](https://github.com/anolilab/lunora/issues/699)) ([04add3a](https://github.com/anolilab/lunora/commit/04add3a62e803dcfbc1627daf072b5c3b110d173))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **cli,runtime:** name the commands these comments describe ([#700](https://github.com/anolilab/lunora/issues/700)) ([b4f7d98](https://github.com/anolilab/lunora/commit/b4f7d9842b611a23c1bb720b923d4e25f4148ede))
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
 ## @lunora/runtime [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.115...@lunora/runtime@1.0.0-alpha.116) (2026-09-12)
 
 

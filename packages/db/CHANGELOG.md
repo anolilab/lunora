@@ -1,3 +1,15 @@
+## @lunora/db [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.104...@lunora/db@1.0.0-alpha.105) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
 ## @lunora/db [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.103...@lunora/db@1.0.0-alpha.104) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

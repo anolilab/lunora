@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.56...@lunora/notify@1.0.0-alpha.57) (2026-09-12)
+
+### Bug Fixes
+
+* **notify:** key the push circuit per transport ([#732](https://github.com/anolilab/lunora/issues/732)) ([bae0b64](https://github.com/anolilab/lunora/commit/bae0b64c6d5f50a35d16ccf9a0c6e12689620c32))
+
 ## @lunora/notify [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.55...@lunora/notify@1.0.0-alpha.56) (2026-09-12)
 
 ### Bug Fixes

@@ -1,3 +1,15 @@
+## @lunora/angular [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.85...@lunora/angular@1.0.0-alpha.86) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+* **vue,svelte,solid,angular:** key reactive args on content ([#721](https://github.com/anolilab/lunora/issues/721)) ([f1e1579](https://github.com/anolilab/lunora/commit/f1e1579cbd9f41789b16a8ad5a8231647f6bd297))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
 ## @lunora/angular [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.84...@lunora/angular@1.0.0-alpha.85) (2026-09-12)
 
 
