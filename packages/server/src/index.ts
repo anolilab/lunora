@@ -18,6 +18,7 @@ export type {
     TerminalKind,
 } from "./builder/index";
 export { initLunora } from "./builder/index";
+export { isPerDispatchMiddleware, tagPerDispatchMiddleware } from "./builder/per-dispatch-tag";
 export { createSecrets } from "./create-secrets";
 export type { DeferredDeleteFlushResult } from "./deferred-deletes";
 export { beginDeferredDeletes, flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";

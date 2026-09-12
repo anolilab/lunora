@@ -5374,6 +5374,16 @@ abstract class ShardDO {
      * a cron-primed entry be served to an anonymous client. So a function the
      * gate can refuse is not cacheable, whatever its kind.
      *
+     * The same holds for a gate the APP author wrote. A procedure's `.use()`
+     * chain is part of the registered function's handler, so it too runs inside
+     * the callback: a `.use(rateLimit(...))` query was charged on its first
+     * dispatch and on none of the ones the memo answered — while every one of
+     * those still arrived at this Durable Object and still cost it a dispatch,
+     * so only the accounting was skipped. The builder marks such a chain
+     * (`perDispatch`) and the generated override refuses it here. Metering and
+     * memoizing are mutually exclusive: the memo's whole value is not running
+     * the thing again.
+     *
      * The base class has no function registry, so the default is `false`: the
      * conservative answer, since caching an `action` would skip its outbound
      * side effects on a hit and caching a `mutation` is meaningless. The

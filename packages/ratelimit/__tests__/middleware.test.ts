@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 
 import { toErrorBody } from "@lunora/errors";
 import type { Middleware, MiddlewareNext } from "@lunora/server";
+import { isPerDispatchMiddleware } from "@lunora/server";
 import { describe, expect, it, vi } from "vitest";
 
+import dbRateLimit from "../src/database-middleware";
 import { rateLimit } from "../src/middleware";
 import { RateLimiter } from "../src/rate-limiter";
 import type { RateLimitDbQuery } from "../src/store";
@@ -279,5 +281,30 @@ describe("rateLimit middleware", () => {
         } finally {
             logged.mockRestore();
         }
+    });
+});
+
+/**
+ * Consuming budget is an effect of the REQUEST, not of the response, so a
+ * memoized answer cannot stand in for it. The mark is what tells the rest of the
+ * stack that: the builder hoists it onto the registered function and the emitted
+ * `isCacheableQuery` keeps such a query out of the reactive cache. Without it a
+ * cache hit answers without running the `.use()` chain at all, and one dispatch's
+ * charge covered every request the memo served — each of which still reached the
+ * Durable Object.
+ */
+describe("rateLimit middleware — per-dispatch mark", () => {
+    it("marks the middleware it returns", () => {
+        expect.assertions(1);
+
+        expect(isPerDispatchMiddleware(rateLimit(new RateLimiter({ config: { probe: { kind: "token bucket", period: 1000, rate: 1 } } }), "probe"))).toBe(true);
+    });
+
+    it("marks the db-backed variant too", () => {
+        expect.assertions(1);
+
+        // Same factory underneath, but a second export is exactly where a mark
+        // gets forgotten.
+        expect(isPerDispatchMiddleware(dbRateLimit({ probe: { kind: "token bucket", period: 1000, rate: 1 } }, "probe"))).toBe(true);
     });
 });

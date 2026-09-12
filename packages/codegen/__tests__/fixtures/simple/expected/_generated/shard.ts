@@ -492,9 +492,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `handleRpc`, so the `internal` refusal at the top of it is skipped —
             // and an `internalQuery` primed by a trusted system dispatch was then
             // served to an anonymous client that the refusal would have 404'd.
+            //
+            // `perDispatch` is the same argument one layer out: the procedure's
+            // own `.use()` chain runs INSIDE `handleRpc`, so a hit skips it too.
+            // A `.use(rateLimit(...))` query was therefore charged once and then
+            // served from the memo to every later request — each of which still
+            // reached this Durable Object and still cost it a dispatch, so only
+            // the accounting was skipped. Metering and memoizing are mutually
+            // exclusive; the author asking for the first is choosing against the
+            // second.
             const registered = LUNORA_FUNCTIONS[functionPath];
 
-            return registered?.kind === "query" && registered.visibility !== "internal";
+            return registered?.kind === "query" && registered.visibility !== "internal" && registered.perDispatch !== true;
         }
 
         protected override isPaidFunction(functionPath: string): boolean {

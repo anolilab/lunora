@@ -1289,6 +1289,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `isPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `isSafeHeaderValue` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1338,6 +1342,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `storageRules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `tagPerDispatchMiddleware` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6107,6 +6115,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `isPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `isSafeHeaderValue` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6156,6 +6168,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `storageRules` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `tagPerDispatchMiddleware` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

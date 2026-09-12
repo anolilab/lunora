@@ -2687,6 +2687,14 @@ export interface RegisteredLunoraFunction {
      * \`reactor\` have no caller identity, so RLS has no user to scope to.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    /**
+     * Hoisted by the builder when the \`.use()\` chain carries a step with a
+     * per-dispatch effect — \`rateLimit(...)\` consuming budget, a single-use
+     * captcha token being burned. Read by \`isCacheableQuery\`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -5360,9 +5368,18 @@ ${sourceBootstrap}${ttlBootstrap}        }
             // \`handleRpc\`, so the \`internal\` refusal at the top of it is skipped —
             // and an \`internalQuery\` primed by a trusted system dispatch was then
             // served to an anonymous client that the refusal would have 404'd.
+            //
+            // \`perDispatch\` is the same argument one layer out: the procedure's
+            // own \`.use()\` chain runs INSIDE \`handleRpc\`, so a hit skips it too.
+            // A \`.use(rateLimit(...))\` query was therefore charged once and then
+            // served from the memo to every later request — each of which still
+            // reached this Durable Object and still cost it a dispatch, so only
+            // the accounting was skipped. Metering and memoizing are mutually
+            // exclusive; the author asking for the first is choosing against the
+            // second.
             const registered = LUNORA_FUNCTIONS[functionPath];
 
-            return registered?.kind === "query" && registered.visibility !== "internal";
+            return registered?.kind === "query" && registered.visibility !== "internal" && registered.perDispatch !== true;
         }
 
         protected override isPaidFunction(functionPath: string): boolean {

@@ -3216,6 +3216,12 @@ const installPlugins: <T extends Record<string, TableDefinition>, const Plugins 
 const isDeny: (where: WhereInput) => boolean;
 ```
 
+### `isPerDispatchMiddleware` (const)
+
+```ts
+const isPerDispatchMiddleware: (middleware: unknown) => boolean;
+```
+
 ### `isSafeHeaderValue` (const)
 
 ```ts
@@ -3296,6 +3302,12 @@ const serveStorageObject: (context: ContextWithStorage, key: string, request: Re
 
 ```ts
 const storageRules: <Context extends StorageContextIn = StorageContextIn>(rules: ReadonlyArray<StorageRule<Context>>, options?: StorageRulesOptions) => Middleware<Context, Context>;
+```
+
+### `tagPerDispatchMiddleware` (const)
+
+```ts
+const tagPerDispatchMiddleware: <M extends object>(middleware: M) => M;
 ```
 
 ### `toWhereInput` (const)

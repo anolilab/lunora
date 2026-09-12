@@ -1,5 +1,6 @@
 import { isInternalCode, isLunoraError, LunoraError } from "@lunora/errors";
 import type { Middleware } from "@lunora/server";
+import { tagPerDispatchMiddleware } from "@lunora/server";
 
 import type { RateLimiter } from "./rate-limiter";
 import type { RateLimitReason } from "./types";
@@ -91,9 +92,14 @@ const resolveKey = <Context>(name: string, context: Context, key: RateLimitMiddl
  * capacity) throws an `INTERNAL` `LunoraError` that is re-thrown as-is under
  * **both** policies — a config bug is never masked as a 503 or silently admitted.
  */
-const rateLimit =
-    <Context>(limiter: LimiterResolver<Context>, name: string, options: RateLimitMiddlewareOptions<Context> = {}): Middleware<Context, Context> =>
-    async ({ ctx, next }) => {
+const rateLimit = <Context>(limiter: LimiterResolver<Context>, name: string, options: RateLimitMiddlewareOptions<Context> = {}): Middleware<Context, Context> =>
+    // Tagged PER-DISPATCH: consuming budget is an effect of the request, not of
+    // the response, so a memoized answer cannot stand in for it. The builder
+    // hoists the mark onto the registered function and the generated
+    // `isCacheableQuery` keeps such a query out of the reactive cache — without
+    // it a hit answers without running this chain at all, and one dispatch's
+    // charge covered every request the memo served.
+    tagPerDispatchMiddleware(async ({ ctx, next }) => {
         let status;
 
         try {
@@ -141,7 +147,7 @@ const rateLimit =
         }
 
         return next();
-    };
+    });
 
 export type { LimiterResolver, RateLimitMiddlewareOptions };
 export { rateLimit, STATUS_BY_REASON };
