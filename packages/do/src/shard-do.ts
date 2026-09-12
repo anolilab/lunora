@@ -100,6 +100,10 @@ import type {
     ResolvedShape,
     RlsPoliciesResult,
     RpcRequest,
+    ScheduleOutbox,
+    ScheduleOutboxEnvelope,
+    ScheduleOutboxRow,
+    SchedulerLike,
     SearchBackfillProgress,
     ShapeDiffCache,
     ShapePokeCursorRow,
@@ -155,6 +159,7 @@ import {
     cursorBelowRetainedFloor,
     DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
+    deferScheduleOutbox,
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
     deleteShapePokeCursor,
@@ -163,6 +168,7 @@ import {
     DurableStreamRunner,
     envOptionalPositiveInt,
     FLAGS_FUNCTION_PREFIX,
+    forgetScheduleOutbox,
     gateReplicaDispatch,
     GlobalPollTick,
     globalShapeReadKey,
@@ -177,8 +183,10 @@ import {
     minCdcReplayableSeq,
     minCdcSeq,
     minShapePokeCursor,
+    parkScheduleOutbox,
     parseExportShardArgs,
     parseImportShardArgs,
+    probeScheduleOutbox,
     projectColumns,
     ReactiveCache,
     reactiveCacheKey,
@@ -190,6 +198,7 @@ import {
     readCdcEpoch,
     readClientWatermark,
     readDeployInfo,
+    readDueScheduleOutbox,
     readGlobalShapeSnapshot,
     readIdempotent,
     readMigrationStatus,
@@ -202,6 +211,7 @@ import {
     recordFanoutPass,
     recordGlobalPollPass,
     recordQueueMessages,
+    recordScheduleOutbox,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
     runSocketPool,
@@ -217,6 +227,7 @@ import {
     summarizeSubscriptions,
     TransactionHeadroomTracker,
     trimIdempotent,
+    trimScheduleOutbox,
     trySendFrame,
     UNVOUCHABLE_DEP,
     writeGlobalShapeSnapshot,
@@ -1058,6 +1069,51 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 const ANONYMOUS_CALLER = stableStringify({ claims: null, ip: null, system: false, userId: null });
 
 /**
+ * How many deferred-schedule outbox entries one alarm tick may attempt. The
+ * dispatches are outbound RPCs, so a backlog is drained across several ticks
+ * rather than held open in one — the same bound `TTL_SWEEP_BATCH` puts on the
+ * sweep tier for the same reason.
+ */
+const SCHEDULE_OUTBOX_BATCH = 32;
+
+/**
+ * How many times a deferred schedule is re-offered to the scheduler before the
+ * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
+ * little over an hour — long enough to ride out a scheduler restart or a
+ * rebalance, short enough that a job the scheduler will never accept (a caller
+ * error it refuses as `INVALID_INPUT`) stops costing alarms and starts being a
+ * reported fact instead.
+ */
+const SCHEDULE_OUTBOX_MAX_ATTEMPTS = 8;
+
+/**
+ * The retry ladder, indexed by attempt count: 5s, 15s, 45s, 2m, 6m, 18m, 30m,
+ * 30m. Exponential until it flattens, so a transient blip is picked up almost
+ * immediately while a persistent outage does not spin the alarm.
+ */
+const SCHEDULE_OUTBOX_BACKOFF_MS: ReadonlyArray<number> = [5000, 15_000, 45_000, 120_000, 360_000, 1_080_000, 1_800_000, 1_800_000];
+
+/**
+ * How long after a failed hand-off the first retry is offered — also the wake the
+ * settle and the cold-start probe ask for, so custody that survived a dispatch is
+ * re-offered promptly rather than at whatever cadence another tier happens to
+ * want.
+ */
+const SCHEDULE_OUTBOX_FIRST_RETRY_MS = 5000;
+
+/** The ladder's rung for `attempts` failures so far, flattening at its last entry. */
+const scheduleOutboxBackoffFor = (attempts: number): number =>
+    SCHEDULE_OUTBOX_BACKOFF_MS[Math.min(attempts, SCHEDULE_OUTBOX_BACKOFF_MS.length - 1)] ?? SCHEDULE_OUTBOX_FIRST_RETRY_MS;
+
+/**
+ * How long a PARKED outbox entry is kept. A job that exhausted its attempts is
+ * evidence — the operator needs to know what was promised and never enqueued —
+ * so it is retained for a week rather than deleted, and trimmed after. Live
+ * entries are never trimmed; the attempt ceiling is what bounds those.
+ */
+const SCHEDULE_OUTBOX_RETENTION_MS = 604_800_000;
+
+/**
  * The refusal a paid (`.x402`) procedure gets on a socket. The paywall lives at
  * the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a WebSocket
  * never crosses — and neither a live subscription (seed plus every poke) nor a
@@ -1418,22 +1474,26 @@ abstract class ShardDO {
      * polled). External-source ingest instead reports the earliest NEXT-DUE
      * timestamp across its non-manual sources (or `undefined` when none exist) —
      * a source with a large `refresh.everyMs` must sleep until it's actually due,
-     * not spin at the global-shape floor. Returns `undefined` when NEITHER tier
-     * has pending work, so the DO can go fully idle instead of re-arming for no
-     * reason; otherwise the earlier of the two candidate times (never later than
-     * `nowMs`, so a source that's already due arms essentially immediately).
+     * not spin at the global-shape floor. The TTL sweep and the deferred-schedule
+     * outbox report the same way; the outbox is `undefined` in the steady state,
+     * since an entry exists only between a mutation's COMMIT and the moment the
+     * scheduler accepts its job. Returns `undefined` when NO tier has pending
+     * work, so the DO can go fully idle instead of re-arming for no reason;
+     * otherwise the earliest candidate time (never later than `nowMs`, so a tier
+     * that's already due arms essentially immediately).
      */
     private static nextPollAlarmTarget(
         globalShapesRemaining: number,
         nextSourceDueAt: number | undefined,
         nextTtlDueAt: number | undefined,
+        nextOutboxDueAt: number | undefined,
         nowMs: number,
     ): number | undefined {
         const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
 
         // The earliest of the tiers that report a pending time; a tier that's
         // already due (past timestamp) is floored to `nowMs` so it arms promptly.
-        const candidates = [globalTarget, nextSourceDueAt, nextTtlDueAt]
+        const candidates = [globalTarget, nextSourceDueAt, nextTtlDueAt, nextOutboxDueAt]
             .filter((value): value is number => value !== undefined)
             .map((value) => Math.max(value, nowMs));
 
@@ -4707,6 +4767,126 @@ abstract class ShardDO {
         return this.scheduleGlobalPoll();
     }
 
+    /**
+     * Durable custody for this shard's deferred `ctx.scheduler` calls — the
+     * `ScheduleOutbox` the generated `buildCtx` hands to
+     * `withDeferredSchedules`.
+     *
+     * The two halves land on opposite sides of the COMMIT on purpose:
+     *
+     * - `record` runs while the handler is still inside its transaction, so the
+     * entry is durable exactly when the writes are and rolls back with them.
+     * It deliberately does NOT swallow: a failure here is still inside the span,
+     * so letting it throw rolls the mutation back — the one moment at which
+     * failing is free. Swallowing would put us back where we started, committing
+     * writes whose job nothing is holding.
+     * - `forget` runs after the dispatch, so it must never fail the response. A
+     * delete that does not land leaves an entry the retry loop re-offers, which
+     * the scheduler refuses as a duplicate and which is then dropped — the error
+     * self-heals into one wasted RPC.
+     *
+     * What survives a settle is therefore exactly the set of jobs that were
+     * promised and not enqueued, which is what {@link ShardDO.pollScheduleOutbox}
+     * drains.
+     */
+    protected scheduleOutbox(): ScheduleOutbox {
+        return {
+            forget: (id: string): void => {
+                try {
+                    forgetScheduleOutbox(this.sql as SqlExec, id);
+                } catch {
+                    // Post-commit: a missing table (pre-migration shard / test stub)
+                    // or a stub handle must not fail a mutation that succeeded. The
+                    // stale entry is re-offered and refused as a duplicate.
+                }
+            },
+            record: (id, envelope): void => {
+                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
+            },
+            wake: (): void => {
+                // Fire-and-forget: this is called from a settle that is about to
+                // throw, and arming the alarm is not allowed to change what it
+                // throws. `scheduleGlobalPoll` already no-ops when an earlier wake
+                // is pending and absorbs a host that cannot arm.
+                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
+                    /* the host could not arm; the next cold start probes again */
+                });
+            },
+        };
+    }
+
+    /**
+     * The scheduler the outbox retry loop dispatches through.
+     *
+     * A seam, like {@link ShardDO.ttlSweeps}: the base has no `createShardDO`
+     * config to read, so it reports `undefined` and the tier stays dormant. The
+     * generated subclass overrides it with the app's configured scheduler —
+     * and only when one is configured, so a shard whose `ctx.scheduler` is the
+     * throwing stub does not retry against a stub eight times before parking.
+     * @returns the scheduler to retry through, or `undefined` when this shard has none
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the generated subclass returns `config.scheduler?.(env)`
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined {
+        return undefined;
+    }
+
+    /**
+     * Re-offer the deferred schedules that were promised to a caller and never
+     * reached the scheduler — the retry half of {@link ShardDO.scheduleOutbox}.
+     * Shares the poll alarm with the source-ingest and TTL tiers, and reports the
+     * earliest next-due time the same way, so a shard with an empty outbox (the
+     * steady state — an entry lives only between a COMMIT and its dispatch) arms
+     * nothing.
+     *
+     * Each attempt reuses the id the caller was already handed, so an entry whose
+     * original dispatch DID land — the failure was the `forget`, or the isolate
+     * died between the two — is refused as a duplicate rather than scheduled
+     * twice. A refusal and an acceptance are therefore both "the scheduler has
+     * it", and both end custody.
+     *
+     * The bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the scheduler will
+     * never accept stops costing alarms and becomes a reported fact instead —
+     * parked, logged at `error` with its id and target, and kept for
+     * {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
+     * promised and never enqueued. The queue is bounded on both sides: the
+     * ceiling stops live entries accumulating, the retention sweep stops parked
+     * ones doing so. The sweep rides whatever tick reaches this tier, so a shard
+     * holding ONLY parked entries keeps them until something else wakes it —
+     * which is the right trade: they are one row per genuinely lost job, not a
+     * loop that grows on its own.
+     */
+    protected async pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined> {
+        const sql = this.sql as SqlExec;
+        const now = Date.now();
+        let probe: { dueAt: number | undefined; populated: boolean };
+
+        try {
+            probe = probeScheduleOutbox(sql);
+        } catch {
+            // No table (a shard whose store predates it, a harness with a stub
+            // handle) means no custody, which is a dormant tier and not a tier
+            // failure — re-arming the alarm over it would wake an idle DO forever.
+            return undefined;
+        }
+
+        if (!probe.populated) {
+            return undefined;
+        }
+
+        if (probe.dueAt !== undefined && probe.dueAt <= now) {
+            const scheduler = this.scheduleOutboxScheduler();
+
+            for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH)) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
+                await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace);
+            }
+        }
+
+        trimScheduleOutbox(sql, now - SCHEDULE_OUTBOX_RETENTION_MS);
+
+        return probeScheduleOutbox(sql).dueAt;
+    }
+
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
         return this.runner.shardKey ?? ROOT_SHARD_NAME;
@@ -4747,9 +4927,17 @@ abstract class ShardDO {
      * error is recorded rather than swallowed.
      */
     protected async ensureShardInit(): Promise<void> {
-        this.shardInitOnce ??= this.runShardInit().catch((error: unknown) => {
-            this.recordShardInitError("__shard_init__", error);
-        });
+        this.shardInitOnce ??= (async (): Promise<void> => {
+            try {
+                await this.runShardInit();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+            }
+
+            // After init, not instead of it: the probe is a read, and a shard whose
+            // init failed is exactly one that may be holding custody.
+            this.armScheduleOutboxRetry();
+        })();
 
         await this.shardInitOnce;
     }
@@ -6569,6 +6757,12 @@ abstract class ShardDO {
         // reports its next-due.
         const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps(trace));
 
+        // Deferred-schedule custody shares this alarm too. Entries exist only
+        // between a mutation's COMMIT and the scheduler accepting its job, so in
+        // the steady state this reports `undefined` and arms nothing; when a
+        // dispatch failed (or never ran) it is what stops the job being lost.
+        const nextOutboxDueAt = await pollTier("scheduler:outbox", async () => this.pollScheduleOutbox(trace));
+
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
         // changed-table → `pokeShapeSubscribers` path (the same one a mutation
@@ -6577,7 +6771,7 @@ abstract class ShardDO {
         // when nothing was queued (non-sourced DOs, or a steady-state tick).
         await this.flushChangedTables();
 
-        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, Date.now());
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, nextOutboxDueAt, Date.now());
 
         if (nextAlarmAt !== undefined) {
             await this.scheduleGlobalPoll(nextAlarmAt);
@@ -11127,6 +11321,116 @@ abstract class ShardDO {
             if (this.globalPollArmedAt === target) {
                 this.globalPollArmedAt = pendingAt;
             }
+        }
+    }
+
+    /**
+     * One outbox attempt: replay the stored call, then either end custody or push
+     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS} — parking it once the
+     * ladder runs out.
+     *
+     * An envelope that will not parse is parked immediately rather than retried:
+     * no number of attempts turns malformed JSON into a job, and the log line is
+     * the only useful output left.
+     */
+    private async retryScheduleOutboxEntry(sql: SqlExec, scheduler: SchedulerLike | undefined, entry: ScheduleOutboxRow, trace?: TraceRefLike): Promise<void> {
+        const attempts = entry.attempts + 1;
+        let envelope: ScheduleOutboxEnvelope | undefined;
+
+        try {
+            envelope = JSON.parse(entry.envelopeJson) as ScheduleOutboxEnvelope;
+        } catch {
+            envelope = undefined;
+        }
+
+        if (scheduler === undefined || envelope === undefined) {
+            this.parkScheduleOutboxEntry(
+                sql,
+                entry.id,
+                attempts,
+                envelope?.target,
+                scheduler === undefined ? "no scheduler is configured on this shard" : "its stored payload is unreadable",
+                trace,
+            );
+
+            return;
+        }
+
+        try {
+            // `runAt`, never `runAfter`: the envelope stores the absolute instant
+            // the caller asked for, so an entry that spent an hour in custody still
+            // fires when it was meant to rather than an hour late.
+            await (scheduler.runAt as (timestampMs: number, target: never, args: never, options?: never) => Promise<string>)(
+                envelope.when,
+                envelope.target as never,
+                decodeWire(envelope.args) as never,
+                { ...envelope.options, id: entry.id } as never,
+            );
+
+            forgetScheduleOutbox(sql, entry.id);
+        } catch (error) {
+            // A duplicate id means the scheduler already has this job — the first
+            // dispatch landed and only the bookkeeping was lost. Custody ends the
+            // same way an acceptance ends it.
+            if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
+                forgetScheduleOutbox(sql, entry.id);
+
+                return;
+            }
+
+            if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+                this.parkScheduleOutboxEntry(
+                    sql,
+                    entry.id,
+                    attempts,
+                    envelope.target,
+                    `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`,
+                    trace,
+                );
+
+                return;
+            }
+
+            deferScheduleOutbox(sql, entry.id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+        }
+    }
+
+    /** Park one entry and say so at `error` — a job was promised to a caller and will not be enqueued. */
+    private parkScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, target: unknown, why: string, trace?: TraceRefLike): void {
+        parkScheduleOutbox(sql, id, attempts);
+
+        this.logs.push({
+            functionPath: "scheduler:outbox",
+            level: "error",
+            message: `deferred schedule ${id} (target ${target === undefined ? "<unreadable>" : JSON.stringify(target)}) will not be enqueued: ${why}. Its mutation committed; the job did not.`,
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
+    }
+
+    /**
+     * Arm the poll alarm once per warm instance if this shard is holding deferred
+     * schedules nobody has enqueued.
+     *
+     * The settle asks for a wake when its own dispatch fails, but the window that
+     * loses a job most quietly is the one where no settle ran at all: the DO is
+     * evicted between the COMMIT and the dispatch, and the entry sits with nothing
+     * pointing at it. Every entry point into this object goes through shard init,
+     * so hooking it here means the next time anything wakes this shard the retry
+     * loop starts — for the cost of one indexed read per cold start.
+     *
+     * Swallows: a shard whose store predates the table (or a harness with a stub
+     * handle) simply has no custody to resume, and init must not fail for it.
+     */
+    private armScheduleOutboxRetry(): void {
+        try {
+            if (probeScheduleOutbox(this.sql as SqlExec).dueAt !== undefined) {
+                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
+                    /* the host could not arm; the next cold start probes again */
+                });
+            }
+        } catch {
+            // No table, no custody to resume.
         }
     }
 

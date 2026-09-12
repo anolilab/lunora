@@ -544,6 +544,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
         }
 
+        // The scheduler the deferred-schedule outbox retries through. Only the
+        // CONFIGURED one: falling back to `schedulerStub` would have an app with no
+        // scheduler retry every entry against a thrower until the attempt ceiling
+        // parked it, and there is nothing to park — an app with no scheduler has no
+        // `ctx.scheduler` call that reached the buffer in the first place.
+        protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
+        }
+
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
             this.ensureMigrated();
 
@@ -1103,7 +1112,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // stays unwrapped.
             //
             // Wrapped OUTSIDE the read-stamping facade so `get`/`list` stay stamped.
-            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);
+            //
+            // `this.scheduleOutbox()` is what keeps the buffer honest. Everything
+            // between the COMMIT and the scheduler's acknowledgement is outside the
+            // transaction, so a failure there leaves writes that are durable and a
+            // job that exists nowhere — and the mutation's replay-dedup row committed
+            // inside the span, so the client's retry is answered from cache and told
+            // it succeeded. The outbox takes custody of each buffered call inside the
+            // transaction and releases it once the scheduler has the job; what
+            // survives is retried by `pollScheduleOutbox` on the shared poll alarm.
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally

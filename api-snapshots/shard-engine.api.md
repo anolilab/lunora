@@ -2439,6 +2439,12 @@ interface RunTriggersOptions {
 const SCAN_DEP = "*scan";
 ```
 
+### `SCHEDULE_OUTBOX_TABLE` (const)
+
+```ts
+const SCHEDULE_OUTBOX_TABLE = "__schedule_outbox";
+```
+
 ### `SCHEMA_HISTORY_MAX_VERSIONS` (const)
 
 ```ts
@@ -2464,6 +2470,38 @@ interface SchedulableWorkflowReferenceLike {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    wake: () => void;
+}
+```
+
+### `ScheduleOutboxEnvelope` (interface)
+
+```ts
+interface ScheduleOutboxEnvelope {
+    args: unknown;
+    options: Record<string, unknown> | undefined;
+    target: unknown;
+    when: number;
+}
+```
+
+### `ScheduleOutboxRow` (interface)
+
+```ts
+interface ScheduleOutboxRow {
+    attempts: number;
+    envelopeJson: string;
+    id: string;
+    nextAttemptAt: number;
 }
 ```
 
@@ -3777,6 +3815,12 @@ const decodeCursor: (cursor: string) => unknown[];
 const decodeFloat64SqlKey: (raw: string) => number | undefined;
 ```
 
+### `deferScheduleOutbox` (const)
+
+```ts
+const deferScheduleOutbox: (sql: SqlExec, id: string, attempts: number, nextAttemptAt: number) => void;
+```
+
 ### `deleteGlobalShapeSnapshot` (const)
 
 ```ts
@@ -3955,6 +3999,12 @@ const float64SqlKey: (value: number) => string;
 
 ```ts
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
+```
+
+### `forgetScheduleOutbox` (const)
+
+```ts
+const forgetScheduleOutbox: (sql: SqlExec, id: string) => void;
 ```
 
 ### `gateReplicaDispatch` (const)
@@ -4213,6 +4263,12 @@ const migrateIdempotency: (sql: SqlExec) => void;
 const migrateReactorState: (sql: SqlExec) => void;
 ```
 
+### `migrateScheduleOutbox` (const)
+
+```ts
+const migrateScheduleOutbox: (sql: SqlExec) => void;
+```
+
 ### `migrateSearchState` (const)
 
 ```ts
@@ -4285,6 +4341,12 @@ const normalizeSourceValue: (value: unknown) => unknown;
 const param: (value: unknown) => SQL;
 ```
 
+### `parkScheduleOutbox` (const)
+
+```ts
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+```
+
 ### `parseExportShardArgs` (const)
 
 ```ts
@@ -4307,6 +4369,15 @@ const planAggregateLookup: (index: AggregateIndexDefinitionLike, requestedWhere:
 
 ```ts
 const pointInBoundingBox: (point: GeoPoint, box: GeoBoundingBox) => boolean;
+```
+
+### `probeScheduleOutbox` (const)
+
+```ts
+const probeScheduleOutbox: (sql: SqlExec) => {
+    dueAt: number | undefined;
+    populated: boolean;
+};
 ```
 
 ### `projectColumns` (const)
@@ -4478,6 +4549,12 @@ const readCommitSeq: (sql: SqlExec) => number;
 const readDeployInfo: (rawEnv: unknown) => DeployInfo;
 ```
 
+### `readDueScheduleOutbox` (const)
+
+```ts
+const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -4596,6 +4673,12 @@ const recordGlobalPollPass: (counters: GlobalPollCounters, drains: number, pairs
 const recordQueueMessages: (sql: SqlExec, inputs: ReadonlyArray<RecordQueueMessageInput>, capturedAt: number) => {
     recorded: number;
 };
+```
+
+### `recordScheduleOutbox` (const)
+
+```ts
+const recordScheduleOutbox: (sql: SqlExec, id: string, envelopeJson: string, now: number) => void;
 ```
 
 ### `recordSchemaVersion` (const)
@@ -4916,6 +4999,12 @@ const trimCdcChanges: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 
 ```ts
 const trimIdempotent: (sql: SqlExec, olderThanTs: number) => void;
+```
+
+### `trimScheduleOutbox` (const)
+
+```ts
+const trimScheduleOutbox: (sql: SqlExec, olderThanTs: number) => void;
 ```
 
 ### `trimStreamRuns` (const)

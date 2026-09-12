@@ -428,6 +428,9 @@ abstract class ShardDO {
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
     protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
+    protected scheduleOutbox(): ScheduleOutbox;
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined;
+    protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
     protected ensureShardInit(): Promise<void>;
     protected runShardInit(): Promise<void>;
