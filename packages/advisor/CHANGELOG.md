@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.132...@lunora/advisor@1.0.0-alpha.133) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen,advisor:** drop the OCC-retry claim from advisories ([#710](https://github.com/anolilab/lunora/issues/710)) ([e5b7734](https://github.com/anolilab/lunora/commit/e5b77343804dc5e0683233bb9547ad5ba4ed3624))
+
 ## @lunora/advisor [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.131...@lunora/advisor@1.0.0-alpha.132) (2026-09-12)
 
 
