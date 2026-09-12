@@ -1,3 +1,17 @@
+## @lunora/client [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.103...@lunora/client@1.0.0-alpha.104) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** queue a live write behind a held one ([#722](https://github.com/anolilab/lunora/issues/722)) ([e65db87](https://github.com/anolilab/lunora/commit/e65db8761c61e582fd3d271e4232c9fb5ce83776))
+* **client:** retry an offline queue held for identity ([#731](https://github.com/anolilab/lunora/issues/731)) ([2d3bb2a](https://github.com/anolilab/lunora/commit/2d3bb2acd3c9caa378087332411bb97f3318d375))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
 ## @lunora/client [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.102...@lunora/client@1.0.0-alpha.103) (2026-09-12)
 
 ### Tests
