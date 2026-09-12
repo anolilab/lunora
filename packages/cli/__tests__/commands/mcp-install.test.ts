@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_DOCS_MCP_URL, runMcpInstall, runMcpInstallList } from "../../src/commands/mcp/install";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const captureLogger = (): { logger: Logger; messages: string[] } => {
@@ -256,7 +257,7 @@ describe("lunora mcp install", () => {
         const { logger, messages } = captureLogger();
         const result = runMcpInstall(baseOptions(logger, { clients: ["claude-code"], localOnly: true }));
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(messages.join("\n")).toContain("not a Lunora project");
     });
 
@@ -266,7 +267,7 @@ describe("lunora mcp install", () => {
         const { logger, messages } = captureLogger();
         const result = runMcpInstall(baseOptions(logger, { clients: ["emacs"] }));
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(messages.join("\n")).toContain("claude-code");
     });
 
@@ -290,7 +291,7 @@ describe("lunora mcp install", () => {
         const { logger, messages } = captureLogger();
         const result = runMcpInstall(baseOptions(logger));
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
         expect(messages.join("\n")).toContain("no MCP client config found");
     });
 

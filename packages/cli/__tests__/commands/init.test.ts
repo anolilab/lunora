@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isTemplate, resolveTemplateFlag, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -570,7 +571,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("not empty");
         });
 
@@ -587,7 +588,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             // cwd itself must not have been scaffolded into (e.g. no package.json dropped in workdir)
             expect(existsSync(join(workdir, "package.json"))).toBe(false);
@@ -606,7 +607,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             expect(existsSync(join(workdir, "   "))).toBe(false);
         });
@@ -650,7 +651,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(errors.join("\n")).toContain("no files");
             expect(existsSync(join(workdir, "hollow"))).toBe(false);
         });
@@ -671,7 +672,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("my-app");
             expect(existsSync(join(workdir, "MyApp"))).toBe(false);
         });
@@ -691,7 +692,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("lowercase");
         });
 
@@ -708,7 +709,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
@@ -865,7 +866,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             // Nothing was written through the link…
             expect(readdirSync(outside)).toHaveLength(0);
             // …and the link itself is still the user's to deal with.

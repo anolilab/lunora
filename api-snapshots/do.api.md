@@ -111,6 +111,10 @@ const ROOT_SHARD_NAME = "__root__";
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `RlsPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -158,6 +162,20 @@ interface RunShardBulkRowResult {
 interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
+}
+```
+
+### `RunShardFindRelatedArgs` (interface)
+
+```ts
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
+    table: string;
 }
 ```
 
@@ -356,6 +374,7 @@ abstract class ShardDO {
         before: number;
         total: number;
     }>;
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage>;
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult>;
     protected runShardCdcSync(args: RunShardCdcSyncArgs): {
         changes: CdcChange[];

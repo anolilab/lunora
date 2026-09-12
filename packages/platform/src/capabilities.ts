@@ -29,7 +29,8 @@
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
  * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
  * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
- * `pipelines`, `queues`, `scheduler`, `secrets`, `vectorStore`, `workflows`.
+ * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
+ * `vectorStore`, `workflows`.
  *
  * Every other key here — `httpCache`, `identityProxy`,
  * `localSql`, `memoryTables`, `objectStorageBackups`,
@@ -53,7 +54,8 @@
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
- * `durableStreams`, `globalTables`, `queues`, `secrets`, `vectorStore`).
+ * `durableStreams`, `globalTables`, `queues`, `relationGraph`, `secrets`,
+ * `vectorStore`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -270,6 +272,27 @@ export interface PlatformCapabilities {
         pipelines?: Capability;
         /** Queue-backed workpools. */
         queues?: Capability;
+
+        /**
+         * `ctx.db.related(...)` — breadth-first traversal of the foreign-key
+         * graph the schema's `v.id("target")` columns describe, returning each
+         * reached row with its depth, the edge names walked to reach it, and a
+         * depth-decaying score.
+         *
+         * Rated on its own key rather than folded into `localSql`, because the
+         * two answer different questions: `localSql` says a shard can run SQL,
+         * while this says a host can serve the traversal's read SHAPE — an
+         * id lookup per out-edge and a batched `WHERE fk IN (...)` per in-edge,
+         * repeated per hop within one request. A host whose reads are remote
+         * enough that a multi-hop expansion cannot finish inside a request
+         * should say `unsupported` here even though every individual read works.
+         *
+         * Gate-bearing: codegen sets the `relationGraph` `PlatformSignals` flag
+         * from the schema IR's `v.id` columns, so a host rating it
+         * `unsupported` refuses the app rather than emitting a `related` that
+         * throws (or worse, silently returns nothing) on the first hop.
+         */
+        relationGraph?: Capability;
         /** Cron triggers / scheduled functions. */
         scheduler?: Capability;
         /** Secrets management. */
@@ -355,6 +378,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
+        relationGraph: {
+            level: "emulated",
+            note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
+        },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
@@ -502,6 +529,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         scheduler: {
             level: "emulated",
             note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        relationGraph: {
+            level: "emulated",
+            note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
         },
         cronTriggers: {
             level: "unsupported",

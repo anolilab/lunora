@@ -8,13 +8,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
 import safe from "./display";
 import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
-import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
+import type { AddCommandOptions, AddCommandResult, RegistryManifest, RegistryPlanItem } from "./types";
 import { emptyResult } from "./types";
 
 /** Render the human-readable plan for one item. */
@@ -83,9 +84,9 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     }
 };
 
-/** Emit the `--json` plan snapshot for the resolved items to stdout. */
-const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): void => {
-    const planSnapshot = items.map(({ manifest }) => {
+/** Build the `--format json` plan snapshot for the resolved items. */
+const buildPlanSnapshot = (items: ReadonlyArray<{ manifest: RegistryManifest }>): RegistryPlanItem[] =>
+    items.map(({ manifest }) => {
         return {
             // Include the concrete value so a JSON-plan consumer can audit the
             // mutation (not just the key path) before it is applied.
@@ -108,9 +109,6 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
             title: manifest.title,
         };
     });
-
-    process.stdout.write(`${JSON.stringify({ items: planSnapshot }, undefined, 2)}\n`);
-};
 
 /**
  * The copy-pastable "install what was just added" command for `cwd`'s project.
@@ -161,8 +159,10 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
+
+    const { logger } = options;
 
     let cleanup: () => void = () => {};
 
@@ -173,25 +173,25 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         const items = collectCatalog(resolved.root);
 
-        if (options.json) {
-            process.stdout.write(`${JSON.stringify(items, undefined, 2)}\n`);
-
-            return empty;
+        if (options.format === "json") {
+            return { ...empty, data: { items } };
         }
 
-        options.logger.info(`available registry items (${String(items.length)}):`);
+        logger.info(`available registry items (${String(items.length)}):`);
 
         for (const item of items) {
-            options.logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
+            logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
         }
 
         return empty;
     } catch (error) {
         // The message can quote the untrusted manifest back (a rejected env-var
         // name, a bad path), so it is sanitized like every other render site.
-        options.logger.error(safe(`list failed: ${error instanceof Error ? error.message : String(error)}`));
+        const message = safe(`list failed: ${error instanceof Error ? error.message : String(error)}`);
 
-        return { ...empty, code: 1 };
+        logger.error(message);
+
+        return { ...empty, code: 1, error: message };
     } finally {
         cleanup();
     }
@@ -201,23 +201,28 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const empty = emptyResult();
-
     if (options.list) {
         return runListCommand(options);
     }
 
-    if (options.names.length === 0) {
-        options.logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
+    // In `--format json` mode every human line — the plan, the diff preview, the
+    // "add complete" report — moves to stderr so stdout carries only the document.
+    const { logger } = options;
 
-        return { ...empty, code: 1 };
+    if (options.names.length === 0) {
+        const message = "add requires at least one item name. Usage: lunora registry add <name> [...names]";
+
+        logger.error(message);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("add", options);
 
     if (gate) {
-        options.logger.error(gate);
+        logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     let cleanups: (() => void)[] = [];
@@ -239,44 +244,54 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         // --- Plan ---
         for (const { manifest } of items) {
-            printPlan(options.logger, manifest);
+            printPlan(logger, manifest);
         }
 
-        if (options.json) {
-            printJsonPlan(items);
-        }
+        // The plan IS the document: it says what this invocation resolved, and it
+        // is the whole answer under `--dry-run`.
+        const data = { items: buildPlanSnapshot(items) };
 
         if (options.dryRun) {
-            options.logger.info("dry-run: stopping before any files are written");
+            logger.info("dry-run: stopping before any files are written");
 
-            return empty;
+            return { ...empty, data };
         }
 
         // --- Diff preview: show file-level changes, mutate nothing ---
         if (options.diff) {
-            reconcileItems(items, cwd, options.logger, { diff: true });
-            options.logger.info("diff: preview only — re-run without --diff to apply");
+            reconcileItems(items, cwd, logger, { diff: true });
+            logger.info("diff: preview only — re-run without --diff to apply");
 
-            return empty;
+            return { ...empty, data };
         }
 
         // --- Confirm package.json mutation (if any item adds deps) ---
-        if (!(await confirmDepMutation(items, options))) {
-            return { ...empty, code: 1 };
+        const confirmation = await confirmDepMutation(items, options);
+
+        if (!confirmation.ok) {
+            // The two cases differ: a non-TTY run without `--yes` is a wrong
+            // invocation (USAGE), a declined prompt is a deliberate abort
+            // (CANCELLED). Collapsing them told automation a user said no when
+            // nobody was ever asked.
+            return confirmation.reason === "declined"
+                ? { ...empty, code: EXIT_CODE.CANCELLED, data, error: "registry add: the package.json change was declined" }
+                : { ...empty, code: EXIT_CODE.USAGE, data, error: "registry add: stdin is not a TTY — re-run with --yes to confirm" };
         }
 
         // --- Reconcile ---
-        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, logger, { overwrite: options.overwrite });
 
-        reportAddResult(items, deps, written.length, skipped.length, options.logger, cwd);
+        reportAddResult(items, deps, written.length, skipped.length, logger, cwd);
 
-        return { bindings, code: 0, deps, skipped, written };
+        return { bindings, code: 0, data, deps, skipped, written };
     } catch (error) {
         // The message can quote the untrusted manifest back (a rejected env-var
         // name, a bad path), so it is sanitized like every other render site.
-        options.logger.error(safe(`add failed: ${error instanceof Error ? error.message : String(error)}`));
+        const message = safe(`add failed: ${error instanceof Error ? error.message : String(error)}`);
 
-        return { ...empty, code: 1 };
+        logger.error(message);
+
+        return { ...empty, code: 1, error: message };
     } finally {
         for (const cleanup of cleanups) {
             cleanup();
@@ -293,9 +308,11 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     const empty = emptyResult();
 
     if (options.names.length === 0) {
-        options.logger.error("view requires an item name. Usage: lunora registry view <name>");
+        const message = "view requires an item name. Usage: lunora registry view <name>";
 
-        return { ...empty, code: 1 };
+        options.logger.error(message);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("view", options);
@@ -303,7 +320,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     const cleanups: (() => void)[] = [];
@@ -358,15 +375,19 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     const root = options.from;
 
     if (root === undefined) {
-        options.logger.error("registry build requires --from <registry root>");
+        const error = "registry build requires --from <registry root>";
 
-        return { ...empty, code: 1 };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error };
     }
 
     if (!existsSync(root)) {
-        options.logger.error(`registry root not found: ${root}`);
+        const error = `registry root not found: ${root}`;
 
-        return { ...empty, code: 1 };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.NOT_FOUND, error };
     }
 
     const index = buildRegistryIndex(root);
@@ -378,9 +399,11 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
         const drift = JSON.stringify(current.items ?? []) !== JSON.stringify(index.items);
 
         if (drift) {
-            options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
+            const error = `registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`;
 
-            return { ...empty, code: 1 };
+            options.logger.error(error);
+
+            return { ...empty, code: EXIT_CODE.USAGE, error };
         }
 
         options.logger.success(`registry: ${outputPath} is up to date (${String(index.items.length)} items)`);

@@ -370,7 +370,9 @@ describe("decodeBigint / tryJsonParse edge cases", () => {
 });
 
 describe("effectiveColumnKind", () => {
-    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => ({ _meta: inner ? { inner } : {}, kind }) as unknown as ValidatorLike;
+    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => {
+        return { _meta: inner ? { inner } : {}, kind };
+    };
 
     it("returns the validator's own kind when not optional", () => {
         expect.assertions(1);

@@ -4238,8 +4238,10 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "MigrationRunResult",
     "QueryReadScope",
     ...(hasQueues ? ["QueuesResult"] : []),
+    "RelatedPage",
     "RunShardApplyCdcArgs",
     "RunShardExportArgs",
+    "RunShardFindRelatedArgs",
     "RunShardImportArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
@@ -5984,6 +5986,24 @@ ${adminWriterPrelude()}
                 rowId: args.rowId,
                 sortValues: args.sortValues,
             });
+        }
+
+        protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+            this.ensureMigrated();
+
+${adminWriterPrelude()}
+
+            // \`related\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
+            // but the shard writer from \`createShardCtxDb\` always defines it — it
+            // derives the edge set from this app's schema.
+            if (!writer.related) {
+                throw new LunoraError("NOT_IMPLEMENTED", "findRelated is unavailable on the shard writer", { status: 500 });
+            }
+
+            return writer.related(
+                { id: args.id, table: args.table },
+                { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+            );
         }
 
         protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {

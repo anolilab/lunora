@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli";
+import { EXIT_CODE } from "../../src/util/exit-code";
 
 let workdir: string;
 
@@ -55,7 +56,7 @@ describe("lunora mcp command wiring", () => {
 
         const { code, output } = await runMcp(["mcp", "bogus"]);
 
-        expect(code).toBe(1);
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(output).toContain("mcp: unknown subcommand. Usage: lunora mcp <install|uninstall|serve>");
     });
 
@@ -64,7 +65,7 @@ describe("lunora mcp command wiring", () => {
 
         const { code, output } = await runMcp(["mcp"]);
 
-        expect(code).toBe(1);
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(output).toContain("mcp: unknown subcommand. Usage: lunora mcp <install|uninstall|serve>");
     });
 
@@ -83,7 +84,7 @@ describe("lunora mcp command wiring", () => {
         // is the proof the positional arrived rather than being swallowed.
         const { code, output } = await runMcp(["mcp", "install", "not-a-client"]);
 
-        expect(code).toBe(1);
+        expect(code).toBe(EXIT_CODE.USAGE);
         expect(output).toContain('mcp install: unknown client "not-a-client"');
     });
 
