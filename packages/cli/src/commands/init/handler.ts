@@ -439,6 +439,28 @@ const pnpmWorkspaceYaml = (): string =>
         "",
     ].join("\n");
 
+/**
+ * Write the build-script allowlist into a scaffold, unless it already has one.
+ *
+ * Idempotent, because there are two moments that know pnpm is in play and
+ * neither subsumes the other: the scaffold step knows the manager DETECTED for
+ * the new project (what the next-steps hint tells the user to run), and the
+ * install offer knows the manager the user actually PICKED, which can differ —
+ * `npx lunora init` detects npm while the offer still defaults to pnpm.
+ *
+ * Without it `pnpm install` exits 1 with `ERR_PNPM_IGNORED_BUILDS` on a tree
+ * that contains esbuild/workerd — i.e. every scaffold — which is precisely the
+ * command the printed next steps and the getting-started docs hand the user.
+ * @param target the scaffolded project directory.
+ */
+const writePnpmBuildAllowlist = (target: string): void => {
+    const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
+
+    if (!existsSync(workspacePath)) {
+        writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
+    }
+};
+
 const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
@@ -776,17 +798,12 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         return undefined;
     }
 
-    // Only when pnpm is the chosen manager: write the build-script allowlist to
-    // pnpm-workspace.yaml just before the install (pnpm v10.16+ no longer reads
-    // the package.json `pnpm` field), so `pnpm install` runs the toolchain's
-    // native builds (esbuild/sharp/workerd) without a follow-up
-    // `pnpm approve-builds`. npm/yarn scaffolds don't get a stray pnpm file.
+    // The scaffold step already wrote this for a project whose DETECTED manager
+    // is pnpm; repeat it here for the case detection cannot reach — the user
+    // picking pnpm at the prompt after `npx lunora init` detected npm. No-op
+    // when the file is already there. npm/yarn scaffolds get no stray pnpm file.
     if (manager === "pnpm") {
-        const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
-
-        if (!existsSync(workspacePath)) {
-            writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
-        }
+        writePnpmBuildAllowlist(target);
     }
 
     const spawner = options.spawner ?? defaultSpawner;
@@ -1613,6 +1630,48 @@ const scaffoldTemplatePath = async (
     return scaffoldFromRemote({ logger: options.logger, markComplete, name, ref: options.ref, source: options.source, target, templateType });
 };
 
+/**
+ * Part of the scaffold itself, not of the install offer: a project whose
+ * detected package manager is pnpm gets the build-script allowlist on disk the
+ * moment its files are written.
+ *
+ * It used to be written inside `maybeOfferInstall`, after `confirm()` returned
+ * true — so `--yes`, a non-TTY (CI, an agent), and "No" at the prompt all
+ * scaffolded a project whose `pnpm install` exits 1 with
+ * `ERR_PNPM_IGNORED_BUILDS`. That is the command the next steps printed three
+ * lines further down, and the one the getting-started docs give.
+ *
+ * Skipped inside a monorepo, deliberately. The new package is not a workspace
+ * member yet, so its install has to run from the workspace ROOT — whose own
+ * `pnpm-workspace.yaml` already governs `allowBuilds`. Writing a second one here
+ * would make the scaffold a workspace root in its own right: `workspace:` deps
+ * would stop resolving, and `isWorkspaceRoot` would from then on read the new
+ * package as a monorepo root, silently suppressing the install offer for
+ * anything scaffolded beneath it.
+ * @param target the scaffolded project directory.
+ * @param cwd the directory `init` was invoked from — the monorepo probe's start.
+ */
+const writeScaffoldPackageManagerConfig = (target: string, cwd: string): void => {
+    if (isInsideMonorepo(cwd)) {
+        return;
+    }
+
+    let manager: PackageManager;
+
+    try {
+        manager = detectPackageManager(target);
+    } catch {
+        // Nothing resolved: no lock file or `packageManager` field above the
+        // scaffold, no launching manager, none on PATH. `printNextSteps` surfaces
+        // that separately; there is no manager to write config for.
+        return;
+    }
+
+    if (manager === "pnpm") {
+        writePnpmBuildAllowlist(target);
+    }
+};
+
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
     // Moonrise header, then create-astro-style linear questions: each prompt shows
     // its badge + question and collapses to a dimmed transcript line on submit.
@@ -1716,9 +1775,16 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     // emptied back out) — see `resetPartialScaffold`.
     tracker.record(target, targetPreExisted);
 
-    return choice.kind === "overlay"
-        ? scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
-        : scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
+    const result =
+        choice.kind === "overlay"
+            ? await scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
+            : await scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
+
+    if (result.code === 0) {
+        writeScaffoldPackageManagerConfig(target, cwd);
+    }
+
+    return result;
 };
 
 /** Tracks the project directory a `lunora init` run creates, so a Ctrl-C abort can reset it. */
