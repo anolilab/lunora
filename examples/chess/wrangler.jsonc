@@ -12,6 +12,6 @@
     "d1_databases": [
         // better-auth's identity tables only — the game state itself lives in
         // the ShardDO, not in D1.
-        { "binding": "DB", "database_name": "lunora-example-chess", "database_id": "REPLACE_WITH_D1_ID" },
+        { "binding": "DB", "database_name": "lunora-example-chess", "database_id": "<replace-with-d1-create-id>" },
     ],
 }
