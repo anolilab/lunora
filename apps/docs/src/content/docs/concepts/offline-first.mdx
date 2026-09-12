@@ -53,7 +53,8 @@ const client = new LunoraClient({
 });
 ```
 
-Both adapters share a single `lunora` IndexedDB database, so there is nothing
+Each adapter opens its own IndexedDB database (`lunora-outbox`,
+`lunora-query-cache`; override either with `databaseName`), so there is nothing
 else to wire up. For tests or SSR you can swap in the in-memory variants
 (`createInMemoryPersistence()` / `createInMemoryQueryCache()`), which implement
 the same contract without touching IndexedDB.
@@ -109,6 +110,33 @@ re-stamps in-flight queued writes rather than dropping them. A real user switch
 consistently, and avoid a `user?.id` that's transiently `undefined` across a reload
 boundary, since a value queued under the token-hash and replayed under the subject
 after a reload can still mismatch.
+
+### Offline reads need a bearer token
+
+The read cache seeds offline only when the client itself holds the credential
+the rows were cached under. A **cookie session** is not that: the cookie is
+`HttpOnly`, so the client can neither read it nor prove it still has it, and
+offline the `/get-session` round trip that would resolve the subject never
+answers. Such entries are cached under `subj:<id>` with no credential, and a
+cold offline start has nothing to match them against — so it renders empty and
+fills in once the app is back online.
+
+This is deliberate, not a gap to work around. The alternative — remembering the
+last resolved subject and seeding on that label — hands the cached rows to
+whoever opens the browser profile, with nothing on the client evidencing they
+are that subject. Re-checking once connectivity returns does not repair it: the
+check can only run in the state where the offline seed was never needed, so a
+session revoked server-side stays readable offline for as long as the app stays
+offline.
+
+If you want offline-first reads, give the client a bearer token:
+
+```ts
+client.setAuthToken(accessToken, user.id);
+```
+
+The offline write outbox is unaffected — queued writes replay under their own
+identity gate regardless of how the session is carried.
 
 ## Surviving a breaking deploy
 
@@ -251,8 +279,11 @@ you writing sync glue:
 2. **Writes flush exactly once.** Queued mutations are deduped by `mutationId`
    and replayed on reconnect; the idempotency key means a retry after a flaky
    ack is a no-op server-side, not a duplicate.
-3. **Optimistic patches rebase, then settle gaplessly.** A per-call `optimistic`
-   transform is recorded as a layer on the query, not applied once-and-forgotten.
+3. **Optimistic patches rebase, then settle gaplessly.** An optimistic patch —
+   one `setQuery` of an `optimisticUpdate`, or the per-call `optimistic`
+   shortcut, which targets only the subscription registered under the mutation's
+   own reference and args — is recorded as a layer on the query it names, not
+   applied once-and-forgotten.
    An unrelated server delta that lands while the write is still pending (queued
    offline, or in flight) is re-folded _under_ the layer instead of clobbering
    it, so your change never flickers away and back. The layer is dropped, with

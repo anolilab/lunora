@@ -19,6 +19,7 @@ export type {
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
@@ -67,6 +68,7 @@ export type { SystemReaderStorageLike } from "@lunora/shard-engine";
 export type { SchedulerLike } from "@lunora/shard-engine";
 export type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 export type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
+export type { RelatedPage } from "@lunora/shard-engine";
 export type { MutationDelta } from "@lunora/shard-engine";
 export type { SearchBackfillProgress } from "@lunora/shard-engine";
 export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "@lunora/shard-engine";

@@ -393,6 +393,32 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let ttl: TtlDefinition | undefined;
     let externalSource: ExternalSourceDefinition | undefined;
 
+    /**
+     * Write the table's shard tier, refusing a second, contradicting one.
+     * `.shardBy()` and `.global()` both own `shardMode`, so chaining them let
+     * the later call silently discard the earlier — the table landed on a tier
+     * the author never chose, losing either per-shard isolation or replicated
+     * edge reads, with nothing visible at build time or runtime.
+     *
+     * Unlike the `.source()` contradictions below, this one cannot be deferred
+     * to `defineSchema`: the whole-table validators see only the survivor, so
+     * by then the collision has left no trace. The chain is the only place it
+     * is still observable.
+     */
+    const setShardMode = (next: ShardMode): void => {
+        // Two non-root kinds exist, so "already set and different" is exactly
+        // the `.shardBy()`/`.global()` collision. Re-stating the same tier is
+        // redundant, not contradictory, and stays allowed.
+        if (shardMode.kind !== "root" && shardMode.kind !== next.kind) {
+            throw new LunoraError(
+                "INTERNAL",
+                "shardBy/global: a table cannot be both .shardBy(key) and .global() — pick one. .shardBy(key) puts the rows in one Durable Object per key (isolation, poke-live reactivity); .global() puts them in a single replicated backend read from the edge.",
+            );
+        }
+
+        shardMode = next;
+    };
+
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
             const op: AggregateOp = options?.op ?? "count";
@@ -443,7 +469,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             return geoIndexes;
         },
         global(options?: { backend?: GlobalBackend }) {
-            shardMode = { backend: options?.backend ?? "d1", kind: "global" };
+            setShardMode({ backend: options?.backend ?? "d1", kind: "global" });
 
             return builder;
         },
@@ -553,7 +579,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         shape,
         shardBy(field) {
-            shardMode = { field, kind: "shardBy" };
+            setShardMode({ field, kind: "shardBy" });
 
             return builder;
         },

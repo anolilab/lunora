@@ -52,7 +52,7 @@ describe("observability-tier gating", () => {
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
         expect(names.some((name) => OBSERVABILITY_NAMES.includes(name))).toBe(false);
     });
 
@@ -64,6 +64,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
         ]);
         expect(toolDefinitions(true, true).map((tool) => tool.name)).toStrictEqual([
@@ -71,6 +72,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
             "lunora_run_mutation",
             "lunora_run_action",
@@ -86,6 +88,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);

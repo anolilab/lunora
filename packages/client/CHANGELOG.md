@@ -1,3 +1,37 @@
+## @lunora/client [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.100...@lunora/client@1.0.0-alpha.101) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `OutboxMutation` gains an optional `onRejected`. A sink that
+ignores it behaves exactly as before; one that owns replay should invoke it on a
+permanent rejection or optimistic values outlive rejected writes.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **client:** re-seed the read cache after a remount ([#720](https://github.com/anolilab/lunora/issues/720)) ([a7a0a53](https://github.com/anolilab/lunora/commit/a7a0a53945bc787d175b7ca627d9542698bfa78c))
+* **client:** roll back an outbox write's optimistic patch ([#717](https://github.com/anolilab/lunora/issues/717)) ([c8c2fe5](https://github.com/anolilab/lunora/commit/c8c2fe55f9833f15532b9f843c6f47d9549606ce))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.136
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+
+## @lunora/client [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.99...@lunora/client@1.0.0-alpha.100) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/client [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.98...@lunora/client@1.0.0-alpha.99) (2026-09-11)
 
 

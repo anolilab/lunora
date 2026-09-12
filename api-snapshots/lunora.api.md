@@ -677,6 +677,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RelationBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1078,6 +1102,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredDeletes` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1937,11 +1965,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ## `lunorash/client/auth`
 
+### `AuthStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `IdentityStore` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `getIdentityStore` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isAuthenticatedStatus` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isLoadingStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2325,6 +2365,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `RlsPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2346,6 +2390,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `RunShardExportArgs` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `RunShardFindRelatedArgs` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2680,6 +2728,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `flattenHint` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `getCatalogEntry` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -5439,6 +5491,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RelationBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5840,6 +5916,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredDeletes` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7282,6 +7362,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredStream` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -396,6 +396,23 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * each then gets a fresh key.
      */
     mutationId?: string;
+
+    /**
+     * Single-query shortcut: the transform is layered onto the subscription
+     * registered under **this write's own** `(functionPath, args, shardKey)`, and
+     * nothing else. A client cannot know which queries a write affects, so the
+     * targeting rule is "same reference, same args" — which makes this the
+     * shorthand for a query and a mutation that share a path (a counter, a
+     * document by id), and a silent no-op for anything else.
+     *
+     * **The general case — a `messages:send` mutation patching a `messages:list`
+     * query — is {@link MutationCallOptions.optimisticUpdate}**, whose store names
+     * its targets. Reach for that whenever the mutation and the query are
+     * different functions, which is nearly always.
+     *
+     * The transform must be pure: it re-runs on every server frame while the write
+     * is pending, so derive from `current` rather than closing over a value.
+     */
     optimistic?: (current: TCurrent | undefined) => TValue;
 
     /**
@@ -1643,9 +1660,16 @@ class LunoraClient {
      * Fetch the currently authenticated user from better-auth's `get-session`
      * endpoint, returning the `user` record or `null` when signed out. Sends
      * the stored bearer token (if any) and `credentials: "include"` so a
-     * cookie-session is also honoured. A network/parse failure or a non-OK
-     * response resolves to `null` rather than throwing — callers treat "couldn't
-     * resolve identity" as "signed out".
+     * cookie-session is also honoured.
+     *
+     * `null` means the **server answered** that there is no session — an empty
+     * body, no `user` field, or a non-OK status such as 401. A network or parse
+     * failure **rejects** instead, because "the endpoint was unreachable" is not
+     * the same answer as "you are signed out": collapsing the two made an
+     * offline reload with a valid stored token read as a sign-out in every
+     * adapter's auth gate. Callers that cannot act on the difference can still
+     * `.catch(() => null)`; `@lunora/client/auth`'s identity store maps the
+     * rejection to the `"unreachable"` status instead.
      *
      * Framework-agnostic: pair it with {@link onAuthTokenChange} to refetch when
      * the token changes (that's what `@lunora/react`'s `useAuth` does).
@@ -1672,31 +1696,29 @@ class LunoraClient {
             headers["authorization"] = `Bearer ${this.authToken}`;
         }
 
-        try {
-            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
-                credentials: "include",
-                headers,
-                method: "GET",
-            });
+        // Deliberately un-caught: a rejection here means the endpoint was
+        // unreachable, and nothing about the session is known — including for
+        // `adoptResolvedSubject`, which must not run on a non-answer.
+        const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+            credentials: "include",
+            headers,
+            method: "GET",
+        });
 
-            if (!response.ok) {
-                // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
-                return null;
-            }
-
-            // better-auth returns `{ user, session }` when authenticated and
-            // `null` (or an empty body) when not. Narrow defensively.
-            const body: { user?: User } | null = await response.json();
-            // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
-            const user = body?.user ?? null;
-
-            this.adoptResolvedSubject(requestToken, user);
-
-            return user;
-        } catch {
-            // eslint-disable-next-line unicorn/no-null -- network/parse failure ⇒ treat as signed out
+        if (!response.ok) {
+            // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
             return null;
         }
+
+        // better-auth returns `{ user, session }` when authenticated and
+        // `null` (or an empty body) when not. Narrow defensively.
+        const body: { user?: User } | null = await response.json();
+        // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
+        const user = body?.user ?? null;
+
+        this.adoptResolvedSubject(requestToken, user);
+
+        return user;
     }
 
     /**
@@ -3774,6 +3796,7 @@ class LunoraClient {
 
             if (subscriptionState.callbacks.size === 0) {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
+                this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
             }
         };
@@ -4534,6 +4557,15 @@ class LunoraClient {
                     idempotencyKey: `${this.clientId}:${String(outboxMutationId)}`,
                     identity: issuingIdentity,
                     mutationId: outboxMutationId,
+                    // The only signal that can take this write's predicted value
+                    // back off the screen: the drop below leaves it displayed, and
+                    // the permanent verdict is reached out of band, in the sink's
+                    // replay. Omitted when there is nothing to roll back.
+                    ...(optimisticRollbacks.length > 0 && {
+                        onRejected: () => {
+                            rollbackOptimistic(optimisticRollbacks);
+                        },
+                    }),
                     shardKey,
                 });
             } catch (error) {
@@ -4545,7 +4577,9 @@ class LunoraClient {
             // The unified outbox (a `@lunora/db` app) manages its own optimistic
             // overlays via the checkpoint watermark; a raw per-call optimistic layer
             // can't be cursor-confirmed through this path, so drop it now (confirm
-            // with no cursor) rather than leak it onto every later frame.
+            // with no cursor) rather than leak it onto every later frame. The value
+            // stays on screen, as it should for a durably queued write — the
+            // `onRejected` handle above is what removes it if the replay dies.
             for (const confirm of optimisticConfirms) {
                 confirm(undefined);
             }
@@ -4795,6 +4829,36 @@ class LunoraClient {
     private dropCacheSeed(key: string): void {
         this.cacheSeededQueries.delete(key);
         this.hydratedQueryCache.delete(key);
+    }
+
+    /**
+     * Hand a cache-seeded entry back to {@link hydratedQueryCache} when its last
+     * subscriber detaches, so the NEXT `subscribe()` of the same key can seed
+     * from it again.
+     *
+     * Without this the hydrated cache was one-shot per key: {@link takeHydratedCache}
+     * consumes the entry, the final unsubscribe drops the state that held its
+     * value, and nothing re-seeds. Navigating away from a route and back while
+     * offline therefore rendered `undefined` for the rest of the offline
+     * session even though the durable store still held the rows. React hid it
+     * behind TanStack's `gcTime`; every other adapter showed it immediately.
+     *
+     * Only a seed still listed in {@link cacheSeededQueries} moves — a server
+     * frame calls {@link dropCacheSeed}, which clears both maps, so an entry
+     * that is still here has not been superseded and is the freshest value this
+     * client has for the key. That is the same map-to-map move
+     * {@link revokeCacheSeededValues} makes, and it keeps the two maps disjoint:
+     * an entry is either on display or waiting, never both.
+     */
+    private returnCacheSeed(key: string): void {
+        const entry = this.cacheSeededQueries.get(key);
+
+        if (entry === undefined) {
+            return;
+        }
+
+        this.cacheSeededQueries.delete(key);
+        this.hydratedQueryCache.set(key, entry);
     }
 
     /**
@@ -6938,6 +7002,18 @@ class LunoraClient {
      * `/get-session` round trip later — which offline never completes at all.
      * Without it the durable read cache never seeded for a bearer-token app.
      *
+     * All three want a credential this client actually HOLDS, which is why a
+     * **cookie session seeds nothing on an offline cold start** — a documented
+     * limitation, not a gap. The cookie is `HttpOnly`: the client can neither
+     * read it nor prove it still has it, and offline the `/get-session` that
+     * would resolve the subject never answers, so such entries (stamped
+     * `subj:<id>`, no credential) have nothing to match. Seeding them on the
+     * remembered subject LABEL would hand the rows to whoever opens the browser
+     * profile with nothing evidencing they are that subject, and revoking on a
+     * later mismatch does not repair it: that check can only run once
+     * connectivity returns, which is exactly the state where the offline seed
+     * was not needed. Offline-first reads require a bearer token.
+     *
      * Case 1 is suspended while the subject awaits re-confirmation
      * ({@link subjectAwaitingReconfirm}): the fingerprint then labels a
      * credential nothing has checked it against, which is precisely the
@@ -7101,7 +7177,7 @@ class LunoraClient {
      * instead of the flush guard discarding them as a mismatch.
      *
      * That map alone was not enough: it is consumed and DELETED on the first
-     * flush attempt (`passesReplayIdentityGate`), while the queue entry and its
+     * flush attempt (`replayIdentityVerdict`), while the queue entry and its
      * persisted record keep the original stamp. So a reload, or a requeue after a
      * transient failure, fell back to the old token hash — and once the token had
      * been refreshed, `isSameCredentialUnderTokenHash` no longer recognised it
@@ -7182,11 +7258,11 @@ class LunoraClient {
      * (see `queuedOfflineShardKeys`). Used on a FOLLOWER tab when the
      * mirrored leader status transitions to `"connected"` — a follower has no
      * per-shard `ShardConnection` reconnect event to hang the usual
-     * single-shard `flushOfflineQueue(shardKey)` call off of (see the
-     * `handleConnect` call site), so this walks every shard that might have
-     * something queued instead. Flushing an already-empty shard is a cheap
-     * no-op (`flushOfflineQueue` returns immediately once `drain` yields
-     * nothing), so over-inclusion here is harmless.
+     * single-shard `flushOfflineQueue(shardKey)` call off of (see the `onOpen`
+     * callback that calls `flushOfflineQueue(shardKey)`), so this walks every
+     * shard that might have something queued instead. Flushing an already-empty
+     * shard is a cheap no-op (`flushOfflineQueue` returns immediately once
+     * `drain` yields nothing), so over-inclusion here is harmless.
      */
     private flushAllOfflineQueues(): void {
         for (const shardKey of this.queuedOfflineShardKeys) {
@@ -7623,7 +7699,7 @@ class LunoraClient {
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     captureBookmark: true,
                     // The id that queued the write, not the live session's — see the
-                    // `clientId` stamp in `enqueueOffline`.
+                    // `clientId` stamp in `enqueueOfflineMutation`.
                     clientId: item.clientId ?? this.clientId,
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {

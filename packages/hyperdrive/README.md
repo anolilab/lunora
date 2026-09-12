@@ -42,7 +42,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 >
 > Hyperdrive talks to a database **Lunora does not own**. That breaks two invariants the rest of Lunora relies on:
 >
-> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on OCC retry / subscription re-evaluation) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
+> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on subscription re-evaluation; an OCC conflict surfaces as a `409` to the caller, not an internal retry) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
 > 2. **Non-reactive.** External writes do **not** flow through the Durable-Object / SQLite change-feed, so **Lunora live queries and subscriptions will NOT re-run** when an external Postgres/MySQL row changes. There is no honest way to make external writes reactive here.
 >
 > Use Hyperdrive to _read/write your existing DB from an action_. It is the **wrong** tool for "make my Postgres reactive". If you want external data to be reactive, write a **projection** of it into a `defineSchema` DO/D1 table from the action — that write _is_ tracked.

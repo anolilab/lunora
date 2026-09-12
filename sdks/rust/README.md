@@ -66,14 +66,18 @@ client.offline_queue = OfflineQueue::new()
     .with_persistence(Box::new(my_store))
     .with_version("v2");
 
+// Read the query back before the write borrows the client mutably.
+let listed = client.query_value("messages:list", &list_args, None).cloned();
+
 let outcome = client.submit(
     SubmitOptions::new("messages:send", args)
-        // Layered onto every subscription registered under the same (path, args,
-        // shard). An `Arc`, because each of those gets its own layer and each
-        // rebases independently onto its own base.
-        .with_optimistic(Arc::new(|current| append_pending(current)))
-        // A constant override for a differently-named query.
-        .with_optimistic_query("messages:unread", list_args, WireValue::Number(4.0)),
+        // Constant overrides that NAME the queries this write affects — the
+        // general form. (`with_optimistic` takes a transform instead, but layers
+        // it onto subscriptions registered under the write's OWN path and args:
+        // the shorthand for a counter or a document by id, and a no-op for a
+        // `send`/`list` pair.)
+        .with_optimistic_query("messages:list", list_args, append_pending(listed))
+        .with_optimistic_query("messages:unread", unread_args, WireValue::Number(4.0)),
 )?;
 
 if outcome.status == MutationStatus::Queued {

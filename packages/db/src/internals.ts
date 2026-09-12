@@ -112,6 +112,39 @@ export const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collect
 /** One-time dev signal when the sink runs against an executor without a carrier. */
 let warnedMissingCarrier = false;
 
+/**
+ * `idempotencyKey` → the client's optimistic rollback for that write.
+ *
+ * Lives beside the sink rather than in the transaction metadata because it is a
+ * closure over live subscription state: metadata is serialized to survive a
+ * reload, and after a reload there is no optimistic layer left to roll back
+ * anyway. Entries are taken (and dropped) by the replay handler the moment the
+ * write reaches a terminal verdict, so nothing accumulates for writes that
+ * commit.
+ */
+const outboxRejections = new Map<string, () => void>();
+
+/** Register a write's rollback, if it carries one. Called by the sink on enqueue. */
+const rememberOutboxRejection = (mutation: OutboxMutation): void => {
+    if (mutation.onRejected) {
+        outboxRejections.set(mutation.idempotencyKey, mutation.onRejected);
+    }
+};
+
+/**
+ * Take (and forget) a write's optimistic rollback. Call it on EVERY terminal
+ * outcome — invoke the result on a permanent rejection, discard it on a commit —
+ * so the map holds only writes still awaiting a verdict. `undefined` for a write
+ * that carried no optimistic update, or one whose verdict already landed.
+ */
+export const takeOutboxRejection = (idempotencyKey: string): (() => void) | undefined => {
+    const onRejected = outboxRejections.get(idempotencyKey);
+
+    outboxRejections.delete(idempotencyKey);
+
+    return onRejected;
+};
+
 /** Tuning for {@link createExecutorOutboxSink}. */
 export interface ExecutorOutboxSinkOptions {
     /** Max persisted-but-unconfirmed writes before `enqueue` rejects with `OFFLINE_QUEUE_OVERFLOW` (default 1000, matching `OfflineQueue`). */
@@ -150,6 +183,11 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 
                 return Promise.reject(error);
             }
+
+            // Held in memory (not in `metadata`, which is serialized): the replay
+            // handler invokes it if this write is ever permanently rejected, so the
+            // optimistic value it painted doesn't outlive the write.
+            rememberOutboxRejection(mutation);
 
             const metadata: OutboxMutationMetadata = {
                 args: mutation.args,

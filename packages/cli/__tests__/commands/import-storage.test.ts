@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runImportCommand } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const sha256Hex = (bytes: string): string => createHash("sha256").update(bytes).digest("hex");
@@ -682,7 +683,7 @@ describe("lunora import --with-storage", () => {
             verify: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(logs.error.join("\n")).toContain("requires --with-storage");
     });
 
@@ -787,7 +788,7 @@ describe("lunora import --with-storage", () => {
                 [flag]: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(worker.imported).toHaveLength(0);
             expect(logs.error.join("\n")).toContain("requires a Convex export directory");
         });
@@ -970,7 +971,7 @@ describe("lunora import --with-storage", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -1040,7 +1041,7 @@ describe("lunora import --with-storage", () => {
                 verify: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(logs.error.join("\n")).toContain("--include-file-storage");
         });
 

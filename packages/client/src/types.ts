@@ -209,6 +209,19 @@ export interface OutboxMutation {
     identity: string | null;
     /** Monotonic per-client mutation id, backing the server `__client_watermark`. */
     mutationId: number;
+
+    /**
+     * Roll this write's optimistic patch back. The sink's owner invokes it when
+     * the replay reaches a PERMANENT verdict (a coded rejection, an identity
+     * drop) — never on a transient failure it will retry, and never on success.
+     *
+     * Without it a rejected replay leaves its predicted value on screen until an
+     * unrelated frame or a reload: the client drops the layer when it hands the
+     * write over (it cannot cursor-confirm through this path) and has no other
+     * signal that the write died. Absent when the write carried no optimistic
+     * update, and safe to ignore — a sink that never calls it behaves as before.
+     */
+    onRejected?: () => void;
     shardKey?: string;
 }
 

@@ -5,27 +5,13 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyCommandData } from "../../src/commands/verify/handler";
+import { execute, runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyOptions } from "../../src/commands/verify/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
-
-/** Run async `body` while capturing everything written to `process.stdout`. */
-const captureStdout = async (body: () => Promise<void>): Promise<string> => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        await body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -491,54 +477,67 @@ describe("lunora verify", () => {
         });
 
         describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", async () => {
+            it("emits a single parseable JSON envelope with the structured result", async () => {
                 expect.assertions(5);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                const { logger } = recordingLogger();
 
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; errors: unknown[]; warnings: unknown[]; wranglerPath: unknown };
-
-                expect(parsed.code).toBe(0);
-                expect(Array.isArray(parsed.errors)).toBe(true);
-                expect(Array.isArray(parsed.warnings)).toBe(true);
-                expect(parsed).toHaveProperty("wranglerPath");
-                expect(parsed.errors).toEqual([]);
+                expect(code).toBe(0);
+                expect(document?.code).toBe(0);
+                expect(Array.isArray(document?.data?.warnings)).toBe(true);
+                expect(document?.data).toHaveProperty("wranglerPath");
+                expect(document?.data?.errors).toEqual([]);
             });
 
-            it("serializes errors into the JSON document on failure", async () => {
-                expect.assertions(2);
+            /**
+             * A failure has to answer in the same shape a success does. Before the
+             * envelope, a failed command put NOTHING on stdout under `--format
+             * json` — the exit code said "it broke" and the reason existed only as
+             * English prose on stderr, which is exactly what the flag exists to
+             * avoid.
+             */
+            it("emits the envelope on failure too, with the reason in it", async () => {
+                expect.assertions(4);
 
                 // No wrangler.jsonc → validation error.
-                const { logger } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; errors: string[] };
-
-                expect(parsed.code).toBe(1);
-                expect(parsed.errors.length).toBeGreaterThan(0);
+                expect(code).toBe(1);
+                expect(document?.code).toBe(1);
+                expect(document?.data?.errors.length).toBeGreaterThan(0);
+                expect(document?.error).toBeDefined();
             });
 
-            it("rejects an unknown --format the same way logs does", async () => {
-                expect.assertions(3);
+            /**
+             * `runVerifyCommand` returns for an unresolved `--target` before it
+             * reaches its reporting tail, so this is the path a serialization
+             * written inside the command body would have skipped.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
 
-                const { logger, recorded } = recordingLogger();
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-                const stdout = await captureStdout(async () => {
-                    const result = await runVerifyCommand({ cwd: workdir, format: "yaml", logger, typecheck: false });
-
-                    expect(result.error).toBeDefined();
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope", typecheck: false },
                 });
 
-                expect(stdout).toBe("");
-                expect(recorded.errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.errors.join(" ")).toContain("unknown deploy target");
             });
         });
     });

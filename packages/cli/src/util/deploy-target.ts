@@ -34,7 +34,7 @@ const TARGET_OPTION = {
 
 /**
  * Resolve and validate a target, reshaped to the return-an-error idiom the CLI
- * handlers already use (see `validateOutputFormat`) rather than throwing.
+ * handlers already use (see `parseOutputFormat`) rather than throwing.
  *
  * The throwing form is right for `@lunora/config`, whose callers differ; inside
  * a handler it forces a try/catch around what is otherwise a flat sequence of
