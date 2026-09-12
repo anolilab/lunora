@@ -156,22 +156,22 @@ second schema to keep in sync: the validator is the contract on both ends.
 
 ## Common validators
 
-| Validator              | Accepts                       | Notes                                    |
-| ---------------------- | ----------------------------- | ---------------------------------------- |
-| `v.string()`           | `string`                      | UTF-8 text                               |
-| `v.number()`           | `number`                      | Finite JS number; `NaN` throws           |
-| `v.boolean()`          | `boolean`                     | `true` / `false`                         |
-| `v.null()`             | `null`                        | Only `null`                              |
-| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1         |
-| `v.bytes()`            | `ArrayBuffer` / `Uint8Array`  | Binary (BLOB in D1)                      |
-| `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                   |
-| `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal |
-| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                        |
-| `v.object(shape)`      | `{ ...shape }`                | Extra keys: stripped in, rejected out    |
-| `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
-| `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
-| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
-| `v.any()`              | anything                      | Escape hatch; disables runtime checks    |
+| Validator              | Accepts                       | Notes                                                                        |
+| ---------------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| `v.string()`           | `string`                      | UTF-8 text                                                                   |
+| `v.number()`           | `number`                      | Finite JS number; `NaN` throws                                               |
+| `v.boolean()`          | `boolean`                     | `true` / `false`                                                             |
+| `v.null()`             | `null`                        | Only `null`                                                                  |
+| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1                                             |
+| `v.bytes()`            | `ArrayBuffer`                 | Binary (BLOB in D1); pass `u8.buffer` for a `Uint8Array`                     |
+| `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                                                       |
+| `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal                                     |
+| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                                                            |
+| `v.object(shape)`      | `{ ...shape }`                | Extra keys: stripped in, rejected out                                        |
+| `v.union(a, b, ...)`   | any member                    | First member that parses wins (declaration order); no discriminant fast-path |
+| `v.record(key, value)` | `Record<key, value>`          | Map-style object                                                             |
+| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                                                       |
+| `v.any()`              | anything                      | Escape hatch; disables runtime checks                                        |
 
 Compose them freely for both columns and function contracts:
 `v.array(v.object({ ... }))`, `v.union(v.literal("a"),

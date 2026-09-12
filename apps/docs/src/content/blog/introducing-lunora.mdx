@@ -107,7 +107,6 @@ cursors: defineTable({
     y: v.number(),
 })
     .shardBy("roomId") // one Durable Object per room or tenant
-    .global() // geo-replicated reads at the edge
     .index("by_room", ["roomId"]),
 ```
 
