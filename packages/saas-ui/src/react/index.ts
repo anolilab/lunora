@@ -15,6 +15,8 @@ export type { BillingPanelProps, GatedProps, PricingTableProps } from "./billing
 export { BillingPanel, Gated, PricingTable } from "./billing";
 export type { OverviewProps } from "./overview";
 export { OverviewStats } from "./overview";
+export type { PresenceBarProps } from "./presence";
+export { PresenceBar } from "./presence";
 export type { CardProps, EmptyProps, FieldErrorProps } from "./primitives";
 export { Card, Empty, FieldError } from "./primitives";
 export type { ProjectsCardProps } from "./projects";

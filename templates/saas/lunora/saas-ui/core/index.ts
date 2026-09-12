@@ -19,6 +19,8 @@ export { dayKey, initials, planLabel, relativeTime } from "./format";
 export { errorCode, mapError, MESSAGES } from "./map-error";
 export type { StatTile } from "./overview";
 export { deriveOverviewStats, isFirstRun } from "./overview";
+export type { PresenceMemberLike, Roster, RosterEntry } from "./presence";
+export { presenceRoster, presenceSummary } from "./presence";
 export { createProjectFormController, NAME_MAX_LENGTH, validateName } from "./project-form";
 export type { ProjectSort, ProjectsView } from "./projects";
 export { DEFAULT_VIEW, projectCounts, selectProjects } from "./projects";
