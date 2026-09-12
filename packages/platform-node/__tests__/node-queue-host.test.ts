@@ -421,4 +421,36 @@ describe("createNodeQueueHost", () => {
 
         second.close();
     });
+
+    it("refuses a message or a batch over Cloudflare's byte ceilings", async () => {
+        expect.hasAssertions();
+
+        const jobs = defineQueue<{ blob: string }>({ handler: () => undefined, maxBatchTimeout: 0 });
+        const host = createNodeQueueHost(freshDatabase(), { onBatch: () => undefined, queues: { jobs } });
+
+        // `@lunora/queue`'s producer leaves both caps to the platform rather than
+        // serializing every body a second time to measure them. Left unchecked
+        // here, a producer works all through development and fails on its first
+        // deploy — which is the divergence the emulated rating exists to rule out.
+        await expect(host.bindings.jobs.send({ blob: "z".repeat(300_000) })).rejects.toThrow(/over the Cloudflare Queues ceiling of 131072/u);
+
+        // Ten messages each under the per-message cap, whose batch is not.
+        await expect(
+            host.bindings.jobs.sendBatch(
+                Array.from({ length: 10 }, () => {
+                    return { body: { blob: "z".repeat(40_000) } };
+                }),
+            ),
+        ).rejects.toThrow(/over the Cloudflare Queues ceiling of 262144/u);
+
+        // Nothing was written by either — the batch is one transaction, and the
+        // single send never reached the insert.
+        await expect(host.poll()).resolves.toBe(0);
+
+        // A body that fits still goes through, so the guard is a ceiling and not
+        // a wall.
+        await host.bindings.jobs.send({ blob: "z".repeat(1000) });
+
+        await expect(host.poll()).resolves.toBe(1);
+    });
 });
