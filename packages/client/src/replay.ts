@@ -272,6 +272,7 @@ const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefi
 
 export {
     AUTH_REPLAY_ERROR_CODES,
+    defaultReplayRetryDelayMs,
     isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
