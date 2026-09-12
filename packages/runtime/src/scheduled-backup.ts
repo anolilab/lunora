@@ -387,8 +387,11 @@ const runScheduledBackup = async (
         chunks.push(chunk);
     };
 
-    // An error from the export (including the size guard) propagates out of
-    // here, so no partial object and no manifest is ever written.
+    // An error from the export propagates out of here, so no partial object and
+    // no manifest is ever written. That covers the size guard above AND a shard
+    // the fan-out could not reach — which `streamExportRows` raises rather than
+    // skipping, precisely so a snapshot missing a shard's rows never gets a
+    // manifest vouching for it.
     await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
 
     const prefix = normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX);

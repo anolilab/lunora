@@ -102,6 +102,26 @@ describe("orchestrateExport", () => {
 
         expect(visited).toEqual(new Set(["c1", "c2", "c3"]));
     });
+
+    it("still reaches the default shard for a root table once another table has registered keys", async () => {
+        expect.assertions(1);
+
+        // `users` is a plain root-DO table: the registry has no entry for it and
+        // never will, so its keys resolve to the default shard. `messages` is
+        // `.shardBy()`-ed and registered. Unioning first and falling back only on
+        // an empty union dropped the default shard the moment ANY table had a
+        // key, so every root-table row was missing from a whole-deployment export.
+        const registry = createStaticShardRegistry({ messages: ["c1"], users: [] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy(() => json({ result: { rows: [] } }));
+
+        await coordinator.orchestrateExport(spy.namespace, { defaultShardKey: "__root__", tables: ["users", "messages"] });
+
+        const visited = new Set(spy.calls.map((c) => c.shardKey));
+
+        expect(visited).toEqual(new Set(["__root__", "c1"]));
+    });
 });
 
 describe("orchestrateImport", () => {
