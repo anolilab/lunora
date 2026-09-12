@@ -55,6 +55,7 @@
 import { env } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
+import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
 
 import { SUBSCRIPTIONS_TABLE } from "./schema.js";
@@ -64,7 +65,21 @@ import { SUBSCRIPTIONS_TABLE } from "./schema.js";
  * the billing-portal return URL. Read from env rather than the request: a Lunora
  * context carries no `Request` (a mutation can be replayed, a query re-run from
  * a live subscription), so there is nothing to derive an origin from at handler
- * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. The first is what puts it on the generated env
+ * TYPE — `CloudflareBindings` is built from wrangler's config, so a var that
+ * lives only in `.dev.vars` reaches the running Worker and not the
+ * type-checker, and reading it here is a `TS7053`. The second supplies the value
+ * locally, and wins over `vars` under `wrangler dev`.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
  */
 const appOrigin = (): string => {
     const value = env["APP_BASE_URL"];
@@ -152,10 +167,57 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
     return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
 });
 
+/*
+ * Column readers for the raw `subscriptions` row. `ctx.db` hands back
+ * `Record<string, unknown>`, and a bare `row["x"] as string` types a MISSING
+ * column as `string` while handing the client `undefined` — so a row written
+ * before a column existed reaches a screen as a non-string claiming to be one.
+ * These narrow instead of asserting, and an absent optional column reads back as
+ * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
+ */
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? (row[column] as string) : "");
+
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined =>
+    typeof row[column] === "number" ? (row[column] as number) : undefined;
+
+const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
+    const value = row[column];
+
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+};
+
+/**
+ * What a billing screen reads. A hand-rolled projection rather than
+ * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
+ * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
+ * here has to be kept in step with `packages/payment/src/schema.ts` by hand.
+ */
 interface SubscriptionRow {
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    /** Start of the billing period metered usage is summed over. Without it a client falls back to `createdAt` and shows LIFETIME usage against a per-period limit. */
+    currentPeriodStart?: number;
+    /** The PRIMARY price id — `priceIds[0]`. For display; match plans against `priceIds`. */
+    priceId: string;
+
+    /**
+     * EVERY price id the subscription bills. This — not `priceId` — is what a plan
+     * lookup tests membership in, mirroring `hasActivePrice`: a Stripe subscription
+     * is a list of items, so a base plan alongside an add-on or a metered price has
+     * a `priceId` naming only one of them.
+     *
+     * Absent on rows written by the webhook path (which carries one price id);
+     * read it as `priceIds ?? [priceId]`.
+     */
+    priceIds?: string[];
+    /** Which provider's row this is. Load-bearing while two providers coexist during a migration. */
+    provider: string;
     providerSubscriptionId: string;
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
+    quantity: number;
     referenceId: string;
-    state: string;
+    state: SubscriptionState;
 }
 
 /**
@@ -184,9 +246,16 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .collect();
 
     return rows.map((row) => ({
-        providerSubscriptionId: row["providerSubscriptionId"] as string,
-        referenceId: row["referenceId"] as string,
-        state: row["state"] as string,
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
     }));
 });
 

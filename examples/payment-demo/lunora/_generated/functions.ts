@@ -126,7 +126,7 @@ export interface Caller {
     billing: {
         apiCallsRemaining: (args?: {}) => Promise<{ allowed: boolean; balance?: number; }>;
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
-        mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        mySubscriptions: (args?: {}) => Promise<{ cancelAtPeriodEnd: boolean; currentPeriodEnd?: number; currentPeriodStart?: number; priceId: string; priceIds?: string[]; provider: string; providerSubscriptionId: string; quantity: number; referenceId: string; state: string }[]>;
         portal: (args?: {}) => Promise<{ url: string; }>;
         processWebhook: (args: { body: string; headers: Record<string, string> }) => Promise<{ applied: boolean; status: number; }>;
         recordApiCall: (args?: {}) => Promise<{ recorded: boolean; }>;

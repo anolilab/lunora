@@ -13,6 +13,7 @@ This:
 1. Adds `@lunora/payment`, `@lunora/server`, and `stripe` to your `package.json` (run `pnpm install` afterwards).
 2. Copies `lunora/payment/schema.ts` (the payment tables to declare) and `lunora/payment/index.ts` (the `checkout` / `track` / `check` / `portal` / `mySubscriptions` / `processWebhook` functions) into your project — these are **yours** to edit.
 3. Scaffolds `APP_BASE_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` into `.dev.vars`.
+4. Declares `APP_BASE_URL` in your `wrangler.jsonc` `vars` (an empty value you fill in — see §4). Your existing `vars` are kept; a key you already set is left alone and the skip is reported.
 
 ## 1. Declare the payment tables — do this first
 
@@ -102,13 +103,28 @@ Answer with `webhookResponse`, never `Response.json(result)`: only the JSON payl
 
 ## 4. Set the env vars
 
-| Var                     | Secret | Notes                                                                                                                       |
-| ----------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `APP_BASE_URL`          | no     | Public origin of the deployment, e.g. `https://app.example.com`. Builds the checkout success/cancel and portal return URLs. |
-| `STRIPE_SECRET_KEY`     | yes    | Stripe secret key (`sk_test_…` in test mode).                                                                               |
-| `STRIPE_WEBHOOK_SECRET` | yes    | Stripe webhook signing secret (`whsec_…`) for your `/payment/webhook` endpoint.                                             |
+| Var                     | Secret | Notes                                                                                                                                                                          |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `APP_BASE_URL`          | no     | var (`.dev.vars` **and** `wrangler.jsonc` `vars`). Public origin of the deployment, e.g. `https://app.example.com`. Builds the checkout success/cancel and portal return URLs. |
+| `STRIPE_SECRET_KEY`     | yes    | Stripe secret key (`sk_test_…` in test mode).                                                                                                                                  |
+| `STRIPE_WEBHOOK_SECRET` | yes    | Stripe webhook signing secret (`whsec_…`) for your `/payment/webhook` endpoint.                                                                                                |
 
 `APP_BASE_URL` is read from env rather than derived from the request because a Lunora context carries no `Request` — a mutation can be replayed and a query re-run from a live subscription, so there is no request to read an origin from at handler time.
+
+It is declared in **two** places, and both are load-bearing:
+
+- **`wrangler.jsonc` `vars`** is what puts it on the generated env _type_. Binding types come from wrangler's config, so a var living only in `.dev.vars` reaches the running Worker and not the type-checker, and reading it is a `TS7053`. If it still errors after `wrangler types`, your `tsconfig.json`'s `include` is missing the generated `worker-configuration.d.ts` — that file is where every binding type lives.
+- **`.dev.vars`** is what supplies the value locally, and it takes precedence over `vars` under `wrangler dev`.
+
+If you deploy with a **named wrangler environment** (`wrangler deploy --env
+production`), set `APP_BASE_URL` inside that `env.<name>.vars` block, not only at
+the top level. Cloudflare does not inherit bindings into a named environment —
+"Bindings, such as `vars` or `kv_namespaces`, are not inheritable and need to be
+defined explicitly" — and `lunora registry add` writes the top-level block
+because it has no way to know which environments a project uses. A top-level-only
+value is simply absent under `--env production`, so `appOrigin()` throws there.
+
+The item ships the `vars` entry **empty on purpose**. `vars` is deployed configuration, so a committed `http://localhost:…` placeholder would be consumed only in production — the one place it is wrong — and `checkout` would hand Stripe a `success_url` pointing at the customer's own machine. Empty instead means `appOrigin()` throws its actionable error, and `lunora deploy` blocks any loopback `var` before it ships. **Set it to your public origin before deploying.**
 
 Then run `lunora codegen` to wire `ctx.payments` onto `ActionCtx`.
 

@@ -5,11 +5,6 @@ import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 
-interface SubscriptionRow {
-    providerSubscriptionId: string;
-    state: string;
-}
-
 /**
  * Demo UI: enter a Stripe price id, click Subscribe → the `checkout` action
  * returns a hosted-checkout URL and `CheckoutButton` redirects to it. The
@@ -20,7 +15,11 @@ export const App = (): ReactElement => {
     const client = useLunora();
     const [priceId, setPriceId] = useState("price_123");
 
-    const subscriptions = useQuery(api.billing.mySubscriptions, {}) as SubscriptionRow[] | undefined;
+    // No cast and no local row type: `api` carries the query's return type, so
+    // `subscriptions` infers end to end from the server. A hand-written mirror
+    // behind an `as` is free to drift from what the handler actually returns —
+    // which is the one thing this framework is supposed to make impossible.
+    const subscriptions = useQuery(api.billing.mySubscriptions, {});
 
     return (
         <main style={{ fontFamily: "system-ui", margin: "0 auto", maxWidth: 480, padding: 24 }}>
@@ -39,6 +38,8 @@ export const App = (): ReactElement => {
                     {subscriptions.map((subscription) => (
                         <li key={subscription.providerSubscriptionId}>
                             {subscription.providerSubscriptionId} — {subscription.state}
+                            {/* Outranks `state`: a subscription can be `active` AND ending. */}
+                            {subscription.cancelAtPeriodEnd ? " (cancels at period end)" : ""}
                         </li>
                     ))}
                 </ul>

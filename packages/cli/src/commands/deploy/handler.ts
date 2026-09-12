@@ -365,20 +365,23 @@ const readWranglerShape = (cwd: string, environment?: string): WranglerD1Shape |
 };
 
 /**
- * Worker-origin `vars` that must resolve to the deployed worker's public URL.
- * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
- * scheduled-job dispatch and reverse cross-shard relations (both
- * `LUNORA_ORIGIN_URL`) and auth callbacks (`AUTH_URL`) silently break in
- * production.
+ * Every IPv4 loopback address, not just `127.0.0.1`: the whole `127.0.0.0/8`
+ * block is loopback (RFC 1122), so `127.0.0.2` is exactly as unreachable from a
+ * deployed Worker. Matched as a dotted quad rather than a `"127."` prefix,
+ * because `127.example.com` is a routable DNS name and must not be blocked.
+ *
+ * The shorter numeric spellings need no pattern of their own — `new URL()`
+ * canonicalises them for http(s), so `127.1`, `0x7f.1` and `2130706433` all
+ * arrive here as `127.0.0.1`.
  */
-const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "AUTH_URL"] as const;
+const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
 
-/** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
+/** True when a URL string resolves to a loopback host (localhost / 127.0.0.0/8 / ::1). */
 const isLocalhostUrl = (value: string): boolean => {
     try {
         const { hostname } = new URL(value);
 
-        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+        return hostname === "localhost" || IPV4_LOOPBACK.test(hostname) || hostname === "::1" || hostname === "[::1]";
     } catch {
         return false;
     }
@@ -1245,6 +1248,8 @@ const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployComma
  * D1-placeholder hard-block. Returns the error message, or `undefined` when
  * clean (or when wrangler.jsonc is absent/unparseable — the validator handles
  * that).
+ *
+ * Checks every `var`, not a named subset — see the filter below.
  */
 const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy", environment?: string): string | undefined => {
     const variables = readWranglerShape(cwd, environment)?.vars;
@@ -1253,7 +1258,17 @@ const checkLocalhostOriginVariables = (cwd: string, logger: Logger, command: Pre
         return undefined;
     }
 
-    const offenders = ORIGIN_VAR_NAMES.filter((name) => typeof variables[name] === "string" && isLocalhostUrl(variables[name]));
+    // Every `var` whose value is a loopback URL, not a list of known names: the
+    // invariant is a property of the VALUE (a deployed Worker cannot reach
+    // loopback, whatever the var is called), and the allowlist this replaces had
+    // already gone stale — it covered `LUNORA_ORIGIN_URL` and `AUTH_URL` while
+    // `APP_BASE_URL` and `PUBLIC_STORAGE_BASE_URL` shipped localhost defaults
+    // past it. A name list has to be extended by whoever adds the next origin
+    // var, which is exactly the person who doesn't know this gate exists.
+    const offenders = Object.entries(variables)
+        .filter(([, value]) => typeof value === "string" && isLocalhostUrl(value))
+        .map(([name]) => name)
+        .toSorted((a, b) => a.localeCompare(b));
 
     if (offenders.length === 0) {
         return undefined;

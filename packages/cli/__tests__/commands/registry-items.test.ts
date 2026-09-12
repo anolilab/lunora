@@ -69,6 +69,15 @@ const REQUIRED_BINDING_FIELDS: Record<string, ReadonlyArray<string>> = {
     send_email: ["name"],
 };
 
+/**
+ * Binding kinds that are a NAME→VALUE map rather than resource entries: the key
+ * IS the binding name, so there is no per-entry field wrangler could require and
+ * {@link REQUIRED_BINDING_FIELDS} has nothing to say about them. Listed here
+ * rather than keyed to `[]` there so that map keeps one meaning and its "unknown
+ * binding kind" branch keeps its teeth for a kind nobody has thought about.
+ */
+const MAP_SHAPED_BINDINGS = new Set(["vars"]);
+
 /** Bindings whose scaffolded value omits something wrangler requires. */
 const bindingsMissingRequiredFields = (): string[] => {
     const offenders: string[] = [];
@@ -76,6 +85,11 @@ const bindingsMissingRequiredFields = (): string[] => {
     for (const { manifest, name } of manifests) {
         for (const binding of manifest.bindings ?? []) {
             const kind = binding.path[0] ?? "";
+
+            if (MAP_SHAPED_BINDINGS.has(kind)) {
+                continue;
+            }
+
             const required = REQUIRED_BINDING_FIELDS[kind];
 
             if (required === undefined) {
@@ -260,14 +274,16 @@ describe("shipped registry items", () => {
         expect(messages.some((message) => message.includes("binding DB already exists"))).toBe(true);
     });
 
-    it("self-describing bindings (ai/browser/images) are single objects, not arrays", () => {
+    it("object-shaped bindings (ai/browser/images/vars) are single objects, not arrays", () => {
         expect.assertions(1);
 
         // Cloudflare's `ai`/`browser`/`images` bindings are single objects
-        // (`{ "binding": "NAME" }`), unlike list bindings such as `r2_buckets`.
-        // Wrapping one in an array writes a wrangler.jsonc wrangler rejects on
-        // dev/deploy — guard every shipped item against that shape.
-        const selfDescribing = new Set(["ai", "browser", "images"]);
+        // (`{ "binding": "NAME" }`), and `vars` is a name→value map — unlike list
+        // bindings such as `r2_buckets`. Wrapping one in an array writes a
+        // wrangler.jsonc wrangler rejects on dev/deploy, and `mergedBindingValue`
+        // takes its array branch and appends, so the damage is a config that no
+        // longer loads for the WHOLE Worker. Guard every shipped item.
+        const selfDescribing = new Set(["ai", "browser", "images", ...MAP_SHAPED_BINDINGS]);
         const offenders: string[] = [];
 
         for (const name of itemNames) {
