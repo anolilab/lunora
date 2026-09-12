@@ -14,7 +14,9 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev:server": "wrangler dev",
-        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit"
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
     },
     "dependencies": {
         "@better-auth/expo": "catalog:auth",
