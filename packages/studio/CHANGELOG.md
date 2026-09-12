@@ -1,3 +1,18 @@
+## @lunora/studio [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.177...@lunora/studio@1.0.0-alpha.178) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.130
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+* **@lunora/react:** upgraded to 1.0.0-alpha.107
+* **@lunora/notify:** upgraded to 1.0.0-alpha.57
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
 ## @lunora/studio [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.176...@lunora/studio@1.0.0-alpha.177) (2026-09-12)
 
 
