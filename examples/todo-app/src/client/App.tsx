@@ -8,9 +8,13 @@ import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
 /**
  * Tiny CRUD demo: list + create + toggle + delete, with optimistic updates.
  *
- * The `optimistic` callback on each mutation paints the new list state
+ * The `optimisticUpdate` callback on each mutation paints the new list state
  * immediately; if the server rejects the call the runtime rolls the cache
- * back automatically.
+ * back automatically. It names `api.todos.list` because that is the query the
+ * write affects — `add`/`toggle`/`remove` are different functions, and no
+ * client can infer which queries a write changes. (The per-call `optimistic`
+ * shortcut patches only a subscription on the mutation's own reference and
+ * args, which is not this shape.)
  */
 export const App = (): ReactElement => {
     const [draft, setDraft] = useState("");
@@ -34,8 +38,8 @@ export const App = (): ReactElement => {
         await add(
             { text },
             {
-                optimistic: (current) => {
-                    const list = (current as Doc<"todos">[] | undefined) ?? [];
+                optimisticUpdate: (store) => {
+                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
                     const provisional: Doc<"todos"> = {
                         _id: `optimistic_${Date.now()}` as Id<"todos">,
                         _creationTime: Date.now(),
@@ -44,7 +48,7 @@ export const App = (): ReactElement => {
                         createdAt: Date.now(),
                     };
 
-                    return [provisional, ...list];
+                    store.setQuery(api.todos.list, {}, [provisional, ...list]);
                 },
             },
         );
@@ -54,16 +58,20 @@ export const App = (): ReactElement => {
         await toggle(
             { id: todo._id, done: !todo.done },
             {
-                optimistic: (current) => {
-                    const list = (current as Doc<"todos">[] | undefined) ?? [];
+                optimisticUpdate: (store) => {
+                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
 
-                    return list.map((entry) => {
-                        if (entry._id !== todo._id) {
-                            return entry;
-                        }
+                    store.setQuery(
+                        api.todos.list,
+                        {},
+                        list.map((entry) => {
+                            if (entry._id !== todo._id) {
+                                return entry;
+                            }
 
-                        return { ...entry, done: !entry.done };
-                    });
+                            return { ...entry, done: !entry.done };
+                        }),
+                    );
                 },
             },
         );
@@ -73,10 +81,14 @@ export const App = (): ReactElement => {
         await remove(
             { id: todo._id },
             {
-                optimistic: (current) => {
-                    const list = (current as Doc<"todos">[] | undefined) ?? [];
+                optimisticUpdate: (store) => {
+                    const list = (store.getQuery(api.todos.list, {}) as Doc<"todos">[] | undefined) ?? [];
 
-                    return list.filter((entry) => entry._id !== todo._id);
+                    store.setQuery(
+                        api.todos.list,
+                        {},
+                        list.filter((entry) => entry._id !== todo._id),
+                    );
                 },
             },
         );
