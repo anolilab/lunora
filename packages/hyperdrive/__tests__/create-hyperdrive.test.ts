@@ -184,9 +184,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                 const driver = postgres(connectionString, { max: 1 });
 
                 try {
-                    // postgres.js's `unsafe` takes a narrower params type than the structural
-                    // projection; the runtime shape is exactly PostgresJsLike.
-                    const sql = fromPostgresJs(driver as unknown as PostgresJsLike);
+                    const sql = fromPostgresJs(driver);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM todos WHERE id = $1", ["t1"])).resolves.toEqual([{ title: "ship hyperdrive" }]);
@@ -298,8 +296,11 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                     await connection.query("CREATE TABLE hyperdrive_roundtrip (id VARCHAR(16) PRIMARY KEY, title TEXT NOT NULL)");
                     await connection.query("INSERT INTO hyperdrive_roundtrip (id, title) VALUES ('m1', 'ship hyperdrive')");
 
-                    // mysql2's overloaded `execute` doesn't structurally match the
-                    // projection, but the runtime shape is exactly Mysql2Like.
+                    // Still cast, and deliberately: mysql2 types `execute`'s second
+                    // argument as a single `ExecuteValues` — a union of scalars,
+                    // arrays and records — which relates to the projection's
+                    // `ReadonlyArray<unknown>` in NEITHER direction, so the method
+                    // syntax that fixed postgres.js cannot reach it. See Mysql2Like.
                     const sql = fromMysql2(connection as unknown as Mysql2Like);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
