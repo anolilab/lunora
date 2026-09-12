@@ -552,7 +552,14 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkRowArgs
     //
     // Same shape as `parseBulkPatchArgs` refusing an empty `doc` two functions
     // below, rather than treating it as a no-op.
-    if ((filters === undefined || filters.length === 0) && (search === undefined || search === "")) {
+    //
+    // `search` is tested TRIMMED because the reader normalises it the same way
+    // (`options.search?.trim() ?? ""`): a blank-but-not-empty term compiles to no
+    // search conjunct at all, so it would walk past a raw `=== ""` guard and run
+    // the predicate-free scan — a full `clearTable` recorded under the
+    // `deleteRows` audit verb. A guard that tests the raw value while the reader
+    // normalises it is not a guard.
+    if ((filters === undefined || filters.length === 0) && (search === undefined || search.trim() === "")) {
         throw new LunoraError("BAD_REQUEST", "deleteRows: a predicate (`filters` or `search`) is required — use `clearTable` to empty the table");
     }
 

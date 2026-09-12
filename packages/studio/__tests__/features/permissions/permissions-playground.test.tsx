@@ -33,6 +33,9 @@ const runAsServer =
         return answer();
     };
 
+/** An error shaped like the one `LunoraClient` rebuilds from the server's `{ code, message }` envelope. */
+const coded = (code: string, message: string): Error => Object.assign(new Error(message), { code });
+
 const renderPlayground = (mock: MockClientHooks, runAsIdentity: boolean): ReactElement => (
     <LunoraProvider client={mock.asClient}>
         <PermissionsPlayground functions={FUNCTIONS} runAsIdentity={runAsIdentity} />
@@ -67,12 +70,14 @@ describe("permissionsPlayground", () => {
         expect(screen.getByTestId("pp-result").textContent).toContain("doc_1");
     });
 
-    it("renders the denied outcome when the probe throws", async () => {
+    it("renders the denied outcome when the probe is refused by a policy", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient({
             query: runAsServer(() => {
-                throw new Error("not authorized");
+                // What `rls(...)` throws on a denied read/write, carried to the client
+                // as the machine `code` on the rebuilt error.
+                throw coded("FORBIDDEN", `read on "documents" denied by policy`);
             }),
         });
 
@@ -86,8 +91,53 @@ describe("permissionsPlayground", () => {
         expect(denied.textContent).toContain("Denied");
 
         await waitFor(() => {
-            expect(screen.getByTestId("pp-denied").textContent).toContain("not authorized");
+            expect(screen.getByTestId("pp-denied").textContent).toContain("denied by policy");
         });
+    });
+
+    it("renders Errored — never Denied — for a failure that is not an access verdict", async () => {
+        expect.assertions(3);
+
+        // A malformed query, an unregistered path, a throw inside the handler: the
+        // dispatch failed, which says nothing about whether the rule would have let
+        // this identity through. Painting it as a denial is the screen built to
+        // verify access reporting a verdict it does not have.
+        const mock = createMockClient({
+            query: runAsServer(() => {
+                throw new Error("unknown function: list");
+            }),
+        });
+
+        render(renderPlayground(mock, true));
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        const errored = await screen.findByTestId("pp-outcome-errored");
+
+        expect(errored.textContent).toContain("Errored");
+        expect(screen.getByTestId("pp-errored").textContent).toContain("unknown function");
+        expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
+    });
+
+    it("does not mistake an unrelated 403 for a verdict on the probed identity", async () => {
+        expect.assertions(2);
+
+        // `ADMIN_FORBIDDEN` is the admin bearer gate refusing the STUDIO, not the
+        // policy refusing the forged user — same status, opposite meaning.
+        const mock = createMockClient({
+            query: runAsServer(() => {
+                throw coded("ADMIN_FORBIDDEN", "admin access forbidden");
+            }),
+        });
+
+        render(renderPlayground(mock, true));
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        await expect(screen.findByTestId("pp-outcome-errored")).resolves.toBeDefined();
+        expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
     });
 
     it("does not dispatch — and never claims Denied — when no identity is supplied", async () => {

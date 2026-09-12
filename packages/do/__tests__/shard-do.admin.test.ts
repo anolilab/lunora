@@ -3459,6 +3459,25 @@ describe("shardDO admin bulk delete", () => {
         expect(remaining.page).toHaveLength(3);
     });
 
+    it("refuses a whitespace-only search, which the reader trims back to no predicate", async () => {
+        expect.assertions(2);
+
+        // The reader normalises `search` with `.trim()`, so a blank-but-not-empty
+        // term compiles to NO search conjunct — a predicate-free scan that empties
+        // the table while the audit log records it as `deleteRows`. The guard has
+        // to normalise the same way the reader does, or the two disagree and the
+        // one that wins is the destructive one.
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { search: "   ", table: "todos" }));
+
+        expect(response.status).toBe(400);
+        expect(rowCount()).toBe(3);
+    });
+
     it("maps an unknown table to a 404", async () => {
         expect.assertions(1);
 
