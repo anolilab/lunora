@@ -34,6 +34,7 @@ import type {
     MigrationIR,
     MutatorIR,
     QueueIR,
+    RelationIR,
     RlsMetadataIR,
     SchemaIR,
     ShapeIR,
@@ -2946,6 +2947,15 @@ interface EmittedColumn {
      * "clear this field" control that then writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to — what
+     * the writer actually does to this row when the referenced parent is deleted.
+     * Absent when the column is not an FK, or when the schema declared no action.
+     * Carried so the studio's delete preview can name the real behaviour instead
+     * of reporting every edge as undeclared.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert: declared `v.optional(...)` or carrying a `.default(...)`. */
     optional: boolean;
     /** Primary key — the runtime-minted `_id` column. */
@@ -3017,12 +3027,21 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
  * One column's emitted metadata. Split out of {@link buildTableColumns} so the
  * per-field decisions read on their own rather than nested two loops deep.
  */
-const buildColumn = (field: string, validator: ValidatorIR): EmittedColumn => {
+const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: ReadonlyMap<string, RelationIR["onDelete"]>): EmittedColumn => {
     const resolved = unwrapOptional(validator);
     const column: EmittedColumn = { name: field, optional: isOptionalOnInsert(validator), type: resolved.kind };
 
     if (resolved.kind === "id" && resolved.tableName !== undefined) {
         column.ref = resolved.tableName;
+
+        // The declared delete behaviour lives on the table's relation, not on the
+        // validator. Without it the studio's delete preview cannot tell a cascade
+        // from a restrict and reports every FK as "no delete action declared".
+        const onDelete = onDeleteByField.get(field);
+
+        if (onDelete !== undefined) {
+            column.onDelete = onDelete;
+        }
     }
 
     if (resolved.kind === "storage") {
@@ -3060,8 +3079,14 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
             ...(table.commitOrdered === true ? [{ name: "_commitSeq", optional: false, type: "number" } satisfies EmittedColumn] : []),
         ];
 
+        // `one` relations are the ones whose FK column lives on THIS table, so
+        // only those map a local field to a declared delete action.
+        const onDeleteByField = new Map<string, RelationIR["onDelete"]>(
+            table.relations.filter((relation) => relation.kind === "one").map((relation) => [relation.field, relation.onDelete]),
+        );
+
         for (const [field, validator] of Object.entries(table.shape)) {
-            columns.push(buildColumn(field, validator));
+            columns.push(buildColumn(field, validator, onDeleteByField));
         }
 
         byTable[table.name] = columns;
@@ -5423,7 +5448,18 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
 const LUNORA_TABLE_COLUMNS: Record<
     string,
-    Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
+    Array<{
+        bucket?: string;
+        enumValues?: string[];
+        isStorage?: boolean;
+        name: string;
+        nullable?: boolean;
+        onDelete?: "cascade" | "restrict" | "set null";
+        optional: boolean;
+        pk?: boolean;
+        ref?: string;
+        type: string;
+    }>
 > = ${JSON.stringify(tableColumns, undefined, 4)};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
@@ -5810,9 +5846,18 @@ ${shardInitOverride}
             return LUNORA_TTL_SWEEPS;
         }
 
-        protected override tableColumns(
-            table: string,
-        ): Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        protected override tableColumns(table: string): Array<{
+            bucket?: string;
+            enumValues?: string[];
+            isStorage?: boolean;
+            name: string;
+            nullable?: boolean;
+            onDelete?: "cascade" | "restrict" | "set null";
+            optional: boolean;
+            pk?: boolean;
+            ref?: string;
+            type: string;
+        }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 
