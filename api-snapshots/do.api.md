@@ -83,6 +83,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ```ts
 interface QueryReadScope {
     footprint: ReadFootprint;
+    markIpRead: () => void;
     tracker: DependencyTracker;
 }
 ```
@@ -315,6 +316,7 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
@@ -447,7 +449,7 @@ abstract class ShardDO {
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
-    protected isQueryFunction(_functionPath: string): boolean;
+    protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;

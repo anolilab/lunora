@@ -845,6 +845,21 @@ interface QueryAttribution {
 interface QueryReadScope {
     /** Range footprint for this dispatch — the `onReadRange` channel. */
     footprint: ReadFootprint;
+
+    /**
+     * Record that this dispatch's handler read `ctx.ip` — the ambient-read
+     * channel, and the reason the generated `buildCtx` exposes `ip` as a getter
+     * rather than a plain field.
+     *
+     * `ctx.ip` is per-request state of exactly the kind the cache's identity
+     * discriminator exists to separate, but unlike userId/claims it cannot be
+     * folded in blind: keying every entry by caller address would shard the
+     * cache per client for the overwhelming majority of queries that never read
+     * it. So {@link ShardDO.runCachedQuery} keys on it only for a `functionPath`
+     * some dispatch has been observed reading it through — this mark is that
+     * observation.
+     */
+    markIpRead: () => void;
     /** Dependency tracker for this dispatch — the `onRead` channel. */
     tracker: DependencyTracker;
 }
@@ -996,6 +1011,20 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
  * dispatch rather than a timer.
  */
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
+
+/**
+ * The encoded caller context of a plain anonymous request: no userId, no identity
+ * claims, no address in the key, and not a trusted system dispatch. The one
+ * context {@link ShardDO.runCachedQuery} maps onto `reactiveCacheKey`'s documented
+ * `null` bucket.
+ *
+ * Written as the encoding of a whole caller object rather than as a conjunction
+ * of field tests, so that a member added to the caller context and not mirrored
+ * here fails by no longer matching — every caller then gets its own bucket,
+ * which costs hit rate and leaks nothing.
+ */
+// eslint-disable-next-line unicorn/no-null -- mirrors the caller object `runCachedQuery` encodes, where absent fields serialize as null
+const ANONYMOUS_CALLER = stableStringify({ claims: null, ip: null, system: false, userId: null });
 
 /**
  * The refusal a paid (`.x402`) procedure gets on a socket. The paywall lives at
@@ -1395,6 +1424,21 @@ abstract class ShardDO {
      * on the first call.
      */
     protected readonly reactiveCache: ReactiveCache | undefined;
+
+    /**
+     * Function paths a dispatch has been observed reading `ctx.ip` through, and
+     * whose reactive-cache entries are therefore keyed by the caller's address
+     * as well as by identity — see the discriminator {@link ShardDO.runCachedQuery}
+     * builds.
+     *
+     * Learned at runtime rather than declared, because the honest signal is the
+     * property read itself: a handler may reach `ctx.ip` through a helper, and a
+     * source scan that missed one would leave the cache serving one caller's
+     * address to another. Marking is monotone and per-path, so it can only ever
+     * over-key. Its lifetime is the instance's, the same as the cache it guards,
+     * so a restart clears both together.
+     */
+    protected readonly ipKeyedFunctionPaths: Set<string> = new Set<string>();
 
     /**
      * Running read tallies for the shape-poke path, surfaced next to
@@ -2923,12 +2967,13 @@ abstract class ShardDO {
      * MUTATING caller's IP and hand it to every subscriber. Those paths take the
      * socket's own IP by value instead, via {@link SubscriptionIdentity.ip}.
      *
-     * Owning the FIELD is not the same as owning the value: `runCachedQuery`'s
-     * reactive-cache key folds userId + claims and not `ip`, so under
-     * `.reactiveCache(true)` an anonymous query reading `ctx.ip` can still be
-     * served one caller's answer for another. Pre-existing and tracked
-     * separately — noted so the next reader does not conclude this accessor is
-     * now safe everywhere.
+     * Under `.reactiveCache(true)` the memo is keyed by the caller's address as
+     * well as by identity, but only for function paths a dispatch has been seen
+     * reading `ctx.ip` through. That observation is the generated `buildCtx`'s
+     * `ip` GETTER calling {@link QueryReadScope.markIpRead} — so a subclass that
+     * surfaces this value to handlers by some other route, bypassing that
+     * getter, gets no mark and no address in the key, and two anonymous callers
+     * would share one entry again.
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
@@ -4771,7 +4816,7 @@ abstract class ShardDO {
 
     /**
      * Wrap a query handler in the reactive cache. The `/rpc` dispatch path calls
-     * this for every path {@link ShardDO.isQueryFunction} recognises, so a
+     * this for every path {@link ShardDO.isCacheableQuery} admits, so a
      * subclass does NOT wrap its own `handleRpc` — see the re-entry guard below
      * for why doing both would be worse than doing neither. When the cache is
      * configured we key by `(identity, functionPath, stable-stringified args)`,
@@ -4839,7 +4884,14 @@ abstract class ShardDO {
 
         const tracker = createDependencyTracker();
         const footprint = createReadFootprint();
-        const scope: QueryReadScope = { footprint, tracker };
+        let ipRead = false;
+        const scope: QueryReadScope = {
+            footprint,
+            markIpRead: () => {
+                ipRead = true;
+            },
+            tracker,
+        };
 
         // Detect a cache hit cheaply by diffing the cache's lifetime hit
         // counter across the `run` call — a hit means the callback (and thus
@@ -4849,21 +4901,62 @@ abstract class ShardDO {
         // whether the cache is even enabled.
         const hitsBefore = this.reactiveCache.stats().hits;
 
-        // Scope the cache entry to the caller's FULL identity — userId AND the
-        // identity claims (active-org/role/tenant) that RLS can key on — so a
-        // per-request claim that varies while userId stays constant never
-        // memoizes one context's rows for another caller sharing the same DO.
-        // An anonymous request (no userId, no claims) collapses to the `null`
-        // bucket. `stableStringify` canonicalizes key order, so equal identities
-        // yield equal discriminators (same guarantee the args encoding relies on).
-        const userId = this.getCurrentUserId();
-        const claims = this.getCurrentIdentity();
+        // Scope the cache entry to the caller's FULL context, resolved as ONE
+        // object on one pass over the per-request state. Everything a cache HIT
+        // would skip has to be in here, because a hit returns the stored result
+        // without ever running the callback: not just what the handler reads
+        // (userId, the RLS-keyable claims, the address) but what the GATES
+        // around it branch on. The emitted `handleRpc` refuses an `internal`
+        // function to a caller without the trusted-dispatch flag — and that
+        // check lives inside the callback, so leaving the flag out of the key
+        // let a cron-primed `internalQuery` entry be handed to an anonymous
+        // client verbatim.
+        //
+        // One object rather than a field-per-expression for the same reason the
+        // emitted `buildCtx` resolves its caller on a single discriminant:
+        // parallel per-field expressions are how a field comes to be forgotten.
+        // A fifth field belongs here and nowhere else.
+        //
+        // `ip` is the one member NOT read unconditionally. Folding the address
+        // in always would key every entry by caller, collapsing the hit rate for
+        // the overwhelming majority of queries that never touch `ctx.ip`: on the
+        // default single-`__root__`-DO topology one public list read by N
+        // anonymous visitors would become N entries instead of one. So it joins
+        // only for a `functionPath` some dispatch has been OBSERVED reading
+        // `ctx.ip` through — the generated `buildCtx` exposes `ip` as a getter
+        // that calls `scope.markIpRead`, recorded below once the handler ran.
+        //
+        // The dispatch that DISCOVERS the read is the one case the mark cannot
+        // precede: its own key was already computed without the address. It is
+        // still safe, because the mark lands before its entry is stored (the
+        // range fallback below runs inside `ReactiveCache.run`'s callback, and
+        // the store happens after that resolves), while every later dispatch
+        // computes its key and probes the cache in one synchronous stretch. A
+        // dispatch that can see the discovering entry therefore keyed on the
+        // address and cannot be looking under the key that entry sits at: the
+        // orphan is unreachable and simply ages out.
+        const caller = {
+            // eslint-disable-next-line unicorn/no-null -- absent fields serialize as null so the encoded shape stays canonical
+            claims: this.getCurrentIdentity() ?? null,
+            // eslint-disable-next-line unicorn/no-null -- as above
+            ip: (this.ipKeyedFunctionPaths.has(functionPath) ? this.getCurrentIp() : undefined) ?? null,
+            system: this.isSystemDispatch(),
+            // eslint-disable-next-line unicorn/no-null -- as above
+            userId: this.getCurrentUserId() ?? null,
+        };
+        // `stableStringify` canonicalizes key order, so equal contexts yield
+        // equal discriminators (the same guarantee the args encoding relies on).
+        // The plain anonymous caller keeps `reactiveCacheKey`'s documented `null`
+        // bucket — matched on the ENCODED string rather than field by field, so a
+        // member added above that nobody mirrors in `ANONYMOUS_CALLER` simply
+        // stops matching and every caller gets its own bucket: a hit-rate
+        // regression the tests catch, never a shared entry.
+        const encoded = stableStringify(caller);
         const identity =
-            userId === undefined && claims === undefined
+            encoded === ANONYMOUS_CALLER
                 ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
                   null
-                : // eslint-disable-next-line unicorn/no-null -- fold userId/claims into the discriminator; missing fields serialize as null so the shape stays canonical
-                  stableStringify({ claims: claims ?? null, userId: userId ?? null });
+                : encoded;
 
         // Wraps `run` so that, once the handler has actually executed and the
         // footprint is final, every table it touched that `footprint.ranges()`
@@ -4893,6 +4986,16 @@ abstract class ShardDO {
         // handler resolved but before either later step — lands in time.
         const runWithRangeFallback = async (): Promise<R> => {
             const result = await run(scope);
+
+            // Before the entry is stored, so the key every LATER dispatch of
+            // this path computes already carries the caller's address. See the
+            // discriminator comment above for why that ordering is what makes
+            // the discovering dispatch's own ip-less entry unreachable rather
+            // than servable.
+            if (ipRead) {
+                this.ipKeyedFunctionPaths.add(functionPath);
+            }
+
             const narrowed = footprint.ranges();
 
             for (const table of footprint.tables) {
@@ -5041,8 +5144,16 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether `functionPath` names a registered `query` — the only kind whose
-     * result may be memoized by the reactive cache.
+     * Whether `functionPath` may have its result memoized by the reactive cache.
+     *
+     * Named for the decision rather than for the `kind` lookup that mostly
+     * answers it, because the `kind` is not the whole test. A cache HIT returns
+     * the stored result without running the dispatch callback, so every gate
+     * inside that callback is skipped — including the emitted `handleRpc`'s
+     * refusal of an `internal` function to an untrusted caller. An
+     * `internalQuery` is a registered `query`, and classifying on kind alone let
+     * a cron-primed entry be served to an anonymous client. So a function the
+     * gate can refuse is not cacheable, whatever its kind.
      *
      * The base class has no function registry, so the default is `false`: the
      * conservative answer, since caching an `action` would skip its outbound
@@ -5051,7 +5162,7 @@ abstract class ShardDO {
      * lookup, which is what production dispatch uses.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
-    protected isQueryFunction(_functionPath: string): boolean {
+    protected isCacheableQuery(_functionPath: string): boolean {
         return false;
     }
 
@@ -6089,9 +6200,9 @@ abstract class ShardDO {
                 // decoded args are what get keyed (`stableWireKey` handles the
                 // `bigint`/bytes leaves), so two calls that differ only in wire
                 // encoding still share an entry. `runCachedQuery` is a pass-through
-                // when `reactiveCache` is undefined, but the kind lookup is skipped
-                // in that case so a cache-less shard pays nothing.
-                return this.reactiveCache !== undefined && this.isQueryFunction(payload.functionPath)
+                // when `reactiveCache` is undefined, but the cacheability lookup is
+                // skipped in that case so a cache-less shard pays nothing.
+                return this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
                     ? this.runCachedQuery(
                           payload.functionPath,
                           handlerArgs,

@@ -48,7 +48,7 @@ class AttributionShard extends ShardDO {
         return { ok: true };
     }
 
-    protected override isQueryFunction(): boolean {
+    protected override isCacheableQuery(): boolean {
         return this.reactiveCache !== undefined;
     }
 

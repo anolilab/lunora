@@ -60,8 +60,10 @@ describe("emitted executeStream identity", () => {
         // `getCurrentIp()` reads the per-request field a CONCURRENT dispatch owns.
         // A subscription refresh runs inside the writing dispatch's flush, before
         // its `endDispatch`, so reading it here would hand every subscriber the
-        // mutating caller's IP. The ctx takes the already-resolved value.
-        expect(literal).toContain("\n                ip,\n");
+        // mutating caller's IP. The ctx takes the already-resolved value — the
+        // getter (which marks the reactive-cache read scope) returns that local
+        // and nothing else.
+        expect(literal).toContain("\n                    return ip;\n                },\n");
         expect(literal.slice(0, literal.indexOf("\n            };"))).not.toContain("getCurrentIp");
         // One expression on one discriminant, resolving all three members
         // together — parallel per-field ternaries are how `ip` was forgotten.
