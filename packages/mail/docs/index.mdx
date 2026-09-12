@@ -94,6 +94,12 @@ Cloudflare Queue binding you passed as `queue`. React elements are NOT
 structured-cloneable, so the queue body always carries pre-rendered html/
 text, never the original JSX.
 
+Addresses, the subject and custom headers are validated before the enqueue, with
+the same checks `mailer.send(...)` applies — a message with no `to` recipient is
+rejected rather than accepted and left to fail on every consumer attempt. An empty
+`cc` / `bcc` array means "no recipients" and is treated exactly like omitting the
+field.
+
 A consumer Worker re-hydrates the payload and sends it with
 `consumeQueuedSend(mailer, body)` — it validates the untrusted message body, then
 calls `mailer.send(...)` for you and returns `{ id }`. Call `message.ack()` after
