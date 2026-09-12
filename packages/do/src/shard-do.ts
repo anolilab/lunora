@@ -2508,7 +2508,7 @@ abstract class ShardDO {
      *
      * A no-op seam here; the generated subclass overrides it, because running a
      * reactor needs two things the base cannot build — a ctx (for `select` and the
-     * handler) and a read footprint around it. Mirrors `runSubscription`, which
+     * handler) and a read footprint around it. Mirrors `executeSubscription`, which
      * has the identical shape for the socket-terminated side of reactivity.
      * @returns the run's digest and read footprint, or `undefined` when the path
      * resolves to nothing (a manifest naming a function this build does not have).
@@ -7880,7 +7880,7 @@ abstract class ShardDO {
                     // is the signal that a reactor is watching more than it needs to.
                     result: outcome.ran ? "ran" : "suppressed",
                     // The sentinel is stripped for the same reason the delta frame
-                    // strips it (see `pushSubscriptionDelta`): `tables` is persisted
+                    // strips it (see `pushSubscriptionData`): `tables` is persisted
                     // in `__reactor_state` and rendered as the reactor's watched-table
                     // list in the Studio, so a reactor that read `ctx.kv` would show an
                     // internal marker to an operator. Inert either way —
