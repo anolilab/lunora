@@ -1,3 +1,9 @@
+## @lunora/mail [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.80...@lunora/mail@1.0.0-alpha.81) (2026-09-12)
+
+### Bug Fixes
+
+* **mail:** correct empty recipient list handling ([#743](https://github.com/anolilab/lunora/issues/743)) ([e1e8c94](https://github.com/anolilab/lunora/commit/e1e8c944248ef5a0bb7fe10f6a6a741b4ac04ece))
+
 ## @lunora/mail [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.79...@lunora/mail@1.0.0-alpha.80) (2026-09-12)
 
 
