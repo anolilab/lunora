@@ -65,18 +65,18 @@ export const channelWelcome = defineWorkflow<
 The handler receives one argument bundling the durable-step API and a typed
 function caller:
 
-| Member                 | What it is                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------ |
-| `context.params`       | The input passed to `.create({ params })`, typed as `Params`.                                          |
-| `context.step`         | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                                  |
-| `context.run`          | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.            |
-| `context.runStep`      | Run a reusable, schema-validated `defineStep` as a durable step (see below).                           |
-| `context.parallel`     | Fan out branches as isolated child workflow instances and await their outputs (see below).             |
-| `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).               |
-| `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload. |
-| `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.    |
-| `context.event`        | The raw triggering event (`instanceId`, `payload`, `timestamp`, `workflowName`).                       |
-| `context.env`          | The Worker environment bindings.                                                                       |
+| Member                 | What it is                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `context.params`       | The input passed to `.create({ params })`, typed as `Params`.                                                                     |
+| `context.step`         | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                                                             |
+| `context.run`          | Call a Lunora function (`api.*`) by typed reference; `{ shardKey }` targets a shard, `{ dedupId }` overrides the replay-dedup id. |
+| `context.runStep`      | Run a reusable, schema-validated `defineStep` as a durable step (see below).                                                      |
+| `context.parallel`     | Fan out branches as isolated child workflow instances and await their outputs (see below).                                        |
+| `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).                                          |
+| `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload.                            |
+| `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.                               |
+| `context.event`        | The raw triggering event (`instanceId`, `payload`, `timestamp`, `workflowName`).                                                  |
+| `context.env`          | The Worker environment bindings.                                                                                                  |
 
 ### Durable steps
 
@@ -87,9 +87,11 @@ function caller:
 // result without re-running the callback.
 const order = await context.step.do("load", () => context.run(api.orders.get, { id: orderId }, { shardKey: orderId }));
 
-// Per-step retry policy.
+// Per-step retry policy. A raw `step.do` retries its callback IN PLACE, so a
+// call that writes needs an explicit `dedupId` — see "Exactly-once dispatches"
+// below, or reach for `context.runStep`, which pins one for you.
 await context.step.do("charge", { retries: { limit: 3, delay: "2 seconds", backoff: "exponential" }, timeout: "30 seconds" }, () =>
-    context.run(api.payments.charge, { orderId }),
+    context.run(api.payments.charge, { orderId }, { dedupId: `charge:${orderId}` }),
 );
 
 // Durable delays — minutes to weeks, not held in memory.
@@ -108,6 +110,39 @@ const approval = await context.step.waitForEvent<{ approved: boolean }>("await-a
     Steps must be **JSON-serialisable and idempotent**, the same determinism contract Cloudflare (and Convex) impose. A step body may run more than once on
     retry, so don't rely on side effects outside the step's return value.
 </Callout>
+
+### Exactly-once dispatches (`dedupId`)
+
+A workflow is a replay machine: a failed step body is retried in place, and the
+handler body itself re-executes from the top on every activation (after a
+`step.sleep`, a `waitForEvent`, an eviction). Every `context.run` on those paths
+is therefore issued more than once — so each one carries a deterministic
+**replay-dedup id**, which the shard applies as its `(identity, mutationId)`
+idempotency key. The same logical call re-issued on a retry or a replay resolves
+with the first application's result instead of applying again.
+
+Pinned for you on three surfaces:
+
+- top-level `context.run` in the handler body — stable across activations;
+- `context.run` inside a `context.runStep` body — stable across that step's retries;
+- `context.run` inside a step's `rollback` — stable across the rollback's own retries, and never shared with the forward call.
+
+Three paths are **not** covered, and stay at-least-once:
+
+- **A bare `context.run` inside a raw `context.step.do(...)` callback.** The pin
+  numbers calls in body order and cannot see that `step.do` is re-invoking its
+  callback in place, so attempt 2 issues a _new_ id. Use `context.runStep`, or
+  pass your own `{ dedupId }` (as in the `charge` example above).
+- **A body whose `context.run` order varies per attempt** — branching on
+  `Date.now()`, `Math.random()`, or unordered concurrent settles. The automatic
+  ids are positional, so pass your own.
+- **A replay more than 24 hours after the first attempt.** Dedup rows are pruned
+  past that window, so a workflow that sleeps for days re-dispatches on wake.
+
+The full guarantee applies to **mutations**, which take the dedup read under the
+shard's single-writer gate. An action or query gets the weaker form: a
+_sequential_ replay short-circuits, but two genuinely concurrent dispatches of
+one id can both miss the cache and both run.
 
 ### Declared events (`defineWorkflowEvent`)
 
@@ -212,6 +247,12 @@ The step handler context gives you `context.attempt` (1-based retry counter),
 `context.step` (`{ name, count }`). Pass
 `context.runStep(step, args, { config })` to override the step's durability
 config for a single call.
+
+Both `context.run`s above — the handler's and the rollback's — carry a pinned
+replay-dedup id, so a retried `charge` does not charge twice and a retried
+`refund` does not refund twice. See
+[Exactly-once dispatches](#exactly-once-dispatches-dedupid) for the paths that
+still need an explicit `dedupId`.
 
 ### Fan-out with child-DO isolation (`ctx.parallel` / `ctx.spawn`)
 
