@@ -109,6 +109,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["react", "framework adapter — installed per framework, not part of the base surface"],
     ["react-native", "framework adapter — installed per framework, not part of the base surface"],
     ["replica", "local-first replica runtime — installed directly by apps that opt into local mirrors"],
+    ["saas-ui", "internal, not published — distributed as the saas-ui-* registry items"],
     ["scheduler", "add-on — installed directly when used"],
     ["search-core", "internal, not published"],
     ["seed", "tooling — dev-time seeding, installed directly where used"],

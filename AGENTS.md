@@ -6,8 +6,8 @@ builders, one Durable Object per app by default, opt-in sharding
 (`.shardBy(key)`) and global replication (`.global()`), types inferred end to
 end from server to client.
 
-The repo is a pnpm monorepo of 55 packages — 52 published (`@lunora/*` plus the
-unscoped `lunorash` umbrella), 3 internal — orchestrated by `@visulima/vis`.
+The repo is a pnpm monorepo of 56 packages — 52 published (`@lunora/*` plus the
+unscoped `lunorash` umbrella), 4 internal — orchestrated by `@visulima/vis`.
 
 **Research the codebase before editing. Never change code you haven't read.**
 

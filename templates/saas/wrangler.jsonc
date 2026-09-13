@@ -1,0 +1,22 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "{{name}}",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [{ "binding": "DB", "database_name": "{{name}}-db", "database_id": "<replace-with-d1-create-id>" }],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    // The public origin the payment provider redirects back to. Declared here
+    // because `vars` is what types a key into `CloudflareBindings`, and EMPTY for
+    // the same reason the `payment` registry item ships it empty: `vars` is
+    // DEPLOYED configuration, so a committed `http://localhost:…` is read only in
+    // production, where it is wrong — `checkout` would succeed and hand the
+    // provider a `success_url` on the customer's own machine. Empty makes the
+    // failure loud and local to the deploy. Put the dev value in `.dev.vars`,
+    // which wins over this under `wrangler dev`.
+    "vars": { "APP_BASE_URL": "" },
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

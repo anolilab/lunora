@@ -1,0 +1,16 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["node"]
+        // No `outDir`/`rootDir`: this package is a source-of-truth synced into the
+        // registry (never built/published), so `lint:types` is `tsc --noEmit` only.
+        // Mirrors packages/auth-ui/tsconfig.json.
+    },
+    "include": ["src/**/*", "__tests__/**/*"],
+    // One program holds one `jsx` setting and cannot read `.svelte` at all, so the
+    // Svelte port has its own config checked by `svelte-check`. `lint:types` runs
+    // both, so every line that ships to a user is type-checked here.
+    "exclude": ["src/svelte/**", "__tests__/svelte/**"]
+}

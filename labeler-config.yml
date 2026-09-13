@@ -115,6 +115,9 @@
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"
+"package: saas-ui":
+    - changed-files:
+          - any-glob-to-any-file: "packages/saas-ui/**/*"
 "package: scheduler":
     - changed-files:
           - any-glob-to-any-file: "packages/scheduler/**/*"
