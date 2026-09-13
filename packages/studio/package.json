@@ -100,6 +100,7 @@
         "@lunora/mail": "1.0.0-alpha.84",
         "@lunora/notify": "1.0.0-alpha.60",
         "@lunora/runtime": "1.0.0-alpha.124",
+        "@lunora/shard-engine": "1.0.0-alpha.72",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
