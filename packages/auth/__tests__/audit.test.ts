@@ -60,6 +60,55 @@ describe("auth audit trail", () => {
             await expect(readAuthAuditLog(executor, { sinceSeq: 2 })).resolves.toHaveLength(1);
         });
 
+        /**
+         * `sinceSeq` is documented as a forward cursor, so walking it must reach
+         * every row. A lower bound combined with `ORDER BY seq DESC` returns the
+         * NEWEST rows above the bound instead — advancing to the highest `seq`
+         * seen then skips everything older, silently, and the walk terminates
+         * after one page.
+         */
+        it("walks every row when paging forward with sinceSeq", async () => {
+            expect.assertions(2);
+
+            for (let index = 1; index <= 25; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential appends model the real per-request write order
+                await appendAuthAuditEntry(executor, { event: `e${String(index)}`, outcome: "success", ts: index });
+            }
+
+            const seen: number[] = [];
+            let cursor = 0;
+
+            for (let page = 0; page < 10; page += 1) {
+                // eslint-disable-next-line no-await-in-loop -- a cursor walk is inherently sequential
+                const rows = await readAuthAuditLog(executor, { limit: 10, sinceSeq: cursor });
+
+                if (rows.length === 0) {
+                    break;
+                }
+
+                for (const row of rows) {
+                    seen.push(row.seq);
+                }
+
+                cursor = Math.max(...rows.map((row) => row.seq));
+            }
+
+            expect(seen).toHaveLength(25);
+            expect(seen.toSorted((a, b) => a - b)).toStrictEqual(Array.from({ length: 25 }, (_, index) => index + 1));
+        });
+
+        it("keeps the unpaged read newest-first (what the studio panel renders)", async () => {
+            expect.assertions(1);
+
+            await appendAuthAuditEntry(executor, { event: "first", outcome: "success", ts: 1 });
+            await appendAuthAuditEntry(executor, { event: "second", outcome: "success", ts: 2 });
+
+            await expect(readAuthAuditLog(executor, {})).resolves.toStrictEqual([
+                expect.objectContaining({ event: "second" }),
+                expect.objectContaining({ event: "first" }),
+            ]);
+        });
+
         it("returns [] on a never-audited database instead of throwing", async () => {
             expect.assertions(1);
 
@@ -287,6 +336,57 @@ describe("auth audit trail", () => {
 
             expect(buildAuditEntry({ path: "/api/auth/sign-in/social" })?.event).toBe("sign-in-initiated");
             expect(buildAuditEntry({ path: "/api/auth/sign-in/magic-link" })?.event).toBe("sign-in-initiated");
+        });
+
+        /**
+         * `@better-auth/sso`'s `/sign-in/sso` is a dispatch too — it answers
+         * `{ url, redirect: true }` and nobody is authenticated yet. Falling
+         * through to the `/sign-in/` substring branch recorded every SSO redirect
+         * mint as a completed, successful `sign-in` with no actor. Its completion
+         * is `/sso/callback/:providerId`, which the `/callback/` branch already
+         * classifies.
+         */
+        it("classifies the SSO sign-in dispatch as `sign-in-initiated`, not a completed `sign-in`", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ path: "/api/auth/sign-in/sso" })?.event).toBe("sign-in-initiated");
+            expect(buildAuditEntry({ path: "/api/auth/sso/callback/okta" })?.event).toBe("sign-in");
+        });
+
+        /**
+         * SAML completes at the assertion consumer service, not at a `/callback/`
+         * path — `/sso/saml2/sp/acs/:providerId` runs the whole validate-and-issue
+         * pipeline and calls `setSessionCookie`. Matching neither the `/callback/`
+         * substring nor any other branch, it classified as `undefined` and the one
+         * endpoint that issues a SAML session was not recorded at all.
+         */
+        it("classifies the SAML assertion consumer service as a completed `sign-in`", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/acs/okta" })?.event).toBe("sign-in");
+            // The SP metadata document is a public config read, not a sign-in.
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/metadata" })?.event).toBeUndefined();
+        });
+
+        /**
+         * Both SAML logout endpoints terminate the local session — the
+         * SP-initiated `/sso/saml2/logout/:providerId` and the IdP-initiated
+         * receiver `/sso/saml2/sp/slo/:providerId` each call `deleteSession`
+         * plus `deleteSessionCookie` before redirecting. Neither ends in
+         * `/sign-out`, so both went unrecorded: the trail showed the SAML
+         * sign-in and then nothing, leaving a reader unable to tell "still
+         * signed in" from "we stopped watching".
+         */
+        it("classifies both SAML logout endpoints as `sign-out`", () => {
+            expect.assertions(4);
+
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/logout/okta" })?.event).toBe("sign-out");
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/slo/okta" })?.event).toBe("sign-out");
+
+            // Neighbouring SSO reads must not be dragged in by the substrings:
+            // provider config is not a session event.
+            expect(buildAuditEntry({ path: "/api/auth/sso/providers" })?.event).toBeUndefined();
+            expect(buildAuditEntry({ path: "/api/auth/sso/saml2/sp/metadata" })?.event).toBeUndefined();
         });
 
         it("classifies every sign-in COMPLETION endpoint as `sign-in` (previously unrecorded)", () => {

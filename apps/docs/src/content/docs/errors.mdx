@@ -277,7 +277,7 @@ The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER
 
 This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).
 
-Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`).
+Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`).
 
 ### `EMAIL_UNDELIVERABLE`
 
