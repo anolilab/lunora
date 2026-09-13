@@ -1,3 +1,4 @@
+import type { D1DatabaseLike } from "@lunora/d1";
 import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import Stripe from "stripe";
@@ -6,7 +7,9 @@ import { getAuth } from "./auth/index.js";
 import { defineApp } from "./_generated/app.js";
 
 interface Env extends Record<string, unknown> {
-    DB: unknown;
+    // Typed rather than `unknown`: `.global(...)` takes the binding itself, so an
+    // untyped `DB` is a TS2322 at the chain rather than a cast inside it.
+    DB: D1DatabaseLike;
     SHARD: ShardNamespaceLike;
     STRIPE_SECRET_KEY: string;
     STRIPE_WEBHOOK_SECRET: string;
