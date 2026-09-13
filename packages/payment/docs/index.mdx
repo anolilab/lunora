@@ -65,8 +65,10 @@ export const ShardDO = createShardDO({
             client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
-        // Override the default "caller owns the referenceId" rule for org/workspace keys.
-        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
+        // receives `env` only — there is no `ctx` in scope — so an org rule resolves membership from
+        // the reference itself, through a lookup you own.
+        // authorize: async (referenceId) => isMemberOfOrg(referenceId),
         entitlements: {
             plans: {
                 pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_123"] },

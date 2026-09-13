@@ -41,7 +41,7 @@ Declaring them inline is also what lets you chain `.global()` on a read-heavy ta
 
 ## 2. Wire the adapter
 
-In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`:
+In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`. The thunk receives `env` and nothing else — there is no `ctx` in scope — and the default authorizer already ties `referenceId` to `ctx.auth.userId`, so pass `authorize` only to express a different rule (an org or workspace key):
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
@@ -53,7 +53,6 @@ createShardDO({
             client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
-        authorize: (ref) => ref === ctx.auth.userId,
         entitlements: { plans: { pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_xxx"] } } },
     }),
 });
