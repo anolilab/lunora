@@ -151,25 +151,26 @@ the fetch is reproducible and tamper-evident; if the SHA can't be resolved
 (offline / rate-limited) it falls back to the ref itself with a one-line
 UNPINNED warning. Pass `-t` / `--template` to choose the starting point:
 
-| Value                  | Description                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `react`                | React SPA — official create-vite base + the Lunora layer (the default)               |
-| `vue`                  | Vue SPA — create-vite base + Lunora                                                  |
-| `solid`                | Solid SPA — create-vite base + Lunora                                                |
-| `solid-v2`             | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)               |
-| `svelte`               | Svelte SPA — create-vite base + Lunora                                               |
-| `next`                 | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker           |
-| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes                                 |
-| `tanstack-start-solid` | TanStack Start (Solid)                                                               |
-| `vinext`               | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental) |
-| `vinext-pages`         | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)      |
-| `react-router`         | React Router (v7, framework mode) — SSR composed into the Lunora worker              |
-| `astro`                | Astro (islands) — single-worker, Lunora composed into the adapter worker             |
-| `analog`               | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                          |
-| `nuxt`                 | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                  |
-| `sveltekit`            | SvelteKit — single-worker, Lunora composed into the adapter worker                   |
-| `expo`                 | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend               |
-| `standalone`           | Worker only — no frontend                                                            |
+| Value                  | Description                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `react`                | React SPA — official create-vite base + the Lunora layer (the default)                  |
+| `vue`                  | Vue SPA — create-vite base + Lunora                                                     |
+| `solid`                | Solid SPA — create-vite base + Lunora                                                   |
+| `solid-v2`             | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)                  |
+| `svelte`               | Svelte SPA — create-vite base + Lunora                                                  |
+| `next`                 | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker              |
+| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes                                    |
+| `saas`                 | SaaS kit — multi-tenant app on TanStack Start: organizations, projects, activity, admin |
+| `tanstack-start-solid` | TanStack Start (Solid)                                                                  |
+| `vinext`               | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)    |
+| `vinext-pages`         | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)         |
+| `react-router`         | React Router (v7, framework mode) — SSR composed into the Lunora worker                 |
+| `astro`                | Astro (islands) — single-worker, Lunora composed into the adapter worker                |
+| `analog`               | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                             |
+| `nuxt`                 | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                     |
+| `sveltekit`            | SvelteKit — single-worker, Lunora composed into the adapter worker                      |
+| `expo`                 | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend                  |
+| `standalone`           | Worker only — no frontend                                                               |
 
 The create-vite frameworks (`react`, `vue`, `solid`, `svelte`, plus
 `vanilla` via `--vite`) scaffold through the **overlay** engine (the official
