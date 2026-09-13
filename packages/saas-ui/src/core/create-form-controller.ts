@@ -55,6 +55,18 @@ interface FormOptions<TFields extends string> {
     onSubmit: (values: Record<TFields, string>) => Promise<unknown>;
     /** Called after a submit resolves without throwing. */
     onSuccess?: (values: Record<TFields, string>) => void;
+
+    /**
+     * Clear the fields after a successful submit, before `onSuccess` runs.
+     *
+     * Lives here because both ports otherwise hand-roll it, and each hand-rolls it
+     * badly: React has to close over the very `const` the hook is declaring (which
+     * React Compiler rejects — the binding is in TDZ when the factory runs), and
+     * Svelte reaches back through the store for the controller it just made. A
+     * form that empties itself after a create is form behaviour, so it belongs in
+     * the controller that owns the fields.
+     */
+    resetOnSuccess?: boolean;
 }
 
 const createFormController = <TFields extends string>(options: FormOptions<TFields>): FormController<TFields> => {
@@ -76,14 +88,16 @@ const createFormController = <TFields extends string>(options: FormOptions<TFiel
         return errors;
     };
 
+    const reset = (): void => {
+        store.set({ errors: {}, status: "idle", values: { ...initial } });
+    };
+
     return {
         destroy: () => {
             store.clear();
         },
         getState: store.get,
-        reset: () => {
-            store.set({ errors: {}, status: "idle", values: { ...initial } });
-        },
+        reset,
         setValue: (field, value) => {
             const state = store.get();
 
@@ -123,6 +137,11 @@ const createFormController = <TFields extends string>(options: FormOptions<TFiel
             }
 
             store.update({ status: "success" });
+
+            if (options.resetOnSuccess === true) {
+                reset();
+            }
+
             options.onSuccess?.(state.values);
 
             return true;

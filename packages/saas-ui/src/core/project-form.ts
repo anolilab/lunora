@@ -38,6 +38,9 @@ const createProjectFormController = (onCreate: (name: string) => Promise<unknown
         fields: { name: { validate: validateName } },
         onSubmit: async ({ name }) => onCreate(name.trim()),
         onSuccess,
+        // The field empties itself after a create, so neither port has to reach
+        // back for the controller it is in the middle of creating.
+        resetOnSuccess: true,
     });
 
 export { createProjectFormController, NAME_MAX_LENGTH, validateName };

@@ -96,6 +96,43 @@ describe("createFormController", () => {
         expect(onSuccess).toHaveBeenCalledWith({ name: "Website" });
     });
 
+    it("resetOnSuccess empties the fields before onSuccess runs", async () => {
+        expect.assertions(3);
+
+        // Ordering is the point: a caller reading state from onSuccess must see the
+        // cleared form, because that is what both view ports relied on when they
+        // hand-rolled this by calling reset() themselves.
+        const seen: string[] = [];
+        const form = createFormController({
+            fields: { name: { initial: "" } },
+            onSubmit: vi.fn(),
+            onSuccess: () => {
+                seen.push(form.getState().values.name);
+            },
+            resetOnSuccess: true,
+        });
+
+        form.setValue("name", "Website");
+
+        await expect(form.submit()).resolves.toBe(true);
+
+        expect(seen).toStrictEqual([""]);
+        expect(form.getState().values.name).toBe("");
+    });
+
+    it("keeps the submitted values when resetOnSuccess is not asked for", async () => {
+        expect.assertions(2);
+
+        // The default has to stay put: an edit form that emptied itself after save
+        // would look like it lost the record.
+        const form = createFormController({ fields: { name: { initial: "" } }, onSubmit: vi.fn() });
+
+        form.setValue("name", "Website");
+
+        await expect(form.submit()).resolves.toBe(true);
+        expect(form.getState().values.name).toBe("Website");
+    });
+
     it("reset restores the declared initial values", () => {
         const form = createFormController({ fields: { name: { initial: "Website" } }, onSubmit: vi.fn() });
 

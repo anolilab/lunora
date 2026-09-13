@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 
-import type { Plan, SubscriptionLike } from "../core";
-import { currentPlan, isEntitled, pricingRows, seatUsage, subscriptionNotice } from "../core";
+import type { Plan } from "../core/billing";
+import { currentPlan, isEntitled, pricingRows, seatUsage, subscriptionNotice } from "../core/billing";
+import type { SubscriptionLike } from "../core/types";
 import { Card, Empty } from "./primitives";
 
 interface PricingTableProps {

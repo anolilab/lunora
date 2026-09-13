@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 
-import type { ActivityRow } from "../core";
-import { groupActivityByDay, initials } from "../core";
+import type { ActivityRow } from "../core/types";
+import { groupActivityByDay } from "../core/activity";
+import { initials } from "../core/format";
 import { Card, Empty } from "./primitives";
 
 interface ActivityFeedProps {
