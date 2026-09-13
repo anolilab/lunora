@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.187...@lunora/codegen@1.0.0-alpha.188) (2026-09-13)
+
+### Bug Fixes
+
+* **codegen:** record table modifiers in the drift snapshot ([#751](https://github.com/anolilab/lunora/issues/751)) ([b8e9212](https://github.com/anolilab/lunora/commit/b8e92129ef721619405e1f4df274932fc28635a5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.138
+* **@lunora/agent:** upgraded to 1.0.0-alpha.116
+* **@lunora/container:** upgraded to 1.0.0-alpha.52
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/queue:** upgraded to 1.0.0-alpha.59
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.76
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.55
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/codegen [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.186...@lunora/codegen@1.0.0-alpha.187) (2026-09-13)
 
 ### Bug Fixes
