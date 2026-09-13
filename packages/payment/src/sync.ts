@@ -57,33 +57,70 @@ const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b)
  */
 const PRE_CAPTURE_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["authorized", "initiated"]);
 
+/** What {@link foldRefundOnce} resolved, plus the undo for the claim it minted. */
+interface RefundFold {
+    /** The action to apply — amount zeroed when this refund is already in the row. */
+    readonly action: WebhookAction;
+
+    /**
+     * Undo the claim this fold minted. Call it on any path that does NOT write the refund into the
+     * row, or the claim outlives the fold it stands for and the provider's retry books nothing.
+     */
+    readonly release: () => Promise<void>;
+}
+
+const noRelease = async (): Promise<void> => {};
+
 /**
- * The refund `action` still has to contribute, once what the facade already recorded is taken out.
+ * Book a DELTA provider's refund at most once, whoever reports it first.
  *
- * `refundPayment` folds the refund it issued into the row immediately — that ledger is what stops a
- * retry from issuing it twice — and leaves a marker. This event is that same money coming back: an
- * ABSOLUTE provider restates a cumulative total, which resolves to `max(...)` and is idempotent on
- * its own; a DELTA provider's event would add it a second time, so consume the marker and zero the
- * amount, leaving the event to carry only its state transition.
+ * A delta event carries one refund's own amount, so the sync layer ADDS it — which is only correct
+ * if each refund reaches this fold once. Two things break that:
  *
- * Test-and-consume, with the two primitives the claim store has: claiming reports whether a marker
- * was there, and releasing restores the unclaimed state either way — so a SECOND, genuinely separate
- * refund still counts. The marker is keyed on the provider's own refund id, which is what makes two
- * in-flight facade refunds of the SAME amount on one session distinguishable: each leaves its own
- * marker and each confirming event consumes only that one. The amount is the key only for a provider
- * that reports no refund id on either side, where the two would still collide.
+ * - `refundPayment` folds the refund it issued into the row immediately (that ledger is what stops a
+ *   retry from issuing it twice) and leaves a marker. The confirming webhook is that same money
+ *   coming back.
+ * - A provider can report ONE refund under more than one event id. Polar maps both `refund.created`
+ *   and `refund.updated` to a refund event, so a refund that reaches `succeeded` and is then touched
+ *   again (a dispute attaching to it, say) restates the same money under a fresh event id — which
+ *   the `markEventProcessed` dedupe cannot catch, because the event ids genuinely differ.
+ *
+ * Both are the same shape, so one marker answers both: claim `local-refund:<session>:id:<refundId>`
+ * and KEEP it. Whoever claims it first books the money, and every later restatement of that refund
+ * id zeroes its amount, carrying only its state transition. An ABSOLUTE provider (Stripe's
+ * cumulative `amount_refunded`) resolves to `max(...)` and is idempotent without any of this, so it
+ * is skipped.
+ *
+ * Without a provider refund id the key falls back to `(session, amount)`, which two genuinely
+ * distinct same-amount refunds SHARE — keeping that claim would swallow the second one. So that case
+ * keeps the old test-and-release behaviour: it still cancels the facade's own marker, and carries
+ * the collision documented on `localRefundKey` rather than dropping real money.
  */
-const withoutLocallyRecordedRefund = async (store: PaymentStore, action: WebhookAction, existing: PaymentSession | undefined): Promise<WebhookAction> => {
+const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existing: PaymentSession | undefined): Promise<RefundFold> => {
     if (!existing || !action.sessionId || !action.amount || action.amountKind === "absolute") {
-        return action;
+        return { action, release: noRelease };
     }
 
     const key = localRefundKey(action.sessionId, action.refundId, action.amount);
     const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
+    const zeroed: WebhookAction = { ...action, amount: zeroMoney(action.amount.currency) };
 
-    await store.releaseEvent(action.provider, key);
+    if (action.refundId === undefined) {
+        await store.releaseEvent(action.provider, key);
 
-    return unclaimed ? action : { ...action, amount: zeroMoney(action.amount.currency) };
+        return { action: unclaimed ? action : zeroed, release: noRelease };
+    }
+
+    if (!unclaimed) {
+        return { action: zeroed, release: noRelease };
+    }
+
+    return {
+        action,
+        release: async () => {
+            await store.releaseEvent(action.provider, key);
+        },
+    };
 };
 
 /**
@@ -150,7 +187,8 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const now = Date.now();
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
-    const effective = paymentAction === "refund" ? await withoutLocallyRecordedRefund(store, action, existing) : action;
+    const refund = paymentAction === "refund" ? await foldRefundOnce(store, action, existing) : undefined;
+    const effective = refund?.action ?? action;
 
     const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, effective) : paymentAction;
 
@@ -163,6 +201,11 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         // applies it once the capture lands. Dropping it would burn the event id and lose the refund
         // permanently — leaving a refunded customer entitled.
         const outOfOrder = paymentAction === "refund" && PRE_CAPTURE_STATES.has(fromState);
+
+        // Nothing is written, so the claim must not stand: an `orphaned` refund is retried once and
+        // has to book its money then, and an `illegal_transition` would leave a claim no event ever
+        // consumes. Same reason on the two paths below.
+        await refund?.release();
 
         return { applied: false, reason: outOfOrder ? "orphaned" : "illegal_transition" };
     }
@@ -189,20 +232,32 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         const prospective = refundedTotalFor(base, effective);
 
         if (!prospective) {
+            await refund?.release();
+
             return { applied: false, reason: "invalid_refund_amount" };
         }
 
         refundedAmount = prospective;
     }
 
-    await store.upsertPaymentSession({
-        ...base,
-        capturedAmount,
-        referenceId: action.referenceId ?? base.referenceId,
-        refundedAmount,
-        state: toState,
-        updatedAt: now,
-    });
+    try {
+        await store.upsertPaymentSession({
+            ...base,
+            capturedAmount,
+            referenceId: action.referenceId ?? base.referenceId,
+            refundedAmount,
+            state: toState,
+            updatedAt: now,
+        });
+    } catch (error) {
+        // The claim is taken before the row, because a concurrent restatement of the same refund must
+        // not double-count while this write is in flight. There is no transaction across the two, so a
+        // failed write would otherwise leave the claim standing, and the provider's retry — which the
+        // caller's rethrow triggers — would zero the amount and lose the refund entirely.
+        await refund?.release();
+
+        throw error;
+    }
 
     return { applied: true, reason: "ok" };
 };
