@@ -17,9 +17,9 @@
     "dependencies": {
         "@lunora/auth": "^0.0.0",
         "@lunora/d1": "^0.0.0",
-        "@lunora/errors": "alpha",
+        "@lunora/errors": "^0.0.0",
         "@lunora/mail": "^0.0.0",
-        "@lunora/payment": "alpha",
+        "@lunora/payment": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "@tanstack/react-query": "^5.101.0",
