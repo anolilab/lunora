@@ -1,9 +1,9 @@
 {
     "$schema": "../schema/registry-item.schema.json",
     "name": "saas",
-    "title": "SaaS kit — tenancy, activity, admin projection",
+    "title": "SaaS kit \u2014 tenancy, activity, admin projection",
     "description": "The framework-independent backend of the Lunora SaaS kit: per-tenant tables sharded by organizationId (projects, activity), a .global() organizations projection for the cross-tenant reads a shard cannot serve, an identity claim contract carrying the caller's active organization, and the queries/mutations the dashboard and admin run on. Identity itself stays in better-auth; this item never becomes a second source of truth for it.",
-    "docs": "Re-export lunora/saas/index.ts from your lunora/ entry so codegen emits api.saas.*. Then wire `resolveIdentity` in your Worker's createWorker(...) call to return { userId, activeOrganizationId, orgRole, appRole } from the better-auth session — the snippet is in lunora/identity.ts, and without it every org-scoped function fails closed with UNPROCESSABLE. Enable better-auth's organization() and admin() plugins in lunora/auth/index.ts, and call internal.saas.syncOrganization after an organization is created or renamed so the admin projection stays in step.",
+    "docs": "Re-export lunora/saas/index.ts from your lunora/ entry so codegen emits api.saas.*. Then wire `resolveIdentity` in your Worker's createWorker(...) call to return { userId, activeOrganizationId, orgRole, appRole } from the better-auth session \u2014 the snippet is in lunora/identity.ts, and without it every org-scoped function fails closed with UNPROCESSABLE. Enable better-auth's organization() and admin() plugins in lunora/auth/index.ts, and call internal.saas.syncOrganization after an organization is created or renamed so the admin projection stays in step. `saas_organizations` is a `.global()` table, so chain `.global({ d1: (env) => env.DB })` onto `defineApp()` beside `.shard(...)` \u2014 the `auth` item already declares that D1 binding, and without the chain every admin list and slug lookup throws INTERNAL at runtime while the types compile.",
     "requires": ["auth", "ratelimit"],
     "deps": {
         "@lunora/d1": "workspace:*",

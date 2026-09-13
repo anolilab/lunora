@@ -44,6 +44,11 @@ const ENTITLEMENTS = {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    // The D1 writer behind the `.global()` `saas_organizations` table. Omit it and
+    // the shard has no global backend, so every admin list and every slug lookup
+    // throws INTERNAL ("requires a globalDb writer") at runtime — with types that
+    // compiled fine. `DB` is the binding the `auth` item already declares.
+    .global({ d1: (env) => env.DB })
     .payment((env) => {
         const environment = env as unknown as Env;
 
