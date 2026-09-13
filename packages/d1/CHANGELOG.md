@@ -1,3 +1,42 @@
+## @lunora/d1 [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.119...@lunora/d1@1.0.0-alpha.120) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** a `v.literal(<bigint>)` column on a `.global()` table is now
+rejected by `defineSchema`, by the same guard that already rejects `v.bigint()`
+there. It used to be accepted and read back as key padding.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(d1): pin the value encodings on a real D1 database
+
+Every one of these assertions is about what an engine does to a bound value, and
+the `node:sqlite` harness cannot settle that on its own — it is a different
+SQLite build from the one workerd ships, and the whole defect class is a column
+whose declared affinity silently rewrites what is stored in it. So the column
+types D1 actually provisioned are asserted alongside the round-tripped values,
+both read back from the real binding.
+
+Run against the unfixed code the new suite reproduces each symptom exactly:
+`TEXT` where `REAL` was expected, the string `"1.0"` where `1` was written, the
+number `42` from a string field, and an explicitly written `null` gone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **sql-store:** stop three value encodings corrupting reads ([#748](https://github.com/anolilab/lunora/issues/748)) ([7278722](https://github.com/anolilab/lunora/commit/72787225df560213fec3fe7d09f3ec7e72ab05ee))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.122
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+
 ## @lunora/d1 [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.118...@lunora/d1@1.0.0-alpha.119) (2026-09-13)
 
 
