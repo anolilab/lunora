@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.186...@lunora/codegen@1.0.0-alpha.187) (2026-09-13)
+
+### Bug Fixes
+
+* close template, CLI and reference drift ([#750](https://github.com/anolilab/lunora/issues/750)) ([a5188b5](https://github.com/anolilab/lunora/commit/a5188b5927b5e9233dab40c9521a62ca332c38cf))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.137
+* **@lunora/agent:** upgraded to 1.0.0-alpha.115
+* **@lunora/container:** upgraded to 1.0.0-alpha.51
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/queue:** upgraded to 1.0.0-alpha.58
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.75
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.54
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/codegen [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.185...@lunora/codegen@1.0.0-alpha.186) (2026-09-13)
 
 
