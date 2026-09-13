@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 
-import type { PresenceMemberLike } from "../core";
-import { initials, presenceRoster, presenceSummary } from "../core";
+import { initials } from "../core/format";
+import type { PresenceMemberLike } from "../core/presence";
+import { presenceRoster, presenceSummary } from "../core/presence";
 
 interface PresenceBarProps {
     /** How many avatars to show before collapsing into a `+N`. */
