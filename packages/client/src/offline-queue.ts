@@ -6,6 +6,14 @@ interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
 
     /**
+     * CDC cursor this write was composed against (see
+     * {@link PersistedMutation.baselineSeq}). Persisted and restored so a replay is
+     * judged against what its author could see, not against what the client has
+     * since caught up to.
+     */
+    readonly baselineSeq?: number;
+
+    /**
      * The client id that queued this write (see {@link PersistedMutation.clientId}).
      * Persisted and restored, so a replay namespaces by the id that issued the
      * write rather than whatever the current session minted.
@@ -191,6 +199,7 @@ class OfflineQueue {
         this.persistence
             ?.append({
                 args: item.args,
+                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
                 clientId: item.clientId,
                 functionPath: item.functionPath,
                 id: item.id,
@@ -264,6 +273,7 @@ class OfflineQueue {
             seen.add(mutation.id);
             restored.push({
                 args: mutation.args,
+                baselineSeq: mutation.baselineSeq,
                 clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
                 id: mutation.id,
@@ -337,6 +347,7 @@ class OfflineQueue {
 
             const record: PersistedMutation = {
                 args: item.args,
+                ...(item.baselineSeq === undefined ? {} : { baselineSeq: item.baselineSeq }),
                 clientId: item.clientId,
                 functionPath: item.functionPath,
                 id,

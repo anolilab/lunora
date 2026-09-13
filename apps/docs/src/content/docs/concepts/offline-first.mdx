@@ -330,6 +330,51 @@ take whichever of these fits:
 An opt-in `{ ordered: true }` mode for plain mutations is deliberately not
 shipped; see [Design boundaries](/docs/non-goals#also-deliberately-absent).
 
+## Stale offline writes (`.dropStalePatches()`)
+
+Queued writes replay in order, and by default the replay wins: a write composed
+offline on Monday overwrites an edit someone else made on Tuesday, because
+arrival order decides, not authorship. The newer edit is gone with nothing to
+show it existed.
+
+Opt a table into judging a patch against what its author could actually see:
+
+```ts
+// lunora/schema.ts
+documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
+```
+
+The client stamps every write with its **CDC baseline** — the changelog cursor
+its live queries had reached when the write was composed — and replays that
+cursor verbatim off the offline queue. The shard reads the row's post-image as of
+that cursor out of `__cdc_log` and compares the fields the patch writes against
+what is on disk now. If any of them moved, the patch is dropped.
+
+So two clients editing **different** fields of one row both win, and two editing
+the **same** field means the later-composed write survives.
+
+### Three things to know before turning it on
+
+**The whole patch is dropped, never part of it.** Applying the fresh half and
+discarding the stale half would produce a row no mutation ever wrote —
+`status: "shipped"` landing while `shippedAt` is thrown away — and a handler's
+invariants live across the fields of one `patch` call.
+
+**A drop is silent to the caller.** No row change, no CDC entry, no broadcast, no
+triggers: indistinguishable from a patch that was never issued, and the mutation
+still resolves successfully. Each drop is logged (table, row, fields) so it is
+traceable. If the caller must be _told_ its write did not land, compare in the
+handler and throw instead.
+
+**It fails open.** No baseline (a client with no live query, or one older than
+this feature), no changelog entry at or below it (retention trimmed it, or the
+row is newer than the cursor), or CDC off, and the write applies exactly as it
+would without the flag. Discarding writes because retention ran would trade a
+rare lost edit for a common one.
+
+Requires CDC, and is rejected on `.global()` tables — a D1-backed table has no
+per-shard changelog to establish a baseline from, so the flag would be inert.
+
 ## Surfacing rejected writes
 
 A queued write that the server ultimately rejects (a coded conflict, a validation
