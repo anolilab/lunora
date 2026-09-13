@@ -3,8 +3,10 @@
 import type { ReactNode } from "react";
 import { useId, useState } from "react";
 
-import type { ProjectRow, ProjectsView } from "../core";
-import { createProjectFormController, DEFAULT_VIEW, NAME_MAX_LENGTH, projectCounts, selectProjects } from "../core";
+import { createProjectFormController, NAME_MAX_LENGTH } from "../core/project-form";
+import type { ProjectsView } from "../core/projects";
+import { DEFAULT_VIEW, projectCounts, selectProjects } from "../core/projects";
+import type { ProjectRow } from "../core/types";
 import { Card, Empty, FieldError } from "./primitives";
 import { useForm } from "./use-form";
 
@@ -28,13 +30,7 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
     const [view, setView] = useState<ProjectsView>(DEFAULT_VIEW);
     const nameId = useId();
     const archivedId = useId();
-    const [form, controller] = useForm(
-        () =>
-            createProjectFormController(onCreate, () => {
-                controller.reset();
-            }),
-        [onCreate],
-    );
+    const [form, controller] = useForm(() => createProjectFormController(onCreate), [onCreate]);
 
     if (!rows) {
         return (

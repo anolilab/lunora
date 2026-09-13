@@ -27,12 +27,7 @@
     // `onCreate` is referenced inside the closure, not passed directly: a
     // destructured prop read at the top level captures its first value, so a
     // parent that swaps the handler would keep submitting into the old one.
-    const form = createFormState(
-        createProjectFormController(
-            async (name) => onCreate(name),
-            () => form.controller.reset(),
-        ),
-    );
+    const form = createFormState(createProjectFormController(async (name) => onCreate(name)));
 
     const counts = $derived(rows ? projectCounts(rows) : { active: 0, archived: 0, total: 0 });
     const visible = $derived(rows ? selectProjects(rows, view) : []);
