@@ -275,6 +275,7 @@ interface AuthGateStore {
 ```ts
 interface AuthStore {
     setToken: (token: string | null) => void;
+    status: Readable<AuthStatus>;
     token: Readable<string | null>;
     user: Readable<User | null>;
 }

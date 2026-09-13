@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora eval` — discover every `*.eval.ts` under `evals/` (or `--dir`) and
  * run it through its own default-exported `run()`, which calls
@@ -23,7 +25,7 @@ const evalCommand: Command = {
     name: "eval",
     options: [
         { description: "Directory to discover *.eval.ts files under (default evals/)", name: "dir", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         {
             description: "Score gate every eval's average must meet ([0,1]); a per-eval `threshold` export wins over this for that eval",
             name: "threshold",

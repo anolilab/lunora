@@ -1,3 +1,210 @@
+## @lunora/client [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.109...@lunora/client@1.0.0-alpha.110) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.145
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.125
+
+## @lunora/client [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.108...@lunora/client@1.0.0-alpha.109) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.124
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+
+## @lunora/client [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.107...@lunora/client@1.0.0-alpha.108) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+
+## @lunora/client [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.106...@lunora/client@1.0.0-alpha.107) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/do:** upgraded to 1.0.0-alpha.142
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+
+## @lunora/client [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.105...@lunora/client@1.0.0-alpha.106) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.121
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
+## @lunora/client [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.104...@lunora/client@1.0.0-alpha.105) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+
+## @lunora/client [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.103...@lunora/client@1.0.0-alpha.104) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** queue a live write behind a held one ([#722](https://github.com/anolilab/lunora/issues/722)) ([e65db87](https://github.com/anolilab/lunora/commit/e65db8761c61e582fd3d271e4232c9fb5ce83776))
+* **client:** retry an offline queue held for identity ([#731](https://github.com/anolilab/lunora/issues/731)) ([2d3bb2a](https://github.com/anolilab/lunora/commit/2d3bb2acd3c9caa378087332411bb97f3318d375))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
+## @lunora/client [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.102...@lunora/client@1.0.0-alpha.103) (2026-09-12)
+
+### Tests
+
+* fail suites that can register zero cases ([#712](https://github.com/anolilab/lunora/issues/712)) ([eca1eaa](https://github.com/anolilab/lunora/commit/eca1eaad82fb9bb9c3aead43af135a9a488bb268))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.65
+
+## @lunora/client [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.101...@lunora/client@1.0.0-alpha.102) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** align the cookie-seed case with the identity contract ([#737](https://github.com/anolilab/lunora/issues/737)) ([021baa8](https://github.com/anolilab/lunora/commit/021baa80816790ae921e5cc4b23f77639585df1b))
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
+## @lunora/client [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.100...@lunora/client@1.0.0-alpha.101) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `OutboxMutation` gains an optional `onRejected`. A sink that
+ignores it behaves exactly as before; one that owns replay should invoke it on a
+permanent rejection or optimistic values outlive rejected writes.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **client:** re-seed the read cache after a remount ([#720](https://github.com/anolilab/lunora/issues/720)) ([a7a0a53](https://github.com/anolilab/lunora/commit/a7a0a53945bc787d175b7ca627d9542698bfa78c))
+* **client:** roll back an outbox write's optimistic patch ([#717](https://github.com/anolilab/lunora/issues/717)) ([c8c2fe5](https://github.com/anolilab/lunora/commit/c8c2fe55f9833f15532b9f843c6f47d9549606ce))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.136
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+
+## @lunora/client [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.99...@lunora/client@1.0.0-alpha.100) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+
+## @lunora/client [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.98...@lunora/client@1.0.0-alpha.99) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.114
+
+## @lunora/client [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.97...@lunora/client@1.0.0-alpha.98) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.113
+
+## @lunora/client [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.96...@lunora/client@1.0.0-alpha.97) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.112
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
+## @lunora/client [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.95...@lunora/client@1.0.0-alpha.96) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.111
+
+## @lunora/client [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.94...@lunora/client@1.0.0-alpha.95) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.110
+
+## @lunora/client [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.93...@lunora/client@1.0.0-alpha.94) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.129
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.109
+
+## @lunora/client [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.92...@lunora/client@1.0.0-alpha.93) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.128
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.108
+
+## @lunora/client [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.91...@lunora/client@1.0.0-alpha.92) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.107
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+
+## @lunora/client [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.90...@lunora/client@1.0.0-alpha.91) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.126
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/client [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.89...@lunora/client@1.0.0-alpha.90) (2026-09-08)
 
 

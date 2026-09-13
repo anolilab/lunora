@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 interface RecordingLogger {
@@ -322,6 +323,38 @@ describe("lunora dev lifecycle", () => {
             expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
         });
 
+        it("forwards --inspector-port to the daemon, and omits it when unset", async () => {
+            expect.assertions(3);
+
+            const seen: ReadonlyArray<string>[] = [];
+
+            const run = (options: { command: { args: ReadonlyArray<string> } }): Promise<{ code: number }> => {
+                seen.push(options.command.args);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { inspectorPort: 9235 } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({ cwd: workdir, jsonLogs: false, logger: recordingLogger().logger, options: {} as DevOptions, remote: false, run });
+
+            // The daemon re-parses argv, so the flag has to be spelled out here —
+            // `--background` is the automatic path for an AI agent, which makes
+            // this the default way the pinned inspector port gets lost.
+            expect(seen[0]).toContain("--inspector-port");
+            expect(seen[0]?.[(seen[0]?.indexOf("--inspector-port") ?? 0) + 1]).toBe("9235");
+            expect(seen[1]).not.toContain("--inspector-port");
+        });
+
         it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", async () => {
             expect.assertions(2);
 
@@ -374,7 +407,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            // Absent, not empty-string: the daemon re-reads `lunora.json`, so
+            // Absent, not empty-string: the daemon re-reads `lunora.config.ts`, so
             // passing `--target ""` would override a project setting with junk.
             expect(args).not.toContain("--target");
         });
@@ -546,7 +579,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             expect(lines.some((line) => line.level === "warn" && line.message.includes("lunora dev logs"))).toBe(true);
             // The child's pid is surfaced in the warning so an agent (or human)
             // knows which process to inspect without a separate `dev status`.
@@ -581,7 +614,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             // The record now points at the detached child, not the parent that
             // is about to return — `dev status`/`stop`/`logs` can still find
             // and signal it instead of reporting "No dev server running".
@@ -630,7 +663,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
 
             const state = readDevServerState(workdir);
 

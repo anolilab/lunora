@@ -1,3 +1,60 @@
+## @lunora/queue [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.58...@lunora/queue@1.0.0-alpha.59) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/queue [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.57...@lunora/queue@1.0.0-alpha.58) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/queue [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.56...@lunora/queue@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/queue [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.55...@lunora/queue@1.0.0-alpha.56) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/queue [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.54...@lunora/queue@1.0.0-alpha.55) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/queue [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.53...@lunora/queue@1.0.0-alpha.54) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/queue [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.52...@lunora/queue@1.0.0-alpha.53) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/queue [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.51...@lunora/queue@1.0.0-alpha.52) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
 ## @lunora/queue [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.50...@lunora/queue@1.0.0-alpha.51) (2026-09-07)
 
 ### Tests

@@ -72,6 +72,7 @@ const ADMIN_FUNCTIONS = {
     explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
+    findRelated: "__lunora_admin__:findRelated",
     getAdvisories: "__lunora_admin__:getAdvisories",
     getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
@@ -301,6 +302,15 @@ interface ColumnMeta {
      * column — one of those must not be offered a control that writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to —
+     * what the writer actually does to this row when the referenced parent is
+     * deleted. Absent when the column is not an FK, or when the schema declared
+     * no action for it. Paired with {@link ColumnMeta.ref}, which names the
+     * parent table.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */
@@ -776,6 +786,26 @@ interface TablePage {
     rows: Record<string, unknown>[];
 
     /**
+     * The table's PHYSICAL column names, straight from `PRAGMA table_info` — for
+     * a canonical shard table, `id`, `_creationTime`, `__doc__`.
+     *
+     * `columns` is the DISPLAY list: {@link expandDocumentRows} lifts every
+     * `__doc__` field to a top-level column so the browser shows fields rather
+     * than one opaque blob. Those lifted names are not columns any SQL statement
+     * can name, so a caller that feeds `columns` to something SQL-shaped (an
+     * editor's completion list, a lint's column set, an `INSERT` dump) builds
+     * statements SQLite rejects — or, on workerd, silently misreads: its SQLite
+     * resolves a bare `"status"` that names nothing to the string literal
+     * `'status'` instead of raising.
+     *
+     * So the two lists are reported separately and the caller picks the one that
+     * matches its question. `columns` minus this list is exactly the set of
+     * `__doc__` fields, which a SQL surface reaches with
+     * `json_extract(__doc__, '$.field')`.
+     */
+    sqlColumns: string[];
+
+    /**
      * Total rows matching the predicate. Absent when the read passed
      * `skipCount: true` (the caller sources the count from a separate,
      * predicate-keyed read instead of recomputing it per page).
@@ -1137,6 +1167,18 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
  * `undefined` to skip it (an unknown column on a non-doc table). The compared
  * expression + bound path params come from {@link resolveColumnExpression}; the
  * value is always bound too, so a clause can never inject SQL.
+ *
+ * A `null` value on `eq`/`ne` compiles to `IS NULL` / `IS NOT NULL`, not to
+ * `= ?` with NULL bound: SQL's three-valued logic makes `x = NULL` neither true
+ * nor false, so the bound form matches nothing — including the rows that really
+ * are NULL. A facet summarising a column reports its NULL group like any other
+ * value ("∅ (2)"), and a caller that asks for that group back has to receive
+ * those two rows, or the count and the grid contradict each other.
+ *
+ * NULL here means the column has no value: for a `__doc__` field,
+ * `json_extract` returns NULL both when the key is absent and when it holds JSON
+ * `null`, and the facet groups those together too — so the clause matches
+ * exactly the rows the facet counted.
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  */
 const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { params: unknown[]; sql: string } | undefined => {
@@ -1150,6 +1192,10 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
 
     if (clause.operator === "contains") {
         return { params: [...pathParameters, filterValueText(clause.value)], sql: containsSql(expression) };
+    }
+
+    if (clause.value === null && (clause.operator === "eq" || clause.operator === "ne")) {
+        return { params: pathParameters, sql: `${expression} IS ${clause.operator === "ne" ? "NOT " : ""}NULL` };
     }
 
     return { params: [...pathParameters, clause.value], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
@@ -1310,7 +1356,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     const needle = options.search?.trim() ?? "";
 
     // Echo only the refs whose column actually surfaces (a UI links those cells).
-    const withReferences = (page: { columns: string[]; rows: Record<string, unknown>[]; total?: number }): TablePage => {
+    const withReferences = (page: TablePage): TablePage => {
         if (options.refs === undefined) {
             return page;
         }
@@ -1353,7 +1399,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
 
     const rawRows = sql.exec(`SELECT * FROM ${quoted}${whereSql}${orderSql} LIMIT ? OFFSET ?`, ...whereParams, ...orderParams, limit, offset).toArray();
 
-    return withReferences({ ...expandDocumentRows(columns, rawRows), total });
+    return withReferences({ ...expandDocumentRows(columns, rawRows), sqlColumns: columns, total });
 };
 
 /**

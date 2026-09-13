@@ -3,10 +3,22 @@ import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_ } from "../../lunora/_generated/dataModel.js";
 
-type Message = Doc<"messages">;
-type Profile = Doc<"profiles">;
+/**
+ * One text field out of a `FormData`.
+ *
+ * `FormData.get` is typed `string | File | null`, so `String(form.get(name) ?? "")`
+ * stringifies a `File` to `"[object File]"`. Narrowing yields `""` for anything
+ * that is not text.
+ */
+const textField = (form: FormData, name: string): string => {
+    const value = form.get(name);
+
+    return typeof value === "string" ? value : "";
+};
+
+type Profile = Document_<"profiles">;
 
 /** A tab counts as "here" if it checked in within this window… */
 const PRESENCE_TTL_MS = 30_000;
@@ -48,12 +60,15 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     const { mutate: leave } = useMutation(api.presence.leave);
 
     useEffect(() => {
+        // The first heartbeat fires immediately, but `now` is NOT set here: seeding
+        // it from `useState(() => Date.now())` keeps this effect free of a
+        // synchronous `setState`, which forces a second render pass on mount.
+        void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
+
         const beat = (): void => {
             setNow(Date.now());
             void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
         };
-
-        beat();
 
         const timer = globalThis.setInterval(beat, HEARTBEAT_MS);
 
@@ -105,8 +120,8 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
             const url = await client.action(api.messages.attachmentUrl, { channelId, key });
 
             globalThis.open(url, "_blank", "noreferrer");
-        } catch (cause: unknown) {
-            setError(cause instanceof Error ? cause.message : "could not open that attachment");
+        } catch (error_: unknown) {
+            setError(error_ instanceof Error ? error_.message : "could not open that attachment");
         }
     };
 
@@ -138,9 +153,17 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
             <header className="channel-header">
                 <h1>#{channelId}</h1>
 
-                <input aria-label="Search this channel" onChange={(event) => setSearch(event.target.value)} placeholder="Search" type="search" value={search} />
+                <input
+                    aria-label="Search this channel"
+                    onChange={(event) => {
+                        setSearch(event.target.value);
+                    }}
+                    placeholder="Search"
+                    type="search"
+                    value={search}
+                />
 
-                <ul className="presence" aria-label="Online now">
+                <ul aria-label="Online now" className="presence">
                     {online.map((row) => (
                         <li key={row._id} title={row.name}>
                             {row.name.slice(0, 2).toUpperCase()}
@@ -180,7 +203,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                     event.preventDefault();
 
                     const form = event.currentTarget;
-                    const content = String(new FormData(form).get("content") ?? "");
+                    const content = textField(new FormData(form), "content");
                     const picker = form.elements.namedItem("file") as HTMLInputElement;
                     const file = picker.files?.[0];
 
@@ -204,11 +227,11 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                     void (async () => {
                         try {
                             await deliver();
-                        } catch (cause: unknown) {
+                        } catch (error_: unknown) {
                             // An upload can fail (size cap, rejected type) and a
                             // send can be refused. Without this the promise
                             // rejects unhandled and the composer just sits there.
-                            setError(cause instanceof Error ? cause.message : "could not send that message");
+                            setError(error_ instanceof Error ? error_.message : "could not send that message");
                         }
 
                         // Deliberately after the catch rather than in a `finally`:

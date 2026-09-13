@@ -41,7 +41,7 @@ import java.util.function.UnaryOperator;
  *
  * <p><b>Divergence from {@code @lunora/client}.</b> The TypeScript engine suppresses a notification
  * whose folded result is reference-identical to the value already displayed. Reference identity has
- * no portable meaning across the seven ports, so they notify on every fold instead — a consumer
+ * no portable meaning across the eight ports, so they notify on every fold instead — a consumer
  * sees at most a few redundant callbacks carrying the same value, never a missing one.
  */
 public final class Optimistic {

@@ -83,6 +83,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ```ts
 interface QueryReadScope {
     footprint: ReadFootprint;
+    markIpRead: () => void;
     tracker: DependencyTracker;
 }
 ```
@@ -108,6 +109,10 @@ const ROOT_SHARD_NAME = "__root__";
 ```
 
 ### `RankIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `RelatedPage` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -158,6 +163,20 @@ interface RunShardBulkRowResult {
 interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
+}
+```
+
+### `RunShardFindRelatedArgs` (interface)
+
+```ts
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
+    table: string;
 }
 ```
 
@@ -297,6 +316,7 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
@@ -317,6 +337,7 @@ abstract class ShardDO {
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
+    protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
@@ -356,6 +377,7 @@ abstract class ShardDO {
         before: number;
         total: number;
     }>;
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage>;
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult>;
     protected runShardCdcSync(args: RunShardCdcSyncArgs): {
         changes: CdcChange[];
@@ -407,6 +429,9 @@ abstract class ShardDO {
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
     protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
+    protected scheduleOutbox(): ScheduleOutbox;
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined;
+    protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
     protected ensureShardInit(): Promise<void>;
     protected runShardInit(): Promise<void>;
@@ -428,7 +453,7 @@ abstract class ShardDO {
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
-    protected isQueryFunction(_functionPath: string): boolean;
+    protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
@@ -533,6 +558,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `StudioFeaturesResult` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `SubscriptionIdentity` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

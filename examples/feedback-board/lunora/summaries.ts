@@ -2,11 +2,11 @@ import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import { api, internal } from "./_generated/api.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Inference costs money per call, so it gets a far tighter bucket than the
@@ -21,7 +21,9 @@ const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
 /** Newest first. The board renders whichever summary is on top. */
-export const list = query.query(async ({ ctx }): Promise<Doc<"summaries">[]> => ctx.db.query("summaries").withIndex("by_generated").order("desc").collect());
+export const list = query.query(async ({ ctx }): Promise<Document_<"summaries">[]> =>
+    ctx.db.query("summaries").withIndex("by_generated").order("desc").collect(),
+);
 
 /**
  * Read the top-voted posts and write a summary of what people are asking for.
@@ -39,13 +41,14 @@ export const generate = action
     .use(rateLimit(actionLimiter, "ai", byCaller))
     .input({ limit: v.optional(v.number()) })
     .action(async ({ args: { limit }, ctx }): Promise<Id<"summaries"> | null> => {
-        const top = (await ctx.runQuery(api.feedback.list, { sortBy: "votes" })).slice(0, Math.min(Math.max(limit ?? 10, 1), 50));
+        const awaited1 = await ctx.runQuery(api.feedback.list, { sortBy: "votes" });
+        const top = awaited1.slice(0, Math.min(Math.max(limit ?? 10, 1), 50));
 
         if (top.length === 0) {
             return null;
         }
 
-        const board = top.map((post, index) => `${index + 1}. ${post.title} (${post.upvoteCount} votes)\n   ${post.description}`).join("\n\n");
+        const board = top.map((post, index) => `${String(index + 1)}. ${post.title} (${String(post.upvoteCount)} votes)\n   ${post.description}`).join("\n\n");
 
         let text: string;
 
@@ -79,7 +82,7 @@ export const generate = action
         return ctx.runMutation(internal.summaries.store, {
             feedbackIds: top.map((post) => post._id),
             summary: text,
-            title: `Top ${top.length} requests`,
+            title: `Top ${String(top.length)} requests`,
         });
     });
 

@@ -5,10 +5,10 @@
  * DO-backed rate limiting. Named limits live here and nowhere else, so tuning
  * one is a change to this file rather than to the procedure that enforces it.
  */
-import type { Middleware } from "lunorash/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
-import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
+import { createDbStore, RateLimiter } from "lunorash/ratelimit";
+import type { Middleware } from "lunorash/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
 export const limits = {
     /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */

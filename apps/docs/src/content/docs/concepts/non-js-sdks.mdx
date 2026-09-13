@@ -96,13 +96,17 @@ All eight also implement the two client-side write features, ported from
   so a write the server already committed is not applied twice. The queue is a
   bounded FIFO: overflow drops the OLDEST write, a stale precondition drops one
   before it replays, and a write queued under one identity never replays under
-  another. Give the client a persistence adapter to survive a process restart.
+  another. A flush of two or more writes coalesces into `/_lunora/rpc-batch`
+  round trips rather than one request per write. Give the client a persistence
+  adapter to survive a process restart.
 
-Two deliberate gaps everywhere:
+Two deliberate gaps:
 
 - **No multi-tab leader election.** A browser concern; there are no tabs here.
-- **No built-in HTTP or socket.** Both are injected, which is what lets you keep
-  your own stack — see below.
+- **No built-in HTTP or socket**, except in Python — its client defaults to a
+  `urllib` poster and can drive a live socket through the optional `websockets`
+  package. Everywhere else both are injected, and in Python both defaults are
+  overridable, which is what lets you keep your own stack — see below.
 
 How you reach the queued write path differs in one place, and it is worth knowing
 before you look for a method that is not there:
@@ -119,7 +123,7 @@ before you look for a method that is not there:
   `LunoraPersistence` adapter is asynchronous where the other seven's is
   synchronous.
 
-Two things only Dart gets, because a mobile client is disconnected routinely rather
+One thing only Dart gets, because a mobile client is disconnected routinely rather
 than exceptionally:
 
 - **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
@@ -127,13 +131,6 @@ than exceptionally:
   on first listen and unsubscribes when the last listener cancels, so disposing the
   widget disposes the subscription. The callback-shaped `subscribeList(...)` every
   other language has is there too.
-- **Batched replay.** A reconnect flushing two or more writes coalesces them into
-  `/_lunora/rpc-batch` round trips instead of one request per write. The other seven
-  replay sequentially.
-
-One thing only Dart lacks: a **per-shard drain**. The other seven own a socket per
-shard, so one shard reconnecting flushes just its writes; Dart has a single
-connectivity signal, so one reconnect drains everything.
 
 In Dart, that rides the generated mutation:
 
@@ -182,9 +179,9 @@ Two things are worth knowing about the models everywhere:
   type is inferred by TypeScript and absent from the schema, so the SDK hands back
   its language's `any` rather than guessing a shape.
 
-HTTP and the socket are injected in every language rather than assumed, so you
-keep your own stack, timeouts, retries and socket library, and the conformance
-suites run with no network.
+HTTP and the socket are injected rather than assumed in every language but Python,
+whose defaults you can override, so you keep your own stack, timeouts, retries and
+socket library, and the conformance suites run with no network.
 
 ## Conformance
 

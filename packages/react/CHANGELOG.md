@@ -1,3 +1,191 @@
+## @lunora/react [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.114...@lunora/react@1.0.0-alpha.115) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+
+## @lunora/react [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.113...@lunora/react@1.0.0-alpha.114) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.63
+
+## @lunora/react [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.112...@lunora/react@1.0.0-alpha.113) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.62
+
+## @lunora/react [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.111...@lunora/react@1.0.0-alpha.112) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.61
+
+## @lunora/react [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.110...@lunora/react@1.0.0-alpha.111) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.60
+
+## @lunora/react [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.109...@lunora/react@1.0.0-alpha.110) (2026-09-12)
+
+### Bug Fixes
+
+* four defects found by building a SaaS kit on the packages ([#736](https://github.com/anolilab/lunora/issues/736)) ([3a92fed](https://github.com/anolilab/lunora/commit/3a92fedd31d7571ccbdc1b4589131758f579a938)), closes [#539](https://github.com/anolilab/lunora/issues/539) [#541](https://github.com/anolilab/lunora/issues/541)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.59
+
+## @lunora/react [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.108...@lunora/react@1.0.0-alpha.109) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.58
+
+## @lunora/react [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.107...@lunora/react@1.0.0-alpha.108) (2026-09-12)
+
+### Bug Fixes
+
+* **react:** mirror the priceIds field payment now declares ([#738](https://github.com/anolilab/lunora/issues/738)) ([335e4c7](https://github.com/anolilab/lunora/commit/335e4c73c162437e1f021611861d299c48d5b23b))
+
+## @lunora/react [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.106...@lunora/react@1.0.0-alpha.107) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+* **vue,svelte,solid,angular:** key reactive args on content ([#721](https://github.com/anolilab/lunora/issues/721)) ([f1e1579](https://github.com/anolilab/lunora/commit/f1e1579cbd9f41789b16a8ad5a8231647f6bd297))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
+## @lunora/react [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.105...@lunora/react@1.0.0-alpha.106) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `OutboxMutation` gains an optional `onRejected`. A sink that
+ignores it behaves exactly as before; one that owns replay should invoke it on a
+permanent rejection or optimistic values outlive rejected writes.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **client:** roll back an outbox write's optimistic patch ([#717](https://github.com/anolilab/lunora/issues/717)) ([c8c2fe5](https://github.com/anolilab/lunora/commit/c8c2fe55f9833f15532b9f843c6f47d9549606ce))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.57
+
+## @lunora/react [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.104...@lunora/react@1.0.0-alpha.105) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.56
+
+## @lunora/react [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.103...@lunora/react@1.0.0-alpha.104) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.55
+
+## @lunora/react [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.102...@lunora/react@1.0.0-alpha.103) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.54
+
+## @lunora/react [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.101...@lunora/react@1.0.0-alpha.102) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.53
+
+## @lunora/react [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.100...@lunora/react@1.0.0-alpha.101) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.52
+
+## @lunora/react [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.99...@lunora/react@1.0.0-alpha.100) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.51
+
+## @lunora/react [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.98...@lunora/react@1.0.0-alpha.99) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.50
+
+## @lunora/react [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.97...@lunora/react@1.0.0-alpha.98) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.49
+
+## @lunora/react [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.96...@lunora/react@1.0.0-alpha.97) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.48
+
+## @lunora/react [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.95...@lunora/react@1.0.0-alpha.96) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.47
+
 ## @lunora/react [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.94...@lunora/react@1.0.0-alpha.95) (2026-09-08)
 
 

@@ -80,10 +80,26 @@ const bindingType = (value: object): string => {
 /**
  * Pull best-effort deploy metadata from well-known vars/bindings in `env`. Reads
  * only what the runtime happens to expose and omits everything else — no
- * guessing. `CF_VERSION_METADATA` is the Worker version-metadata binding
+ * guessing. Takes `unknown` rather than a record because that is what the
+ * callers actually hold: `ShardDO.env` is `unknown` and was reaching here
+ * through an `as` cast that a missing env turned into a TypeError. `CF_VERSION_METADATA` is the Worker version-metadata binding
  * (`{ id, tag, timestamp }`) when configured.
  */
-const readDeployInfo = (env: Record<string, unknown>): DeployInfo => {
+const readDeployInfo = (rawEnv: unknown): DeployInfo => {
+    // `buildSettings` below normalises its own `unknown` env with `?? {}` before
+    // calling here; `ShardDO` does not — it types `env` as `unknown` and stores
+    // it as-is, so a host that constructs one without an env landed on
+    // `env[key]` of `undefined`. A throw there loses the log line for every
+    // request, to report a deploy id that was never going to be there. An
+    // absent env is just "no deploy metadata", which is what `{}` says — and
+    // taking `unknown` is what lets the DO call this without a cast that
+    // asserts away exactly the case this guards.
+    if (typeof rawEnv !== "object" || rawEnv === null) {
+        return {};
+    }
+
+    const env = rawEnv as Record<string, unknown>;
+
     const firstStringVariable = (keys: ReadonlyArray<string>): string | undefined =>
         keys.map((key) => env[key]).find((value): value is string => typeof value === "string" && value !== "");
 

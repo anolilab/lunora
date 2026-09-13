@@ -25,6 +25,17 @@ interface Subscription {
     readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe
+     * subscription can carry an add-on or a metered price alongside the base plan, and a
+     * customer paying for one is entitled to it — so entitlements test membership here.
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only
+     * `priceId`; absent reads as `[priceId]`, which is exactly right for the single-item
+     * case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;

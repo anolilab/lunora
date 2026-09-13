@@ -53,6 +53,7 @@ export {
     mergeWranglerEnvironment,
     REQUIRED_COMPATIBILITY_DATE,
     REQUIRED_FLAG,
+    UNEXPORTED_CLASS_MARKER,
     validateWrangler,
     validateWranglerConfig,
     validateWranglerProject,

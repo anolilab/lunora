@@ -1,5 +1,6 @@
-import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
+
+import { ratelimit } from "./ratelimit/schema.js";
 
 /**
  * payment-demo schema.
@@ -52,6 +53,11 @@ export default defineSchema({
         currentPeriodEnd: v.optional(v.number()),
         currentPeriodStart: v.optional(v.number()),
         priceId: v.string(),
+        // EVERY price id the subscription bills, not just the primary one.
+        // Entitlements test membership here (falling back to `[priceId]` when
+        // absent), so without the column an add-on or metered price never grants
+        // its plan. Optional, so adding it needs no backfill.
+        priceIds: v.optional(v.array(v.string())),
         provider: v.string(),
         providerSubscriptionId: v.string(),
         quantity: v.number(),

@@ -1,3 +1,92 @@
+## @lunora/hyperdrive [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.119...@lunora/hyperdrive@1.0.0-alpha.120) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.123
+
+## @lunora/hyperdrive [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.118...@lunora/hyperdrive@1.0.0-alpha.119) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.122
+
+## @lunora/hyperdrive [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.117...@lunora/hyperdrive@1.0.0-alpha.118) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.121
+
+## @lunora/hyperdrive [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.116...@lunora/hyperdrive@1.0.0-alpha.117) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `NodePgLike`, `PostgresJsLike` and `Mysql2Like` declare their
+members with method syntax and an explicit `this: void`. An implementation that
+assigned a bare arrow property still satisfies them; code that aliased the
+member type keeps working.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* unbreak the first five minutes of a new project ([#746](https://github.com/anolilab/lunora/issues/746)) ([9915245](https://github.com/anolilab/lunora/commit/9915245c32e6891f098ebece5a3243f5fa5d3c5d))
+
+## @lunora/hyperdrive [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.115...@lunora/hyperdrive@1.0.0-alpha.116) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **hyperdrive:** show the real ctx.sql wiring ([#707](https://github.com/anolilab/lunora/issues/707)) ([caab3fb](https://github.com/anolilab/lunora/commit/caab3fbb6aa629b360267be5c38ba016439581df))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.118
+
+## @lunora/hyperdrive [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.114...@lunora/hyperdrive@1.0.0-alpha.115) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.116
+
+## @lunora/hyperdrive [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.113...@lunora/hyperdrive@1.0.0-alpha.114) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.115
+
+## @lunora/hyperdrive [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.112...@lunora/hyperdrive@1.0.0-alpha.113) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/hyperdrive [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.111...@lunora/hyperdrive@1.0.0-alpha.112) (2026-09-07)
 
 

@@ -435,6 +435,27 @@ traces are retained; it is also emitted on the `Logpush` console event, so a SIE
 can join a request to its spans.
 :::
 
+### Attributing a spike to a deploy
+
+Bind Cloudflare's version metadata and the runtime stamps `deploymentId` /
+`versionTag` onto every durable request-log row and every emitted Workers-Logs
+event:
+
+```jsonc
+// wrangler.jsonc — every `lunora init` template ships this
+"version_metadata": { "binding": "CF_VERSION_METADATA" },
+```
+
+That turns "latency doubled some time this afternoon" into a group-by rather
+than a graph-correlation exercise: filter the Requests view or the Workers Logs
+Query Builder on the deploy id and the before/after split is exact. It costs
+nothing when unused, and nothing reads it but the stamp.
+
+Pair it with `"observability": { "logs": { "invocation_logs": true } }`, which
+the templates also ship — the Query Builder groups on the per-invocation summary
+line, and without it only explicit `console` events survive, leaving the
+group-by nothing to group.
+
 ### Generation spans (AI)
 
 An AI model call is a span with the OpenTelemetry

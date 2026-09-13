@@ -102,6 +102,33 @@ describe("toSql", () => {
         expect(toSql("t", ["blob"], [{ blob: Uint8Array.from([1, 2, 3, 4]).buffer }])).toBe('INSERT INTO "t" ("blob") VALUES\n  (\'<bytes: 4 B>\');');
     });
 
+    it("targets the physical columns and re-assembles `__doc__` when the page was expanded", () => {
+        expect.assertions(1);
+
+        // `columns` is the DISPLAY list (doc fields lifted); `sqlColumns` is what
+        // the table physically has. Without the second, the statement names
+        // `"body"`/`"pinned"`, which no shard table has.
+        const sql = toSql(
+            "notes",
+            ["id", "_creationTime", "body", "pinned"],
+            [{ _creationTime: 17, body: "hi", id: "n1", pinned: true }],
+            ["id", "_creationTime", "__doc__"],
+        );
+
+        expect(sql).toBe('INSERT INTO "notes" ("id", "_creationTime", "__doc__") VALUES\n  (\'n1\', 17, \'{"body":"hi","pinned":true}\');');
+    });
+
+    it("leaves the dump column-for-column when the page still carries a raw `__doc__` (unexpanded)", () => {
+        expect.assertions(1);
+
+        // A row whose `__doc__` did not parse is reported unexpanded, so the
+        // display list already IS the physical list and there is nothing to
+        // re-assemble — re-assembling would emit an empty document.
+        const sql = toSql("notes", ["id", "__doc__"], [{ __doc__: "not-json", id: "n1" }], ["id", "__doc__"]);
+
+        expect(sql).toBe('INSERT INTO "notes" ("id", "__doc__") VALUES\n  (\'n1\', \'not-json\');');
+    });
+
     it("returns an empty string when there are no columns or no rows", () => {
         expect.assertions(2);
 

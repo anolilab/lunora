@@ -1,3 +1,57 @@
+## @lunora/mail [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.83...@lunora/mail@1.0.0-alpha.84) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/mail [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.82...@lunora/mail@1.0.0-alpha.83) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/mail [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.81...@lunora/mail@1.0.0-alpha.82) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/mail [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.80...@lunora/mail@1.0.0-alpha.81) (2026-09-12)
+
+### Bug Fixes
+
+* **mail:** correct empty recipient list handling ([#743](https://github.com/anolilab/lunora/issues/743)) ([e1e8c94](https://github.com/anolilab/lunora/commit/e1e8c944248ef5a0bb7fe10f6a6a741b4ac04ece))
+
+## @lunora/mail [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.79...@lunora/mail@1.0.0-alpha.80) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/mail [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.78...@lunora/mail@1.0.0-alpha.79) (2026-09-12)
+
+## @lunora/mail [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.77...@lunora/mail@1.0.0-alpha.78) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.76...@lunora/mail@1.0.0-alpha.77) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.75...@lunora/mail@1.0.0-alpha.76) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.74...@lunora/mail@1.0.0-alpha.75) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.73...@lunora/mail@1.0.0-alpha.74) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.72...@lunora/mail@1.0.0-alpha.73) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.71...@lunora/mail@1.0.0-alpha.72) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.70...@lunora/mail@1.0.0-alpha.71) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.69...@lunora/mail@1.0.0-alpha.70) (2026-09-08)
+
 ## @lunora/mail [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.68...@lunora/mail@1.0.0-alpha.69) (2026-09-08)
 
 ## @lunora/mail [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.67...@lunora/mail@1.0.0-alpha.68) (2026-09-07)

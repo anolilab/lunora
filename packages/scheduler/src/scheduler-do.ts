@@ -458,7 +458,7 @@ class SchedulerDO {
         return jsonResponse({ error: { code: "NOT_FOUND" } }, 404);
     }
 
-    /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
+    /** Called by the Workers runtime when the alarm previously set by `rescheduleAlarm()` fires. */
     public async alarm(): Promise<void> {
         // BEFORE the due slice is read, so a job recovered here fires in this
         // very pass rather than waiting for the next one.

@@ -119,6 +119,17 @@ const orderToSession = (input: unknown): PaymentSession => {
     const state = PAYMENT_STATE_BY_POLAR_ORDER_STATUS[readString(order, "status") ?? ""] ?? "initiated";
     const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
 
+    // Polar's `Order` carries the refunded total (`refundedAmount`, `refunded_amount` on the raw
+    // shape), so read it rather than inferring one. Inferring left every PARTIALLY refunded order
+    // reporting zero refunded, and reconcile writes that: after a missed `refund.created` the ledger
+    // says a refunded order is unrefunded, and the next `refundPayment({ sessionId })` computes the
+    // remainder as the whole captured amount and asks Polar to move it a second time.
+    //
+    // The full-refund fallback stands for a response that omits the field (an older API version, a
+    // partial test double) — without it those would regress from `amount` to zero.
+    const refundedMinor = readNumber(order, "refundedAmount") ?? readNumber(order, "refunded_amount");
+    const inferredRefund = state === "refunded" ? amount : zeroMoney(currency);
+
     return {
         amount,
         capturedAmount: settled ? amount : zeroMoney(currency),
@@ -128,7 +139,7 @@ const orderToSession = (input: unknown): PaymentSession => {
         // Polar copies checkout metadata onto the order, so recover the framework-pinned `referenceId`
         // rather than blanking it — a reconcile sweep would otherwise orphan the row from `by_reference`.
         referenceId: referenceFromMetadata(order) ?? "",
-        refundedAmount: state === "refunded" ? amount : zeroMoney(currency),
+        refundedAmount: refundedMinor === undefined ? inferredRefund : money(BigInt(Math.round(refundedMinor)), currency),
         state,
         updatedAt: now,
     };
@@ -163,7 +174,18 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             };
         }
 
-        case "refund.created": {
+        case "refund.created":
+        case "refund.updated": {
+            // Polar sends `refund.created` "regardless of status" (its own SDK says so) and
+            // `RefundStatus` is pending | succeeded | failed | canceled, so the event alone does not
+            // mean money moved. Booking a `pending` refund leaves the ledger claiming a refund the
+            // customer never received — and, because the refunded total then equals what was asked
+            // for, the facade's over-refund guard rejects every later attempt to actually issue it.
+            // Wait for `succeeded`; `refund.updated` is what carries the pending → succeeded step.
+            if (readString(object, "status") !== "succeeded") {
+                return { ...base, type: "unhandled" };
+            }
+
             return {
                 ...base,
                 amount: money(readNumber(object, "amount") ?? 0, currency),
@@ -309,19 +331,27 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             });
 
             const refundedAmount = input.amount ?? money(BigInt(Math.round(amountMinor)), currency);
+            // Polar's `RefundStatus` is pending | succeeded | failed | canceled, so `refunds.create`
+            // answering does not mean the money moved. Report an unsettled refund as `pending` (as the
+            // Dodo adapter does) so the facade holds its ledger back: a refund that later fails
+            // reverses nothing, and an optimistic write would over-state the refunded total for good —
+            // blocking every later legitimate refund through the facade's over-refund guard. The
+            // confirming `refund.updated` carries the money once Polar settles it.
+            const settled = refund.status === "succeeded";
 
             return {
                 amount: refundedAmount,
                 capturedAmount: refundedAmount,
                 createdAt: Date.now(),
                 id: input.sessionId,
+                pending: !settled,
                 provider: "polar",
                 referenceId: "",
                 refundedAmount,
-                // The same id Polar's confirming `refund.created` carries, which is what lets the sync
+                // The same id Polar's confirming refund event carries, which is what lets the sync
                 // layer tell this refund's event from a concurrent refund of the identical amount.
                 refundId: refund.id,
-                state: "refunded",
+                state: settled ? "refunded" : "captured",
                 updatedAt: Date.now(),
             };
         },

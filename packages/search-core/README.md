@@ -14,7 +14,7 @@ It sits outside both engines because both need it and neither may depend on the 
 
 ## Why a package rather than a folder under `shared/`
 
-`shared/` is for tiny, genuinely dependency-free leaf helpers that must not create a dependency edge. This is ~800 lines across five modules with an internal dependency order, its own test suite, and one import of `@lunora/errors` (the query surface's refusals have to carry a code the runtime renders as a 400; a bare `TypeError` surfaces as a 500).
+`shared/` is for tiny, genuinely dependency-free leaf helpers that must not create a dependency edge. This is ~1,100 lines across five modules with an internal dependency order, its own test suite, and one import of `@lunora/errors` (the query surface's refusals have to carry a code the runtime renders as a 400; a bare `TypeError` surfaces as a 500).
 
 As a package it gets ESLint, its own tests and its own coverage gate. As `private`, being a package costs nothing on npm.
 

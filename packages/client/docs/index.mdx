@@ -127,21 +127,44 @@ See [Offline-first](/docs/concepts/offline-first) for the full reads + writes st
 
 ## Optimistic updates
 
-`client.mutation(fn, args, { optimistic: (current) => next })` patches the
-matching subscription's cache immediately, then reconciles it **gaplessly**: the
-patch is recorded as a rebaseable layer, so an unrelated server delta that lands
-while the write is still pending is re-folded _under_ it (your change never
-flickers away and back), and the layer is dropped the moment a server frame whose
-`cursor` reaches the write's committed cursor arrives. The server echoes that
-cursor on the mutation response, so the drop is keyed on confirmed server state,
-not RPC-response timing (which races the WebSocket broadcast). A coded rejection
-rolls the layer back.
+`client.mutation(fn, args, { optimisticUpdate })` patches subscribed queries
+immediately, then reconciles them **gaplessly**: each patch is recorded as a
+rebaseable layer, so an unrelated server delta that lands while the write is
+still pending is re-folded _under_ it (your change never flickers away and back),
+and the layer is dropped the moment a server frame whose `cursor` reaches the
+write's committed cursor arrives. The server echoes that cursor on the mutation
+response, so the drop is keyed on confirmed server state, not RPC-response timing
+(which races the WebSocket broadcast). A coded rejection rolls every layer of the
+batch back atomically.
 
-To patch several subscribed queries from one mutation, pass `optimisticUpdate`
-instead; it receives an `OptimisticLocalStore` over the live cache, and each
-`setQuery` registers a constant-value layer on the same engine, so the whole
-batch rebases and settles together (confirmed on the mutation's commit cursor, or
-rolled back atomically on failure). See
+The callback receives an `OptimisticLocalStore` over the live cache plus the
+mutation's args, and **names the queries it patches** — which it has to: a write
+and the queries it affects are different functions, and no client can infer which
+ones a `messages:send` changes.
+
+```ts
+await client.mutation(
+    api.messages.send,
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
+```
+
+`getAllQueries(fn)` patches every subscribed variant of a query (all channels,
+all filters) when you don't want to enumerate their args.
+
+There is also a per-call `optimistic: (current) => next` shortcut, and its
+targeting rule is narrow enough to be worth stating: it patches the subscription
+registered under the **mutation's own** reference and args, and silently finds
+nothing otherwise. That makes it the shorthand for a query and a mutation that
+share a path (a counter, a document by id) — for anything else, including the
+`send`/`list` shape above, use `optimisticUpdate`. See
 [Offline-first](/docs/concepts/offline-first#the-reconciliation-model) for the
 full reconciliation model.
 

@@ -4,20 +4,23 @@ import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
 
+/**
+ * One text field out of a `FormData`.
+ *
+ * `FormData.get` is typed `string | File | null`, so `String(form.get(name) ?? "")`
+ * stringifies a `File` to `"[object File]"` — a file input sharing a text field's
+ * name would submit that verbatim. Narrowing instead yields `""` for anything
+ * that is not text.
+ */
+const textField = (form: FormData, name: string): string => {
+    const value = form.get(name);
+
+    return typeof value === "string" ? value : "";
+};
+
 const BOARD_ARGS = { limit: 50 } as const;
 
-export const Route = createFileRoute("/")({
-    component: Home,
-    /**
-     * The SSR read. `lunoraQueryOptions` builds a one-shot HTTP fetch keyed
-     * exactly like the live `useQuery` hook below, so the value the server puts
-     * in the cache is the value the component finds there on its first render —
-     * fully rendered markup, no loading flash, no second request on hydration.
-     */
-    loader: async ({ context }) => context.queryClient.ensureQueryData(lunoraQueryOptions(context.lunora, api.messages.board, BOARD_ARGS)),
-});
-
-function Home(): ReactElement {
+const Home = (): ReactElement => {
     /**
      * The same query, now live. On the first client render it reads the
      * loader's cached value (same key), then the subscription attaches and
@@ -49,17 +52,17 @@ function Home(): ReactElement {
              */}
             <form
                 action={(data: FormData) => {
-                    const body = String(data.get("body") ?? "").trim();
+                    const body = textField(data, "body").trim();
 
                     if (!body) {
                         return;
                     }
 
-                    void send({ author: String(data.get("author") ?? "").trim() || "anon", body });
+                    void send({ author: textField(data, "author").trim() || "anon", body });
                 }}
             >
                 <input aria-label="Your name" name="author" placeholder="Your name" />
-                <input required aria-label="Message" maxLength={140} name="body" placeholder="Write a message" />
+                <input aria-label="Message" maxLength={140} name="body" placeholder="Write a message" required />
                 <button disabled={pending} type="submit">
                     {pending ? "Sending…" : "Send"}
                 </button>
@@ -101,4 +104,16 @@ function Home(): ReactElement {
             )}
         </main>
     );
-}
+};
+
+export const Route = createFileRoute("/")({
+    component: Home,
+
+    /**
+     * The SSR read. `lunoraQueryOptions` builds a one-shot HTTP fetch keyed
+     * exactly like the live `useQuery` hook below, so the value the server puts
+     * in the cache is the value the component finds there on its first render —
+     * fully rendered markup, no loading flash, no second request on hydration.
+     */
+    loader: async ({ context }) => context.queryClient.ensureQueryData(lunoraQueryOptions(context.lunora, api.messages.board, BOARD_ARGS)),
+});

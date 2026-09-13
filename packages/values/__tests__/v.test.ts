@@ -53,13 +53,36 @@ describe("primitives", () => {
         expect(() => v.null().parse(undefined)).toThrow(ValidationError);
     });
 
-    it("bytes accepts ArrayBuffer only", () => {
+    it("bytes passes an ArrayBuffer through and rejects a non-buffer", () => {
         expect.assertions(2);
 
         const buffer = new ArrayBuffer(4);
 
         expect(v.bytes().parse(buffer)).toBe(buffer);
-        expect(() => v.bytes().parse(new Uint8Array(4))).toThrow(ValidationError);
+        expect(() => v.bytes().parse("nope")).toThrow(ValidationError);
+    });
+
+    it("bytes normalises a view to an ArrayBuffer", () => {
+        expect.assertions(3);
+
+        const parsed = v.bytes().parse(new Uint8Array([1, 2, 3]));
+
+        expect(parsed).toBeInstanceOf(ArrayBuffer);
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
+    });
+
+    it("bytes copies only a view's own window, not its parent buffer", () => {
+        expect.assertions(2);
+
+        // A subarray views a slice of a larger buffer. Returning `view.buffer`
+        // would hand the column every byte of the parent — the neighbouring
+        // records' bytes included.
+        const parent = new Uint8Array([9, 9, 1, 2, 3, 9, 9]);
+        const parsed = v.bytes().parse(parent.subarray(2, 5));
+
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
     });
 
     it("literal", () => {
@@ -109,6 +132,36 @@ describe("composites", () => {
         expect(schema.parse({ name: "a" })).toEqual({ name: "a" });
         expect(schema.parse({ name: "a", nickname: "b" })).toEqual({ name: "a", nickname: "b" });
         expect(() => schema.parse({ name: "a", nickname: 7 })).toThrow(ValidationError);
+    });
+
+    it("parses an absent bare `v.any()` field, so the key is optional and not required (issue #688)", () => {
+        expect.assertions(3);
+
+        // `v.any()`'s parser returns its input unchanged, so `undefined` is a
+        // perfectly good value for it — an absent field parses. That is why
+        // `ObjectShapeType` types the key `data?: unknown` and `toJsonSchema`
+        // leaves it out of `required`; `@lunora/codegen` used to disagree and
+        // emit a REQUIRED `data: unknown` into `_generated/api.ts`, which made
+        // two procedures declaring the identical validator fail to typecheck
+        // against each other.
+        const schema = v.object({ data: v.any(), id: v.string() });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        expect(schema.parse({ id: "x" })).toEqual({ id: "x" });
+        // A declared `v.any()` still round-trips a supplied value untouched.
+        expect(schema.parse({ data: { nested: 1 }, id: "x" })).toEqual({ data: { nested: 1 }, id: "x" });
+    });
+
+    it("parses an absent field of a `v.union(...)` with an `any` member (issue #688)", () => {
+        expect.assertions(2);
+
+        // The union tries its members; `v.any()` accepts `undefined`, so the
+        // field is absent-tolerant exactly like a bare `v.any()`.
+        const schema = v.object({ id: v.string(), payload: v.union(v.string(), v.any()) });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        // A union of only absent-INTOLERANT members still requires the field.
+        expect(v.object({ flag: v.union(v.string(), v.number()) }).safeParse({}).ok).toBe(false);
     });
 
     it("object reads declared fields as own-properties, not through the prototype chain", () => {

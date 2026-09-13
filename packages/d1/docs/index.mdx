@@ -247,6 +247,36 @@ table, `internal error: too many SQL variables` — is treated as **permanent** 
 surfaces immediately, because re-running one turns a single fast failure into
 three slow ones and hides the cause.
 
+## Per-query cost accounting
+
+D1 returns `rows_read` / `rows_written` / `duration` in the `meta` of every
+result, and the exec layer records them instead of discarding them.
+
+**Rows read counts rows SCANNED, not rows returned.** That is the number D1
+bills and the number a missing index inflates: a query filtering on an
+unindexed column scans the table to find its subset, so one that cost 200 rows
+against a small table costs 200k once the table grows — nothing deployed, and
+the spend went up a thousandfold. The dashboard's own `rowsRead` metric is
+per-DATABASE, so it can say the total moved but never which query moved it.
+
+Each statement is emitted to Workers Logs under a **low-cardinality** tag from
+`d1QueryTag` — `select:users`, `insert:orders`, `select:unknown` when no table
+token is recognisable. Verb + table, never the rendered SQL: grouping on the
+statement itself mints a tag per distinct parameter value and answers nothing.
+
+```jsonc
+{ "source": "lunora", "type": "d1_query", "tag": "select:users", "rowsRead": 204831, "rowsWritten": 0, "durationMs": 41 }
+```
+
+Group by `tag` in the Workers Logs Query Builder and "D1 reads spiked" resolves
+to one culprit. The emit is best-effort — instrumentation never fails the query
+it measures — and a result with no usable `meta` (a test double, a `batch()`
+leg that reports none) is skipped rather than logged as zeroes, which would read
+as "this query was free".
+
+`readD1QueryCost(meta)` projects the same numbers as a `D1QueryCost` if you want
+to route them somewhere other than Workers Logs.
+
 ## Atomicity
 
 Each migration's body and its tracking-table INSERT run together in one

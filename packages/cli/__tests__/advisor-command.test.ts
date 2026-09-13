@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAdvisorCommand } from "../src/commands/advisor/handler";
+import { EXIT_CODE } from "../src/util/exit-code";
 import type { Logger } from "../src/util/logger";
 
 /** A logger that records rather than prints, so assertions can read the output. */
@@ -93,11 +94,15 @@ describe("lunora advisor", () => {
     });
 
     it("rejects a --min-score outside 0-100 rather than silently skipping the gate", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const { logger } = recordingLogger();
+        const result = runAdvisorCommand({ cwd: workdir, logger, minScore: 400, write: false });
 
-        expect(runAdvisorCommand({ cwd: workdir, logger, minScore: 400, write: false }).error).toContain("--min-score");
+        expect(result.error).toContain("--min-score");
+        // Exit 2, the bucket a bad `--format` already lands in: the flag value is
+        // wrong, which automation must not read as "the advisor found a problem".
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("errors when a baseline was asked for but does not exist", () => {

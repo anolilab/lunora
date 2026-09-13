@@ -2,8 +2,16 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { CODEGEN_ENV, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
+import {
+    CodegenDiagnosticError,
+    createCodegenProject,
+    describeErrorLevelFindings,
+    findTsconfig,
+    PROJECT_CONFIG_FILENAMES,
+    refreshCodegenProject,
+    runCodegen,
+} from "@lunora/codegen";
+import { CODEGEN_ENV, isCodegenDisabled, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
@@ -283,6 +291,27 @@ const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: stri
 };
 
 /**
+ * Codegen's logger outside a dev-server context. Module-scoped because two
+ * hooks now share it — `configResolved` (the cold-start run) and `buildStart`
+ * (the post-codegen hook and binding reconcile). The dev server's own logger
+ * is used instead for watch-triggered runs, see `serverLogger` below.
+ */
+const consoleLogger = {
+    error: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.error(message);
+    },
+    info: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.info(message);
+    },
+    warn: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.warn(message);
+    },
+};
+
+/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -324,7 +353,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // `server.restart()` (Vite re-invokes the hooks on the SAME plugin instance).
     //
     // `configFingerprint` is the binding-relevant baseline of wrangler.jsonc +
-    // lunora.json, refreshed after every Lunora-initiated config write so codegen's
+    // lunora.config.*, refreshed after every Lunora-initiated config write so codegen's
     // own idempotent rewrites never look like drift. `restartInFlight` collapses a
     // burst of edits during the async restart window into one restart.
     //
@@ -347,26 +376,34 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // target logs an ERROR line and still exits 0.
     let command: "build" | "serve" | undefined;
 
+    // `configResolved`'s codegen run, handed to `buildStart` so it escalates and
+    // post-processes that run instead of repeating it. See the hook for why the
+    // run moved earlier.
+    let primedCodegen: CodegenSafelyResult | undefined;
+
     return {
         config(_userConfig, env) {
             command = env.command;
         },
-        async buildStart() {
-            const logger = {
-                error: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.error(message);
-                },
-                info: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.info(message);
-                },
-                warn: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.warn(message);
-                },
-            };
+        // Codegen has to land before any OTHER plugin initialises, not before
+        // our own `buildStart`: `virtual:lunora/worker` imports
+        // `_generated/app.ts`, and Vite runs every `configureServer` — the
+        // Cloudflare plugin's included — before the first `buildStart`. On a
+        // cold `_generated/` that left a window (2.6s in the playground, and
+        // `_generated/` is gitignored so CI is always cold) in which the worker
+        // entry's own import could not resolve; whoever read the entry inside it
+        // failed on a specifier that would exist a moment later. `configResolved`
+        // is the last hook that still runs before the rest of the container, and
+        // codegen is synchronous, so the window closes entirely rather than
+        // getting smaller.
+        configResolved() {
+            if (command !== "build" && codegenDisabled) {
+                return;
+            }
 
+            primedCodegen = runCodegenSafely(options, consoleLogger);
+        },
+        async buildStart() {
             // Build mode: no devServer, no overlay callbacks.
             //
             // {@link isCodegenDisabled} is a DEV switch, honoured only in serve mode:
@@ -376,7 +413,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // shipping against a surface its target cannot serve, CI green the whole
             // way, from a variable someone exported in a shell profile.
             const skipCodegen = command !== "build" && codegenDisabled;
-            const { blockingMessage, failure, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
+            const { blockingMessage, failure, outputDirectory } = primedCodegen ?? (skipCodegen ? {} : runCodegenSafely(options, consoleLogger));
+
+            // One-shot: a `server.restart()` rebuilds the plugin container and
+            // re-primes, but if a host ever reuses this instance for a second
+            // `buildStart` it must generate afresh rather than replay a stale run.
+            primedCodegen = undefined;
 
             // Codegen threw: the schema could not be parsed or emitted at all.
             // Without this a `vite build` went on to bundle whatever `_generated/*`
@@ -408,7 +450,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 let hook;
 
                 try {
-                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: consoleLogger });
                 } finally {
                     hookRunning = false;
                 }
@@ -449,7 +491,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // re-exported container/workflow is raised in the browser error
             // overlay (Vite buffers it and replays to clients on connect) so the
             // fix surfaces here rather than at a late `wrangler deploy` failure.
-            await reconcileBindingsSafely(options, logger, (gaps) => {
+            await reconcileBindingsSafely(options, consoleLogger, (gaps) => {
                 devServer?.hot.send({
                     err: { loc: undefined, message: formatExportGapOverlay(gaps), stack: "" },
                     type: "error",
@@ -800,14 +842,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // in place. Both wrangler candidate names are watched (even if absent
             // now) so creating one mid-session is caught. `@cloudflare/vite-plugin`
             // already restarts on its own wrangler config change when the Cloudflare
-            // integration is active, but it does NOT watch lunora.json (the remote-
+            // integration is active, but it does NOT watch lunora.config.* (the remote-
             // binding preference) — and Vite's `server.restart()` coalesces
             // concurrent calls via its `_restartPromise`, so a same-tick double
             // restart is harmless. Under the BYO (`cloudflare: false`) path nothing
             // else watches wrangler.jsonc, so this becomes the sole restart trigger.
             const configWatchPaths = new Set<string>([
                 ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
-                resolve(options.projectRoot, LUNORA_CONFIG_FILE),
+                // Every candidate name, so CREATING the config mid-session is
+                // picked up: `load()` reads it once when the composed entry is
+                // built and nothing invalidates a virtual module, so an unwatched
+                // create silently did nothing until a manual restart.
+                ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(options.projectRoot, name)),
             ]);
 
             for (const configPath of configWatchPaths) {

@@ -65,6 +65,10 @@ const INSTRUMENTED_METHODS = new Set([
     "rankBefore",
     "rankPage",
     "rankPageRows",
+    // Not in `TABLE_FIRST_METHODS`: a traversal's first argument is its start
+    // node, and the tables it visits are discovered as it walks — so the span
+    // carries no table name rather than a misleading one.
+    "related",
     "replace",
     "restore",
 ]);

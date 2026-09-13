@@ -1,3 +1,166 @@
+## @lunora/advisor [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.137...@lunora/advisor@1.0.0-alpha.138) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+
+## @lunora/advisor [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.136...@lunora/advisor@1.0.0-alpha.137) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+
+## @lunora/advisor [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.135...@lunora/advisor@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+
+## @lunora/advisor [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.134...@lunora/advisor@1.0.0-alpha.135) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/advisor [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.133...@lunora/advisor@1.0.0-alpha.134) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/advisor [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.132...@lunora/advisor@1.0.0-alpha.133) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen,advisor:** drop the OCC-retry claim from advisories ([#710](https://github.com/anolilab/lunora/issues/710)) ([e5b7734](https://github.com/anolilab/lunora/commit/e5b77343804dc5e0683233bb9547ad5ba4ed3624))
+
+## @lunora/advisor [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.131...@lunora/advisor@1.0.0-alpha.132) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/advisor [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.130...@lunora/advisor@1.0.0-alpha.131) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.123
+
+## @lunora/advisor [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.129...@lunora/advisor@1.0.0-alpha.130) (2026-09-12)
+
+### Bug Fixes
+
+* **codegen:** clear auth advisory on signed webhooks ([#697](https://github.com/anolilab/lunora/issues/697)) ([ab14072](https://github.com/anolilab/lunora/commit/ab140721c483a0560f53de7d7d98eebaeb447f84))
+
+## @lunora/advisor [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.128...@lunora/advisor@1.0.0-alpha.129) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.122
+* **@lunora/values:** upgraded to 1.0.0-alpha.46
+
+## @lunora/advisor [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.127...@lunora/advisor@1.0.0-alpha.128) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+
+## @lunora/advisor [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.126...@lunora/advisor@1.0.0-alpha.127) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
+## @lunora/advisor [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.125...@lunora/advisor@1.0.0-alpha.126) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/advisor [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.124...@lunora/advisor@1.0.0-alpha.125) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+
+## @lunora/advisor [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.123...@lunora/advisor@1.0.0-alpha.124) (2026-09-10)
+
+### Features
+
+* **advisor:** flag a signup mutation with no disposable-email gate ([#685](https://github.com/anolilab/lunora/issues/685)) ([acbff85](https://github.com/anolilab/lunora/commit/acbff85138d3fde8bc22c9bce9ff052ab7017896))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
+## @lunora/advisor [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.122...@lunora/advisor@1.0.0-alpha.123) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/advisor [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.121...@lunora/advisor@1.0.0-alpha.122) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/advisor [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.120...@lunora/advisor@1.0.0-alpha.121) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/advisor [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.119...@lunora/advisor@1.0.0-alpha.120) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/advisor [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.118...@lunora/advisor@1.0.0-alpha.119) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+
+## @lunora/advisor [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.117...@lunora/advisor@1.0.0-alpha.118) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
 ## @lunora/advisor [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.116...@lunora/advisor@1.0.0-alpha.117) (2026-09-08)
 
 

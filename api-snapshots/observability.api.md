@@ -46,6 +46,7 @@ interface AiRunBinding {
 ```ts
 interface AppendRequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -59,6 +60,7 @@ interface AppendRequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 
@@ -672,6 +674,7 @@ interface RecordFunctionMetricInput {
 ```ts
 interface RequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -686,6 +689,7 @@ interface RequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 

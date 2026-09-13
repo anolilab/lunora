@@ -7,8 +7,9 @@ import { runCodegen } from "@lunora/codegen";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";
 import type { AdvisorOptions } from "./index";
 import { formatEntry, formatMatrix, formatSummary } from "./report";
@@ -22,7 +23,7 @@ interface AdvisorCommandOptions {
     /** Inspect a single `file#exportName`. */
     entry?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     /**
      * Stamp for the artifact. Defaults to the epoch rather than "now": the map is
@@ -40,17 +41,28 @@ interface AdvisorCommandOptions {
     write?: boolean;
 }
 
-interface AdvisorCommandResult {
+/** The `--format json` payload: the scored map, plus each gate's verdict. */
+interface AdvisorCommandData {
     /** `true` when `--min-score` was given and the score fell below it. */
     belowMinScore?: boolean;
     /** Set when a baseline was requested and could be read. */
     comparison?: BaselineComparison;
-    /** Set when the run aborted, or a gate could not be evaluated. */
-    error?: string;
     /** The scored map; absent only when the run aborted before scoring. */
     map?: AdvisorMap;
     /** Where the artifact was written, when it was. */
     written?: string;
+}
+
+interface AdvisorCommandResult extends AdvisorCommandData {
+    /**
+     * Exit code, when the run resolved one itself. Only a USAGE refusal does —
+     * every other outcome is classified by `failed()`, which cannot tell a
+     * mistyped `--min-score` (the invocation is wrong, exit 2) from a failed gate
+     * (exit 1).
+     */
+    code?: number;
+    /** Set when the run aborted, or a gate could not be evaluated. */
+    error?: string;
 }
 
 /** See {@link AdvisorCommandOptions.generatedAt} — a committed artifact must not churn. */
@@ -126,23 +138,19 @@ const render = (map: AdvisorMap, options: AdvisorCommandOptions, comparison: Bas
  */
 const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult => {
     const projectRoot = options.cwd ?? process.cwd();
-    const json = isJsonFormat(options.format);
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("advisor", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { error: formatError };
-    }
+    const json = options.format === "json";
+    const { logger } = options;
 
     const minScore = parseMinScore(options.minScore);
 
     if ("error" in minScore) {
         options.logger.error(minScore.error);
 
-        return { error: minScore.error };
+        // Same bucket as a bad `--format`: the invocation is wrong, not the
+        // project. Anything the taxonomy leaves at the generic failure tells
+        // automation "the advisor ran and something went wrong", which is the
+        // opposite of what a mistyped flag means.
+        return { code: EXIT_CODE.USAGE, error: minScore.error };
     }
 
     const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot });
@@ -184,8 +192,6 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
     }
 
     if (json) {
-        printJson(result);
-
         return result;
     }
 
@@ -209,21 +215,25 @@ const failed = (result: AdvisorCommandResult): boolean => {
 };
 
 /** `lunora advisor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions>(({ cwd, logger, options }) => {
+const execute: CommandHandler<AdvisorOptions> = defineHandler<AdvisorOptions, AdvisorCommandData>(({ cwd, format, logger, options }) => {
     const result = runAdvisorCommand({
         all: options.all,
         baseline: options.baseline,
         cwd,
         entry: options.entry,
-        format: options.format,
+        format,
         logger,
         minScore: options.minScore,
         out: options.out,
         write: options.write,
     });
 
-    return { code: failed(result) ? 1 : 0 };
+    return {
+        code: result.code ?? (failed(result) ? 1 : 0),
+        data: { belowMinScore: result.belowMinScore, comparison: result.comparison, map: result.map, written: result.written },
+        error: result.error,
+    };
 });
 
 export { execute, runAdvisorCommand };
-export type { AdvisorCommandOptions, AdvisorCommandResult };
+export type { AdvisorCommandData, AdvisorCommandOptions, AdvisorCommandResult };

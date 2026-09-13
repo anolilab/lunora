@@ -35,7 +35,7 @@ module Lunora
   #
   # Divergence from @lunora/client: the TypeScript engine suppresses a
   # notification whose folded result is identical to the value already displayed.
-  # Reference identity has no portable meaning across the seven ports, so they
+  # Reference identity has no portable meaning across the eight ports, so they
   # notify on every fold instead — a consumer sees at most a few redundant
   # callbacks carrying the same value, never a missing one.
   module Optimistic

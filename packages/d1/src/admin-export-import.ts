@@ -181,7 +181,7 @@ const normalizeUnsetOptionals = (definition: SchemaLike["tables"][string], docum
             continue;
         }
 
-        const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
+        const inner = validator._meta?.inner;
 
         if (!acceptsNull(inner)) {
             unset.add(field);

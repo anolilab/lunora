@@ -2,6 +2,8 @@
 title: Relations
 description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
 related:
+    - to: /docs/concepts/relation-graph
+      note: "`ctx.db.related` — walking the derived foreign-key graph"
     - to: /docs/concepts/schema
       note: "declaring tables, validators and indexes"
     - to: /docs/concepts/indexes
@@ -192,3 +194,26 @@ const userWithPosts = await ctx.db.users.findFirst({
 
 The hydration is driven by the same FK + index, so the same advice applies:
 keep the FK indexed or the loader scans.
+
+## Relations vs the relation graph
+
+The descriptors on this page are **declared**: you name each relationship, give
+it a cardinality, and `with` hydrates it one hop at a time with a fully typed
+result. That is the right tool when you already know which relationship you
+want.
+
+[`ctx.db.related`](/docs/concepts/relation-graph) answers the other question —
+"what is this connected to" — over a graph that is **derived** rather than
+declared. It reads every `v.id("table")` column in the schema, whether or not a
+`.relations()` descriptor names it, and walks up to four hops in one call,
+returning each row with the path that reached it.
+
+|            | `with` (this page)          | `ctx.db.related`                                         |
+| ---------- | --------------------------- | -------------------------------------------------------- |
+| Edges      | the descriptors you declare | every `v.id(...)` column, derived                        |
+| Hops       | one per named accessor      | up to 4, breadth-first                                   |
+| Result     | typed onto the parent row   | a flat page of `{ table, document, depth, path, score }` |
+| Use it for | a known relationship, typed | discovery, retrieval, model context                      |
+
+Neither replaces the other, and both read through the same foreign key — so
+[indexing that column](#index-your-foreign-keys) matters just as much either way.

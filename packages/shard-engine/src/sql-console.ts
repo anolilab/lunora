@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
-import type { SqlExec } from "./ctx-db";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /**
  * Result of a `__lunora_admin__:runSql` read-only query: the column names (from
@@ -17,6 +17,29 @@ interface SqlConsoleResult {
 
 /** Most rows the SQL console returns in one query, so a `SELECT *` on a huge table can't blow up the response. */
 const MAX_SQL_ROWS = 1000;
+
+/**
+ * Make a result's column names unique for display, suffixing every repeat after
+ * the first with `:2`, `:3`, ….
+ *
+ * SQL lets two result columns share a name — `SELECT u.id, o.id` declares two
+ * columns both called `id` — but a row object cannot hold the same key twice.
+ * Renaming the repeats is what lets both values be shown at all; the alternative
+ * is to keep one and drop the other silently. The suffix uses `:` because a bare
+ * SQLite identifier cannot contain one, so a renamed column is always
+ * distinguishable from a column the query really named.
+ */
+const dedupeColumnNames = (names: ReadonlyArray<string>): string[] => {
+    const seen = new Map<string, number>();
+
+    return names.map((name) => {
+        const occurrence = (seen.get(name) ?? 0) + 1;
+
+        seen.set(name, occurrence);
+
+        return occurrence === 1 ? name : `${name}:${String(occurrence)}`;
+    });
+};
 
 /**
  * Reject anything that isn't a single read-only statement. Throws a 400
@@ -55,13 +78,46 @@ const assertReadonly = (query: string): void => {
  * there. Decoding here would disagree with the `json_extract(__doc__, …)` the
  * same operator types next, and would change what an existing saved query
  * returns. Reasoning in full in `plans/README.md`, row 303.
+ *
+ * ## Columns come from the statement, not from the first row
+ *
+ * The columns a result HAS and the keys its first row happens to carry are not
+ * the same list, and reading the second for the first loses information in two
+ * ways the operator cannot see. A zero-row result has no first row, so the grid
+ * rendered no header at all — the query's shape is exactly what someone
+ * debugging an empty result needs. And two result columns may share a name
+ * (`SELECT u.id, o.id FROM users u JOIN orders o …` declares two `id`s), which
+ * a row object collapses to the last one — so `u.id` vanished with nothing to
+ * suggest a column had been dropped.
+ *
+ * Where the reader exposes them, the statement's own {@link SqlCursor.columnNames}
+ * and positional {@link SqlCursor.raw} rows are used instead, with repeats
+ * renamed by {@link dedupeColumnNames}. A reader exposing neither keeps the old
+ * behaviour rather than losing the result; see those fields for which ones do.
  */
 const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     assertReadonly(query);
 
-    const all = sql.exec(query).toArray();
-    const rows = all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all;
-    const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
+    const cursor = sql.exec(query);
+    const { columnNames, raw } = cursor;
+
+    if (columnNames === undefined || raw === undefined) {
+        const all = cursor.toArray();
+        const rows = all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all;
+
+        return {
+            columns: rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [],
+            rowCount: all.length,
+            rows,
+            truncated: all.length > MAX_SQL_ROWS,
+        };
+    }
+
+    const columns = dedupeColumnNames(columnNames);
+    const all = [...raw.call(cursor)];
+    const rows = (all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all).map((values) =>
+        Object.fromEntries(columns.map((column, index) => [column, values[index]])),
+    );
 
     return { columns, rowCount: all.length, rows, truncated: all.length > MAX_SQL_ROWS };
 };

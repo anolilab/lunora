@@ -149,6 +149,9 @@ generated_files:
     - "**/project.json"
     - "apps/docs/src/data/packages-metadata.json"
     - "apps/docs/scripts/generate-*.js"
+    # The generated error-code reference itself: a hand edit to the output is drift
+    # too, and its generator's only other input (packages/errors) is listed below.
+    - "apps/docs/src/content/docs/errors.mdx"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"

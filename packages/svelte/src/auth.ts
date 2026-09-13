@@ -1,5 +1,6 @@
 import type { User } from "@lunora/client";
-import { getIdentityStore } from "@lunora/client/auth";
+import type { AuthStatus } from "@lunora/client/auth";
+import { getIdentityStore, isAuthenticatedStatus, isLoadingStatus } from "@lunora/client/auth";
 import type { Readable } from "svelte/store";
 import { derived, readable } from "svelte/store";
 
@@ -9,6 +10,14 @@ import { getLunoraClient } from "./context";
 interface AuthStore {
     /** Set the auth token on the underlying `LunoraClient`. */
     setToken: (token: string | null) => void;
+
+    /**
+     * Readable store of the resolved auth state. Branch on this, not on
+     * `$user === null` — see the contract in `@lunora/client/auth`; `user` is
+     * `null` both when signed out and when a held credential's identity could
+     * not be resolved.
+     */
+    status: Readable<AuthStatus>;
     /** Readable store of the auth token (`null` when signed out). */
     token: Readable<string | null>;
     /** Readable store of the resolved user (`null` when signed out or still loading). */
@@ -59,19 +68,31 @@ const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore =>
         });
     });
 
+    const status = readable<AuthStatus>(store.getStatus(), (set) => {
+        set(store.getStatus());
+
+        if (!isBrowser()) {
+            return () => {};
+        }
+
+        return store.subscribe(() => {
+            set(store.getStatus());
+        });
+    });
+
     const setToken = (next: string | null): void => {
         client.setAuthToken(next);
     };
 
-    return { setToken, token, user };
+    return { setToken, status, token, user };
 };
 
 /** Derived auth-gate stores for template gating (`{#if $isAuthenticated}`), built on {@link auth}. */
 interface AuthGateStore {
-    /** Readable store, `true` once a token is set and the user has resolved. */
+    /** Readable store, `true` once a credential is held and nothing has contradicted it. */
     isAuthenticated: Readable<boolean>;
 
-    /** Readable store, `true` while a token is set but the user hasn't resolved yet. */
+    /** Readable store, `true` while a credential's first identity resolve is in flight. */
     isLoading: Readable<boolean>;
 }
 
@@ -79,9 +100,11 @@ interface AuthGateStore {
  * Derived auth-gate stores built on {@link auth}. Svelte has no JSX-style
  * `Authenticated` slot component the way React/Vue/Solid do (this package is
  * plain `.ts` over stores — no `.svelte` component compiler required), so this
- * exposes the same three-state logic as two boolean stores instead: a token
- * with no resolved user yet is `isLoading`; a token with a resolved user is
- * `isAuthenticated`; no token is neither (the signed-out state a template
+ * exposes the same three-state logic as two boolean stores instead, mapped from
+ * the shared `AuthStatus` contract in `@lunora/client/auth`: a credential whose
+ * first identity resolve is in flight is `isLoading`; a credential nothing has
+ * contradicted — including one whose identity endpoint is unreachable — is
+ * `isAuthenticated`; no session is neither (the signed-out state a template
  * checks for with a plain `{:else}`).
  *
  * ```ts
@@ -93,10 +116,10 @@ interface AuthGateStore {
  * Pass an explicit client to bypass the ambient context (useful in tests).
  */
 const authGate = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthGateStore => {
-    const { token, user } = auth(explicitClient);
+    const { status } = auth(explicitClient);
 
-    const isLoading = derived([token, user], ([$token, $user]) => $token !== null && $user === null);
-    const isAuthenticated = derived([token, user], ([$token, $user]) => $token !== null && $user !== null);
+    const isLoading = derived(status, ($status) => isLoadingStatus($status));
+    const isAuthenticated = derived(status, ($status) => isAuthenticatedStatus($status));
 
     return { isAuthenticated, isLoading };
 };

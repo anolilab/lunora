@@ -57,7 +57,9 @@
  *
  * - `databaseHooks.user.create.before` — the universal backstop. An unspent,
  *   unexpired invitation must exist for the address, whatever created the row.
- * - `hooks.before` on `/sign-up/email` — additionally requires the token.
+ * - `hooks.before` on `/sign-up/email` — additionally requires the token, and
+ *   re-checks that the invitation is unspent and unexpired so a stale link earns
+ *   the same vague rejection a wrong token does.
  *
  * Without the token this would be guessable in bulk, and that is not theoretical:
  * the common case is inviting a team, where addresses are `first.last@company`.
@@ -80,13 +82,17 @@
  * # What it refuses that you may not expect
  *
  * Plugins that mint an account from something other than a real mailbox still
- * synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
- * `<wallet>@<domain>`, `phoneNumber`'s sign-up-on-verification writes a temp
- * address of its own. None of them can match an invitation, so the gate **rejects**
- * them — but only once the first account exists. With
- * {@link InviteOnlyOptions.allowFirstUser} on, the bootstrap runs before the
- * address is ever compared, so the first anonymous session or wallet sign-in is
- * what claims it. Do not combine those plugins with this one.
+ * synthesize an address — `siwe` writes `<wallet>@<domain>`, `phoneNumber`'s
+ * sign-up-on-verification writes a temp address of its own. Neither can match an
+ * invitation, so the gate **rejects** them — but only once the first account
+ * exists. With {@link InviteOnlyOptions.allowFirstUser} on, the bootstrap runs
+ * before the address is ever compared, so the first wallet sign-in is what claims
+ * it. Do not combine those plugins with this one.
+ *
+ * `anonymous()` is the one carve-out, because anonymous sign-in is not
+ * registration — see {@link isAnonymousUser}. Installing both gives you "browse
+ * anonymously, invitation required to keep an account": the throwaway identity is
+ * admitted, and converting it into a real account is gated like any other sign-up.
  *
  * `AuthAdmin.createUser` (`./admin.ts`) mints through the same internal adapter, so
  * the studio's create-user action is gated too. Issue an invitation first, or call
@@ -283,10 +289,36 @@ const emailOf = (user: { email?: unknown }): string | undefined => {
     return normalized === "" ? undefined : normalized;
 };
 
-/** Whether `email` has an invitation that is present, unspent, and unexpired. */
-const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> => {
-    const row = await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] });
+/** better-auth's own id for the `anonymous()` plugin — the only thing that puts an `isAnonymous` field on `user`. */
+const ANONYMOUS_PLUGIN_ID = "anonymous";
 
+/** Whether `anonymous()` is installed. Both uses of the flag below are unsafe without it — see {@link isAnonymousUser}. */
+const hasAnonymousPlugin = (options: BetterAuthOptions): boolean => (options.plugins ?? []).some((plugin) => plugin.id === ANONYMOUS_PLUGIN_ID);
+
+/**
+ * Whether the row being created is better-auth's `anonymous()` user — the one
+ * carve-out in the gate below, because anonymous sign-in is not registration.
+ *
+ * Converting an anonymous user to a real account stays gated: better-auth creates
+ * a SECOND, non-anonymous row and links the anonymous one afterwards, so that row
+ * reaches this hook without the flag.
+ *
+ * **Only trusted when `anonymous()` is installed**, which is what makes the flag
+ * unreachable from a request body: the plugin declares `isAnonymous` as
+ * `input: false`, so better-auth strips it from every payload it parses. An app
+ * that declares the same column through `user.additionalFields` — a leftover, or
+ * a hand-rolled guest mode — makes it body-settable, and a bare
+ * `{ isAnonymous: true }` would then walk straight through the invitation gate.
+ *
+ * Typed as an index signature rather than `{ isAnonymous?: unknown }` like its
+ * neighbour {@link emailOf}: the hook payload is `User & Record<string, unknown>`,
+ * which has no property in common with an all-optional type, so the weak-type
+ * check rejects it.
+ */
+const isAnonymousUser = (user: Readonly<Record<string, unknown>>): boolean => user["isAnonymous"] === true;
+
+/** Whether an already-loaded invitation row is present, unspent, and unexpired. */
+const isUsableInvitation = (row: null | Record<string, unknown>): boolean => {
     if (row === null || row["acceptedAt"] instanceof Date) {
         return false;
     }
@@ -294,12 +326,17 @@ const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise
     return row["expiresAt"] instanceof Date && row["expiresAt"].getTime() > Date.now();
 };
 
+/** Whether `email` has an invitation that is present, unspent, and unexpired. */
+const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> =>
+    isUsableInvitation(await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] }));
+
 /**
  * Warn once per auth context when the password provider is on without
- * `requireEmailVerification`. It does not make an invited address secret (see the
- * security section above) — it is the difference between an attacker who guesses
- * one holding a session immediately and holding none until the invitee clicks a
- * link she was expecting. Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it
+ * `requireEmailVerification`. The token already stops address-guessing (see the
+ * security section above); this is about the residual risk the token cannot
+ * cover — a link that reached the wrong person. It is the difference between
+ * whoever holds a forwarded link holding a session immediately and holding none
+ * until someone clicks a link delivered to the address itself. Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it
  * does not change the default, it just refuses to let the gap be silent.
  */
 const warnIfVerificationOff = (options: BetterAuthOptions): void => {
@@ -310,9 +347,9 @@ const warnIfVerificationOff = (options: BetterAuthOptions): void => {
     // eslint-disable-next-line no-console
     console.warn(
         "@lunora/auth: inviteOnly() is installed with password sign-up but without " +
-            "`emailAndPassword: { requireEmailVerification: true }`. An invitation is keyed by email address " +
-            "alone, so anyone who learns an invited address can sign up as it — and without verification they " +
-            "hold a session the moment they do.",
+            "`emailAndPassword: { requireEmailVerification: true }`. The invitation link is a bearer " +
+            "credential, so anyone it reaches — a forwarded mail, a shared inbox — can sign up as that " +
+            "address, and without verification they hold a session the moment they do.",
     );
 };
 
@@ -341,13 +378,33 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
     // ever use it.
     let mayBootstrap = options.allowFirstUser ?? false;
 
+    // Set from `init`, which better-auth runs at instance construction — before any
+    // request reaches either hook. `false` until then fails SAFE: the window closes
+    // early rather than staying open.
+    let anonymousInstalled = false;
+
     /** Whether this request falls inside the one-account bootstrap window. Closes it for good on the first miss. */
     const inBootstrapWindow = async (adapter: AuthAdapter): Promise<boolean> => {
         if (!mayBootstrap) {
             return false;
         }
 
-        if ((await adapter.count({ model: "user" })) === 0) {
+        const users = await adapter.count({ model: "user" });
+
+        // An anonymous row is not an account. `anonymous()` mints one on first page
+        // load, which is the whole point of it — so counting those burns the single
+        // bootstrap seat before the owner ever opens /sign-up, and the window never
+        // reopens. The deployment is then un-bootstrappable, which is the exact
+        // outcome `allowFirstUser` exists to prevent.
+        //
+        // Subtracted rather than filtered with `ne`: a row written before the plugin
+        // was installed has `isAnonymous` NULL, and `NULL <> 1` is NULL, so an
+        // `ne`-filtered count would omit real accounts and hold the window OPEN on a
+        // populated deployment. Counting the anonymous rows and subtracting treats
+        // every NULL as an account, which errs toward closing.
+        const anonymous = anonymousInstalled && users > 0 ? await adapter.count({ model: "user", where: [{ field: "isAnonymous", value: true }] }) : 0;
+
+        if (users - anonymous <= 0) {
             return true;
         }
 
@@ -412,7 +469,13 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                         // token cost the same.
                         const presentedHash = await hashToken(presented);
 
-                        if (typeof stored !== "string" || !digestsMatch(stored, presentedHash)) {
+                        // Usability is checked HERE as well as in `user.create.before`,
+                        // not only there: the database gate answers
+                        // `SIGN_UP_INVITE_REQUIRED`, and letting a spent or expired
+                        // invitation past this hook to earn that code tells the holder
+                        // of a stale link that the address IS on the list — the exact
+                        // distinction the uniform rejection exists to hide.
+                        if (typeof stored !== "string" || !digestsMatch(stored, presentedHash) || !isUsableInvitation(row)) {
                             refuse();
                         }
                     }),
@@ -426,7 +489,13 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
 
             const { adapter } = context;
 
+            anonymousInstalled = hasAnonymousPlugin(context.options);
+
             const before: UserCreateBefore = async (user) => {
+                if (anonymousInstalled && isAnonymousUser(user)) {
+                    return;
+                }
+
                 const email = emailOf(user);
 
                 if (email !== undefined && (await hasUsableInvitation(adapter, email))) {
@@ -448,7 +517,9 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
             const after: UserCreateAfter = async (user) => {
                 const email = emailOf(user);
 
-                if (email === undefined) {
+                // An anonymous user's generated address marks no invitation spent,
+                // so the write is a wasted round trip.
+                if (email === undefined || (anonymousInstalled && isAnonymousUser(user))) {
                     return;
                 }
 

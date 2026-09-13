@@ -6,11 +6,15 @@ import { gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BuildCommandResult } from "../../src/commands/build/handler";
-import { runBuildCommand } from "../../src/commands/build/handler";
+import type { BuildCommandData, BuildCommandResult } from "../../src/commands/build/handler";
+import { execute, runBuildCommand } from "../../src/commands/build/handler";
+import type { BuildOptions } from "../../src/commands/build/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import { setCommandLogger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -67,6 +71,15 @@ const bundlingSpawner =
 
         return { code: 0, descriptor, stderr: "", stdout: "" };
     };
+
+// `execute` builds its own spawner, so the document test below would otherwise
+// shell out to a real wrangler. Stubbing the default makes that leg write the
+// same out-dir `bundlingSpawner` does.
+vi.mock(import("../../src/util/spawn"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, defaultSpawner: async (descriptor) => bundlingSpawner("dist-worker")(descriptor) };
+});
 
 describe("lunora build", () => {
     beforeEach(() => {
@@ -176,7 +189,7 @@ describe("lunora build", () => {
         expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
-    it("reports the size in the --format json document without failing on it", async () => {
+    it("measures the bundle for the --format json payload without failing on it", async () => {
         expect.assertions(3);
 
         const { logger } = silentLogger();
@@ -203,11 +216,38 @@ describe("lunora build", () => {
 
         // Measuring is reporting: a size never changes the exit code.
         expect(result.code).toBe(0);
+        // The document is `defineHandler`'s; the command writes nothing itself, so
+        // the wrangler leg cannot splice its own output into it.
+        expect(written).toHaveLength(0);
+        expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
+    });
 
-        const document = JSON.parse(written.join("")) as BuildCommandResult;
+    /**
+     * Through `execute`, because the envelope is `defineHandler`'s: the command
+     * body writes nothing, so nothing below this line is covered by asserting on
+     * `runBuildCommand`'s in-process result — which is how the measurement could
+     * move under `data` while `scripts/check-worker-size.js`, the one consumer,
+     * still read it off the top level and saw "no bundle" on every healthy build.
+     */
+    it("carries the bundle measurement in the --format json envelope's data", async () => {
+        expect.assertions(4);
 
-        expect(written).toHaveLength(1);
-        expect(document.bundle?.gzipBytes).toBeGreaterThan(0);
+        setCommandLogger({ error: () => {}, info: () => {}, success: () => {}, warn: () => {} });
+
+        try {
+            const { code, document } = await runExecute<BuildOptions, BuildCommandData>(execute, {
+                commandName: "build",
+                cwd: workdir,
+                options: { format: "json", outDir: "dist-worker" },
+            });
+
+            expect(code).toBe(0);
+            expect(document?.code).toBe(0);
+            expect(document?.data?.bundle?.files).toBe(1);
+            expect(document?.data?.bundle?.gzipBytes).toBe(gzipSync(Buffer.from(SCRIPT)).byteLength);
+        } finally {
+            setCommandLogger(undefined);
+        }
     });
 
     it("says so rather than reporting zero when there is nothing to weigh", async () => {
@@ -238,7 +278,7 @@ describe("lunora build", () => {
 
         const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
     });
 });

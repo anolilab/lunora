@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runEnvCommand } from "../../src/commands/env/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -213,7 +214,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, key: "SECRET", logger, subcommand: "set", value });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             // Nothing should have been written for a rejected value.
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
         });
@@ -262,7 +263,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, key: "MISSING", logger, subcommand: "get" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(recorded.errors.join("\n")).toContain("MISSING");
         });
 
@@ -327,7 +328,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, key: "A.B", logger, subcommand: "unset" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(recorded.errors.join("\n")).toContain("invalid key");
         });
 
@@ -358,7 +359,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push", yes: true });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(recorded.errors.join("\n")).toContain("AUTH_SECRET");
             expect(recorded.errors.join("\n")).toContain("env doctor");
@@ -390,7 +391,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(recorded.errors.join("\n")).toContain("--yes");
         });
@@ -519,7 +520,7 @@ describe("lunora env", () => {
 
             const result = await runEnvCommand({ cwd: workdir, key: "1BAD", logger, subcommand: "set", value: "x" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
             expect(recorded.errors.join("\n")).toContain("invalid key");
         });
@@ -562,7 +563,7 @@ describe("lunora env", () => {
             const { logger, recorded } = recordingLogger();
             const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(recorded.errors.join("\n")).toContain("is missing");
         });
 
@@ -699,7 +700,7 @@ describe("lunora env", () => {
             const { logger, recorded } = recordingLogger();
             const refused = await runEnvCommand({ cwd: workdir, key: "LUNORA_ADMIN_TOKEN", logger, set: true, subcommand: "generate" });
 
-            expect(refused.code).toBe(1);
+            expect(refused.code).toBe(EXIT_CODE.USAGE);
             expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(live);
 
             // …and --yes is the deliberate rotation.
@@ -742,8 +743,41 @@ describe("lunora env", () => {
             const { logger, recorded } = recordingLogger();
             const result = await runEnvCommand({ cwd: workdir, key: "bad-key!", logger, subcommand: "generate" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(recorded.errors.join("\n")).toContain("invalid key");
+        });
+
+        /**
+         * `--set`'s product is a written `.dev.vars`, not a printed value: the
+         * pretty path names the keys and prints nothing else. The json document
+         * used to carry `secrets: [{ key, value }]`, which made `--format json`
+         * strictly more disclosing than the default for the same flags and put a
+         * freshly-minted admin bearer into every CI log and pipe consumer.
+         */
+        it("--set reports only the written key names, never the minted values", async () => {
+            expect.assertions(4);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, format: "json", key: "AUTH_SECRET", logger, set: true, subcommand: "generate" });
+            const written = readFileSync(join(workdir, ".dev.vars"), "utf8");
+            const minted = /AUTH_SECRET="?([a-f0-9]{64})/u.exec(written)?.[1];
+
+            expect(result.code).toBe(0);
+            expect(minted).toMatch(HEX64);
+            expect(result.data).toStrictEqual({ subcommand: "generate", written: ["AUTH_SECRET"] });
+            // The value really is absent from the whole document, not just from a
+            // field somebody remembered to drop.
+            expect(JSON.stringify(result.data)).not.toContain(minted);
+        });
+
+        it("still returns the minted values WITHOUT --set, which is the point of that mode", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, format: "json", key: "AUTH_SECRET", logger, subcommand: "generate" });
+
+            expect(result.code).toBe(0);
+            expect(result.data).toStrictEqual({ secrets: [{ key: "AUTH_SECRET", value: expect.stringMatching(HEX64) }], subcommand: "generate" });
         });
     });
 });

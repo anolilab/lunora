@@ -71,7 +71,7 @@ final class OptimisticOfflineTest {
      * — its monitor is REENTRANT, so a callback running inside the critical section neither hangs
      * nor deadlocks, which is why the violation was invisible for as long as it was. The re-entrant
      * call is the shape that hard-deadlocks the sibling ports whose lock is not reentrant, kept
-     * here so all seven suites drive the same scenario.
+     * here so all eight suites drive the same scenario.
      */
     private static void assertUnlocked(Client client, List<String> violations, String name) {
         if (Thread.holdsLock(client.lock)) {
@@ -85,7 +85,7 @@ final class OptimisticOfflineTest {
     /**
      * No callback a consumer supplies runs while the client holds its lock.
      *
-     * <p>{@code sdks/README.md} states this for all seven ports: not the optimistic update, not a
+     * <p>{@code sdks/README.md} states this for all eight ports: not the optimistic update, not a
      * queue entry's precondition, not {@code onSettled}, not a subscription handler. The transform
      * runs and the precondition is evaluated outside the critical section; the lock is taken only
      * to install the result — in ONE section with the offline decision and the enqueue, so the

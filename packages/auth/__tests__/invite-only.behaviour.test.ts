@@ -1,4 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
+import { anonymous } from "better-auth/plugins";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
@@ -90,6 +91,62 @@ describe("inviteOnly", () => {
         expect(database["user"]).toHaveLength(1);
     });
 
+    /** An instance carrying both plugins, which is the combination that used to break. */
+    const buildAnonymousAuth = (pluginOptions: Parameters<typeof inviteOnly>[0] = {}): any =>
+        createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(database),
+            emailAndPassword: { enabled: true },
+            plugins: [anonymous(), inviteOnly(pluginOptions)],
+            secret: SECRET,
+        });
+
+    it("leaves anonymous sign-in working when `anonymous()` is installed alongside it", async () => {
+        expect.assertions(2);
+
+        // `anonymous()` mints its user through the same `createUser` path with a
+        // generated address, so the gate used to reject it — turning anonymous
+        // sign-in off with a `SIGN_UP_INVITE_REQUIRED` that named neither plugin.
+        auth = buildAnonymousAuth();
+
+        await expect(auth.api.signInAnonymous()).resolves.toBeDefined();
+
+        // Password sign-up is still gated: the carve-out is the `isAnonymous` flag,
+        // not "the anonymous plugin is installed".
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
+    });
+
+    it("does not let an anonymous row burn the allowFirstUser bootstrap seat", async () => {
+        expect.assertions(3);
+
+        // An SPA calls signIn.anonymous() on first page load — that is what the
+        // plugin is for. If that row counts as "the user table is no longer empty",
+        // the owner can never claim the one bootstrap account and the deployment is
+        // un-bootstrappable, which is the opposite of what allowFirstUser promises.
+        auth = buildAnonymousAuth({ allowFirstUser: true });
+
+        await expect(auth.api.signInAnonymous()).resolves.toBeDefined();
+        await expect(signUp("owner@example.com")).resolves.toBeDefined();
+
+        // …and the seat is spent once a real account exists.
+        await expect(signUp("stranger@example.com")).rejects.toThrow(/not valid/);
+    });
+
+    it("still gates a sign-up body that claims isAnonymous itself", async () => {
+        expect.assertions(2);
+
+        auth = buildAnonymousAuth();
+
+        // `anonymous()` declares `isAnonymous` as `input: false`, so better-auth
+        // strips it from the parsed payload and the row reaches the hook without it.
+        // This pins that: the carve-out must never be reachable from a request body.
+        await expect(
+            auth.api.signUpEmail({ body: { email: "stranger@example.com", isAnonymous: true, name: "Ada", password: STRONG_PASSWORD } }),
+        ).rejects.toThrow(/not valid/);
+
+        expect(database["user"]).toHaveLength(0);
+    });
+
     it("admits an invited address and marks the invitation spent", async () => {
         expect.assertions(3);
 
@@ -176,7 +233,7 @@ describe("inviteOnly", () => {
         });
     });
 
-    it("refuses an expired invitation", async () => {
+    it("refuses an expired invitation with the same message a wrong token earns", async () => {
         expect.assertions(1);
 
         const token = await invite("ada@example.com", 60);
@@ -184,10 +241,11 @@ describe("inviteOnly", () => {
         vi.useFakeTimers();
         vi.setSystemTime(Date.now() + 61 * 1000);
 
-        // The token still matches — expiry is the database gate's business, so the
-        // holder of a stale link gets the "ask for an invitation" message rather
-        // than the deliberately vague one a wrong token earns.
-        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
+        // The token still matches, but the route hook checks usability too, so the
+        // holder of a stale link gets the one uniform `SIGN_UP_INVITE_INVALID`
+        // rejection — not a different code that tells them the address is on the
+        // list and only the link went stale.
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/not valid/);
     });
 
     it("refuses a revoked invitation", async () => {
@@ -209,7 +267,8 @@ describe("inviteOnly", () => {
         await signUp("ada@example.com", token);
         database["user"] = [];
 
-        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
+        // Spent, like expired, is refused at the route hook with the uniform message.
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/not valid/);
     });
 
     /**

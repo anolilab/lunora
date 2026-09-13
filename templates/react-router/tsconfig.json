@@ -25,5 +25,5 @@
             "~/*": ["./app/*"]
         }
     },
-    "include": ["app/**/*", "lunora/**/*", "vite.config.ts", "react-router.config.ts", ".react-router/types/**/*"]
+    "include": ["app/**/*", "lunora/**/*", "vite.config.ts", "react-router.config.ts", ".react-router/types/**/*", "lunora.config.ts"]
 }

@@ -28,6 +28,14 @@ const createAuthFakeClient = (userResolves = true) => {
 
     // `userResolves: false` models the in-flight window `AuthLoading` exists for:
     // a token is set but `getCurrentUser` has not come back yet.
+    // The shared identity store also watches the connection so it can retry a
+    // resolve that failed while offline; the double has to offer it.
+    const onConnectionStatus = vi.fn<(listener: (status: string) => void) => Unsubscribe>((listener) => {
+        listener("idle");
+
+        return () => {};
+    });
+
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => (userResolves ? currentUser : new Promise<never>(() => {})));
 
     const setCurrentUser = (user: User | null) => {
@@ -38,10 +46,11 @@ const createAuthFakeClient = (userResolves = true) => {
         getAuthToken,
         getCurrentUser,
         onAuthTokenChange,
+        onConnectionStatus,
         setAuthToken,
     } as unknown as LunoraClient;
 
-    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken, setCurrentUser };
+    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken, setCurrentUser };
 };
 
 const flushMicrotasks = async (): Promise<void> => {

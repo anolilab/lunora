@@ -25,8 +25,25 @@ interface Suggestion {
  * column coverage grows as they explore — table names are always complete).
  */
 interface SqlSchema {
-    /** Columns per table, keyed by table name. Missing table ⇒ columns not probed yet. */
+    /**
+     * Real SQL columns per table, keyed by table name. Missing table ⇒ columns
+     * not probed yet.
+     *
+     * These are the names a statement may write: for a canonical shard table,
+     * `id`, `_creationTime`, `__doc__`. The user's fields live INSIDE `__doc__`
+     * and are reachable only through `json_extract` — they belong in
+     * `docFields`, never here, because this list is what the editor
+     * completes and what the linter treats as resolvable.
+     */
     readonly columns: Readonly<Record<string, ReadonlyArray<string>>>;
+
+    /**
+     * The `__doc__` field names per table — model fields, not columns. Kept
+     * apart from `columns` so the linter can recognise a field that has
+     * been written as though it were a column and say so precisely, instead of
+     * either flagging nothing or flagging every unknown identifier.
+     */
+    readonly docFields?: Readonly<Record<string, ReadonlyArray<string>>>;
     readonly tables: ReadonlyArray<string>;
 }
 

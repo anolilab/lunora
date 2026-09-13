@@ -62,6 +62,7 @@ import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { trustedClientIp } from "./trusted-client-ip";
@@ -96,6 +97,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
  */
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
+    [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -529,6 +531,35 @@ interface ScheduledControllerLike {
  * trigger's `cron` expression. Runs server-side with no end-user identity.
  */
 type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+
+/** One forwarded queue message: the platform's opaque `body` plus its id. */
+interface QueueForwardMessage {
+    body: unknown;
+    id: string;
+}
+
+/** A batch of queue messages forwarded to a tenant via `POST /_lunora/queue`. */
+interface QueueForwardBatch {
+    messages: ReadonlyArray<QueueForwardMessage>;
+    queue: string;
+}
+
+/** Outcome of a forwarded batch: the ids to retry (everything else is acked). */
+interface QueueForwardResult {
+    retry?: ReadonlyArray<string>;
+}
+
+/**
+ * Process a batch of queue messages forwarded by the platform. WfP namespaced
+ * Workers can't be queue consumers, so a platform-owned consumer fans batches in
+ * here; return the ids to retry. Env-driven side effects
+ * (sending mail, etc.) belong in the app's handler.
+ */
+type QueueForwardHandler = (
+    batch: QueueForwardBatch,
+    env: unknown,
+    context: ExecutionContextLike,
+) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
 
 /**
  * The trigger's own trace, handed to a consumer so every function it dispatches
@@ -1199,6 +1230,14 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
 
     /**
+     * Queue-batch handler. WfP namespaced Workers can't be
+     * queue consumers, so a platform-owned consumer forwards batches to the
+     * admin-gated `POST /_lunora/queue` endpoint, which invokes this. Return the
+     * message ids to retry; the rest are acked. Omit if the app has no queues.
+     */
+    queueHandler?: QueueForwardHandler;
+
+    /**
      * Serve one-shot **queries** from a read replica placed in the caller's
      * region instead of from the shard owner. Off by default.
      *
@@ -1768,6 +1807,7 @@ const readForwardedIdentity = (request: Request): { identity?: string; userId?: 
         ...(forwardedUserId === null ? {} : { userId: forwardedUserId }),
     };
 };
+
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
@@ -3379,7 +3419,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Cloudflare serialises as JSON into durable storage — so a decoded
             // `bigint` fails creation outright and a decoded `Date` silently arrives
             // as a string. The wire form IS JSON-safe, so it travels intact and
-            // `createRunContext` decodes it where the handler reads `params`.
+            // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
+            // handler reads `params`.
             await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
@@ -5075,6 +5116,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    // The reserved WfP fan-out entrypoints (`/_lunora/scheduled`,
+    // `/_lunora/queue`). Kept out of the internal route table below because both
+    // need the execution `context` — the cron tick for user-cron `waitUntil`,
+    // the queue batch to hand to the app's handler — which the table-shaped
+    // routes don't receive.
+    const tenantFanoutRoutes = buildTenantFanoutRoutes({
+        assertAdmin: assertAdminAuthorized,
+        dispatchScheduled: handleScheduled,
+        queueHandler: options.queueHandler,
+    });
+
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
     type InternalRoute = (request: Request, env: unknown, url: URL, context: ExecutionContextLike) => Promise<Response> | Response;
@@ -5306,6 +5358,49 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         await recordAdminGrant(request);
     };
 
+    /**
+     * Fast-path reject on a declared `Content-Length` over the cap — cheap (a
+     * header read, no body materialization) but NOT authoritative:
+     * `Content-Length` is forgeable. A chunked body omits it and a non-numeric
+     * value parses to `NaN`, so a missing/unparseable length is treated as
+     * "unknown" (let the request through here) — the real enforcement happens in
+     * `readBodyTextWithLimit` / the streaming import reader, which abort with 413
+     * once cumulative bytes exceed the cap.
+     *
+     * Scoped to the planes the FRAMEWORK dispatches — the reserved `/_lunora/*`
+     * surface (what `MAX_BODY_BYTES` documents itself as capping) and the auth
+     * plane it mounts. Unscoped, it also pre-rejected the app's own `httpRouter`
+     * routes: an upload route 413'd a 2 MiB POST before the router ever ran,
+     * while the identical 2 MiB sent chunked sailed straight through, so on that
+     * plane it was neither a cap the app could rely on nor one it could raise.
+     * Whether app routes deserve a body cap is a separate, deliberate decision;
+     * this is not one.
+     * @throws LunoraError `PAYLOAD_TOO_LARGE` when the declared length exceeds the route's cap
+     */
+    const enforceDeclaredBodyLimit = (request: Request, url: URL): void => {
+        const onFrameworkPlane =
+            url.pathname.startsWith(RESERVED_PATH_PREFIX) ||
+            (options.authHandler !== undefined && isUnderAuthBasePath(url.pathname, options.authBasePath ?? DEFAULT_AUTH_BASE_PATH));
+
+        if (!onFrameworkPlane || (request.method !== "POST" && request.method !== "PUT")) {
+            return;
+        }
+
+        const contentLength = Number(request.headers.get("content-length") ?? "");
+        // Routes that declare their own larger body budget (the KV value PUT,
+        // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV value;
+        // the storage object upload, which moves real files; and the queue
+        // fan-out, which takes a full 100 × 128 KiB forwarded batch) must not be
+        // pre-rejected by the shared 1 MiB cap — else the per-route cap is dead
+        // code for any client that sends a `Content-Length`. Pick the route's cap
+        // so the header check matches the reader's cap.
+        const maxBodyBytes = ROUTE_BODY_BUDGETS[url.pathname] ?? MAX_BODY_BYTES;
+
+        if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
+            throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+        }
+    };
+
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         // Record the context for this request before anything resolves identity:
         // `resolveIdentity` / `adminGate` read it back through
@@ -5315,40 +5410,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const url = new URL(request.url);
 
-        // Fast-path reject on a declared `Content-Length` over the cap — cheap
-        // (a header read, no body materialization) but NOT authoritative:
-        // `Content-Length` is forgeable. A chunked body omits it and a
-        // non-numeric value parses to `NaN`, so a missing/unparseable length is
-        // treated as "unknown" (let the request through here) — the real
-        // enforcement happens in `readBodyTextWithLimit` / the streaming import
-        // reader, which abort with 413 once cumulative bytes exceed the cap.
-        //
-        // Scoped to the planes the FRAMEWORK dispatches — the reserved
-        // `/_lunora/*` surface (what `MAX_BODY_BYTES` documents itself as
-        // capping) and the auth plane it mounts. Unscoped, it also pre-rejected
-        // the app's own `httpRouter` routes: an upload route 413'd a 2 MiB POST
-        // before the router ever ran, while the identical 2 MiB sent chunked
-        // sailed straight through, so on that plane it was neither a cap the app
-        // could rely on nor one it could raise. Whether app routes deserve a body
-        // cap is a separate, deliberate decision; this is not one.
-        const onFrameworkPlane =
-            url.pathname.startsWith(RESERVED_PATH_PREFIX) ||
-            (options.authHandler !== undefined && isUnderAuthBasePath(url.pathname, options.authBasePath ?? DEFAULT_AUTH_BASE_PATH));
-
-        if (onFrameworkPlane && (request.method === "POST" || request.method === "PUT")) {
-            const contentLength = Number(request.headers.get("content-length") ?? "");
-            // Routes that declare their own larger body budget (the KV value PUT,
-            // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV
-            // value, and the storage object upload, which moves real files) must
-            // not be pre-rejected by the shared 1 MiB cap — else the per-route cap
-            // is dead code for any client that sends a `Content-Length`. Pick the
-            // route's cap so the header check matches the reader's cap.
-            const maxBodyBytes = ROUTE_BODY_BUDGETS[url.pathname] ?? MAX_BODY_BYTES;
-
-            if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
-                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
-            }
-        }
+        enforceDeclaredBodyLimit(request, url);
 
         // Top-level `@lunora/auth` dispatch (+ SLO instrumentation). Auth runs as
         // a `/api/auth/*` route, ahead of the worker's own routing, so a sign-in
@@ -5372,6 +5434,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             if (route) {
                 return route(request, env, context);
             }
+        }
+
+        // The WfP fan-out entrypoints need the execution `context`, which the
+        // table-shaped routes below don't receive — dispatch them here while
+        // `context` is in scope.
+        const fanoutRoute = tenantFanoutRoutes[url.pathname];
+
+        if (fanoutRoute) {
+            return fanoutRoute(request, env, context);
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts
@@ -5803,6 +5874,10 @@ export type {
     NotifySubscriptionDevice,
     NotifySubscriptionStoreLike,
     QueueConsumerHandler,
+    QueueForwardBatch,
+    QueueForwardHandler,
+    QueueForwardMessage,
+    QueueForwardResult,
     Route,
     RpcContext,
     RpcEnvelope,

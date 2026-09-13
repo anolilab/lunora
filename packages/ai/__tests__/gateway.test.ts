@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_GATEWAY_TOKEN_ENV, buildAiGatewayMetadataFields, resolveAiGateway } from "../src/gateway";
+import {
+    AI_GATEWAY_ACCOUNT_ID_ENV,
+    AI_GATEWAY_ID_ENV,
+    AI_GATEWAY_METADATA_MAX_KEYS,
+    AI_GATEWAY_TAGS_ENV,
+    AI_GATEWAY_TOKEN_ENV,
+    buildAiGatewayMetadataFields,
+    readAiGatewayEnvTags,
+    resolveAiGateway,
+} from "../src/gateway";
 
 /** A configured-gateway env, without any auth token. */
 const configuredEnv = (): Record<string, unknown> => {
@@ -115,5 +124,66 @@ describe(buildAiGatewayMetadataFields, () => {
             traceId: FAKE_TRACE_ID,
         });
         expect(buildAiGatewayMetadataFields({ functionPath: "messages:send" })).toStrictEqual({ functionPath: "messages:send" });
+    });
+
+    it("carries app-supplied tags, which is what makes gateway cost filterable by app dimensions", () => {
+        expect.assertions(1);
+        expect(buildAiGatewayMetadataFields({ functionPath: "messages:send", tags: { feature: "summarize", plan: "pro" } })).toStrictEqual({
+            feature: "summarize",
+            functionPath: "messages:send",
+            plan: "pro",
+        });
+    });
+
+    it("never lets an app tag shadow a built-in correlation field", () => {
+        expect.assertions(1);
+        // `traceId` is the join back to the trace — an app reusing the key must
+        // not be able to break it.
+        expect(buildAiGatewayMetadataFields({ tags: { traceId: "not-the-trace" }, traceId: FAKE_TRACE_ID })).toStrictEqual({ traceId: FAKE_TRACE_ID });
+    });
+
+    it("trims to the gateway's key cap, keeping the correlation fields", () => {
+        expect.assertions(3);
+
+        const fields = buildAiGatewayMetadataFields({
+            functionPath: "messages:send",
+            tags: { a: "1", b: "2", c: "3", d: "4", e: "5", f: "6" },
+            traceId: FAKE_TRACE_ID,
+        });
+
+        // Over the cap the gateway rejects the whole object, so a trimmed set
+        // beats a complete one that is thrown away.
+        expect(Object.keys(fields ?? {})).toHaveLength(AI_GATEWAY_METADATA_MAX_KEYS);
+        expect(fields?.["functionPath"]).toBe("messages:send");
+        expect(fields?.["traceId"]).toBe(FAKE_TRACE_ID);
+    });
+
+    it("drops non-string tag values rather than coercing them", () => {
+        expect.assertions(1);
+        expect(buildAiGatewayMetadataFields({ tags: { bad: 1 as unknown as string, good: "yes" } })).toStrictEqual({ good: "yes" });
+    });
+});
+
+describe(readAiGatewayEnvTags, () => {
+    it("parses a flat JSON object of deployment-scoped tags", () => {
+        expect.assertions(1);
+        expect(readAiGatewayEnvTags({ [AI_GATEWAY_TAGS_ENV]: '{"app":"checkout","env":"prod"}' })).toStrictEqual({ app: "checkout", env: "prod" });
+    });
+
+    it("returns undefined when unset", () => {
+        expect.assertions(1);
+        expect(readAiGatewayEnvTags({})).toBeUndefined();
+    });
+
+    it("ignores a malformed value instead of failing the inference call", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        expect(readAiGatewayEnvTags({ [AI_GATEWAY_TAGS_ENV]: "not json" })).toBeUndefined();
+        expect(readAiGatewayEnvTags({ [AI_GATEWAY_TAGS_ENV]: '["a","b"]' })).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(AI_GATEWAY_TAGS_ENV));
+
+        warn.mockRestore();
     });
 });

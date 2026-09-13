@@ -211,18 +211,19 @@ queue.
 ## File storage
 
 `ctx.storage.generateUploadUrl()` / `ctx.storage.getUrl(id)` mirror the
-Convex shape. Lunora backs them with **R2**: uploads go straight to R2 via
-a presigned URL, and downloads stream from the Worker.
+Convex shape. Lunora backs them with **R2**: uploads go through a Worker-signed
+`PUT` URL (so your storage rules still apply) and downloads use `getUrl` against
+your `publicBaseUrl`. `getPresignedUrl` is the direct-to-R2 escape hatch.
 
 <Callout type="warn">
-    **`ctx.storage` is read-only in queries AND mutations.** Convex allowed `ctx.storage.delete(id)` inside a mutation; Lunora types it as `ReadOnlyStorage`
-    there and puts `delete` / `store` / `generateUploadUrl` on actions only.
+    **`ctx.storage` has no immediate `delete` in a mutation.** Convex allowed `ctx.storage.delete(id)` inside a mutation; Lunora types it as `MutationStorage`
+    there — the read surface plus `deleteAfterCommit(key)` — and puts `delete` / `store` / `generateUploadUrl` on actions only. A query gets `ReadOnlyStorage`.
 
     This is deliberate. A mutation runs in a Durable Object transaction that can roll back, and an R2 delete cannot: a mutation that deleted an object and then
-    aborted would leave the row intact and the bytes gone. **Schedule the delete instead**, which is strictly better than the Convex original: the row deletion
-    commits transactionally and the object cleanup runs only if it did.
+    aborted would leave the row intact and the bytes gone. `deleteAfterCommit(key)` queues the object cleanup to run only if the transaction commits, so no
+    scheduling of your own is needed.
 
-    `Property 'delete' does not exist on type 'ReadOnlyStorage<"default">'` is the error to expect. Note the same rule makes `generateUploadUrl` an action, which
+    `Property 'delete' does not exist on type 'MutationStorage<"default">'` is the error to expect. Note the same rule makes `generateUploadUrl` an action, which
     changes the browser-facing contract: a client calling it as a mutation fails at runtime, not at compile time.
 
 </Callout>
@@ -330,10 +331,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     </Callout>
 
 6. **Wire the React provider**: replace `<ConvexProvider client={…}>` with
-   `<LunoraProvider client={createLunoraClient({ url })}>`. URL is your
+   `<LunoraProvider client={new LunoraClient({ url })}>`. URL is your
    Worker's `*.workers.dev` hostname.
-7. **Deploy**: `lunora deploy` builds, runs migrations, calls
-   `wrangler deploy`. Your data plane is now in your own Cloudflare account.
+7. **Deploy**: `lunora deploy` builds and calls `wrangler deploy` (data
+   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane is now in your own Cloudflare account.
 
 ## Caveats
 
@@ -376,9 +377,9 @@ export const linkConnector = defineWorkflow({
     handler: async (ctx) => {
         // Each step is checkpointed: a crash after step 1 resumes at step 2
         // rather than re-running step 1.
-        const definition = await ctx.step.do("read-definition", async () => ctx.runQuery(internal.connectors.getDefinition, { key: ctx.params.key }));
+        const definition = await ctx.step.do("read-definition", async () => ctx.run(internal.connectors.getDefinition, { key: ctx.params.key }));
 
-        await ctx.step.do("write-user-link", async () => ctx.runMutation(internal.connectors.linkForUser, { definition, userId: ctx.params.userId }));
+        await ctx.step.do("write-user-link", async () => ctx.run(internal.connectors.linkForUser, { definition, userId: ctx.params.userId }));
     },
 });
 ```

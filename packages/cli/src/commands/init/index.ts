@@ -82,7 +82,7 @@ const initCommand: Command = {
         },
         {
             description:
-                "Add features non-interactively after scaffolding (comma-separated): ai | auth | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow",
+                "Add features non-interactively after scaffolding (comma-separated): ai | auth | auth-ui | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow",
             name: "add",
             type: String,
         },

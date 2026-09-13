@@ -227,6 +227,10 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
     },
 }) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
 
+// The presence functions are built with the procedure builders (no generated
+// server here, so bind the base contexts via `initLunora.dataModel().create()`).
+const { mutation, query } = initLunora.dataModel().create();
+
 /**
  * Build a presence {@link Component} — schema extension + heartbeat / listPresent
  * / sweep functions — wired to a single TTL. Re-export `component.functions`
@@ -240,10 +244,6 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
  * @param options presence configuration (TTL).
  * @returns a component bundling the extension and the presence functions.
  */
-// The presence functions are built with the procedure builders (no generated
-// server here, so bind the base contexts via `initLunora.dataModel().create()`).
-const { mutation, query } = initLunora.dataModel().create();
-
 const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     // A grace window longer than the TTL would never hide the row before the

@@ -18,6 +18,7 @@ export const api = anyApi as unknown as ApiTypes;
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
     messages: {
+        probeSink: FunctionReference<"mutation", { shape?: { data?: unknown; id: string } }, null>;
         purge: FunctionReference<"mutation", { channelId: Id<"channels"> }, unknown>;
     };
 }

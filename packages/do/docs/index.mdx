@@ -92,8 +92,8 @@ the secret is unset the DO rejects all calls with 401.
 
 <Callout type="warn">
     **`@lunora/auth` does not use this class.** It never has:
-    `grep -rn "SessionDO" packages/auth/src/` finds nothing, and no commit in that
-    package's history references it. So exporting `SessionDO`, binding it as `SESSION`,
+    `grep -rn "SessionDO" packages/auth/src/` finds only a comment in `auth-do.ts`;
+    nothing in that package imports or instantiates it. So exporting `SessionDO`, binding it as `SESSION`,
     and setting `SESSION_DO_SECRET` gets you a correctly-configured object that nothing
     ever calls; sessions still live in the auth database.
 

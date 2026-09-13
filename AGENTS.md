@@ -52,6 +52,7 @@ pnpm run dist:check               # built dist/ is production-clean
 pnpm run lint:package-json        # package.json key order (:fix)
 pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/auth-ui
 pnpm run test:templates           # templates/* scaffold, install, build, typecheck
+pnpm run test:workerd             # the `workerd` vitest projects (11 packages) — see below
 pnpm run e2e                      # Playwright suite in tests/e2e
 bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh, generated-check.sh too)
 ```
@@ -61,6 +62,7 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Stale `dist/`.** `dist/` is gitignored and built on demand; a raw `pnpm --filter … run test` / `lint:types` does not rebuild workspace deps, so upstream source changes surface as `X is not a function` or a missing export. Build first (`pnpm run build:packages`, or `--filter "@lunora/<pkg>..."` with the trailing `...`), or use the `:affected` scripts, which build deps for you.
 - **`api:check` needs a fresh build.** It reads `dist/`; running `api:update` against a stale build writes a wrong snapshot.
 - **`package.json` key order** is enforced by one CI job and nothing else — ESLint, Prettier, `lint:types`, `api:check`, `dist:check` are all blind to it. Classic failure: `peerDependencies` placed above `devDependencies`. Run `pnpm run lint:package-json` after editing any manifest.
+- **`pnpm run test` does not run the `workerd` suites.** Eleven packages declare a second, `LUNORA_WORKERD_TESTS=1`-gated vitest project that only their own CI job runs, and the gate is permanent: coverage collects through `node:inspector`, which workerd does not implement, so `test:coverage` **hangs** with them on — and sandboxed environments cannot open the localhost loopback the runtime needs to boot at all. A full local sweep therefore goes green over a broken Durable Object or D1 path; `node:sqlite` does not reproduce workerd's SQLite (it builds with `SQLITE_DQS=0`, so a bare double-quoted column that resolves to nothing raises there and is a silent string literal on workerd). Run `pnpm run test:workerd` before pushing anything touching SQL, storage, or a Durable Object.
 - **Never `pnpm -r run test`.** Every package's vitest in parallel fails a different arbitrary set each run (resource contention, not real failures). Use `pnpm run test`, `test:affected`, or one `--filter`.
 - **Never text-merge `pnpm-lock.yaml`.** Discard a conflicted lockfile and regenerate (`pnpm install --lockfile-only`). CI builds `refs/pull/N/merge`, not your branch head, so a hand-resolved lockfile fails there and nowhere else.
 - **Prettier before ESLint** when fixing by hand. The reverse lets Prettier reformat lines ESLint just fixed and reintroduce the violations.

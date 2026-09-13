@@ -904,6 +904,7 @@ class OfflineQueue {
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
+    hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -960,6 +961,7 @@ interface OutboxMutation {
     idempotencyKey: string;
     identity: string | null;
     mutationId: number;
+    onRejected?: () => void;
     shardKey?: string;
 }
 ```
@@ -969,6 +971,7 @@ interface OutboxMutation {
 ```ts
 interface OutboxSink {
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+    pending?: () => boolean;
 }
 ```
 
@@ -1727,10 +1730,17 @@ const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectRes
 
 ## `@lunora/client/auth`
 
+### `AuthStatus` (type)
+
+```ts
+type AuthStatus = "authenticated" | "loading" | "unauthenticated" | "unreachable";
+```
+
 ### `IdentityStore` (interface)
 
 ```ts
 interface IdentityStore {
+    getStatus: () => AuthStatus;
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
@@ -1740,6 +1750,18 @@ interface IdentityStore {
 
 ```ts
 const getIdentityStore: (client: LunoraClient) => IdentityStore;
+```
+
+### `isAuthenticatedStatus` (const)
+
+```ts
+const isAuthenticatedStatus: (status: AuthStatus) => boolean;
+```
+
+### `isLoadingStatus` (const)
+
+```ts
+const isLoadingStatus: (status: AuthStatus) => boolean;
 ```
 
 ## `@lunora/client/pagination`

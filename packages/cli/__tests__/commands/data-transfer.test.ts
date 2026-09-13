@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Decode a request body for assertions — the fetch shim also carries blob bytes. */
@@ -71,7 +72,7 @@ describe("lunora data-transfer", () => {
             try {
                 const result = await runExportCommand({ logger: silentLogger() });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env["LUNORA_ADMIN_TOKEN"] = previous;
@@ -226,7 +227,7 @@ describe("lunora data-transfer", () => {
                 token: "t",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -240,7 +241,7 @@ describe("lunora data-transfer", () => {
                 token: "t",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
         });
 
         it("refuses a remote --url without --yes even when --prod is not passed", async () => {
@@ -274,7 +275,7 @@ describe("lunora data-transfer", () => {
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -448,7 +449,7 @@ describe("lunora data-transfer", () => {
 
             const result = await runImportCommand({ fetchImpl, file: join(workDir, "not-an-export"), logger: silentLogger(), token: "t" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
 
         it("refuses --table alongside a Convex export directory", async () => {
@@ -476,7 +477,7 @@ describe("lunora data-transfer", () => {
 
             const result = await runImportCommand({ fetchImpl, file: workDir, logger: silentLogger(), table: "other", token: "t" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(called).toBe(false);
         });
 
@@ -511,7 +512,7 @@ describe("lunora data-transfer", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 

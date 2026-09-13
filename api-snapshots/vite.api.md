@@ -44,19 +44,11 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GENERATED_CLASS_MODULES` (const)
 
-```ts
-const GENERATED_CLASS_MODULES: readonly [
-    "agents",
-    "containers",
-    "workflows"
-];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GeneratedClassModule` (type)
 
-```ts
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `LUNORA_API_UPDATED_EVENT` (const)
 
@@ -187,6 +179,17 @@ interface ViteRemotePlan {
 const WORKER_STARTUP_HINT: string;
 ```
 
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    shard?: LunoraShardConfig;
+}
+```
+
 ### `augmentWorkerStartupError` (const)
 
 ```ts
@@ -206,7 +209,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, composition?: WorkerEntryComposition) => string;
 ```
 
 ### `checkLunoraProxy` (const)

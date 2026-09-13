@@ -67,6 +67,7 @@
         "test:clean-machine": "./scripts/clean-machine-smoke.sh",
         "test:coverage": "vis run test:coverage --query \"project!=lunora-e2e\"",
         "test:templates": "./scripts/template-build-smoke.sh",
+        "test:workerd": "./scripts/test-workerd.sh",
         "worker-size:check": "node scripts/check-worker-size.js",
         "worker-size:update": "node scripts/check-worker-size.js --update"
     },

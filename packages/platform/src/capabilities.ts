@@ -29,7 +29,8 @@
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
  * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
  * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
- * `pipelines`, `queues`, `scheduler`, `secrets`, `vectorStore`, `workflows`.
+ * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
+ * `vectorStore`, `workflows`.
  *
  * Every other key here — `httpCache`, `identityProxy`,
  * `localSql`, `memoryTables`, `objectStorageBackups`,
@@ -53,7 +54,8 @@
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
- * `durableStreams`, `globalTables`, `queues`, `secrets`, `vectorStore`).
+ * `durableStreams`, `globalTables`, `queues`, `relationGraph`, `secrets`,
+ * `vectorStore`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -270,6 +272,27 @@ export interface PlatformCapabilities {
         pipelines?: Capability;
         /** Queue-backed workpools. */
         queues?: Capability;
+
+        /**
+         * `ctx.db.related(...)` — breadth-first traversal of the foreign-key
+         * graph the schema's `v.id("target")` columns describe, returning each
+         * reached row with its depth, the edge names walked to reach it, and a
+         * depth-decaying score.
+         *
+         * Rated on its own key rather than folded into `localSql`, because the
+         * two answer different questions: `localSql` says a shard can run SQL,
+         * while this says a host can serve the traversal's read SHAPE — an
+         * id lookup per out-edge and a batched `WHERE fk IN (...)` per in-edge,
+         * repeated per hop within one request. A host whose reads are remote
+         * enough that a multi-hop expansion cannot finish inside a request
+         * should say `unsupported` here even though every individual read works.
+         *
+         * Gate-bearing: codegen sets the `relationGraph` `PlatformSignals` flag
+         * from the schema IR's `v.id` columns, so a host rating it
+         * `unsupported` refuses the app rather than emitting a `related` that
+         * throws (or worse, silently returns nothing) on the first hop.
+         */
+        relationGraph?: Capability;
         /** Cron triggers / scheduled functions. */
         scheduler?: Capability;
         /** Secrets management. */
@@ -355,6 +378,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
+        relationGraph: {
+            level: "emulated",
+            note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
+        },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
@@ -459,7 +486,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         websocketHibernation: {
             level: "emulated",
-            note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
+            note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
         },
         durableStreams: {
             level: "unsupported",
@@ -493,15 +520,19 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         queues: {
             level: "emulated",
-            note: 'createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd\'s implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. mode: "pull" queues are written but not consumed — nothing here serves the HTTP pull endpoint',
+            note: "createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd's implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. Cloudflare's byte ceilings are enforced on send — 128 KiB per message and 256 KiB per sendBatch, measured over the encoded body — because @lunora/queue leaves both to the platform and this host is the only point where those bytes already exist. mode: \"pull\" queues are written but not consumed — nothing here serves the HTTP pull endpoint",
         },
         workflows: {
             level: "emulated",
-            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so rollbackConfig is ignored and a crash mid-unwind leaves it half-done. terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running; no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
         },
         scheduler: {
             level: "emulated",
             note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        relationGraph: {
+            level: "emulated",
+            note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
         },
         cronTriggers: {
             level: "unsupported",
@@ -521,7 +552,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         objectStorage: {
             level: "emulated",
-            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. No multipart uploads, no presigned URLs",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. The limits R2 would apply are applied here rather than left to the deploy to discover: put verifies a declared sha256 against the bytes received and stores nothing on a mismatch, and refuses customMetadata over R2's summed 2048-byte ceiling. Because R2 has no directories, neither does this bucket's behaviour — a deleted key's empty directory is pruned, so a later object may take that prefix, and delete of a key that is only a prefix is the no-op it is on R2 rather than a raw fs error. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },

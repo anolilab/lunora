@@ -18,7 +18,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { DatabaseWriterLike } from "./schema-types";
+import { findRelated } from "./relation-graph";
+import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
 
 /**
  * Well-known symbol the guard hangs the unwrapped writer off of. `Symbol.for`
@@ -158,6 +159,8 @@ type WriterGating =
     | "inline-table-gated"
     /** First argument is the table name AND the one uniform loop below gates it. Says how the method is gated, not what its arguments look like — `inline-table-gated` methods also take the table first. */
     | "loop-gated"
+    /** Re-bound over the GUARDED writer, so every table it reaches is gated by that writer's own methods rather than by anything here (`related`). */
+    | "rebound"
     /** Whole-shard sweep: every table in range is gated (`guardShardSweep`). */
     | "sweep-gated"
     /** Deliberately NOT gated — see the reason on each entry. */
@@ -177,7 +180,7 @@ type WriterGating =
  * `"ungated"` entries are an explicit allowlist WITH a reason, never an
  * omission: each one either touches no rows or is a pure string helper.
  */
-const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGating>> = {
+const WRITER_METHOD_GATING = {
     aggregate: "loop-gated",
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
@@ -207,12 +210,27 @@ const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGati
     rankBefore: "loop-gated",
     rankPage: "loop-gated",
     rankPageRows: "loop-gated",
+
+    /**
+     * A traversal, so its table set is DISCOVERED as it walks rather than named
+     * in an argument — gating `arguments[0]` would gate the start node and let
+     * the hops out of it reach anything. Re-bound below over the guarded writer
+     * instead, so every hop is a `findMany` this map already gates.
+     */
+    related: "rebound",
+
+    /**
+     * Schema-derived metadata, not a read: the edge set `related` walks. It
+     * names tables but reaches no row, and the reads it drives are gated as
+     * `related`'s own entry describes.
+     */
+    relationEdges: "ungated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
     system: "ungated",
     wipeShard: "sweep-gated",
-};
+} as const satisfies Readonly<Record<keyof DatabaseWriterLike, WriterGating>>;
 
 /**
  * Every method the uniform table-level loop below gates — DERIVED from
@@ -232,6 +250,64 @@ const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entri
     .filter(([, gating]) => gating === "loop-gated")
     .map(([name]) => name as keyof DatabaseWriterLike);
 
+/** Every method gated by re-binding — DERIVED, for the reason {@link REBINDERS} gives. */
+type ReboundMethod = {
+    [K in keyof typeof WRITER_METHOD_GATING]: (typeof WRITER_METHOD_GATING)[K] extends "rebound" ? K : never;
+}[keyof typeof WRITER_METHOD_GATING];
+
+/** Builds the guarded replacement for one `"rebound"` method. */
+type Rebinder = (guarded: Record<string, unknown>, relationEdges: ReadonlyArray<RelationEdge>) => (...args: never[]) => unknown;
+
+/**
+ * The replacement each `"rebound"` method gets, keyed by method name.
+ *
+ * `Record<ReboundMethod, Rebinder>` is the exhaustiveness control for this
+ * gating mode, and it is the half that was missing. {@link LOOP_GATED_METHODS}
+ * is derived from {@link WRITER_METHOD_GATING} so the two can never drift, but
+ * `"rebound"` had no derived counterpart — the install was hard-coded for
+ * `related` alone. A second `"rebound"` entry therefore compiled, fell out of
+ * the loop-gated filter, got no rebinder, and arrived on the guarded writer
+ * UNGATED through the `...raw` spread below: exactly the bypass that spread's
+ * own comments warn about. Now a new `"rebound"` entry widens `ReboundMethod`
+ * and fails to compile until it has a rebinder here.
+ */
+const REBINDERS: Readonly<Record<ReboundMethod, Rebinder>> = {
+    /**
+     * Re-bound, not delegated: `findRelated` holds no SQL, so running it over
+     * `guarded` makes every hop a `findMany` / `lookupById` the uniform loop
+     * already gates. Delegating to `base.related` instead would walk through the
+     * writer's own unguarded closure.
+     */
+    related:
+        (guarded, relationEdges) =>
+        (...args: never[]) => {
+            const [start, options] = args as unknown as [RelatedStart, RelatedOptions | undefined];
+
+            return findRelated(guarded as unknown as Parameters<typeof findRelated>[0], relationEdges, start, options);
+        },
+};
+
+/** The `"rebound"` method names, derived exactly as {@link LOOP_GATED_METHODS} is. */
+const REBOUND_METHODS: ReadonlyArray<ReboundMethod> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "rebound")
+    .map(([name]) => name as ReboundMethod);
+
+/**
+ * Install every `"rebound"` gate on an already-loop-gated `guarded`.
+ *
+ * A base without the method (the `.global()` twin has no `related`) is left
+ * alone, so it stays absent on the guarded writer exactly as the `...raw` spread
+ * left it — the same rule the loop-gated optional members follow.
+ */
+const installReboundMethods = (guarded: Record<string, unknown>, base: GuardableWriter, relationEdges: ReadonlyArray<RelationEdge>): void => {
+    for (const name of REBOUND_METHODS) {
+        if (typeof (base as unknown as Record<string, unknown>)[name] === "function") {
+            // eslint-disable-next-line no-param-reassign -- the guarded writer is built by mutation, as above
+            guarded[name] = REBINDERS[name](guarded, relationEdges);
+        }
+    }
+};
+
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
  * unless the schema is `.rls("required")` — so non-secure schemas pay nothing
@@ -246,7 +322,13 @@ const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entri
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds): W => {
+const guardWriter = <W>(
+    raw: W,
+    schema: GuardableSchema,
+    tableOfId: TableOfId,
+    tablesOfIds?: TablesOfIds,
+    relationEdges: ReadonlyArray<RelationEdge> = [],
+): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -426,6 +508,8 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
             };
         }
     }
+
+    installReboundMethods(guarded, base, relationEdges);
 
     if (base.wipeShard) {
         const { wipeShard } = base;

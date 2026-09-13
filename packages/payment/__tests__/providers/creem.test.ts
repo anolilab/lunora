@@ -228,6 +228,8 @@ describe("creem adapter", () => {
                 metadata: { referenceId: "user_1" },
                 refund_amount: 1500,
                 refund_currency: "EUR",
+                // Required on `RefundEntity`; only a settled refund books money.
+                status: "succeeded",
                 transaction: { id: "tx_1" },
             },
         });
@@ -245,6 +247,28 @@ describe("creem adapter", () => {
         expect(action.refundId).toBe("rf_1");
     });
 
+    it("does not book a refund.created that is still pending (regression)", async () => {
+        expect.assertions(2);
+
+        // `RefundEntity.status` is pending | requiresAction | succeeded | failed | canceled, and Creem
+        // documents the first two as non-terminal processing states. Booking one leaves the ledger
+        // claiming a refund the customer never got, which the facade's over-refund guard then makes
+        // unissuable.
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        for (const status of ["pending", "requiresAction"]) {
+            const payload = JSON.stringify({
+                eventType: "refund.created",
+                id: `evt_refund_${status}`,
+                object: { checkout: { id: "ch_1" }, id: "rf_1", refund_amount: 1500, refund_currency: "EUR", status, transaction: { id: "tx_1" } },
+            });
+            // eslint-disable-next-line no-await-in-loop -- two fixtures, read serially for a clearer failure
+            const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+            expect(action.type).toBe("unhandled");
+        }
+    });
+
     it("keys a dashboard refund to the checkout row a checkout.completed created (regression)", async () => {
         expect.assertions(2);
 
@@ -259,7 +283,7 @@ describe("creem adapter", () => {
         const refundBody = JSON.stringify({
             eventType: "refund.created",
             id: "evt_refund_2",
-            object: { checkout: "ch_1", id: "rf_2", refund_amount: 1500, refund_currency: "EUR", transaction: { id: "tx_2" } },
+            object: { checkout: "ch_1", id: "rf_2", refund_amount: 1500, refund_currency: "EUR", status: "succeeded", transaction: { id: "tx_2" } },
         });
         const refunded = await adapter.parseWebhook({ headers: headersFor(sign(refundBody)), payload: refundBody });
 

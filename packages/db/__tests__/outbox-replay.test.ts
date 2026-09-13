@@ -325,6 +325,73 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(onWriteRejected).not.toHaveBeenCalled();
     });
 
+    it("rolls the write's optimistic value back when the replay is permanently rejected", async () => {
+        const { client } = makeClient({
+            mutation: async () => {
+                // A coded verdict — permanent, so the write is dropped, not retried.
+                const error = new Error("forbidden") as Error & { code?: string };
+
+                error.code = "FORBIDDEN";
+
+                throw error;
+            },
+        });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+        const onRejected = vi.fn<() => void>();
+
+        await sink.enqueue(outboxWrite({ onRejected }));
+
+        await vi.waitFor(() => {
+            expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        });
+
+        // Without this the rejected prediction stays on screen until an unrelated
+        // frame or a reload — the rejection reaches the app but never the cache.
+        expect(onRejected).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the optimistic value alone while a transient failure is retried, and drops the handle once it commits", { timeout: 10_000 }, async () => {
+        let attempts = 0;
+        const { client, mutation } = makeClient({
+            mutation: async () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    throw new Error("socket hang up");
+                }
+
+                return "ok";
+            },
+        });
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+        const onRejected = vi.fn<() => void>();
+
+        await sink.enqueue(outboxWrite({ onRejected }));
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(2);
+            },
+            { interval: 100, timeout: 8000 },
+        );
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        // Never rolled back: the first failure was retriable, and the retry landed.
+        expect(onRejected).not.toHaveBeenCalled();
+    });
+
     it("drops a transport transaction that carries no replay metadata without calling the server", async () => {
         const { client, mutation } = makeClient();
         const database = buildDatabase(client);

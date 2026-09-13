@@ -10,6 +10,7 @@
         "concepts/data-types",
         "concepts/document-ids",
         "concepts/relations",
+        "concepts/relation-graph",
         "concepts/constraints",
         "concepts/queries-mutations",
         "concepts/function-context",
@@ -102,6 +103,7 @@
         "cloud/monitoring",
         "---Reference---",
         "errors",
+        "exit-codes",
         "concepts/wire-protocol",
         "concepts/non-js-sdks",
         "packages"

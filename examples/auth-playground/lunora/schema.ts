@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * auth-playground — demo schema for the better-auth org/admin plugins.
  *
@@ -26,4 +28,4 @@ export default defineSchema({
         body: v.string(),
         createdAt: v.number(),
     }).index("by_org_owner_created", ["organizationId", "ownerId", "createdAt"]),
-});
+}).extend(ratelimit.extension);

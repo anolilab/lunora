@@ -7,7 +7,14 @@ import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-trans
 
 import { lunoraCollectionOptions } from "./collection-options";
 import type { OutboxMutationMetadata, Row, WriteProvenance } from "./internals";
-import { createOptimisticOnlineDetector, createOutboxCarrier, OUTBOX_MUTATION_FN_NAME, registerOutboxCarrier, runOutboxMutation } from "./internals";
+import {
+    createOptimisticOnlineDetector,
+    createOutboxCarrier,
+    OUTBOX_MUTATION_FN_NAME,
+    registerOutboxCarrier,
+    runOutboxMutation,
+    takeOutboxRejection,
+} from "./internals";
 
 /** Element type of an array (the row type a `list` query returns). */
 type Element<T> = T extends ReadonlyArray<infer E> ? E : never;
@@ -380,11 +387,20 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             await runOutboxMutation(() =>
                 client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
             );
+
+            // Committed: the predicted value it painted is now the server's, so
+            // forget the rollback rather than leave it pinned for the session.
+            takeOutboxRejection(meta.idempotencyKey);
         } catch (error) {
             // Covers the identity drop AND a server-coded rejection from the replay:
             // reporting only the first would leave this handler half-guarded, which is
             // the shape being fixed here.
             if (error instanceof NonRetriableError) {
+                // Permanent verdict — take the rejected write's optimistic value off
+                // the screen. A transient failure falls through untouched: the
+                // executor will retry it, and its prediction must survive until then.
+                takeOutboxRejection(meta.idempotencyKey)?.();
+
                 reportWriteRejected(options, {
                     code: (error as Error & { code?: string }).code,
                     // A raw outbox write targets a function, not a collection; the path

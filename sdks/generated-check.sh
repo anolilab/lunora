@@ -21,10 +21,10 @@
 # frame — {"args":{"channelId":"chan_1"},"functionPath":"messages:list"} — which
 # the smoke programs under `sdks/smoke/<lang>/` do.
 #
-# --from, not a tag. The fetch defaults to the CLI's own release tag, and six of
-# the seven transports do not exist at any released tag yet. CI must not depend on
-# one, so this passes `--from sdks` and copies from the checkout. The remote path
-# is exercised by generating without it.
+# --from, not a tag. The fetch defaults to the CLI's own release tag, so without
+# this CI would exercise whatever transports that published tag carries rather than
+# the ones in the checkout under test. So this passes `--from sdks` and copies from
+# the checkout. The remote path is exercised by generating without it.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."

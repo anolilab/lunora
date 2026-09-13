@@ -35,7 +35,6 @@ type FlowName = keyof PluginFlags;
 const FLOW_NAMES: ReadonlyArray<FlowName> = [
     "admin",
     "anonymous",
-    "apiKey",
     "deviceAuthorization",
     "emailOtp",
     "lastLoginMethod",

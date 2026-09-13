@@ -264,6 +264,7 @@ interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     readonly system: SystemDatabaseReader;
 }
 ```
@@ -553,6 +554,7 @@ interface FacadeEntry {
     findFirst: (args?: unknown) => Promise<unknown>;
     findFirstOrThrow: (args?: unknown) => Promise<unknown>;
     findMany: (args?: unknown) => Promise<unknown>;
+    findUnique: (args?: unknown) => Promise<unknown>;
     get: (id: string) => Promise<unknown>;
     groupBy: (options: unknown) => Promise<unknown>;
     hardDelete: (id: string) => Promise<void>;
@@ -1794,6 +1796,64 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 }
 ```
 
+### `RelatedDirection` (type)
+
+```ts
+type RelatedDirection = "both" | "in" | "out";
+```
+
+### `RelatedNode` (interface)
+
+```ts
+interface RelatedNode<T = Record<string, unknown>> {
+    depth: number;
+    document: T;
+    path: ReadonlyArray<string>;
+    pathIds: ReadonlyArray<string>;
+    score: number;
+    table: string;
+}
+```
+
+### `RelatedOptions` (interface)
+
+```ts
+interface RelatedOptions {
+    cursor?: null | string;
+    depth?: number;
+    direction?: RelatedDirection;
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+}
+```
+
+### `RelatedPage` (interface)
+
+```ts
+interface RelatedPage<T = Record<string, unknown>> {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode<T>[];
+}
+```
+
+### `RelatedStart` (type)
+
+```ts
+type RelatedStart = (Record<string, unknown> & {
+    _id: string;
+}) | RelatedStartReference;
+```
+
+### `RelatedStartReference` (interface)
+
+```ts
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+```
+
 ### `RelationBuilder` (interface)
 
 ```ts
@@ -2871,6 +2931,12 @@ const asBucketStorage: (raw: unknown) => unknown;
 const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
 ```
 
+### `beginDeferredDeletes` (const)
+
+```ts
+const beginDeferredDeletes: (context: unknown) => ((committed: boolean) => void);
+```
+
 ### `beginDeferredSchedules` (const)
 
 ```ts
@@ -3150,6 +3216,12 @@ const installPlugins: <T extends Record<string, TableDefinition>, const Plugins 
 const isDeny: (where: WhereInput) => boolean;
 ```
 
+### `isPerDispatchMiddleware` (const)
+
+```ts
+const isPerDispatchMiddleware: (middleware: unknown) => boolean;
+```
+
 ### `isSafeHeaderValue` (const)
 
 ```ts
@@ -3232,6 +3304,12 @@ const serveStorageObject: (context: ContextWithStorage, key: string, request: Re
 const storageRules: <Context extends StorageContextIn = StorageContextIn>(rules: ReadonlyArray<StorageRule<Context>>, options?: StorageRulesOptions) => Middleware<Context, Context>;
 ```
 
+### `tagPerDispatchMiddleware` (const)
+
+```ts
+const tagPerDispatchMiddleware: <M extends object>(middleware: M) => M;
+```
+
 ### `toWhereInput` (const)
 
 ```ts
@@ -3251,7 +3329,7 @@ const withDeferredDeletes: (storage: unknown) => unknown;
 ### `withDeferredSchedules` (const)
 
 ```ts
-const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox) => S;
 ```
 
 ## `@lunora/server/data-model`
@@ -3543,6 +3621,10 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
+        select?: S;
+        with?: W;
+    }) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
     groupBy: (options: TableGroupByOptionsOf<DM, REL, T>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
     rank: (indexName: RANK[T], options: TableRankOptions<DM[T]>) => Promise<null | RankResult>;
@@ -4811,6 +4893,30 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RelationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5323,6 +5429,8 @@ interface DatabaseWriterLike {
     }>;
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
+    related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
+    relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     wipeShard?: (options?: {
@@ -5613,6 +5721,15 @@ interface MaskDatabase {
     }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+    related?: (start: Record<string, unknown>, options?: {
+        relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+    }) => Promise<{
+        continueCursor: null | string;
+        isDone: boolean;
+        nodes: {
+            document: Record<string, unknown>;
+        }[];
+    }>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 ```
@@ -5741,6 +5858,60 @@ interface RankPageRowLike {
 }
 ```
 
+### `RelatedArgs` (interface)
+
+```ts
+interface RelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+}
+```
+
+### `RelatedPageLike` (interface)
+
+```ts
+interface RelatedPageLike {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: {
+        depth: number;
+        document: Record<string, unknown>;
+        path: ReadonlyArray<string>;
+        pathIds: ReadonlyArray<string>;
+        score: number;
+        table: string;
+    }[];
+}
+```
+
+### `RelatedStartLike` (type)
+
+```ts
+type RelatedStartLike = (Record<string, unknown> & {
+    _id: string;
+}) | {
+    id: string;
+    table: string;
+};
+```
+
+### `RelationEdgeLike` (interface)
+
+```ts
+interface RelationEdgeLike {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+```
+
 ### `RelationWhere` (type)
 
 ```ts
@@ -5857,6 +6028,21 @@ interface SchedulableWorkflowReference {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: {
+        args: unknown;
+        options: Record<string, unknown> | undefined;
+        target: unknown;
+        when: number;
+    }) => void;
+    wake: () => void;
 }
 ```
 

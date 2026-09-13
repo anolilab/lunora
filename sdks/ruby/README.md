@@ -67,10 +67,16 @@ client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 outcome = client.submit(
   "messages:send",
   { "channel" => "general", "text" => "hi" },
-  # Layered onto the subscription registered under the same (path, args, shard).
-  # Re-run on every server frame, so derive from `current` rather than closing
-  # over a value.
-  optimistic: ->(current) { [*current, { "text" => "hi", "pending" => true }] },
+  # Names the query the write affects. `optimistic:` is the shorthand for the
+  # narrower case where the write and the subscription share a path and args
+  # (a counter, a document by id) — it patches nothing here, where `send` and
+  # `list` are different functions. Each transform is re-run on every server
+  # frame, so derive from what it is handed rather than closing over a value.
+  optimistic_update: lambda { |store, args|
+    current = store.get_query("messages:list", { "channel" => args["channel"] }) || []
+    store.set_query("messages:list", { "channel" => args["channel"] },
+                    [*current, { "text" => args["text"], "pending" => true }])
+  },
   # Re-checked just before a QUEUED write replays: false drops it instead of
   # replaying a write that can only fail.
   precondition: -> { channel_still_exists?("general") },

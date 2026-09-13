@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
 import { applyDeps, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 
@@ -320,6 +321,24 @@ describe("lunora add", () => {
             expect(afterSecond).toStrictEqual(afterFirst);
         });
 
+        it("scaffolds a schema whose DEFAULT export codegen can read", async () => {
+            expect.assertions(3);
+
+            // No schema.ts at all — the path that used to write a named-only
+            // export, which codegen's emitted app.ts/shard.ts cannot import, so
+            // every such project failed tsc with TS2613 until someone fixed the
+            // export by hand.
+            rmSync(join(workdir, "lunora", "schema.ts"));
+
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+            const scaffolded = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
+
+            expect(result.code).toBe(0);
+            expect(scaffolded).toContain("export default defineSchema({})");
+            // And the extension still splices into that shape.
+            expect(scaffolded).toContain(".extend(ratelimit.extension)");
+        });
+
         it("applies deps to package.json and bindings to wrangler.jsonc", async () => {
             expect.assertions(3);
 
@@ -375,19 +394,57 @@ describe("lunora add", () => {
             rmSync(customRegistry, { force: true, recursive: true });
         });
 
-        it("rewrites a manifest's workspace: dep range to a publishable one", async () => {
-            expect.assertions(2);
+        it("rewrites a manifest's workspace: dep range to the concrete published version", async () => {
+            expect.assertions(3);
 
             // The ratelimit fixture pins `@lunora/ratelimit: workspace:*`. The
             // workspace protocol is only resolvable inside the monorepo — leaking
             // it into a consumer's package.json makes `pnpm install` abort with
             // ERR_PNPM_WORKSPACE_PKG_NOT_FOUND.
-            await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+            //
+            // What replaces it is the CONCRETE version the CLI's channel tag
+            // currently points at, not the tag: a dist-tag in package.json lets a
+            // stale lockfile or pnpm metadata cache keep an older release, since
+            // the specifier still matches and is never re-resolved. `init` pins
+            // for exactly this reason and `add` used to write a floating "alpha"
+            // right beside init's pinned `lunorash`.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ "dist-tags": { [resolveDistTag()]: "9.9.9-test.1" } }));
 
-            const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+            try {
+                const { lines, logger } = makeLogger();
 
-            expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
-            expect(JSON.stringify(pkg)).not.toContain("workspace:");
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe("9.9.9-test.1");
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+                // The plan preview resolves through the same map, so what it
+                // advertises is what lands.
+                expect(lines.join("\n")).toContain("@lunora/ratelimit@9.9.9-test.1");
+            } finally {
+                fetchSpy.mockRestore();
+            }
+        });
+
+        it("falls back to the channel dist-tag when the registry is unreachable", async () => {
+            expect.assertions(2);
+
+            // Offline, there is no version to pin. The channel tag still resolves
+            // to installable code (unlike `latest` on a pre-release channel), so
+            // it is the right fallback — never the `workspace:` protocol.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("getaddrinfo ENOTFOUND registry.npmjs.org"));
+
+            try {
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+            } finally {
+                fetchSpy.mockRestore();
+            }
         });
     });
 
@@ -433,7 +490,9 @@ describe("lunora add", () => {
                 source: "gh:attacker/evil",
             });
 
-            expect(result.code).toBe(1);
+            // Non-TTY with no `--yes`: nobody could be asked, so the INVOCATION
+            // is wrong — distinct from a human declining the prompt (CANCELLED).
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(lines.join("\n")).toContain("custom registry source");
             // Nothing from the attacker-controlled origin reached the project.
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(false);
@@ -519,7 +578,7 @@ describe("lunora add", () => {
                 names: [],
             });
 
-            expect(proceeded).toBe(true);
+            expect(proceeded).toStrictEqual({ ok: true });
             expect(asked).toHaveLength(0);
         });
     });

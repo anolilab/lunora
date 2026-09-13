@@ -22,7 +22,9 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
@@ -40,6 +42,8 @@ interface EnvCommandOptions {
      * compatibility — when both are set, `env` wins.
      */
     env?: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     /** Required for `set`. Required (positional) for `get`/`unset`. */
     key?: string;
     logger: Logger;
@@ -63,8 +67,43 @@ interface EnvCommandOptions {
     yes?: boolean;
 }
 
+/**
+ * The structured result one `env` subcommand produced, for `--format json`.
+ *
+ * Deliberately per-subcommand rather than one flat union of every field: the
+ * eight verbs answer eight different questions, and a document carrying all of
+ * them with most absent would tell a consumer nothing about which one it is
+ * holding. `subcommand` is the discriminant.
+ *
+ * Keys are names throughout, never values — the exceptions are `get`, which the
+ * caller asked for by name, and `generate` WITHOUT `--set`, whose whole product
+ * is the minted values (the pretty path prints the same `KEY=value` pairs to
+ * stdout, so the document discloses nothing the command did not already exist to
+ * disclose).
+ *
+ * `generate --set` is deliberately a SEPARATE shape carrying only `written`.
+ * There the values' destination is `.dev.vars`, and the caller never asked to
+ * see them — the pretty path names the keys and prints no value. Serializing
+ * them anyway made `--format json` strictly more disclosing than the default for
+ * the same flags, putting freshly-minted admin bearers and signing secrets into
+ * CI logs, shell history and whatever consumed the pipe. Two members rather than
+ * an optional `value` so the `--set` document cannot carry one by construction.
+ */
+type EnvCommandData =
+    | { both: string[]; localOnly: string[]; remoteOnly: string[]; subcommand: "diff" }
+    | { extra: string[]; missing: string[]; ok: boolean; placeholders: string[]; subcommand: "doctor" }
+    | { file: string; keys: string[]; subcommand: "list" }
+    | { key: string; removed: boolean; subcommand: "unset" }
+    | { key: string; subcommand: "set" }
+    | { key: string; subcommand: "get"; value: string }
+    | { pushed: string[]; subcommand: "push"; target?: string }
+    | { secrets: { key: string; value: string }[]; subcommand: "generate" }
+    | { subcommand: "generate"; written: string[] };
+
 interface EnvCommandResult {
     code: number;
+    /** The structured result `--format json` serializes. Absent when the run failed before producing one. */
+    data?: EnvCommandData;
     /** For `push`, the descriptors that were spawned. */
     descriptors: ReadonlyArray<SpawnDescriptor>;
 }
@@ -117,18 +156,21 @@ const resolveEnvironment = (options: EnvCommandOptions): string | undefined => o
 
 const runEnvList = (context: EnvContext): EnvCommandResult => {
     const map = loadDevVariables(context.devVariablesPath);
+    // Names only, matching the redaction the pretty rendering applies: `list`
+    // enumerates what is set, `get <KEY>` is how a value is asked for.
+    const data: EnvCommandData = { file: DEV_VARS_FILE, keys: [...map.keys()], subcommand: "list" };
 
     if (map.size === 0) {
         context.logger.info(`${DEV_VARS_FILE}: (empty)`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data, descriptors: [] };
     }
 
     for (const entry of map.values()) {
         context.logger.info(`${entry.key}=${redact(entry.value)}`);
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data, descriptors: [] };
 };
 
 const runEnvGet = (context: EnvContext): EnvCommandResult => {
@@ -137,7 +179,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
     if (!options.key) {
         logger.error("env get requires a key. Usage: lunora env get <KEY>");
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const entry = loadDevVariables(devVariablesPath).get(options.key);
@@ -145,13 +187,16 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
     if (!entry) {
         logger.error(`env: ${options.key} is not set in ${DEV_VARS_FILE}`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
     }
 
-    // Get prints the full value (caller asked for it explicitly).
-    process.stdout.write(`${entry.value}\n`);
+    // Get prints the full value (caller asked for it explicitly) — except in
+    // json mode, where it rides the document instead so stdout stays one blob.
+    if (options.format !== "json") {
+        process.stdout.write(`${entry.value}\n`);
+    }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, subcommand: "get", value: entry.value }, descriptors: [] };
 };
 
 const runEnvSet = (context: EnvContext): EnvCommandResult => {
@@ -160,19 +205,19 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     if (!options.key) {
         logger.error("env set requires a key. Usage: lunora env set <KEY> <VALUE>");
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
         logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     if (options.value === undefined) {
         logger.error("env set requires a value. Usage: lunora env set <KEY> <VALUE>");
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     // `.dev.vars` is a line-oriented format and parseDevVariables splits on
@@ -181,7 +226,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     if (NEWLINE_PRESENT.test(options.value)) {
         logger.error(`env: value for "${options.key}" contains a newline, which .dev.vars cannot represent`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     // A `"` or `\` would not round-trip: the shared grammar's read path strips
@@ -191,7 +236,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     if (UNREPRESENTABLE_PRESENT.test(options.value)) {
         logger.error(`env: value for "${options.key}" contains a double-quote or backslash, which .dev.vars cannot round-trip`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const raw = readDevVariablesRaw(devVariablesPath);
@@ -199,7 +244,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     writeDevVariablesFileAtomically(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value));
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, subcommand: "set" }, descriptors: [] };
 };
 
 const runEnvUnset = (context: EnvContext): EnvCommandResult => {
@@ -208,13 +253,13 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
     if (!options.key) {
         logger.error("env unset requires a key. Usage: lunora env unset <KEY>");
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
         logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const raw = readDevVariablesRaw(devVariablesPath);
@@ -222,13 +267,13 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
     if (!parseDevVariables(raw).has(options.key)) {
         logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { key: options.key, removed: false, subcommand: "unset" }, descriptors: [] };
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, removeDevVariableLine(raw, options.key));
     logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { key: options.key, removed: true, subcommand: "unset" }, descriptors: [] };
 };
 
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
@@ -237,7 +282,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     if (!options.yes) {
         logger.error("env push uploads secrets to Cloudflare. Re-run with --yes to confirm.");
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const map = loadDevVariables(devVariablesPath);
@@ -245,7 +290,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     if (map.size === 0) {
         logger.warn(`${DEV_VARS_FILE}: nothing to push (empty)`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { pushed: [], subcommand: "push", target: resolveEnvironment(options) }, descriptors: [] };
     }
 
     const placeholders = [...map.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
@@ -256,7 +301,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
                 `run \`lunora env doctor\` to review, and \`lunora env generate --set\` (or \`lunora env set <KEY> <VALUE>\`) to fill them, then re-run.`,
         );
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     const spawner = options.spawner ?? defaultSpawner;
@@ -277,7 +322,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         if (secretCommand === undefined) {
             logger.error("deploy target has no command-line toolchain; cannot push secrets");
 
-            return { code: 1, descriptors: [] };
+            return { code: EXIT_CODE.USAGE, descriptors: [] };
         }
 
         const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
@@ -306,7 +351,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
 
     logger.success(`env: pushed ${String(map.size)} secret(s)`);
 
-    return { code: 0, descriptors };
+    return { code: 0, data: { pushed: [...map.keys()], subcommand: "push", target: environment }, descriptors };
 };
 
 /** List the deployed Worker's secret names for `diff` (the resolved --env/--prod target). */
@@ -355,7 +400,7 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
         logger.success("env diff: local and remote secret names match");
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { both, localOnly, remoteOnly, subcommand: "diff" }, descriptors: [] };
 };
 
 /**
@@ -371,7 +416,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     if (!existsSync(examplePath)) {
         logger.info(`env doctor: no ${DEV_VARS_EXAMPLE_FILE} to check against — nothing to validate.`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data: { extra: [], missing: [], ok: true, placeholders: [], subcommand: "doctor" }, descriptors: [] };
     }
 
     const exampleKeys = parseDevVariableEntries(readFileSync(examplePath, "utf8")).map((entry) => entry.key);
@@ -381,7 +426,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
         logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`lunora dev\` to scaffold it, or \`lunora env set <KEY> <VALUE>\`.`);
         logger.info(`expected (from ${DEV_VARS_EXAMPLE_FILE}): ${exampleKeys.join(", ")}`);
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
     }
 
     const missing = exampleKeys.filter((key) => !current.has(key));
@@ -401,13 +446,16 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
         logger.info(`extra: ${key} is set locally but not listed in ${DEV_VARS_EXAMPLE_FILE}`);
     }
 
-    if (missing.length === 0 && placeholders.length === 0) {
+    const ok = missing.length === 0 && placeholders.length === 0;
+    const data: EnvCommandData = { extra, missing, ok, placeholders, subcommand: "doctor" };
+
+    if (ok) {
         logger.success(`env doctor: ${DEV_VARS_FILE} looks good (${String(current.size)} var(s)).`);
 
-        return { code: 0, descriptors: [] };
+        return { code: 0, data, descriptors: [] };
     }
 
-    return { code: 1, descriptors: [] };
+    return { code: 1, data, descriptors: [] };
 };
 
 /**
@@ -474,7 +522,7 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
                 `(outstanding signed URLs and bearers stop verifying). Re-run with --yes to rotate anyway.`,
         );
 
-        return { code: 1, descriptors: [] };
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
     if (live.length > 0) {
@@ -490,7 +538,10 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
     writeDevVariablesFileAtomically(devVariablesPath, raw);
     logger.success(`env: generated ${String(writable.length)} secret(s) into ${DEV_VARS_FILE}: ${writable.map((entry) => entry.key).join(", ")}`);
 
-    return { code: 0, descriptors: [] };
+    // Key names only. The values went into `.dev.vars`; echoing them back on
+    // stdout would hand a fresh admin bearer to every CI log and pipe consumer,
+    // which the pretty path of this same flag combination does not do.
+    return { code: 0, data: { subcommand: "generate", written: writable.map((entry) => entry.key) }, descriptors: [] };
 };
 
 /**
@@ -511,14 +562,14 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
         if (keys.length === 0) {
             logger.info("env generate: no locally-generatable secrets for this project. Name one explicitly: lunora env generate <KEY>");
 
-            return { code: 0, descriptors: [] };
+            return { code: 0, data: { secrets: [], subcommand: "generate" }, descriptors: [] };
         }
     } else {
         // An explicit key is minted even if it's a provider key — the user named it.
         if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
             logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
 
-            return { code: 1, descriptors: [] };
+            return { code: EXIT_CODE.USAGE, descriptors: [] };
         }
 
         keys = [options.key];
@@ -534,21 +585,19 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
 
     // Print full `KEY=value` lines to stdout (the user asked to generate them —
     // e.g. to pipe into `wrangler secret put`). Not via the logger, which redacts.
-    for (const entry of generated) {
-        process.stdout.write(`${entry.key}=${entry.value}\n`);
+    // In json mode the same values ride the document instead, so stdout stays one blob.
+    if (options.format !== "json") {
+        for (const entry of generated) {
+            process.stdout.write(`${entry.key}=${entry.value}\n`);
+        }
     }
 
-    return { code: 0, descriptors: [] };
+    return { code: 0, data: { secrets: generated, subcommand: "generate" }, descriptors: [] };
 };
 
-const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
-    const context: EnvContext = {
-        cwd,
-        devVariablesPath: join(cwd, DEV_VARS_FILE),
-        logger: options.logger,
-        options,
-    };
+/** Route one validated `env` invocation to its subcommand. */
+const dispatchEnvSubcommand = async (context: EnvContext): Promise<EnvCommandResult> => {
+    const { options } = context;
 
     switch (options.subcommand) {
         case "diff": {
@@ -576,11 +625,24 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
             return runEnvUnset(context);
         }
         default: {
-            options.logger.error(`env: unknown subcommand "${options.subcommand as string}"`);
+            context.logger.error(`env: unknown subcommand "${options.subcommand as string}"`);
 
-            return { code: 1, descriptors: [] };
+            return { code: EXIT_CODE.USAGE, descriptors: [] };
         }
     }
+};
+
+const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const context: EnvContext = {
+        cwd,
+        devVariablesPath: join(cwd, DEV_VARS_FILE),
+        // In json mode every human line moves to stderr so stdout carries only
+        // the result document.
+        logger: options.logger,
+        options,
+    };
+    return dispatchEnvSubcommand(context);
 };
 
 const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generate", "get", "list", "push", "set", "unset"]);
@@ -589,18 +651,21 @@ const ENV_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "doctor", "generat
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand => typeof value === "string" && ENV_SUBCOMMANDS.has(value);
 
 /** `lunora env <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions, EnvCommandData>(({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isEnvSubcommand(sub)) {
-        logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor | generate`);
+        const message = `env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor | generate`;
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     return runEnvCommand({
         cwd,
         env: options.env,
+        format,
         key: argument[1],
         logger,
         prod: options.prod === true,
@@ -613,5 +678,5 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
 });
 
 export { execute };
-export type { EnvCommandOptions, EnvCommandResult, EnvSubcommand };
+export type { EnvCommandData, EnvCommandOptions, EnvCommandResult, EnvSubcommand };
 export { runEnvCommand };

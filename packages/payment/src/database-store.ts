@@ -76,6 +76,13 @@ const readOptionalNumber = (row: PaymentRow, key: string): number | undefined =>
 
 const readBoolean = (row: PaymentRow, key: string): boolean => row[key] === true;
 
+/** An optional `v.array(v.string())` column. Absent — or any non-array — reads as `undefined`. */
+const readStringArray = (row: PaymentRow, key: string): string[] | undefined => {
+    const value = row[key];
+
+    return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : undefined;
+};
+
 const readBigint = (row: PaymentRow, key: string): bigint => {
     const value = row[key];
 
@@ -144,6 +151,9 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
         currentPeriodEnd: subscription.currentPeriodEnd,
         currentPeriodStart: subscription.currentPeriodStart,
         priceId: subscription.priceId,
+        // Left absent when the adapter reported no set, so the column stays unwritten for the
+        // single-price providers and the round-trip below falls back to `[priceId]`.
+        priceIds: subscription.priceIds === undefined ? undefined : [...subscription.priceIds],
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
         quantity: subscription.quantity,
@@ -161,6 +171,10 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
         id: readString(row, "providerSubscriptionId"),
         priceId: readString(row, "priceId"),
+        // Absent on a row written before the column existed, and on one the webhook path wrote (it
+        // carries a single price id). `undefined` is what makes the entitlement read fall back to
+        // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
+        priceIds: readStringArray(row, "priceIds"),
         provider: readString(row, "provider") as ProviderId,
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),

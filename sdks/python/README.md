@@ -84,11 +84,16 @@ outcome = await client.submit(
     SubmitOptions(
         function_path="messages:send",
         args={"channel": "general", "text": "hi"},
-        # Layered onto the subscription registered under the same (path, args,
-        # shard). Re-run on every server frame, so derive from `current` rather
-        # than closing over a value — and keep it pure: the fold runs inside the
-        # client's lock.
-        optimistic=lambda current: [*(current or []), {"text": "hi", "pending": True}],
+        # Names the query the write affects. The `optimistic=` shorthand is for
+        # the narrower case where the write and the subscription share a path
+        # and args (a counter, a document by id) — it patches nothing here,
+        # where `send` and `list` are different functions. Keep every transform
+        # pure: the fold re-runs inside the client's lock on each server frame.
+        optimistic_update=lambda store, args: store.set_query(
+            "messages:list",
+            {"channel": args["channel"]},
+            [*(store.get_query("messages:list", {"channel": args["channel"]}) or []), {"text": args["text"], "pending": True}],
+        ),
         # Re-checked just before a QUEUED write replays: False drops it instead
         # of replaying a write that can only fail.
         precondition=lambda: channel_still_exists("general"),

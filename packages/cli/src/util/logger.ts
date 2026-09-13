@@ -69,6 +69,29 @@ let sharedPail: PailLogger | undefined;
  */
 let jsonForced = false;
 
+/**
+ * Logger every command logs through while set. Undefined in production, where
+ * {@link createLogger} builds the shared pail. `--format json` keeps it too:
+ * the override is off stdout already, so `loggerForFormat` has nothing to
+ * divert (see `isProcessStreamLogger`).
+ *
+ * Set by `runCli({ logger })` and by in-process command tests. Without it a
+ * command's output went to the real stdout/stderr no matter what the caller
+ * injected: it interleaved with the test reporter's own progress display, and
+ * no assertion could see it — which is why the `mcp` wiring tests could only
+ * check an exit code and documented the gap as if it were by design.
+ *
+ * Module-level for the same reason {@link sharedPail} is: the logger is
+ * resolved per call, deep inside command bodies and their helpers, with no
+ * argument path from the CLI entry down to each one.
+ */
+let commandLogger: Logger | undefined;
+
+/** Set (or, with `undefined`, clear) the {@link commandLogger} override. */
+const setCommandLogger = (logger: Logger | undefined): void => {
+    commandLogger = logger;
+};
+
 const wantJson = (): boolean => {
     if (jsonForced) {
         return true;
@@ -111,6 +134,21 @@ const STEP_LOG_TYPES = Object.fromEntries(STEP_BADGE_NAMES.map((name) => [name, 
     { label: string; logLevel: "informational" }
 >;
 
+/**
+ * Every logger this module built over the process's own streams.
+ *
+ * `loggerForFormat` swaps one of these for the stderr logger in `--format json`
+ * mode, because stdout must carry only the JSON document. A logger from
+ * anywhere else is the caller's own sink — already off stdout — so replacing it
+ * achieves nothing and discards their capture, which is what silently dropped
+ * an embedder's logger (`runDeployCommand({ format: "json", logger })`) and
+ * sent every json-mode command's transcript to the real stderr instead.
+ */
+const processStreamLoggers = new WeakSet<Logger>();
+
+/** True for the loggers {@link createLogger} / {@link createStderrLogger} built over the process streams. */
+const isProcessStreamLogger = (logger: Logger): boolean => processStreamLoggers.has(logger);
+
 const getPail = (): PailLogger => {
     sharedPail ??= createPail({
         reporters: buildReporters(),
@@ -124,7 +162,11 @@ const getPail = (): PailLogger => {
 };
 
 const createLogger = (): Logger => {
-    return {
+    if (commandLogger !== undefined) {
+        return commandLogger;
+    }
+
+    const logger: Logger = {
         debug: (message) => {
             getPail().debug(message);
         },
@@ -141,6 +183,10 @@ const createLogger = (): Logger => {
             getPail().warn(message);
         },
     };
+
+    processStreamLoggers.add(logger);
+
+    return logger;
 };
 
 /**
@@ -155,7 +201,7 @@ const createStderrLogger = (): Logger => {
         process.stderr.write(`${tag} ${message}\n`);
     };
 
-    return {
+    const logger: Logger = {
         debug: (message) => {
             write("debug", message);
         },
@@ -172,6 +218,10 @@ const createStderrLogger = (): Logger => {
             write("warn ", message);
         },
     };
+
+    processStreamLoggers.add(logger);
+
+    return logger;
 };
 
 /**
@@ -200,4 +250,4 @@ const logStep = (type: StepBadgeName, message: string): void => {
 };
 
 export type { Logger };
-export { createLogger, createStderrLogger, forceJsonLogging, logStep, pail };
+export { createLogger, createStderrLogger, forceJsonLogging, isProcessStreamLogger, logStep, pail, setCommandLogger };

@@ -431,6 +431,199 @@ describe("dataBrowser", () => {
         expect(mounted.length).toBeLessThan(200);
     });
 
+    /**
+     * Drag-to-reorder, twice.
+     *
+     * What this actually guards is the feature registration. TanStack v9 tables
+     * carry only the APIs their `features` object registers, and a missing one is
+     * not a type error at this call site — it is `undefined` at runtime. Dropping
+     * `columnOrderingFeature` from `gridTableFeatures` fails this test with
+     * "Cannot read properties of undefined", which is how it was verified.
+     *
+     * FOUR columns, not the two the shared `messages` fixture has, so a second drag
+     * has somewhere non-trivial to land.
+     *
+     * Note that reading the current order is deliberately belt-and-braces: the
+     * `getAllLeafColumns()` fallback already returns columns in applied order, so
+     * `atoms.columnOrder.get()` returning nothing would not change the outcome.
+     * Don't read a pass here as covering that accessor.
+     */
+    it("reorders columns by drag-and-drop, and the second drag builds on the first", async () => {
+        expect.assertions(2);
+
+        const COLUMNS = ["__id__", "alpha", "beta", "gamma"];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                const { table } = args as PageArgs;
+
+                if (table !== "messages") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return { columns: COLUMNS, rows: [{ __id__: "m1", alpha: "a", beta: "b", gamma: "g" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Header order, read off the DOM in render order.
+        const headerIds = (): string[] => screen.getAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        const drag = (from: string, to: string): void => {
+            fireEvent.dragStart(screen.getByTestId(`db-head-${from}`));
+            fireEvent.drop(screen.getByTestId(`db-head-${to}`));
+        };
+
+        const expectOrder = async (order: string[]): Promise<void> => {
+            await waitFor(() => {
+                if (headerIds().join("|") !== order.join("|")) {
+                    throw new Error(`expected ${order.join(",")}, saw ${headerIds().join(",")}`);
+                }
+            });
+        };
+
+        await expectOrder(COLUMNS);
+
+        // Drop `gamma` before `__id__`: it takes the first slot.
+        drag("gamma", "__id__");
+        await expectOrder(["gamma", "__id__", "alpha", "beta"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "__id__", "alpha", "beta"]);
+
+        // Drop `beta` before `__id__`. Read against the STORED order this lands
+        // `["gamma", "beta", "__id__", "alpha"]`; re-seeded from the declared order it
+        // would land `["beta", "__id__", "alpha", "gamma"]` instead.
+        drag("beta", "__id__");
+        await expectOrder(["gamma", "beta", "__id__", "alpha"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "beta", "__id__", "alpha"]);
+    });
+
+    /**
+     * Drag-to-resize.
+     *
+     * Same class of guard as the reorder test above: `columnResizingFeature` and
+     * `columnSizingFeature` are registered features, and dropping either one is not
+     * a type error at the call site — `header.getResizeHandler()` is simply
+     * `undefined` and the mousedown throws. Verified by removing each in turn.
+     *
+     * `columnResizeMode: "onChange"` means the width tracks the pointer live, so a
+     * single mousemove is enough; the assertion reads the width off the header's
+     * inline style, which is what `header.getSize()` feeds.
+     */
+    it("resizes a column by dragging its handle, and marks it resizing while held", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        const headWidth = (): number => Number.parseFloat(screen.getByTestId("db-head-text").style.width);
+
+        const handle = screen.getByTestId("db-resize-text");
+        const before = headWidth();
+
+        expect(before).toBeGreaterThan(0);
+        expect(handle.dataset["resizing"]).toBe("false");
+
+        // Grab the handle and drag it 60px to the right.
+        fireEvent.mouseDown(handle, { clientX: 0 });
+
+        await waitFor(() => {
+            if (screen.getByTestId("db-resize-text").dataset["resizing"] !== "true") {
+                throw new Error("handle never entered the resizing state");
+            }
+        });
+
+        expect(screen.getByTestId("db-resize-text").dataset["resizing"]).toBe("true");
+
+        fireEvent.mouseMove(document, { clientX: 60 });
+        fireEvent.mouseUp(document, { clientX: 60 });
+
+        await waitFor(() => {
+            if (headWidth() <= before) {
+                throw new Error(`width did not grow: ${String(before)} -> ${String(headWidth())}`);
+            }
+        });
+
+        expect(headWidth()).toBeGreaterThan(before);
+    });
+
+    /**
+     * The Columns menu, driven through the real table rather than a stub.
+     *
+     * `grid-features.test.tsx` covers this file's pure exports (`toCsv` and
+     * friends) and nothing else, so the menu's binding to TanStack —
+     * `column.toggleVisibility`, `table.getIsAllColumnsVisible`,
+     * `table.toggleAllColumnsVisible` — had no coverage at all. Under v9 that
+     * binding is exactly what an unregistered `columnVisibilityFeature` breaks, at
+     * runtime and not in `tsc`; verified by removing it and watching this fail.
+     */
+    it("hides and restores a column from the Columns menu, and toggles them all", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // `queryAll`, not `getAll`: hiding every column legitimately leaves no headers,
+        // and `getAllByTestId` throws on an empty match instead of returning [].
+        const headerIds = (): string[] => screen.queryAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        expect(headerIds()).toContain("text");
+
+        fireEvent.click(screen.getByTestId("grid-columns"));
+
+        // Hiding a column drops its header, not just the menu checkbox.
+        fireEvent.click(await screen.findByTestId("grid-column-text"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
+
+        // "All" restores every hidden column in one go.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (!headerIds().includes("text")) {
+                throw new Error(`text not restored: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).toContain("text");
+
+        // And toggling "All" again hides the data columns rather than doing nothing.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered after hide-all: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
+    });
+
     it("clears the sort on the third click", async () => {
         expect.assertions(2);
 
@@ -2869,6 +3062,100 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
         // (b) the staged inline edit survives. A spurious re-seed wipes it via
         // `stagedEdits.clear()` / `setEditingCell(null)`.
         expect(screen.getByTestId("db-staged").textContent).toContain("edited");
+    });
+});
+
+/**
+ * The page read (`skipCount: true`, one `pageSize` window) and the COUNT are
+ * independent admin RPCs, and the COUNT is by far the slower of the two — a
+ * `search` runs `instr(...)` over every column of every row. Until it lands the
+ * browser's `total` is a LOWER BOUND derived from the loaded page, and quoting
+ * it at a destructive step promised "Clear all 50 rows?" over a table the op
+ * then emptied entirely.
+ */
+describe("destructive labels while the COUNT is still pending", () => {
+    const ROWS = Array.from({ length: 500 }, (_, index) => {
+        return { __id__: `r${index.toString()}`, text: `row ${index.toString()}` };
+    });
+
+    /** A client that serves the page immediately and leaves the COUNT read hanging. */
+    const createPendingCountClient = (): MockClientHooks =>
+        createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 500 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable || reference === ADMIN_FUNCTIONS.deleteRows) {
+                    return { count: ROWS.length, done: true };
+                }
+
+                const { limit = 50, offset = 0, skipCount } = args as { limit?: number; offset?: number; skipCount?: boolean };
+
+                // The COUNT read is the one WITHOUT `skipCount`. Never resolves.
+                if (skipCount !== true) {
+                    return new Promise(() => {});
+                }
+
+                return { columns: ["__id__", "text"], rows: ROWS.slice(offset, offset + limit) };
+            },
+        });
+
+    const openTable = async (): Promise<void> => {
+        render(renderBrowser(createPendingCountClient(), { editable: true, pageSize: 50 }));
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+    };
+
+    it("never quotes the page size on the clear-table button or its confirm", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        const clear = screen.getByTestId("db-clear-table");
+
+        expect(clear.textContent).toBe("Clear table");
+
+        fireEvent.click(clear);
+
+        expect(screen.getByTestId("db-clear-table-confirm").textContent).toBe("Clear every row and everything that cascades?");
+    });
+
+    it("never quotes the page size on 'Delete N matching'", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+
+        const bulk = await screen.findByTestId("db-bulk-delete");
+
+        expect(bulk.textContent).toBe("Delete matching");
+
+        fireEvent.click(bulk);
+
+        expect(screen.getByTestId("db-bulk-delete-confirm").textContent).toBe("Delete all matching rows and everything that cascades?");
+    });
+
+    it("keeps the pager's Next reachable on a full page", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        // `total` is exactly `offset + rows.length` while the COUNT is pending, so
+        // comparing against it froze the pager on page one.
+        expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(false);
+    });
+
+    it("withholds the bulk-patch action until the count it quotes exists", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+        await screen.findByTestId("db-bulk-delete");
+
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
     });
 });
 

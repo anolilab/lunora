@@ -158,6 +158,54 @@ describe("statement sample buffer (OBS-04)", () => {
         }
     });
 
+    it("records rows SCANNED from the cursor's counters, not the size of the result set", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            // A cursor that returns one row but reports having scanned 200k —
+            // the shape of a filter on an unindexed column, and the whole reason
+            // the leaderboard cannot rank on result-set size. Only the probe
+            // statement is decorated, so the DO's own internal SQL keeps running
+            // against untouched cursors.
+            const probe = "SELECT 0 AS x";
+            const counted: ShardDOState = {
+                acceptWebSocket() {},
+                getWebSockets() {
+                    return [];
+                },
+                storage: {
+                    sql: {
+                        exec: (query: string, ...parameters: unknown[]) => {
+                            const cursor = database.sql.exec(query, ...parameters);
+
+                            if (query !== probe) {
+                                return cursor;
+                            }
+
+                            return { one: () => cursor.one(), rowsRead: 200_000, rowsWritten: 7, toArray: () => cursor.toArray() };
+                        },
+                    },
+                },
+            };
+
+            const shard = new StmtSampleShard(counted, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            shard.attachSpan = false;
+            shard.repeatsOfFirst = 1;
+
+            await shard.fetch(userRequest("probe:query"));
+
+            const row = readQueryMetrics(database.sql).find((entry) => entry.normalizedSql === "SELECT ? AS x");
+
+            expect(row?.rowsRead).toBe(200_000);
+            expect(row?.rowsWritten).toBe(7);
+        } finally {
+            database.close();
+        }
+    });
+
     it("does not set db.stmt_samples_truncated when the dispatch stays under the cap", async () => {
         expect.assertions(1);
 

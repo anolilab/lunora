@@ -7,22 +7,16 @@ import { authClient } from "./auth-client.js";
 import { Channel } from "./Channel.js";
 import { SignIn } from "./SignIn.js";
 
-export const App = (): ReactElement => {
-    const session = authClient.useSession();
-    const user = session.data?.user as undefined | { email: string; id: string; name?: string };
-
-    if (!user) {
-        return <SignIn />;
-    }
-
-    return <Chat email={user.email} name={user.name ?? user.email} userId={user.id} />;
+/**
+ * Sign out, reporting a failure to the console rather than to an unhandled
+ * rejection. A thin wrapper because `authClient` is `any` (see `auth-client.ts`),
+ * so `void authClient.signOut()` discards a value the compiler cannot describe.
+ */
+const signOut = (): void => {
+    (authClient.signOut() as Promise<unknown>).catch((error: unknown) => {
+        console.error("sign out failed", error);
+    });
 };
-
-interface ChatProperties {
-    email: string;
-    name: string;
-    userId: string;
-}
 
 const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
     const channels = useQuery(api.channels.list, {});
@@ -37,14 +31,14 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
     // Publish a display name the first time this account is seen, so other
     // members' clients can resolve it. `profiles.save` upserts, so a repeat is
     // harmless; the ref just avoids writing on every render pass.
-    const claimedRef = useRef(false);
+    const claimedReference = useRef(false);
 
     useEffect(() => {
-        if (claimedRef.current || profiles === undefined || profiles.some((profile) => profile.userId === userId)) {
+        if (claimedReference.current || profiles === undefined || profiles.some((profile) => profile.userId === userId)) {
             return;
         }
 
-        claimedRef.current = true;
+        claimedReference.current = true;
         void saveProfile({ name });
     }, [profiles, name, saveProfile, userId]);
 
@@ -60,7 +54,13 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
                 <ul>
                     {(channels ?? []).map((channel) => (
                         <li key={channel._id}>
-                            <button aria-pressed={channel.name === current} onClick={() => setActive(channel.name)} type="button">
+                            <button
+                                aria-pressed={channel.name === current}
+                                onClick={() => {
+                                    setActive(channel.name);
+                                }}
+                                type="button"
+                            >
                                 #{channel.name}
                             </button>
                         </li>
@@ -79,12 +79,16 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
                         }
 
                         setError(null);
-                        void createChannel({ name: value })
+                        createChannel({ name: value })
                             .then(() => {
                                 setActive(value.toLowerCase());
                                 input.value = "";
+
+                                return undefined;
                             })
-                            .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "could not create channel"));
+                            .catch((error_: unknown) => {
+                                setError(error_ instanceof Error ? error_.message : "could not create channel");
+                            });
                     }}
                 >
                     <input aria-label="New channel" name="name" placeholder="new-channel" />
@@ -94,7 +98,13 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
 
                 <footer>
                     <span className="muted">{email}</span>
-                    <button className="link" onClick={() => void authClient.signOut()} type="button">
+                    <button
+                        className="link"
+                        onClick={() => {
+                            signOut();
+                        }}
+                        type="button"
+                    >
                         Sign out
                     </button>
                 </footer>
@@ -110,3 +120,20 @@ const Chat = ({ email, name, userId }: ChatProperties): ReactElement => {
         </div>
     );
 };
+
+export const App = (): ReactElement => {
+    const session = authClient.useSession();
+    const user = session.data?.user as undefined | { email: string; id: string; name?: string };
+
+    if (!user) {
+        return <SignIn />;
+    }
+
+    return <Chat email={user.email} name={user.name ?? user.email} userId={user.id} />;
+};
+
+interface ChatProperties {
+    email: string;
+    name: string;
+    userId: string;
+}

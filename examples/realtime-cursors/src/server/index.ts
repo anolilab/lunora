@@ -10,20 +10,18 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!worker) {
-            // `openApiSpec` (regenerated on every `lunora/` change) backs the
-            // studio's always-current API-reference tab.
-            //
-            // Demo/local default: this app has no auth, so shard access is left
-            // OPEN (any caller may target any shard) and data is protected by
-            // per-row RLS. A PRODUCTION sharded app must gate this instead — e.g.
-            // `authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey)`.
-            worker = createWorker({ allowUnauthenticatedShardAccess: true, openApiSpec, shardDO: env.SHARD });
-        }
+        // `openApiSpec` (regenerated on every `lunora/` change) backs the
+        // studio's always-current API-reference tab.
+        //
+        // Demo/local default: this app has no auth, so shard access is left
+        // OPEN (any caller may target any shard) and data is protected by
+        // per-row RLS. A PRODUCTION sharded app must gate this instead — e.g.
+        // `authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey)`.
+        worker ??= createWorker({ allowUnauthenticatedShardAccess: true, openApiSpec, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

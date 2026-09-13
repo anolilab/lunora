@@ -67,10 +67,18 @@ let outcome = try client.submit(
     LunoraSubmitOptions(
         functionPath: "messages:send",
         args: ["channel": "general", "text": "hi"],
-        // Layered onto the subscription registered under the same (path, args,
-        // shard). Re-run on every server frame, so derive from `current` rather
+        // Names the query the write affects. The `optimistic:` shorthand is for
+        // the narrower case where the write and the subscription share a path
+        // and args (a counter, a document by id) — it patches nothing here,
+        // where `send` and `list` are different functions. Each transform is
+        // re-run on every server frame, so derive from what it is handed rather
         // than closing over a value.
-        optimistic: { current in appendPending(current) },
+        optimisticUpdate: { store, _ in
+            let args: Any? = ["channel": "general"]
+            let current = store.getQuery("messages:list", args: args)
+
+            store.setQuery("messages:list", args: args, value: appendPending(current))
+        },
         // Re-checked just before a QUEUED write replays: false drops it instead
         // of replaying a write that can only fail.
         precondition: { channelStillExists("general") },

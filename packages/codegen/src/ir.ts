@@ -229,13 +229,18 @@ export interface TableIR {
      */
     externalSource?: ExternalSourceIR;
 
+    /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
+    geoIndexes?: ReadonlyArray<GeoIndexIR>;
+
     /**
      * Storage backend for a `.global()` table: `"d1"` (default) or
      * `"hyperdrive"` (a Postgres/MySQL database via Cloudflare Hyperdrive). Only
      * meaningful when `shardMode === "global"`; absent for sharded/root tables.
+     *
+     * Read it through `isD1GlobalTable` / `isHyperdriveGlobalTable` rather than
+     * comparing here — discovery normalises the absent case to `"d1"`, and only
+     * those predicates encode which comparison is right for hand-built IR.
      */
-    /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
-    geoIndexes?: ReadonlyArray<GeoIndexIR>;
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
 

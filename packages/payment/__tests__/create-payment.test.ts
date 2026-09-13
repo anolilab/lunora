@@ -309,6 +309,37 @@ describe("createPayment", () => {
         expect(stored?.state).toBe("canceled");
     });
 
+    it("keeps the stored subscription's referenceId when the cancel response doesn't echo it", async () => {
+        expect.assertions(3);
+
+        // Regression: the adapter's cancel response was written to the store wholesale. It maps a
+        // MUTATION payload, which need not echo the checkout metadata `referenceId` is pinned in —
+        // Creem and Dodo then fall back to the provider's own CUSTOMER id, Stripe and Polar to `""`.
+        // Either orphans the row from `by_reference`, `check`/`hasActivePrice` and the default
+        // authorizer, permanently: `sync.ts` never rewrites the field on a later update.
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), provider: "creem" });
+
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id) => {
+                return { ...subscription("cust_abc", "canceled"), id, provider: "creem" as const };
+            },
+            identifier: "creem",
+        });
+        const payment = createPayment({ adapter, store });
+
+        const updated = await payment.cancelSubscription("sub_1");
+
+        // The lifecycle state IS the adapter's to report; the owner is not.
+        expect(updated.state).toBe("canceled");
+        expect(updated.referenceId).toBe("user_1");
+
+        // The row is still reachable by reference — the index `check`/`hasActivePrice` and the default
+        // authorizer read.
+        await expect(store.listSubscriptionsByReference("user_1")).resolves.toHaveLength(1);
+    });
+
     it("keeps the stored row's identity and amounts when an adapter returns a placeholder session", async () => {
         expect.assertions(5);
 
@@ -462,6 +493,11 @@ describe("createPayment", () => {
 
         await store.upsertPaymentSession(polarSession);
 
+        // This double issues on EVERY call, which is Polar's real behaviour and not a general one:
+        // Polar's `refunds.create` accepts no idempotency key at all (`idempotency.ts`), so the
+        // derived key never reaches the wire and two same-amount calls are two distinct refunds with
+        // two distinct ids. A provider that DOES honour the key replays instead of issuing — see
+        // "does not fold a replayed refund into the ledger" below for that half.
         let issued = 0;
         const adapter = fakeAdapter({
             identifier: "polar",
@@ -493,6 +529,58 @@ describe("createPayment", () => {
 
         expect(afterWebhooks?.refundedAmount.minorUnits).toBe(600n);
         expect(afterWebhooks?.state).toBe("partially_refunded");
+    });
+
+    it("does not fold a replayed refund into the ledger", async () => {
+        expect.assertions(4);
+
+        // Regression: the refund key is derived from (session, amount, reason), so two same-amount
+        // refunds on one session share it. A provider that HONOURS the key — Stripe — then replays the
+        // first refund and moves no money, while the facade added the amount to the ledger anyway.
+        // That phantom total compounds: the absolute `charge.refunded` webhook resolves to `max(...)`
+        // and keeps it, the over-refund guard blocks the real second refund, and "refund the rest"
+        // hands back a remainder computed from the inflated figure — leaving the customer short by
+        // exactly the phantom amount, with no way to recover it through the facade.
+        const store = new MemoryPaymentStore();
+        const captured = { ...paymentSession("user_1"), amount: money(10_000, "USD"), capturedAmount: money(10_000, "USD") };
+
+        await store.upsertPaymentSession(captured);
+
+        // Stripe's idempotency window: a key seen before replays the original response and issues
+        // nothing. The `refundId` comes back unchanged, which is what identifies it as a replay.
+        const byKey = new Map<string, { amount: bigint; refundId: string }>();
+        const issued: bigint[] = [];
+        const adapter = fakeAdapter({
+            refundPayment: async (input) => {
+                const key = input.idempotencyKey ?? "";
+                const replayed = byKey.get(key);
+
+                if (replayed) {
+                    return { ...captured, refundId: replayed.refundId };
+                }
+
+                const amount = input.amount?.minorUnits ?? captured.capturedAmount.minorUnits;
+
+                issued.push(amount);
+                byKey.set(key, { amount, refundId: `re_${String(issued.length)}` });
+
+                return { ...captured, refundId: `re_${String(issued.length)}` };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+        await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+
+        // One refund reached Stripe, so the ledger must hold one refund.
+        expect(issued).toStrictEqual([2000n]);
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(2000n);
+
+        // "Refund the rest" now asks for the true remainder, and the two sides agree.
+        await payment.refundPayment({ sessionId: "pi_1" });
+
+        expect(issued).toStrictEqual([2000n, 8000n]);
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(10_000n);
     });
 
     it("asks the provider for the remainder when a full refund follows a partial one", async () => {
@@ -1205,7 +1293,9 @@ describe("createPayment — attach / check / track", () => {
 
         await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 50, used: 50 });
 
-        // A downward "set" stays local (provider meters are additive) but still corrects the ledger.
+        // A downward "set" corrects the ledger. It is local-only by construction: `reportUsage` is
+        // stripped above because `track` refuses the mode outright where a forward would happen —
+        // see "track rejects mode:set on a provider that meters usage upstream".
         await payment.track({ featureId: "api_calls", mode: "set", quantity: 10, referenceId: "user_1" });
 
         await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 90, used: 10 });
@@ -1269,6 +1359,41 @@ describe("createPayment — attach / check / track", () => {
 
         // …and an "add" after it accrues on top of the reset total.
         await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ used: 12 });
+    });
+
+    it("track rejects mode:set on a provider that meters usage upstream", async () => {
+        expect.assertions(3);
+
+        // Regression: a provider meter is additive, so a "set" could only be forwarded as the
+        // difference from the total just read — and a set that LOWERS usage has no negative delta to
+        // send. `set 10 → set 5 → set 8` forwarded 10 then 3, billing 13 upstream against a local
+        // period total of 8, and the gap widened on every cycle. Reject the mode rather than over-bill.
+        const store = new MemoryPaymentStore();
+        const forwarded: number[] = [];
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({
+            adapter: fakeAdapter({
+                reportUsage: async (input) => {
+                    forwarded.push(input.quantity);
+                },
+            }),
+            entitlements,
+            store,
+        });
+
+        await expect(payment.track({ featureId: "api_calls", mode: "set", quantity: 10, referenceId: "user_1" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+
+        // Nothing forwarded and nothing recorded — the throw is before the ledger append.
+        expect(forwarded).toStrictEqual([]);
+
+        // "add" is exact on both sides and stays available.
+        await payment.track({ featureId: "api_calls", quantity: 10, referenceId: "user_1" });
+
+        expect(forwarded).toStrictEqual([10]);
     });
 
     it("track on a provider without usage metering (Creem-style) records locally only", async () => {

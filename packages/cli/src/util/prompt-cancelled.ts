@@ -5,13 +5,19 @@
  * eagerly pulls in the `@visulima/tui` (Ink/React) runtime.
  */
 
-/** Thrown when the user hits Ctrl-C during a prompt or the scaffold tasks, so the flow can abort cleanly instead of continuing with defaults. */
-export class PromptCancelledError extends Error {
+/**
+ * Thrown when the user hits Ctrl-C during a prompt or the scaffold tasks, so the
+ * flow can abort cleanly instead of continuing with defaults. The exit code it
+ * resolves to lives with the rest of the taxonomy, as `EXIT_CODE.CANCELLED`.
+ *
+ * A default export because it is this module's ONLY export — which is what keeps
+ * the module dependency-free, per the note above.
+ */
+class PromptCancelledError extends Error {
     public constructor() {
         super("cancelled");
         this.name = "PromptCancelledError";
     }
 }
 
-/** Conventional exit code for an interactive cancel (128 + SIGINT). */
-export const PROMPT_CANCEL_EXIT_CODE = 130;
+export default PromptCancelledError;

@@ -70,6 +70,11 @@ Add the binding to `wrangler.jsonc` (use `localConnectionString` for `lunora dev
 }
 ```
 
+The binding is required, not optional: with no `hyperdrive` entry at all,
+`lunora dev` and `lunora deploy` both refuse to start. The NAME is yours — the
+validator only checks that some binding exists, because your `exec` selector is
+what picks it.
+
 > **Read-your-writes:** point the Hyperdrive config at the **primary** (or pin
 > writes to it) so a write then immediate read isn't served by a stale replica.
 

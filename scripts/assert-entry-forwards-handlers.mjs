@@ -109,6 +109,46 @@ const reExportsDefault = (source) =>
         }),
     );
 
+/**
+ * Whether `source`'s `export default <identifier>` re-exports an imported
+ * default — `import worker from "…"; export default worker;`.
+ *
+ * That is {@link reExportsDefault}'s case written as two statements: wrangler
+ * loads the OTHER module's default, whose handler set is just as opaque here,
+ * and the branch above never sees it because there is no `export … from`. The
+ * gate used to skip every identifier default export on the reasoning that
+ * `export default app` forwards everything already — true of a builder result,
+ * false of this, so an entry declaring a cron and forwarding nothing passed.
+ *
+ * Only a default import counts. `import { createApp } from "…"` binds a named
+ * export, and `const app = createApp()` is the builder result the reasoning
+ * above is actually about.
+ *
+ * @param {string} source Stripped source — {@link stripToCode} has already
+ *   blanked every quoted string, so `from "./worker"` arrives as `from ""`.
+ * @param {string} name The exported identifier.
+ * @returns {boolean}
+ */
+const reExportsImportedDefault = (source, name) =>
+    new RegExp(String.raw`import\s+${name}\s*(?:,\s*(?:\{[^}]*\}|\*\s+as\s+\w+)\s*)?from\s*["'][^"']*["']`, "u").test(source);
+
+/**
+ * The identifier in `export default <name>`, or `undefined` when the default is
+ * not a bare identifier.
+ *
+ * The terminating semicolon is optional: ASI makes `export default worker` valid
+ * without one, and requiring it left `exportedName` unset for that spelling — so
+ * the opaque-handler check below was skipped and the scaffold passed without
+ * ever proving its declared handlers are forwarded.
+ *
+ * `function` and `class` are captured by the same shape (`export default
+ * function foo() {}`), which is harmless: neither names an imported default nor
+ * binds an object literal, so both fall through exactly as they did before.
+ * @param {string} source
+ * @returns {string | undefined}
+ */
+const defaultExportName = (source) => /export default (\w+)\s*;?/u.exec(source)?.[1];
+
 /** @param {string} file @returns {string} */
 const codeOf = (file) => stripToCode(readFileSync(file, "utf8"));
 
@@ -224,9 +264,18 @@ const main = (root) => {
             // take it from the `<name>.fetch(` call rather than assuming `app`. A
             // hand-built object can also be bound first and exported by name, which is
             // the same defect in different syntax.
-            const exportedName = /export default (\w+)\s*;/u.exec(source);
+            const exportedName = defaultExportName(source);
+
+            if (exportedName !== undefined && reExportsImportedDefault(source, exportedName)) {
+                offences.push(
+                    `${relative(root, file)} exports an imported default (\`${exportedName}\`), so it cannot be shown to ` +
+                        `forward ${declared.join(", ")} — the re-exported handler set is opaque here.`,
+                );
+                continue;
+            }
+
             const bindsObjectLiteral =
-                exportedName !== null && new RegExp(String.raw`(?:const|let|var)\s+${exportedName[1]}\s*(?::[^=]+)?=\s*\{`, "u").test(source);
+                exportedName !== undefined && new RegExp(String.raw`(?:const|let|var)\s+${exportedName}\s*(?::[^=]+)?=\s*\{`, "u").test(source);
 
             if (!source.includes("export default {") && !bindsObjectLiteral) {
                 continue;
@@ -265,4 +314,4 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     main(target);
 }
 
-export { reExportsDefault, stripToCode };
+export { defaultExportName, reExportsDefault, reExportsImportedDefault, stripToCode };

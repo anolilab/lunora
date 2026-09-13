@@ -9,8 +9,8 @@
  * - `export default defineConfig({})` (no plugins key yet)
  * - `export default { plugins: [...] }` / `export default {}`
  *
- * Idempotent: returns `changed: false` when `lunora(` already appears in the
- * source or when no recognisable config shape can be found.
+ * Idempotent: returns `changed: false` when the parsed config already CALLS
+ * `lunora(...)` or when no recognisable config shape can be found.
  */
 // eslint-disable-next-line import/no-named-as-default -- magic-string's default export IS the MagicString class; this is the documented, idiomatic import
 import MagicString from "magic-string";
@@ -25,13 +25,8 @@ interface PatchViteConfigResult {
 
 const LUNORA_CALL = "lunora()";
 const LUNORA_IMPORT = 'import { lunora } from "@lunora/vite";';
-
-/** Hoisted regex — matches a `lunora(` call anywhere in the source. */
-const LUNORA_CALL_RE = /\blunora\s*\(/u;
-
-/** Hoisted check for the lunora/vite import specifier. */
-const LUNORA_VITE_DOUBLE = '"@lunora/vite"';
-const LUNORA_VITE_SINGLE = "'@lunora/vite'";
+const LUNORA_VITE_SPECIFIER = "@lunora/vite";
+const LUNORA_PLUGIN = "lunora";
 
 /**
  * Locate the config object inside a ts-morph SourceFile for a defineConfig
@@ -84,6 +79,23 @@ const findPlainExportObject = (sf: SourceFile): ObjectLiteralExpression | undefi
 
     return undefined;
 };
+
+/**
+ * Whether the config already CALLS `lunora(...)` — parsed, so a comment or a
+ * string naming the plugin is not a call.
+ *
+ * This decides whether the file is left alone, and the caller then reports the
+ * plugin present. A substring match therefore handed a project whose config
+ * merely mentions `lunora()` — a commented-out line, a note explaining the
+ * plugin — a dev server with no Lunora plugin in it at all, and said the config
+ * was already wired.
+ */
+const callsLunoraPlugin = (sf: SourceFile): boolean =>
+    sf.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getExpression().getText() === LUNORA_PLUGIN);
+
+/** Whether the config already imports `@lunora/vite` — parsed, for the same reason as {@link callsLunoraPlugin}, and quote style comes free. */
+const importsLunoraVite = (sf: SourceFile): boolean =>
+    sf.getImportDeclarations().some((declaration) => declaration.getModuleSpecifierValue() === LUNORA_VITE_SPECIFIER);
 
 /** Parse the config source into a single in-memory ts-morph SourceFile. */
 const parseConfigSource = (sourceText: string): SourceFile =>
@@ -170,11 +182,12 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
  * Returns `{ code: source, changed: false, reason }` for any no-op path.
  */
 const patchViteConfig = (source: string): PatchViteConfigResult => {
-    if (LUNORA_CALL_RE.test(source)) {
+    const sf = parseConfigSource(source);
+
+    if (callsLunoraPlugin(sf)) {
         return { changed: false, code: source, reason: "lunora plugin already present" };
     }
 
-    const sf = parseConfigSource(source);
     const configObject = findDefineConfigObject(sf) ?? findPlainExportObject(sf);
 
     if (configObject === undefined) {
@@ -183,7 +196,7 @@ const patchViteConfig = (source: string): PatchViteConfigResult => {
 
     const ms = new MagicString(source);
 
-    if (!source.includes(LUNORA_VITE_DOUBLE) && !source.includes(LUNORA_VITE_SINGLE)) {
+    if (!importsLunoraVite(sf)) {
         addImport(ms, sf);
     }
 

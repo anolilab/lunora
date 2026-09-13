@@ -208,7 +208,7 @@ describe("createVectors", () => {
         await expect(vectors.describe("docs")).rejects.toThrow(/does not implement describe/);
     });
 
-    it("forwards describe when the binding implements it", async () => {
+    it("forwards describe when the binding implements it, filling in the beta spelling of the count", async () => {
         expect.assertions(1);
 
         const index = fakeIndex({
@@ -220,7 +220,23 @@ describe("createVectors", () => {
 
         const result = await vectors.describe("docs");
 
-        expect(result).toEqual({ dimensions: 1024, vectorsCount: 99 });
+        expect(result).toEqual({ dimensions: 1024, vectorCount: 99, vectorsCount: 99 });
+    });
+
+    it("answers with both spellings of the count for a current binding that reports only `vectorCount`", async () => {
+        expect.assertions(1);
+
+        // The real `Vectorize.describe()` returns `vectorCount` and nothing else —
+        // Cloudflare renamed it after the beta. A caller reading the older name got
+        // `undefined`, which is how the studio's count column ended up empty.
+        const index = fakeIndex({
+            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => {
+                return { dimensions: 1024, vectorCount: 7 };
+            }),
+        });
+        const vectors = createVectors({ indexes: { docs: index } });
+
+        await expect(vectors.describe("docs")).resolves.toEqual({ dimensions: 1024, vectorCount: 7, vectorsCount: 7 });
     });
 
     it("supports sync embedFn return values", async () => {

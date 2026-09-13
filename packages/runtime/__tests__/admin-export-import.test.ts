@@ -10,6 +10,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import chunkedBody from "./helpers/chunked-body";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -31,23 +32,7 @@ const ADMIN_TOKEN = "admin-bear";
  * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
  * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
  */
-const oversizedStream = (): ReadableStream<Uint8Array> => {
-    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
-    let sent = 0;
-
-    return new ReadableStream<Uint8Array>({
-        pull(controller) {
-            if (sent >= 5) {
-                controller.close();
-
-                return;
-            }
-
-            sent += 1;
-            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
-        },
-    });
-};
+const oversizedStream = (): ReadableStream<Uint8Array> => chunkedBody({ exceedBytes: 1_048_576 });
 
 describe("createWorker — admin export endpoint", () => {
     it("rejects without a configured admin token (403)", async () => {
@@ -186,6 +171,54 @@ describe("createWorker — admin export endpoint", () => {
 
         expect(lines).toHaveLength(2);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+    });
+
+    it("errors the stream when a shard's export failed instead of serving a short snapshot", async () => {
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                failed: 1,
+                ok: 1,
+                shards: [
+                    { rows: [{ doc: { _id: "u1" }, table: "users" }], shardKey: "c1" },
+                    { error: { message: 'shard "c2" failed: boom', timedOut: false }, shardKey: "c2" },
+                ],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // The status line is committed before the fan-out runs, so the only
+        // honest signal left is an aborted body — which a consumer cannot mistake
+        // for a complete dump the way it can mistake a short one.
+        expect(response.status).toBe(200);
+        await expect(response.text()).rejects.toThrow(/c2/u);
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {

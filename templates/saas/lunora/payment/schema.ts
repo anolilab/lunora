@@ -71,6 +71,19 @@ export const paymentTables = {
         currentPeriodEnd: v.optional(v.number()),
         currentPeriodStart: v.optional(v.number()),
         priceId: v.string(),
+
+        /**
+         * Every price the subscription bills, when the provider reports more than one.
+         *
+         * Entitlements test MEMBERSHIP in this list, not equality with `priceId` — a Stripe
+         * subscription billing a base plan alongside an add-on or a metered price has a `priceId`
+         * naming only one of them. Optional, so a row written before this column (or by the webhook
+         * path, which carries one price id) reads as absent and falls back to `[priceId]`.
+         *
+         * Mirrors the canonical column in `@lunora/payment`, which says inline mirrors must declare
+         * it to get multi-item entitlements. `registry-payment-mirror.test.ts` gates that.
+         */
+        priceIds: v.optional(v.array(v.string())),
         provider: v.string(),
         providerSubscriptionId: v.string(),
         quantity: v.number(),

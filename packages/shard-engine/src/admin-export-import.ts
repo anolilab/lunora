@@ -57,7 +57,7 @@ interface ImportShardArgs {
 }
 
 interface ImportShardResult {
-    /** Skipped rows whose `_id` conflicted with an existing document. */
+    /** Skipped rows whose `_id` conflicted with an existing document in the same table. */
     conflicts: number;
     errors: ImportError[];
     /** Number of rows successfully inserted, per table. */
@@ -85,6 +85,13 @@ const selectExportTables = (schema: SchemaLike, requested?: ReadonlyArray<string
  * Read every row in `table` and yield it as an {@link ExportRow}. Walks in
  * keyset batches of `batchSize` (default 200) so a 1M-row table doesn't
  * inflate the JS heap with a single materialized array.
+ *
+ * `includeDeleted` because a snapshot is not a user-facing list read: a
+ * `.softDelete()` tombstone is a row the deployment still holds, `restore()`
+ * still reaches and the changefeed still reports. Without it the default
+ * soft-delete scope filtered every tombstone out, so a backup — and the replica
+ * bootstrap that rides the same path — came back with nothing left to restore.
+ * The D1 half of the snapshot has always exported them.
  */
 const exportShardTable = async function* (
     writer: DatabaseWriterLike,
@@ -97,7 +104,7 @@ const exportShardTable = async function* (
 
     while (!done) {
         // eslint-disable-next-line no-await-in-loop -- keyset pagination: each page's cursor depends on the previous page
-        const page = await writer.findMany(table, { cursor, limit: batchSize });
+        const page = await writer.findMany(table, { cursor, includeDeleted: true, limit: batchSize });
 
         for (const record of page.page) {
             yield { doc: record, table };
@@ -205,9 +212,10 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
 /**
  * Re-insert every row in `args.rows` through the writer, validating each one
  * against the table's declared shape. Rows that fail validation are recorded
- * in the result's `errors` array; rows whose `_id` already exists in the table
- * are counted in `conflicts` and skipped (the v1 mode is `append` — no
- * upsert). All `inserted` counts are bucketed per table.
+ * in the result's `errors` array; rows whose `_id` already exists in the SAME
+ * table are counted in `conflicts` and skipped (the v1 mode is `append` — no
+ * upsert), and one already held by a different table is an `ID_COLLISION` error.
+ * All `inserted` counts are bucketed per table.
  *
  * The writer is responsible for invoking this from within the appropriate
  * transaction; this helper takes no SQL handle of its own.
@@ -215,16 +223,33 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
 /** Outcome of importing one row: a recorded error, a skipped conflict, or a successful insert into `table`. */
 type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string };
 
-/** Probe whether a row with `explicitId` already exists (append mode skips collisions). */
-const idAlreadyExists = async (writer: DatabaseWriterLike, explicitId: string): Promise<boolean> => {
+/**
+ * The name of the table that already holds `explicitId`, or `undefined` when the
+ * id is free. `table` itself means an append-mode conflict; any other name is a
+ * cross-table collision.
+ *
+ * Scoping matters. The probe used to be a bare `writer.get(explicitId)`, which
+ * resolves an id across every table — so a row whose id merely coincided with
+ * one in an unrelated table was counted as a conflict and dropped, and the
+ * caller saw a `conflicts` tally it could not tell apart from a real collision.
+ * A genuine cross-table collision is not a conflict either: ids are unique
+ * per-shard, not per-table, so inserting one would leave two tables claiming the
+ * same id and every by-id read resolving to whichever the probe hit first. It is
+ * reported per row instead.
+ */
+const locateExistingId = async (writer: DatabaseWriterLike, table: string, explicitId: string): Promise<string | undefined> => {
     try {
-        const existing = await writer.get(explicitId);
+        if (writer.lookupById) {
+            const located = await writer.lookupById(explicitId);
 
-        return existing !== null;
+            return located === null ? undefined : located.tableName;
+        }
+
+        return (await writer.get(explicitId, table)) === null ? undefined : table;
     } catch {
-        // `get` probes every table; an unknown-table failure here is surfaced
-        // when the insert runs against the real schema.
-        return false;
+        // An unknown-table failure here is surfaced when the insert runs against
+        // the real schema.
+        return undefined;
     }
 };
 
@@ -266,11 +291,21 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
         return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
     }
 
-    // v1 mode is `append`: when `_id` collides, skip the row and count it.
+    // v1 mode is `append`: when `_id` collides in its own table, skip the row and
+    // count it. The same id under a DIFFERENT table is not a conflict to skip —
+    // it is unrepresentable (ids resolve per shard, not per table), so say so.
     const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
 
-    if (explicitId !== undefined && (await idAlreadyExists(writer, explicitId))) {
-        return { kind: "conflict" };
+    if (explicitId !== undefined) {
+        const owner = await locateExistingId(writer, table, explicitId);
+
+        if (owner === table) {
+            return { kind: "conflict" };
+        }
+
+        if (owner !== undefined) {
+            return { error: { code: "ID_COLLISION", line, message: `_id "${explicitId}" already belongs to table "${owner}"`, table }, kind: "error" };
+        }
     }
 
     try {

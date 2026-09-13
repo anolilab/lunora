@@ -265,7 +265,8 @@ always updated.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` — the only mode Stripe accepts. Its meter is additive, so
+    // `mode: "set"` (a period total) throws VALIDATION_ERROR here.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -361,9 +362,12 @@ re-serialize the JSON before verifying.
 ### Events → normalized transitions
 
 `handleWebhook` verifies, normalizes each event into a `WebhookAction`, and applies
-it through the state machine. Once verified it **always returns 200** so Stripe
-stops retrying; a duplicate or no-op is acknowledged, not re-applied (the Stripe
-event id keys an append-only `events` log for idempotency and audit).
+it through the state machine. Once verified it returns **200** once applied or
+deduplicated, so Stripe stops retrying; a duplicate or no-op is acknowledged, not
+re-applied (the Stripe event id keys an append-only `events` log for idempotency
+and audit). An **orphaned** event — one whose subscription or customer row has not
+been created yet, i.e. an out-of-order delivery — returns **500** instead, so
+Stripe redelivers it after the parent row lands.
 
 | Stripe event                                 | Normalized transition                                                                                           | Notes                                                                                                                                        |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -371,7 +375,7 @@ event id keys an append-only `events` log for idempotency and audit).
 | `checkout.session.completed` (subscription)  | `subscription.active` **only if** `payment_status` is `paid`/`no_payment_required`; else `subscription.updated` | Fails closed: an `unpaid` session never entitles.                                                                                            |
 | `checkout.session.async_payment_succeeded`   | same as `checkout.session.completed` (the session is now `paid`)                                                | Settlement of a delayed-notification payment: `authorized` → `captured`.                                                                     |
 | `checkout.session.async_payment_failed`      | `payment.failed` (payment mode) / `subscription.past_due` (subscription)                                        | The delayed debit was returned. Both emit an alertable observer signal.                                                                      |
-| `customer.subscription.created` / `.updated` | `subscription.active` / `.past_due` / `.paused` / `.canceled` / `.updated`                                      | Routed by the subscription `status`; `updated` is a no-op metadata patch when no state changes.                                              |
+| `customer.subscription.created` / `.updated` | `subscription.active` / `.past_due` / `.paused` / `.canceled`                                                   | Routed by the subscription `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                       |
 | `customer.subscription.deleted`              | `subscription.canceled`                                                                                         |                                                                                                                                              |
 | `payment_intent.succeeded`                   | `payment.captured`                                                                                              | Uses `amount_received` (falls back to `amount`).                                                                                             |
 | `payment_intent.payment_failed`              | `payment.failed`                                                                                                | Emits an alertable `payment.failed` observer signal.                                                                                         |
@@ -461,9 +465,10 @@ PaymentIntent [capture](https://docs.stripe.com/api/payment_intents/capture) /
 </Callout>
 
 <Callout type="warn">
-    **"signature timestamp outside tolerance" (WEBHOOK_TIMESTAMP_INVALID).** The signed `t=` timestamp is more than `webhookToleranceSeconds` (default 300s)
-    from your worker's clock. This is usually a replayed or late delivery, which is good. If it fires on live traffic, check for a skewed clock; only raise
-    `webhookToleranceSeconds` deliberately, as a larger window weakens replay protection.
+    **"signature timestamp outside tolerance" (WEBHOOK_SIGNATURE_INVALID — Stripe's SDK folds the tolerance check into signature verification, so the adapter
+    reports it under the signature code).** The signed `t=` timestamp is more than `webhookToleranceSeconds` (default 300s) from your worker's clock. This is
+    usually a replayed or late delivery, which is good. If it fires on live traffic, check for a skewed clock; only raise `webhookToleranceSeconds`
+    deliberately, as a larger window weakens replay protection.
 </Callout>
 
 <Callout type="info">

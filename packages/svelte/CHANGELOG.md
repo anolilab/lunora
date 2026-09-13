@@ -1,3 +1,162 @@
+## @lunora/svelte [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.143...@lunora/svelte@1.0.0-alpha.144) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+
+## @lunora/svelte [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.142...@lunora/svelte@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.63
+
+## @lunora/svelte [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.141...@lunora/svelte@1.0.0-alpha.142) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.62
+
+## @lunora/svelte [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.140...@lunora/svelte@1.0.0-alpha.141) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.61
+
+## @lunora/svelte [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.139...@lunora/svelte@1.0.0-alpha.140) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.60
+
+## @lunora/svelte [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.138...@lunora/svelte@1.0.0-alpha.139) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.59
+
+## @lunora/svelte [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.137...@lunora/svelte@1.0.0-alpha.138) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.58
+
+## @lunora/svelte [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.136...@lunora/svelte@1.0.0-alpha.137) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+* **vue,svelte,solid,angular:** key reactive args on content ([#721](https://github.com/anolilab/lunora/issues/721)) ([f1e1579](https://github.com/anolilab/lunora/commit/f1e1579cbd9f41789b16a8ad5a8231647f6bd297))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
+## @lunora/svelte [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.135...@lunora/svelte@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.57
+
+## @lunora/svelte [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.134...@lunora/svelte@1.0.0-alpha.135) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.56
+
+## @lunora/svelte [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.133...@lunora/svelte@1.0.0-alpha.134) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.55
+
+## @lunora/svelte [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.132...@lunora/svelte@1.0.0-alpha.133) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.54
+
+## @lunora/svelte [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.131...@lunora/svelte@1.0.0-alpha.132) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.53
+
+## @lunora/svelte [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.130...@lunora/svelte@1.0.0-alpha.131) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.52
+
+## @lunora/svelte [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.129...@lunora/svelte@1.0.0-alpha.130) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.51
+
+## @lunora/svelte [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.128...@lunora/svelte@1.0.0-alpha.129) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.50
+
+## @lunora/svelte [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.127...@lunora/svelte@1.0.0-alpha.128) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.49
+
+## @lunora/svelte [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.126...@lunora/svelte@1.0.0-alpha.127) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.48
+
+## @lunora/svelte [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.125...@lunora/svelte@1.0.0-alpha.126) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.47
+
 ## @lunora/svelte [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.124...@lunora/svelte@1.0.0-alpha.125) (2026-09-08)
 
 

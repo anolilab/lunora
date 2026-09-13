@@ -234,6 +234,49 @@ describe("createWorker — scheduled backup", () => {
         expect(store.put).not.toHaveBeenCalled();
     });
 
+    it("refuses to write a snapshot when a shard's export failed", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        const coordinator = {
+            fanOut: vi.fn<() => never>(),
+            orchestrateApplyCdc: vi.fn<() => never>(),
+            orchestrateCdcSync: vi.fn<() => never>(),
+            orchestrateExport: vi.fn<() => Promise<unknown>>(async () => {
+                return {
+                    failed: 1,
+                    ok: 1,
+                    shards: [
+                        { rows: [{ doc: { _id: "u1" }, table: "users" }], shardKey: "c1" },
+                        { error: { message: 'shard "c2" failed: boom', timedOut: false }, shardKey: "c2" },
+                    ],
+                };
+            }),
+            orchestrateImport: vi.fn<() => never>(),
+            orchestrateMigration: vi.fn<() => never>(),
+            orchestrateRank: vi.fn<() => never>(),
+            orchestrateRankPage: vi.fn<() => never>(),
+            orchestrateShardTraffic: vi.fn<() => never>(),
+            registry: {} as never,
+        } as unknown as QueryCoordinator;
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            queryCoordinator: coordinator,
+            shardDO: noopNamespace,
+        });
+
+        // A backup whose fan-out lost a shard is a partial snapshot. Writing it
+        // — and a manifest vouching for it — is how a restore silently comes back
+        // missing every row that shard held.
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/c2/u);
+
+        expect(store.objects.size).toBe(0);
+        expect(store.put).not.toHaveBeenCalled();
+    });
+
     /** `POST …/backup/prune` with a body — the only thing that deletes a backup. */
     const pruneWith = async (
         worker: ReturnType<typeof createWorker>,

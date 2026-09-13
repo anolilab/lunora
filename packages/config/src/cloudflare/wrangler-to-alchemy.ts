@@ -20,7 +20,7 @@
  * `wrangler`, `miniflare`, `esbuild`, `execa`, `find-process`, `glob`, `open`,
  * `proper-lockfile`, `signal-exit`. `@lunora/config` is imported by
  * `@lunora/vite`, so importing Alchemy here would push that tree into every
- * project that merely wanted to read `lunora.json`, and into any bundle
+ * project that merely wanted to read `lunora.config.*`, and into any bundle
  * targeting workerd — where none of it survives.
  *
  * Emitting text keeps this module pure and dependency-free. Alchemy is invoked

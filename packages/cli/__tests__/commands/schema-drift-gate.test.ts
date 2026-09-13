@@ -9,6 +9,7 @@ import { runBuildCommand } from "../../src/commands/build/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import { runVerifyCommand } from "../../src/commands/verify/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -113,7 +114,7 @@ describe("schema-drift gate", () => {
             const { errors, logger } = silentLogger();
             const result = await runDeployCommand({ cwd: workdir, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.schemaDrift?.blocked).toBe(true);
             // The gate aborts BEFORE wrangler is spawned.
             expect(calls).toHaveLength(0);
@@ -253,7 +254,7 @@ describe("schema-drift gate", () => {
             const { errors, logger } = silentLogger();
             const result = await runDeployCommand({ cwd: workdir, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             // The gate aborts before wrangler is spawned.
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("unreadable or malformed"))).toBe(true);
@@ -287,7 +288,7 @@ describe("schema-drift gate", () => {
 
             const result = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.schemaDrift?.blocked).toBe(true);
         });
 
@@ -301,7 +302,7 @@ describe("schema-drift gate", () => {
 
             const blocked = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
 
-            expect(blocked.code).toBe(1);
+            expect(blocked.code).toBe(EXIT_CODE.USAGE);
 
             // The per-run override lets THIS run through — and prepare produces no
             // bundle, so nothing shipped.
@@ -314,7 +315,7 @@ describe("schema-drift gate", () => {
 
             const retry = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
 
-            expect(retry.code).toBe(1);
+            expect(retry.code).toBe(EXIT_CODE.USAGE);
         });
 
         it("build accepts the --allow-schema-drift the blocked-drift message tells it to pass", async () => {
@@ -336,7 +337,7 @@ describe("schema-drift gate", () => {
             const blocked = await runBuildCommand({ cwd: workdir, logger: blockedLog.logger, spawner: createRecordingSpawner().spawner });
             const blockedText = blockedLog.errors.join("\n");
 
-            expect(blocked.code).toBe(1);
+            expect(blocked.code).toBe(EXIT_CODE.USAGE);
             expect(blockedText).toContain("build blocked");
             expect(blockedText).not.toContain("deploy blocked");
             expect(blockedText).not.toContain("pass `--update-schema-baseline`");

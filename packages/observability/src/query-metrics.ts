@@ -11,10 +11,14 @@
  * (no full AST parse) — it collapses adjacent whitespace and replaces
  * quoted strings, numeric literals, and hex literals with `?` placeholders.
  *
- * `rows_read` is the result set size for SELECT statements (rows the caller
- * iterated via `.toArray()` / `.one()`). `rows_written` is always 0 in this
- * module; callers that know a DML statement affected rows can pass the count
- * explicitly. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
+ * `rows_read` is the count of rows the statement SCANNED, and `rows_written`
+ * the count it WROTE, as reported by the storage cursor's own counters — not
+ * the size of the result set. The distinction is the point of the leaderboard:
+ * a query filtering on an unindexed column scans the whole table to return a
+ * handful of rows, so its result-set size stays flat while its real cost grows
+ * with the table, and ranking on rows returned would hide precisely the queries
+ * worth finding. On a host that exposes no counters the recorder falls back to
+ * the result-set size. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
  * entries — new statements beyond the cap are refused (see `admitStatement`),
  * protecting the already-tracked leaderboard from a flood of one-off shapes;
  * `readQueryInsights`'s `capped` is the read-side signal for this.
@@ -88,9 +92,9 @@ interface QueryStatEntry {
     execCount: number;
     /** Normalised SQL text (literals stripped, truncated). */
     normalizedSql: string;
-    /** Total rows read across all executions (SELECT result sizes). */
+    /** Total rows SCANNED across all executions (the billed number, not the result-set size). */
     rowsRead: number;
-    /** Total rows written across all executions. */
+    /** Total rows WRITTEN across all executions. */
     rowsWritten: number;
     /** Total wall-clock milliseconds across all executions. */
     totalDurationMs: number;

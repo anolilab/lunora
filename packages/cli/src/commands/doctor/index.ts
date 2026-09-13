@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora doctor` — read-only preflight over the current project. Checks the
  * wrangler config (SHARD DO binding, placeholder D1 ids), the `send_email`
@@ -22,7 +24,7 @@ const doctorCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "doctor",
-    options: [{ description: "Output format: pretty (default) or json", name: "format", type: String }],
+    options: [OUTPUT_FORMAT_OPTION],
 };
 
 export { doctorCommand };

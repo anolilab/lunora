@@ -9,6 +9,7 @@
  */
 import { homedir } from "node:os";
 
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { JsonMcpClient, McpClient, McpPathContext, McpScope } from "../../util/mcp-clients";
 import { MCP_CLIENTS } from "../../util/mcp-clients";
@@ -113,7 +114,7 @@ const runMcpUninstall = (options: McpUninstallOptions): McpUninstallResult => {
     const clients = resolveClients(options.clients, () => MCP_CLIENTS, options.logger, "uninstall");
 
     if (clients === undefined) {
-        return { code: 1, removed: [] };
+        return { code: EXIT_CODE.USAGE, removed: [] };
     }
 
     const servers = targetServers(options);
@@ -123,7 +124,7 @@ const runMcpUninstall = (options: McpUninstallOptions): McpUninstallResult => {
         // lie — the servers may well be installed everywhere.
         options.logger.error("mcp uninstall: nothing to remove — `--docs-only` and `--local-only` are mutually exclusive, pass at most one.");
 
-        return { code: 1, removed: [] };
+        return { code: EXIT_CODE.USAGE, removed: [] };
     }
 
     const removed: { action: RemoveAction; client: string; path: string; server: string }[] = [];

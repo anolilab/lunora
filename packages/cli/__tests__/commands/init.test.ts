@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isTemplate, resolveTemplateFlag, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -165,6 +166,62 @@ describe("lunora init", () => {
             // Optional native builds a scaffold doesn't need are listed as denied
             // (so pnpm neither prompts nor requires a C/C++ toolchain).
             expect(workspace).toContain("'ssh2': false");
+        });
+
+        it("writes the allowBuilds allowlist for --yes, which never reaches the install offer", async () => {
+            expect.assertions(3);
+
+            // The allowlist used to be written INSIDE the install offer, after
+            // `confirm()` returned true — so `--yes`, a non-TTY (CI, an agent) and
+            // "No" at the prompt each produced a project whose very next step,
+            // `pnpm install`, exits 1 with `ERR_PNPM_IGNORED_BUILDS: esbuild,
+            // workerd, …`. It belongs to the scaffold, not to the offer.
+            //
+            // A bare lock file above the target pins `detectPackageManager` to
+            // pnpm without making the parent a workspace root (`isWorkspaceRoot`
+            // reads `pnpm-workspace.yaml` / a `workspaces` field, not a lock file),
+            // so the monorepo skip below stays out of the way.
+            writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "yes-app",
+                templateType: "tanstack-start-react",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+
+            const workspace = readFileSync(join(workdir, "yes-app", "pnpm-workspace.yaml"), "utf8");
+
+            expect(workspace).toContain("'workerd': true");
+            expect(workspace).toContain("'cpu-features': false");
+        });
+
+        it("writes no pnpm-workspace.yaml into a scaffold inside a monorepo", async () => {
+            expect.assertions(2);
+
+            // The workspace ROOT owns `allowBuilds` there — the new package is not
+            // a member yet, so its install has to run from the root (which is what
+            // the next-steps hint says). A second `pnpm-workspace.yaml` here would
+            // make the scaffold a workspace root of its own and break `workspace:`
+            // resolution for it.
+            writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+            writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "nested-app",
+                templateType: "tanstack-start-react",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "nested-app", "pnpm-workspace.yaml"))).toBe(false);
         });
 
         it("does not install when the user declines the offer", async () => {
@@ -570,7 +627,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("not empty");
         });
 
@@ -587,7 +644,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             // cwd itself must not have been scaffolded into (e.g. no package.json dropped in workdir)
             expect(existsSync(join(workdir, "package.json"))).toBe(false);
@@ -606,7 +663,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             expect(existsSync(join(workdir, "   "))).toBe(false);
         });
@@ -650,7 +707,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(errors.join("\n")).toContain("no files");
             expect(existsSync(join(workdir, "hollow"))).toBe(false);
         });
@@ -671,7 +728,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("my-app");
             expect(existsSync(join(workdir, "MyApp"))).toBe(false);
         });
@@ -691,7 +748,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("lowercase");
         });
 
@@ -708,7 +765,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
@@ -865,7 +922,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             // Nothing was written through the link…
             expect(readdirSync(outside)).toHaveLength(0);
             // …and the link itself is still the user's to deal with.

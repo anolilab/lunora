@@ -37,6 +37,14 @@ export interface RegisteredLunoraFunction {
      * `reactor` have no caller identity, so RLS has no user to scope to.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -52,6 +60,7 @@ export interface RegisteredLunoraFunction {
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "messages:list": lunora_messages_0.list as unknown as RegisteredLunoraFunction,
+    "messages:probeSink": lunora_messages_0.probeSink as unknown as RegisteredLunoraFunction,
     "messages:purge": lunora_messages_0.purge as unknown as RegisteredLunoraFunction,
     "messages:send": lunora_messages_0.send as unknown as RegisteredLunoraFunction,
 };
@@ -73,6 +82,21 @@ __val1 = source["limit"];
 __has1 = true;
 }
 return { "channelId": source["channelId"], ...(__has1 ? { "limit": __val1 } : {}) };
+});
+installCompiledValidatorMap(lunora_messages_0.probeSink.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+let __has2 = false;
+let __val2;
+if (source["shape"] !== undefined) {
+if (typeof source["shape"] !== "object" || source["shape"] === null || Array.isArray(source["shape"])) return DEFER;
+if (Object.getPrototypeOf(source["shape"]) !== Object.prototype && Object.getPrototypeOf(source["shape"]) !== null) return DEFER;
+if (typeof source["shape"]["id"] !== "string") return DEFER;
+const __obj1 = { "data": source["shape"]["data"], "id": source["shape"]["id"] };
+__val2 = __obj1;
+__has2 = true;
+}
+return { ...(__has2 ? { "shape": __val2 } : {}) };
 });
 installCompiledValidatorMap(lunora_messages_0.purge.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -128,6 +152,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     messages: {
         list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;
+        probeSink: (args: { shape?: { data?: unknown; id: string } }) => Promise<null>;
         purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;
         send: (args: { channelId: Id<"channels">; text: string; kind: "text" | "image"; tags: Record<string, string> }) => Promise<unknown>;
     };
@@ -168,6 +193,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 export const createCaller = (context: CallerCtx): Caller => ({
     messages: {
         list: (args) => callRegistered(context, "messages:list", args),
+        probeSink: (args) => callRegistered(context, "messages:probeSink", args),
         purge: (args) => callRegistered(context, "messages:purge", args),
         send: (args) => callRegistered(context, "messages:send", args),
     },

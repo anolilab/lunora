@@ -5,6 +5,7 @@ import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -32,9 +33,14 @@ const useSubscription = <F extends FunctionReference>(
     const data = ref<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
     const error = ref<Error | undefined>(undefined);
 
+    // Keyed on the args' CONTENT (`stableWireKey`), not object identity — a
+    // getter that re-runs and produces equal args must not tear the live
+    // subscription down and re-snapshot. See `use-query`.
     watch(
-        () => toValue(args),
-        (currentArgs, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
+            const currentArgs = toValue(args);
+
             // Each args generation starts clean: the previous args' value must not
             // render under the new args until the new subscription's first frame.
             data.value = undefined;

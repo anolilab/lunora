@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExportCommandOptions, ExportCommandResult } from "../../src/commands/data-transfer";
+import type { ExportCommandOptions, ExportCommandResult } from "../../src/commands/data-transfer/export";
 
 /**
  * `lunora export`'s handler is a thin adapter, and the one decision it makes on
@@ -15,7 +15,9 @@ const runExportCommand = vi.fn<(options: ExportCommandOptions) => Promise<Export
     return { bytes: 0, code: 0, rows: 0 };
 });
 
-vi.mock(import("../../src/commands/data-transfer"), async (importOriginal) => {
+// The module the handler imports, not the barrel it used to go through — a
+// mock aimed at the barrel no longer intercepts anything.
+vi.mock(import("../../src/commands/data-transfer/export"), async (importOriginal) => {
     return { ...(await importOriginal()), runExportCommand };
 });
 

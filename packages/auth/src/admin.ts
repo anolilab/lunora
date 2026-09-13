@@ -1036,12 +1036,23 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 // `data` carries app-defined `additionalFields`. It is spread last and so
                 // can override `role` (matching the better-auth admin plugin's `createUser`);
                 // this is acceptable because the whole plane is admin-token gated.
+                //
+                // `isAnonymous` is the exception, and it is dropped rather than trusted:
+                // `inviteOnly()` reads that flag to decide a row is a throwaway identity
+                // rather than a registration, so letting it through here would make the
+                // studio's create-user action the one path that skips the invitation
+                // requirement. better-auth keeps it out of every request-parsed payload
+                // for the same reason (`input: false`); this plane parses nothing.
+                const safeData = { ...data };
+
+                delete safeData["isAnonymous"];
+
                 const user = await context_.internalAdapter.createUser(
                     {
                         email: normalizedEmail,
                         name,
                         role: role === undefined ? undefined : serializeRole(role),
-                        ...data,
+                        ...safeData,
                     } as Parameters<typeof context_.internalAdapter.createUser>[0],
                     // better-auth 1.7 takes the caller's provenance as a second argument
                     // (it reaches database hooks); this whole plane is admin-token gated,

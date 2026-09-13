@@ -1234,3 +1234,171 @@ describe("mixed-kind push routing", () => {
         expect(receipt.success).toBe(false);
     });
 });
+
+describe("mixed-kind push routing under the resilience middleware", () => {
+    // The router is ONE provider to the engine, so the retry middleware re-runs
+    // `send` with the WHOLE payload. These drive the real facade, the real router
+    // and the real `attachResilience` (through `mockEngine`) because the
+    // interaction between the three is the behaviour under test.
+    const origins = { allowedPushOrigins: ["https://push.example"] };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    const mixedSend = (to: ReadonlyArray<string>) => {
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const engine = mockEngine({ push: routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider }) });
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
+
+        return { fcm, send: async () => notify.send({ push: { body: "b", to: [...to] } }), webPush };
+    };
+
+    it("does not re-send to the group that already delivered when the other fails", async () => {
+        expect.hasAssertions();
+
+        // The web-push target is accepted; the FCM token answers a transient 503.
+        const { fcm, send, webPush } = mixedSend([sub("ok"), "fail-token"]);
+        const [receipt] = await send();
+
+        // One send each: retrying the router re-POSTs the accepted web-push
+        // target, delivering that notification to the device four times over.
+        expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(1);
+        expect(receipt?.successful).toBe(false);
+
+        // The caller is told the send was partial and which group still needs it
+        // — the same "re-send the narrower set" contract `runRetryIds` offers.
+        const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
+
+        expect(errors).toContain("partially delivered");
+        expect(errors).toContain("the fcm group failed");
+    });
+
+    it("still retries when BOTH groups fail — there is no delivery to duplicate", async () => {
+        expect.hasAssertions();
+
+        const { fcm, send, webPush } = mixedSend([sub("fail"), "fail-token"]);
+
+        await send();
+
+        // The engine's budget: the initial attempt plus three retries.
+        expect(webPush.sends).toHaveLength(4);
+        expect(fcm.sends).toHaveLength(4);
+    });
+});
+
+describe("push circuit-breaker scope", () => {
+    // The router is ONE provider to the engine, so every push send — web-push,
+    // FCM, or mixed — arrives at the breaker under the same provider id. These
+    // drive the real facade, router and `attachResilience` because the breaker's
+    // key is only observable through all three.
+    const origins = { allowedPushOrigins: ["https://push.example"] };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    /** `CIRCUIT_THRESHOLD` in `providers.ts` — consecutive failures that open a circuit. */
+    const THRESHOLD = 5;
+
+    const harness = () => {
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const engine = mockEngine({ push: routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider }) });
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
+
+        return { fcm, notify, webPush };
+    };
+
+    it("keeps sending to web-push after enough partials have opened FCM's circuit", async () => {
+        expect.hasAssertions();
+
+        const { notify, webPush } = harness();
+
+        // Each mixed send delivers to web-push and 503s on FCM — a partial, which
+        // the sibling fix refuses to retry, so this is exactly THRESHOLD
+        // consecutive failures and no more.
+        for (let attempt = 0; attempt < THRESHOLD; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+            await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+        }
+
+        const delivered = webPush.sends.length;
+        const [receipt] = await notify.send({ push: { body: "b", to: sub("ok") } });
+
+        // FCM is down; web-push has accepted every single send. Shedding it here
+        // stops healthy browsers receiving anything at all.
+        expect(receipt?.successful).toBe(true);
+        expect(webPush.sends).toHaveLength(delivered + 1);
+    });
+
+    it("charges a partial to FCM exactly once — the circuit opens on the THRESHOLD'th partial, not before", async () => {
+        expect.hasAssertions();
+
+        /** Drive `partials` mixed sends, then report whether an FCM-only send still reaches the provider. */
+        const fcmStillReachedAfter = async (partials: number): Promise<boolean> => {
+            const { fcm, notify } = harness();
+
+            for (let attempt = 0; attempt < partials; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+                await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+            }
+
+            const attempted = fcm.sends.length;
+
+            await notify.send({ push: { body: "b", to: "fail-token" } });
+
+            return fcm.sends.length > attempted;
+        };
+
+        // The boundary pins the count from both sides: charging a partial to no
+        // transport would never open FCM's circuit, and charging it twice would
+        // have opened it on the third partial.
+        await expect(fcmStillReachedAfter(THRESHOLD - 1)).resolves.toBe(true);
+        await expect(fcmStillReachedAfter(THRESHOLD)).resolves.toBe(false);
+    });
+
+    /** Two FCM-only sends: each is retried, so the breaker sees four failures per send. */
+    const openFcmCircuit = async (notify: { send: (message: { push: { body: string; to: string } }) => Promise<unknown> }) => {
+        for (const attempt of [1, 2]) {
+            // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+            await notify.send({ push: { body: `b${attempt.toString()}`, to: "fail-token" } });
+        }
+    };
+
+    it("still sheds FCM once FCM is the transport that is down", async () => {
+        expect.hasAssertions();
+
+        const { fcm, notify, webPush } = harness();
+
+        await openFcmCircuit(notify);
+
+        const attempted = fcm.sends.length;
+        const [shed] = await notify.send({ push: { body: "b", to: "fail-token" } });
+        const [browser] = await notify.send({ push: { body: "b", to: sub("ok") } });
+
+        // Shedding is the breaker's job and it still does it: the FCM leg never
+        // reaches the provider again. The browser leg was never measured against
+        // FCM's circuit and still delivers.
+        expect(shed?.successful).toBe(false);
+        expect(fcm.sends).toHaveLength(attempted);
+        expect(browser?.successful).toBe(true);
+        expect(webPush.sends).toHaveLength(1);
+    });
+
+    it("delivers a mixed send's web-push leg while FCM's circuit is open", async () => {
+        expect.hasAssertions();
+
+        const { notify, webPush } = harness();
+
+        await openFcmCircuit(notify);
+
+        const [receipt] = await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+
+        // A send with one healthy transport is never shed — it has a delivery to
+        // make. The open transport's leg is still attempted and still fails, so
+        // the fold reports a partial rather than a total failure.
+        expect(webPush.sends).toHaveLength(1);
+        expect(receipt?.successful).toBe(false);
+
+        const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
+
+        expect(errors).toContain("partially delivered");
+    });
+});

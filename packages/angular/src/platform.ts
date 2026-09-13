@@ -1,5 +1,7 @@
 import type { DestroyRef, Injector } from "@angular/core";
-import { effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
+import { computed, effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
+
+import { stableWireKey } from "../../../shared/wire-key";
 
 /**
  * Whether a reactive primitive should open its live WebSocket subscription (and
@@ -71,11 +73,21 @@ export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: ()
 
 /**
  * Wire the reactive-args form of a primitive: re-run `open` whenever the tracked
- * `args` thunk produces a new value, tearing the previous generation down first
- * (via the `onCleanup` handed to `open`), and stop the whole effect when the
- * owner is destroyed.
+ * `args` thunk produces args with new CONTENT, tearing the previous generation
+ * down first (via the `onCleanup` handed to `open`), and stop the whole effect
+ * when the owner is destroyed.
  *
- * `args` is read TRACKED — it is the only dependency the effect exists for.
+ * The effect tracks `stableWireKey(args())` rather than the args object: a thunk
+ * such as `() => ({ id: id(), limit: Math.min(limit(), 10) })` builds a fresh
+ * object whenever any signal it reads ticks, and tracking identity would tear the
+ * live subscription down and re-snapshot from the server — blanking the signal —
+ * for args that did not actually change. A `computed` memoises the key, so an
+ * equal-content tick never schedules the effect at all (the dedupe cannot live
+ * inside the effect body: by then Angular has already run the previous
+ * generation's `onCleanup`).
+ *
+ * `args` is read TRACKED through that key — it is the only dependency the effect
+ * exists for.
  * `open` runs UNTRACKED, which is load-bearing rather than an optimisation: a
  * primitive that reads its own signals while building a generation (the
  * paginated engine reads its page list) would otherwise take a dependency on
@@ -100,14 +112,15 @@ export const attachReactiveArgs = <A>(
     open: (resolved: A, onCleanup: (teardown: () => void) => void) => void,
 ): void => {
     let effectRef;
+    const argsKey = computed(() => stableWireKey(args()));
 
     try {
         effectRef = effect(
             (onCleanup) => {
-                const resolved = args();
+                argsKey();
 
                 untracked(() => {
-                    open(resolved, onCleanup);
+                    open(args(), onCleanup);
                 });
             },
             { injector: owner.injector, manualCleanup: true },

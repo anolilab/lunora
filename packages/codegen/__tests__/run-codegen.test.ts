@@ -97,6 +97,23 @@ const unresolvableQualifiers = (root: string, rendered: ReadonlyArray<string>): 
     return unresolved;
 };
 
+/**
+ * The terminal types of the builder chains, declared locally so a probe file
+ * RESOLVES inside a fixture workdir that has no `node_modules`. The
+ * dropped-procedure check is type-level, and against an unresolvable
+ * `@lunora/server` every type is `any` — so a probe that imports the real
+ * package tests the unavailable path, never the check. Only the terminal
+ * identities are mirrored; `__tests__/discover/unregistered-procedures.test.ts`
+ * covers the per-kind detail.
+ */
+const PROBE_BUILDERS = `export interface RegisteredFunction<A, R, Kind extends "query" | "mutation" | "action"> {
+    handler: (context: unknown, args: A) => R;
+    kind: Kind;
+}
+export type RegisteredQuery<A, R> = RegisteredFunction<A, R, "query">;
+export declare const probeQuery: { input<A>(validators: A): { query<R>(handler: (options: { args: A }) => R): RegisteredQuery<A, Awaited<R>> } };
+`;
+
 let workdir: string;
 
 describe("run-codegen", () => {
@@ -586,7 +603,7 @@ export const listMessages = query
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
-                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredDeletes, beginDeferredSchedules");
                 expect(result.generated.shard).toContain(
                     'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
                 );
@@ -2048,7 +2065,8 @@ export const cached = query.input({ key: v.string() }).query(async ({ args, ctx 
             const result = runCodegen({ projectRoot: workdir });
 
             // The method, the config-type alias, and the pass-through state are all emitted…
-            expect(result.generated.app).toContain('public kv(factory: NonNullable<ShardConfig["kv"]>): this');
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted type signature, not a credential
+            expect(result.generated.app).toContain('public kv(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["kv"]>>): this');
             expect(result.generated.app).toContain("type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;");
             expect(result.generated.app).toContain("private readonly shardExtras: Partial<ShardConfig> = {};");
             expect(result.generated.app).toContain("...this.shardExtras,");
@@ -2074,7 +2092,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             // The fluent builder method + its config-type pass-through are emitted…
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
-            expect(result.generated.app).toContain('public x402(factory: NonNullable<ShardConfig["x402"]>): this');
+            expect(result.generated.app).toContain('public x402(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["x402"]>>): this');
             // …the typed rail rides the ActionCtx…
             expect(result.generated.server).toContain("readonly x402: X402Pay;");
             // …and the value is attached only inside the action-only `if (isAction)` block.
@@ -2792,13 +2810,12 @@ export default executeTrigger;
             // 'getUserSettings' does not exist", reading as a naming mistake
             // rather than a dropped function. This check is type-level, so the
             // indirection that causes the bug cannot hide it.
+            writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
             writeFileSync(
                 join(workdir, "lunora", "settings.ts"),
-                `import type { RegisteredQuery } from "@lunora/server";
+                `import { probeQuery } from "./builders.js";
 
-import { query } from "./_generated/server.js";
-
-const makeGetter = (): RegisteredQuery<{}, string> => query.input({}).query(async () => "x");
+const makeGetter = () => probeQuery.input({}).query(async () => "x");
 
 export const getUserSettings = makeGetter();
 `,
@@ -2809,7 +2826,54 @@ export const getUserSettings = makeGetter();
 
             expect(finding).toBeDefined();
             expect(finding?.detail).toContain("`getUserSettings`");
-            expect(finding?.remediation).toContain("Assign the builder chain directly");
+            expect(finding?.remediation).toContain("query.input({ … }).query(handler)");
+        });
+
+        it("says so when it cannot type-check `lunora/` at all, rather than reporting a clean bill of health", () => {
+            expect.assertions(2);
+
+            // A builder chain importing the real `@lunora/server`, in a tmpdir
+            // with no `node_modules` and no `tsconfig.json`: registered
+            // syntactically, unreadable by type. The shared fixture cannot
+            // stand in for this — its procedures use the bare factory form,
+            // whose type is `any` even in a healthy install, so it would prove
+            // the wrong thing. `__tests__/discover/unregistered-procedures.test.ts`
+            // covers the resolving side, including that this stays quiet there.
+            writeFileSync(
+                join(workdir, "lunora", "probe.ts"),
+                `import { query } from "@lunora/server";
+
+export const probeListed = query.input({}).query(async () => "x");
+`,
+            );
+            const result = runCodegen({ projectRoot: workdir });
+            const finding = result.advisories.find((entry) => entry.name === "procedure_type_check_unavailable");
+
+            expect(finding?.detail).toContain("Type resolution for `lunora/` is unavailable");
+            expect(finding?.remediation).toContain("tsconfig.json");
+        });
+
+        it("keeps the type-check finding out of the generated shard while still returning it", () => {
+            expect.assertions(2);
+
+            // `_generated/shard.ts` is committed for the examples, and this
+            // finding describes the machine codegen ran on — so regenerating
+            // against a cold `dist/` must not write it into a tracked file.
+            // Asserted on the output rather than by sharing the name constant
+            // with the filter: the risk is the filter silently stopping to
+            // match, and only the emitted bytes prove it still does.
+            writeFileSync(
+                join(workdir, "lunora", "probe.ts"),
+                `import { query } from "@lunora/server";
+
+export const probeListed = query.input({}).query(async () => "x");
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.advisories.map((entry) => entry.name)).toContain("procedure_type_check_unavailable");
+            expect(result.generated.shard).not.toContain("procedure_type_check_unavailable");
         });
 
         it("flags a procedure exported by a separate export statement, under its exported name", () => {
@@ -2822,13 +2886,12 @@ export const getUserSettings = makeGetter();
             // dropped from is an ordinary builder chain with nothing to look at.
             // `export { a as b }` is addressed by callers as `b`, so `b` is what
             // the finding has to name.
+            writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
             writeFileSync(
                 join(workdir, "lunora", "settings.ts"),
-                `import type { RegisteredQuery } from "@lunora/server";
+                `import { probeQuery } from "./builders.js";
 
-import { query } from "./_generated/server.js";
-
-const listSettings: RegisteredQuery<{}, string> = query.input({}).query(async () => "x");
+const listSettings = probeQuery.input({}).query(async () => "x");
 
 export { listSettings as listUserSettings };
 `,
@@ -3682,6 +3745,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('"type": "id"');
         });
 
+        it("carries each foreign key's declared onDelete onto its column", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [
+                            { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" },
+                            { field: "editorId", kind: "one", name: "editor", onDelete: "restrict", references: "_id", table: "users" },
+                            // No declared action — the column must stay silent rather
+                            // than inherit a sibling's.
+                            { field: "reviewerId", kind: "one", name: "reviewer", references: "_id", table: "users" },
+                        ],
+                        searchIndexes: [],
+                        shape: {
+                            authorId: { kind: "id", tableName: "users" },
+                            editorId: { kind: "id", tableName: "users" },
+                            reviewerId: { kind: "id", tableName: "users" },
+                        },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const columns = JSON.parse(/const LUNORA_TABLE_COLUMNS[^=]+= (?<json>\{.*?\n\});/su.exec(emitShard({ schema }))?.groups?.["json"] ?? "{}") as {
+                posts: { name: string; onDelete?: string }[];
+            };
+            const byName = new Map(columns.posts.map((column) => [column.name, column.onDelete]));
+
+            expect(byName.get("authorId")).toBe("cascade");
+            expect(byName.get("editorId")).toBe("restrict");
+            expect(byName.get("reviewerId")).toBeUndefined();
+        });
+
         it("flags a v.storage() column with isStorage: true", () => {
             expect.assertions(1);
 
@@ -3712,9 +3814,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
-            expect(output).toContain(
-                "Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>",
-            );
+            expect(output).toContain('onDelete?: "cascade" | "restrict" | "set null";');
         });
 
         it("names the members of a string-literal union so the row editor can offer them", () => {
@@ -3882,7 +3982,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // ctx.vectors + the auto-propagation write hook are assembled in buildCtx.
             expect(output).toContain("vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;");
             expect(output).toContain("onWrite = createVectorSyncHook(");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
             expect(output).toContain("vectors,");
         });
 
@@ -3961,7 +4061,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
@@ -4002,7 +4102,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("lists only the sharded table's index in shardedIndexNames for a MIXED schema (one sharded, one root-scoped vectorized table)", () => {

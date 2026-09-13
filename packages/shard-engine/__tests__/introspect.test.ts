@@ -315,6 +315,26 @@ describe("introspect", () => {
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
         });
 
+        // A SQL surface (the console's autocomplete, its linter, a dump of
+        // INSERTs) has to know which of the displayed names a statement may
+        // actually write. Handed only the display list it offered `title` and
+        // `authorId` as columns — names SQLite rejects, or, on workerd, silently
+        // resolves to the string literal of their own spelling.
+        it("reports the physical columns alongside the expanded display list", () => {
+            expect.assertions(2);
+
+            const page = readTablePage(database.sql, { table: "posts" });
+
+            expect(page.sqlColumns).toEqual(["id", "_creationTime", "__doc__"]);
+            expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
+        });
+
+        it("reports the same list for a non-doc table, where the two coincide", () => {
+            expect.assertions(1);
+
+            expect(readTablePage(database.sql, { table: "messages" }).sqlColumns).toEqual(["__id__", "text", "votes"]);
+        });
+
         /** A canonical doc-stored table holding exactly one row with `doc` as its blob. */
         const seedDocTable = (name: string, doc: string): void => {
             database.raw(`CREATE TABLE "${name}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
@@ -414,6 +434,39 @@ describe("introspect", () => {
 
             expect(page.total).toBe(1);
             expect(page.rows).toEqual([{ _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" }]);
+        });
+
+        // A facet summarises a column's NULL group like any other value and a
+        // click has to bring those rows back. Bound as a parameter, `= ?` with
+        // NULL is neither true nor false for any row in the table, so the
+        // sidebar read "∅ (2)" over a grid that said the table was empty.
+        it("matches the NULL group when a clause asks for it, on a doc field", () => {
+            expect.assertions(2);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p3', 3, '{"title":"No author","authorId":null}'), ('p4', 4, '{"title":"Absent"}')`);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "authorId", operator: "eq", value: null }], table: "posts" });
+
+            // Both the JSON `null` and the absent key: `json_extract` answers
+            // NULL for each, and the facet groups them together too.
+            expect(page.total).toBe(2);
+            expect(page.rows.map((row) => (row as { id: string }).id)).toEqual(["p3", "p4"]);
+        });
+
+        it("matches everything else when a clause asks for `ne` NULL", () => {
+            expect.assertions(1);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p3', 3, '{"title":"No author","authorId":null}')`);
+
+            expect(readTablePage(database.sql, { filters: [{ column: "authorId", operator: "ne", value: null }], table: "posts" }).total).toBe(2);
+        });
+
+        it("matches the NULL group on a physical column too", () => {
+            expect.assertions(1);
+
+            database.raw(`INSERT INTO "messages" VALUES ('m4', 'quiet', NULL)`);
+
+            expect(readTablePage(database.sql, { filters: [{ column: "votes", operator: "eq", value: null }], table: "messages" }).total).toBe(1);
         });
 
         it("aND-combines structured filters with the substring search", () => {

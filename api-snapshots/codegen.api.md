@@ -114,6 +114,7 @@ interface CodegenResult {
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
     workflows: ReadonlyArray<WorkflowIR>;
+    writtenFiles: ReadonlyArray<string>;
 }
 ```
 
@@ -194,7 +195,7 @@ interface DriftChange {
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
-    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
+    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
 
@@ -436,6 +437,25 @@ interface LintSchemaOptions {
 }
 ```
 
+### `LoadedProjectConfig` (interface)
+
+```ts
+interface LoadedProjectConfig {
+    config?: LunoraProjectConfig;
+    error?: string;
+}
+```
+
+### `LunoraProjectConfig` (interface)
+
+```ts
+interface LunoraProjectConfig {
+    app?: unknown;
+    remote?: unknown;
+    target?: unknown;
+}
+```
+
 ### `LunoraSolution` (interface)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -550,6 +570,12 @@ interface OpenRpcMethod {
 }
 ```
 
+### `PROJECT_CONFIG_FILENAMES` (const)
+
+```ts
+const PROJECT_CONFIG_FILENAMES: ReadonlyArray<string>;
+```
+
 ### `PlatformDiagnostic` (interface)
 
 ```ts
@@ -557,9 +583,19 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
     remediation: string;
     target: string;
+}
+```
+
+### `ProjectConfigLiterals` (interface)
+
+```ts
+interface ProjectConfigLiterals {
+    remote?: boolean;
+    target?: string;
+    unreadable?: boolean;
 }
 ```
 
@@ -894,10 +930,13 @@ interface TableIR {
 
 ```ts
 interface TableSnapshot {
+    commitOrdered?: boolean;
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
+    memory?: boolean;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
+    ttl?: TtlSnapshot;
 }
 ```
 
@@ -1247,6 +1286,12 @@ const emitOpenRpc: (input: OpenRpcEmitInput) => string;
 const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ```
 
+### `emitScheduler` (const)
+
+```ts
+const emitScheduler: (hasScheduler: boolean) => string;
+```
+
 ### `emitServer` (const)
 
 ```ts
@@ -1305,6 +1350,12 @@ const evaluateSchemaDrift: (options: {
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `findProjectConfigFile` (const)
+
+```ts
+const findProjectConfigFile: (projectRoot: string) => string | undefined;
+```
+
 ### `findTsconfig` (const)
 
 ```ts
@@ -1321,6 +1372,18 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 
 ```ts
 const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
+```
+
+### `isD1GlobalTable` (const)
+
+```ts
+const isD1GlobalTable: (table: TableIR) => boolean;
+```
+
+### `isHyperdriveGlobalTable` (const)
+
+```ts
+const isHyperdriveGlobalTable: (table: TableIR) => boolean;
 ```
 
 ### `isTypedSchema` (const)
@@ -1341,6 +1404,12 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 const listLunoraSourceFiles: (directory: string) => string[];
 ```
 
+### `loadProjectConfig` (const)
+
+```ts
+const loadProjectConfig: (projectRoot: string) => Promise<LoadedProjectConfig>;
+```
+
 ### `parseSchemaSnapshot` (const)
 
 ```ts
@@ -1357,6 +1426,12 @@ const platformMatrixIds: () => ReadonlyArray<string>;
 
 ```ts
 const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
+```
+
+### `readProjectConfigLiterals` (const)
+
+```ts
+const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 ```
 
 ### `readProjectTarget` (const)
@@ -2339,6 +2414,15 @@ interface StorageUploadIR {
 
 ```ts
 interface TtlIR {
+    after?: number;
+    field: string;
+}
+```
+
+### `TtlSnapshot` (interface)
+
+```ts
+interface TtlSnapshot {
     after?: number;
     field: string;
 }

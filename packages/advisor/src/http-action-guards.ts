@@ -7,7 +7,9 @@
  * unauthenticated write bypassing identity/RLS (distinct from
  * `admin_route_without_guard`, which covers Studio/admin paths). Only handlers
  * with a statically-resolvable inline body and `ctx` binding are recorded
- * (fail-safe under-report); read-only handlers are never recorded. Produced by
+ * (fail-safe under-report); read-only handlers are never recorded, and neither
+ * are signed-webhook handlers, which authenticate the request by provider
+ * signature rather than by `ctx.auth`. Produced by
  * the codegen feeder; runtime callers don't supply it, so the lint finds nothing
  * there.
  */

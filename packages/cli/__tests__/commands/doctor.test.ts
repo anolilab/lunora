@@ -5,8 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorData } from "../../src/commands/doctor/handler";
+import { DOCTOR_CODES, execute, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorOptions } from "../../src/commands/doctor/index";
 import type { Logger } from "../../src/util/logger";
+import { setCommandLogger } from "../../src/util/logger";
+import { runExecute } from "../helpers/execute";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
 const captureStdout = async (body: () => Promise<void>): Promise<string> => {
@@ -36,12 +40,18 @@ const makeLogger = (): { lines: string[]; logger: Logger } => {
     return { lines, logger: { error: push("error: "), info: push("info: "), success: push("success: "), warn: push("warn: ") } };
 };
 
-/** A clean wrangler.jsonc: SHARD DO binding + a real-looking D1 id. */
+/**
+ * A clean wrangler.jsonc: SHARD DO binding + its migration entry + a real-looking
+ * D1 id. The migration is load-bearing — wrangler requires one per Durable Object
+ * class, and doctor now reports every validator error rather than the three it
+ * used to cherry-pick, so a fixture that omits it is not actually clean.
+ */
 const CLEAN_WRANGLER = JSON.stringify(
     {
         compatibility_date: "2026-04-07",
         d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -54,6 +64,7 @@ const PLACEHOLDER_WRANGLER = JSON.stringify(
         compatibility_date: "2026-04-07",
         d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -124,6 +135,67 @@ describe("runDoctor", () => {
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "fail")).toBe(false);
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
+    });
+
+    describe("blast-radius guardrails", () => {
+        it("prompts for a CPU cap when none is set, without failing the run", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = result.findings.find((entry) => entry.code === "cpu-limit-missing");
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.fix).toContain("cpu_ms");
+            // A guardrail prompt must not turn a healthy project red.
+            expect(result.code).toBe(0);
+        });
+
+        it("stays quiet once a CPU cap is configured", async () => {
+            expect.assertions(1);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    limits: { cpu_ms: 30_000 },
+                    name: "demo",
+                }),
+            );
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((entry) => entry.code === "cpu-limit-missing")).toBe(false);
+        });
+
+        it("names R2 buckets whose lifecycle rules should be checked, and stays silent without one", async () => {
+            expect.assertions(3);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    name: "demo",
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "demo-uploads" }],
+                }),
+            );
+
+            const withBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = withBucket.findings.find((entry) => entry.code === "r2-lifecycle-unset");
+
+            expect(finding?.message).toContain("demo-uploads");
+            expect(finding?.fix).toContain("lifecycle");
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const withoutBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(withoutBucket.findings.some((entry) => entry.code === "r2-lifecycle-unset")).toBe(false);
+        });
     });
 
     /**
@@ -198,6 +270,78 @@ describe("runDoctor", () => {
 
         expect(finding?.level).toBe("warn");
         expect(finding?.message).toContain("could not check");
+    });
+
+    it("fails when a declared Durable Object class is not exported by the worker entry", async () => {
+        expect.assertions(2);
+
+        // Doctor read the PURE config validator, which cannot see the entry — so
+        // the `durable_objects.bindings[].class_name` cross-check never ran here
+        // and doctor passed a tree wrangler refuses to bundle. Its own
+        // `declared-export-missing` check covers containers/workflows/agents off
+        // inference and stopped there — which is why this one has its own code
+        // rather than reusing that one: both fire for a container, and
+        // `DOCTOR_CODES` is the `--format json` contract a CI job counts.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "2026-04-07",
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "SchedulerDO", name: "SCHEDULER" },
+                    ],
+                },
+                main: "src/server.ts",
+                name: "demo",
+            }),
+        );
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-class-unexported" && finding.message.includes("SchedulerDO"))).toBe(true);
+    });
+
+    it("reports wrangler errors no more specific check claimed, instead of dropping them", async () => {
+        expect.assertions(2);
+
+        // Doctor cherry-picked three findings out of the validator report and
+        // discarded the rest, so a bad `compatibility_date` (and an unchained
+        // `.vectors()`, a container image with no Dockerfile, a missing
+        // migration entry) read as a clean bill of health.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "not-a-date",
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                name: "demo",
+            }),
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-invalid" && finding.message.includes("compatibility_date"))).toBe(true);
+    });
+
+    it("warns when a stale lunora.json is left behind", async () => {
+        expect.assertions(2);
+
+        // Nothing reads it any more, so nothing breaks — but a `target` in it used
+        // to select the provider, and after the rename the project silently gets
+        // the default one.
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }\n`, "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.code === "stale-lunora-json");
+
+        expect(finding?.level).toBe("warn");
+        // A warning, not a failure: the file is inert, not invalid.
+        expect(result.code).toBe(0);
     });
 
     it("reports a failure when wrangler.jsonc is missing", async () => {
@@ -481,48 +625,46 @@ describe("runDoctor", () => {
     });
 
     describe("--format json", () => {
-        it("puts one JSON document on stdout and the human report on stderr", async () => {
+        // Through `execute`, the only path that writes the envelope: the document
+        // is `defineHandler`'s, and `runDoctorCommand` is the library entry point.
+        it("puts one JSON document on stdout and the human report off it", async () => {
             expect.assertions(5);
 
             seed(workdir, PLACEHOLDER_WRANGLER);
 
-            const { logger } = makeLogger();
-            let stderr = "";
-            const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-                stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+            const { lines, logger } = makeLogger();
 
-                return true;
-            });
+            setCommandLogger(logger);
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger });
-            });
+            try {
+                const { code, document } = await runExecute<DoctorOptions, DoctorData>(execute, {
+                    commandName: "doctor",
+                    cwd: workdir,
+                    options: { format: "json" },
+                });
 
-            stderrSpy.mockRestore();
-
-            const parsed = JSON.parse(stdout) as { code: number; findings: { code: string; level: string }[]; ok: boolean; summary: Record<string, number> };
-
-            expect(parsed.ok).toBe(false);
-            expect(parsed.code).toBe(1);
-            expect(parsed.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
-            expect(parsed.summary.fail).toBe(1);
-            // The report is still rendered — on stderr, so stdout stays pipeable.
-            expect(stderr).toContain("lunora doctor — project preflight");
+                expect(code).toBe(1);
+                // No `ok`: the envelope's `code` is the verdict, and two fields
+                // answering that is how they end up disagreeing.
+                expect(document?.code).toBe(1);
+                expect(document?.data?.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+                expect(document?.data?.summary.fail).toBe(1);
+                // The report is still rendered, and off stdout so it stays pipeable.
+                expect(lines.join("\n")).toContain("lunora doctor — project preflight");
+            } finally {
+                setCommandLogger(undefined);
+            }
         });
 
-        it("counts every level in the summary and keeps pass findings in the document", async () => {
+        it("counts every level in the summary and keeps pass findings in the payload", async () => {
             expect.assertions(2);
 
             seed(workdir, CLEAN_WRANGLER);
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
-            });
+            const result = await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
 
-            const parsed = JSON.parse(stdout) as { findings: { level: string }[]; summary: Record<"fail" | "info" | "pass" | "warn", number> };
-
-            expect(parsed.summary.pass).toBeGreaterThan(0);
-            expect(parsed.findings.filter((finding) => finding.level === "pass")).toHaveLength(parsed.summary.pass);
+            expect(result.summary.pass).toBeGreaterThan(0);
+            expect(result.findings.filter((finding) => finding.level === "pass")).toHaveLength(result.summary.pass);
         });
 
         it("renders the human report on the caller's logger in pretty mode", async () => {
@@ -538,23 +680,6 @@ describe("runDoctor", () => {
 
             expect(stdout).toBe("");
             expect(lines.some((line) => line.includes("lunora doctor — project preflight"))).toBe(true);
-        });
-
-        it("rejects an unknown --format the same way the other commands do", async () => {
-            expect.assertions(3);
-
-            seed(workdir, CLEAN_WRANGLER);
-
-            const { lines, logger } = makeLogger();
-
-            const stdout = await captureStdout(async () => {
-                const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
-
-                expect(result.code).toBe(1);
-            });
-
-            expect(stdout).toBe("");
-            expect(lines.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
         });
     });
 

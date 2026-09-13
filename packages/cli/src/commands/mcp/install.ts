@@ -15,6 +15,7 @@ import { join } from "@visulima/path";
 
 import type { PackageManager } from "../../util/detect-package-manager";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { JsonMcpClient, ManualMcpClient, McpClient, McpPathContext, McpScope, McpServerSpec } from "../../util/mcp-clients";
 import { MCP_CLIENT_IDS, MCP_CLIENTS } from "../../util/mcp-clients";
@@ -269,7 +270,7 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     const clients = resolveClients(options.clients, () => detectInstalledClients({ home, platform, projectRoot: options.cwd }), options.logger, "install");
 
     if (clients === undefined) {
-        return { code: 1, written: [] };
+        return { code: EXIT_CODE.USAGE, written: [] };
     }
 
     if (clients.length === 0) {
@@ -279,7 +280,7 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
             `mcp install: no MCP client config found — name one explicitly, e.g. \`lunora mcp install claude-code\`. Known clients: ${MCP_CLIENT_IDS.join(", ")}.`,
         );
 
-        return { code: 1, written: [] };
+        return { code: EXIT_CODE.NOT_FOUND, written: [] };
     }
 
     if (options.clients.length === 0) {
@@ -291,7 +292,7 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     if (servers.length === 0) {
         options.logger.error(`mcp install: nothing to install — ${describeEmptySelection(options)}`);
 
-        return { code: 1, written: [] };
+        return { code: EXIT_CODE.USAGE, written: [] };
     }
 
     const written = installAll(clients, servers, { ...options, home, platform });

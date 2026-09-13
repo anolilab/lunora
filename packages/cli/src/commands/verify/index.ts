@@ -2,6 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 import { API_SPEC_HELP } from "../../util/api-spec";
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const verifyCommand: Command = {
     description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
@@ -9,6 +10,7 @@ const verifyCommand: Command = {
         ["lunora verify", "Validate wrangler + codegen + tsc"],
         ["lunora verify --no-typecheck", "Skip the TypeScript type-check"],
         ["lunora verify --health-url https://my-app.workers.dev", "Also probe the deployment's /_lunora/health"],
+        ["lunora verify --env production", "Validate the env.production view, as `lunora deploy --env production` will"],
     ],
     group: "Deploy",
     loader: () =>
@@ -19,7 +21,17 @@ const verifyCommand: Command = {
     options: [
         { description: "Treat breaking schema drift as a warning instead of a failure", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        // `verify` is the cheap gate people put in PR CI while `build`/`deploy`
+        // run on the deploy job — so it has to validate the view the deploy
+        // will. Without this it read the TOP LEVEL for an `--env`-scoped
+        // project: `durable_objects` is non-inheritable, so a binding declared
+        // only under `env.<name>` was never cross-checked at all.
+        {
+            description: "Cloudflare environment name — validate the env.<name> view of wrangler.jsonc, as `lunora deploy --env` does",
+            name: "env",
+            type: String,
+        },
+        OUTPUT_FORMAT_OPTION,
         {
             description: "Probe this deployment's /_lunora/health endpoint (off by default; keeps verify offline-safe)",
             name: "health-url",
@@ -57,6 +69,7 @@ export { verifyCommand };
 export type VerifyOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
+    env: string | undefined;
     format: string | undefined;
     "health-url": string | undefined;
     "strict-advisories": boolean | undefined;

@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
+    readonly findRelated: "__lunora_admin__:findRelated";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
     readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
@@ -417,6 +418,7 @@ interface ColumnMeta {
     isStorage?: boolean;
     name: string;
     nullable?: boolean;
+    onDelete?: "cascade" | "restrict" | "set null";
     optional: boolean;
     pk?: boolean;
     ref?: string;
@@ -688,6 +690,8 @@ interface DatabaseWriterLike {
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
+    related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+    relationEdges?: ReadonlyArray<RelationEdge>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;
@@ -1255,10 +1259,8 @@ interface KeyRange {
 ### `LifecycleDispatchInfo` (interface)
 
 ```ts
-interface LifecycleDispatchInfo {
+interface LifecycleDispatchInfo extends SubscriptionIdentity {
     event: LifecycleEvent;
-    identity: Record<string, unknown> | undefined;
-    userId: string | undefined;
 }
 ```
 
@@ -1659,6 +1661,30 @@ const RANK_TIEBREAK = "__id__";
 const REACTOR_STATE_TABLE = "__reactor_state";
 ```
 
+### `RELATED_DEFAULT_LIMIT` (const)
+
+```ts
+const RELATED_DEFAULT_LIMIT = 50;
+```
+
+### `RELATED_DEPTH_DECAY` (const)
+
+```ts
+const RELATED_DEPTH_DECAY = 0.5;
+```
+
+### `RELATED_MAX_DEPTH` (const)
+
+```ts
+const RELATED_MAX_DEPTH = 4;
+```
+
+### `RELATED_MAX_LIMIT` (const)
+
+```ts
+const RELATED_MAX_LIMIT = 200;
+```
+
 ### `RELATION_EXISTS_KEY` (const)
 
 ```ts
@@ -1965,6 +1991,66 @@ interface RecordQueueMessageInput {
 }
 ```
 
+### `RelatedDirection` (type)
+
+```ts
+type RelatedDirection = "both" | "in" | "out";
+```
+
+### `RelatedNode` (interface)
+
+```ts
+interface RelatedNode {
+    depth: number;
+    document: Record<string, unknown>;
+    path: ReadonlyArray<string>;
+    pathIds: ReadonlyArray<string>;
+    score: number;
+    table: string;
+}
+```
+
+### `RelatedOptions` (interface)
+
+```ts
+interface RelatedOptions {
+    cursor?: null | string;
+    depth?: number;
+    direction?: RelatedDirection;
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
+}
+```
+
+### `RelatedPage` (interface)
+
+```ts
+interface RelatedPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode[];
+}
+```
+
+### `RelatedStart` (type)
+
+```ts
+type RelatedStart = (Record<string, unknown> & {
+    _id: string;
+}) | RelatedStartReference;
+```
+
+### `RelatedStartReference` (interface)
+
+```ts
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+```
+
 ### `RelationDefinitionLike` (interface)
 
 ```ts
@@ -1977,6 +2063,18 @@ interface RelationDefinitionLike {
 }
 ```
 
+### `RelationEdge` (interface)
+
+```ts
+interface RelationEdge {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+```
+
 ### `RelationExistsMarker` (interface)
 
 ```ts
@@ -1986,6 +2084,12 @@ interface RelationExistsMarker {
     parentTable: string;
     relation: RelationDefinitionLike;
 }
+```
+
+### `RelationGraphReader` (type)
+
+```ts
+type RelationGraphReader = Pick<DatabaseWriterLike, "findMany"> & Pick<Partial<DatabaseWriterLike>, "lookupById">;
 ```
 
 ### `RelayAttach` (interface)
@@ -2335,6 +2439,12 @@ interface RunTriggersOptions {
 const SCAN_DEP = "*scan";
 ```
 
+### `SCHEDULE_OUTBOX_TABLE` (const)
+
+```ts
+const SCHEDULE_OUTBOX_TABLE = "__schedule_outbox";
+```
+
 ### `SCHEMA_HISTORY_MAX_VERSIONS` (const)
 
 ```ts
@@ -2360,6 +2470,38 @@ interface SchedulableWorkflowReferenceLike {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    wake: () => void;
+}
+```
+
+### `ScheduleOutboxEnvelope` (interface)
+
+```ts
+interface ScheduleOutboxEnvelope {
+    args: unknown;
+    options: Record<string, unknown> | undefined;
+    target: unknown;
+    when: number;
+}
+```
+
+### `ScheduleOutboxRow` (interface)
+
+```ts
+interface ScheduleOutboxRow {
+    attempts: number;
+    envelopeJson: string;
+    id: string;
+    nextAttemptAt: number;
 }
 ```
 
@@ -2640,6 +2782,7 @@ interface SocketAttachment {
     context?: Record<string, unknown>;
     expiresAt?: number;
     identity?: Record<string, unknown>;
+    ip?: string;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;
@@ -2694,7 +2837,9 @@ interface SqlConsoleResult {
 
 ```ts
 interface SqlCursor<Row> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```
@@ -2832,6 +2977,7 @@ interface SubscriptionEnvelope {
 ```ts
 interface SubscriptionIdentity {
     identity?: Record<string, unknown>;
+    ip?: string;
     userId?: string;
 }
 ```
@@ -3007,6 +3153,7 @@ interface TablePage {
     columns: string[];
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+    sqlColumns: string[];
     total?: number;
 }
 ```
@@ -3154,6 +3301,10 @@ const UNVOUCHABLE_DEP = "!unvouchable";
 interface ValidatorLike {
     readonly _meta?: {
         readonly column?: ColumnMetaLike;
+        readonly inner?: ValidatorLike;
+        readonly members?: ReadonlyArray<ValidatorLike>;
+        readonly tableName?: string;
+        readonly value?: unknown;
     };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
@@ -3458,10 +3609,22 @@ const buildShapeDiff: (sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, 
 const bumpCdcEpoch: (sql: SqlExec) => string;
 ```
 
+### `cdcArchiveRewound` (const)
+
+```ts
+const cdcArchiveRewound: (bucket: R2BucketLike, scope: CdcArchiveScope, archivedThrough: number) => Promise<boolean>;
+```
+
 ### `cdcCanVouchFor` (const)
 
 ```ts
 const cdcCanVouchFor: (sql: SqlExec, deps: ReadonlySet<string>) => boolean;
+```
+
+### `cdcForkedError` (const)
+
+```ts
+const cdcForkedError: (cursor: number, sinceSeq: number, epoch: string) => LunoraError;
 ```
 
 ### `cdcSeqLeavingRows` (const)
@@ -3666,6 +3829,12 @@ const decodeCursor: (cursor: string) => unknown[];
 const decodeFloat64SqlKey: (raw: string) => number | undefined;
 ```
 
+### `deferScheduleOutbox` (const)
+
+```ts
+const deferScheduleOutbox: (sql: SqlExec, id: string, attempts: number, nextAttemptAt: number) => void;
+```
+
 ### `deleteGlobalShapeSnapshot` (const)
 
 ```ts
@@ -3700,6 +3869,12 @@ const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
 
 ```ts
 const depKey: (table: string, idOrScan: string) => string;
+```
+
+### `deriveRelationEdges` (const)
+
+```ts
+const deriveRelationEdges: (schema: SchemaLike) => RelationEdge[];
 ```
 
 ### `diffExternalSource` (const)
@@ -3807,6 +3982,12 @@ const facetColumn: (sql: SqlExec, options: FacetColumnOptions) => FacetColumnRes
 const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => Promise<number>, tableName: string, whereField: string, values: unknown[], policyWhere: WhereInput | undefined) => Promise<Map<unknown, number>>;
 ```
 
+### `findRelated` (const)
+
+```ts
+const findRelated: (reader: RelationGraphReader, edges: ReadonlyArray<RelationEdge>, start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+```
+
 ### `findStorageReferences` (const)
 
 ```ts
@@ -3834,6 +4015,12 @@ const float64SqlKey: (value: number) => string;
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
 ```
 
+### `forgetScheduleOutbox` (const)
+
+```ts
+const forgetScheduleOutbox: (sql: SqlExec, id: string) => void;
+```
+
 ### `gateReplicaDispatch` (const)
 
 ```ts
@@ -3849,16 +4036,13 @@ const geoTableName: (table: string, indexName: string) => string;
 ### `globalShapeReadKey` (const)
 
 ```ts
-const globalShapeReadKey: (resolved: ResolvedShape, identity: {
-    identity?: Record<string, unknown>;
-    userId?: string;
-}) => string | undefined;
+const globalShapeReadKey: (resolved: ResolvedShape, identity: SubscriptionIdentity) => string | undefined;
 ```
 
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds, relationEdges?: ReadonlyArray<RelationEdge>) => W;
 ```
 
 ### `handleReplicaControl` (const)
@@ -4093,6 +4277,12 @@ const migrateIdempotency: (sql: SqlExec) => void;
 const migrateReactorState: (sql: SqlExec) => void;
 ```
 
+### `migrateScheduleOutbox` (const)
+
+```ts
+const migrateScheduleOutbox: (sql: SqlExec) => void;
+```
+
 ### `migrateSearchState` (const)
 
 ```ts
@@ -4165,6 +4355,12 @@ const normalizeSourceValue: (value: unknown) => unknown;
 const param: (value: unknown) => SQL;
 ```
 
+### `parkScheduleOutbox` (const)
+
+```ts
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+```
+
 ### `parseExportShardArgs` (const)
 
 ```ts
@@ -4187,6 +4383,15 @@ const planAggregateLookup: (index: AggregateIndexDefinitionLike, requestedWhere:
 
 ```ts
 const pointInBoundingBox: (point: GeoPoint, box: GeoBoundingBox) => boolean;
+```
+
+### `probeScheduleOutbox` (const)
+
+```ts
+const probeScheduleOutbox: (sql: SqlExec) => {
+    dueAt: number | undefined;
+    populated: boolean;
+};
 ```
 
 ### `projectColumns` (const)
@@ -4352,6 +4557,18 @@ const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) =>
 const readCommitSeq: (sql: SqlExec) => number;
 ```
 
+### `readDeployInfo` (const)
+
+```ts
+const readDeployInfo: (rawEnv: unknown) => DeployInfo;
+```
+
+### `readDueScheduleOutbox` (const)
+
+```ts
+const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -4470,6 +4687,12 @@ const recordGlobalPollPass: (counters: GlobalPollCounters, drains: number, pairs
 const recordQueueMessages: (sql: SqlExec, inputs: ReadonlyArray<RecordQueueMessageInput>, capturedAt: number) => {
     recorded: number;
 };
+```
+
+### `recordScheduleOutbox` (const)
+
+```ts
+const recordScheduleOutbox: (sql: SqlExec, id: string, envelopeJson: string, now: number) => void;
 ```
 
 ### `recordSchemaVersion` (const)
@@ -4723,6 +4946,12 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
+### `stripReservedPatchFields` (const)
+
+```ts
+const stripReservedPatchFields: (patch: Record<string, unknown>) => Record<string, unknown>;
+```
+
 ### `subscriptionFrames` (const)
 
 ```ts
@@ -4790,6 +5019,12 @@ const trimCdcChanges: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 
 ```ts
 const trimIdempotent: (sql: SqlExec, olderThanTs: number) => void;
+```
+
+### `trimScheduleOutbox` (const)
+
+```ts
+const trimScheduleOutbox: (sql: SqlExec, olderThanTs: number) => void;
 ```
 
 ### `trimStreamRuns` (const)

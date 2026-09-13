@@ -42,7 +42,9 @@ import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
 import { detectPackageManager } from "./util/detect-package-manager";
-import { createLogger } from "./util/logger";
+import { EXIT_CODE, exitCodeForError } from "./util/exit-code";
+import type { Logger } from "./util/logger";
+import { createLogger, setCommandLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
 import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
@@ -256,8 +258,9 @@ interface RunCliOptions {
 
     /**
      * Inject a console-like logger so callers (tests) can capture cerebro's
-     * help / version / usage rendering. Omitted in production, where cerebro
-     * uses its default stdout/stderr logger.
+     * help / version / usage rendering AND the commands' own output. Omitted in
+     * production, where cerebro uses its default stdout/stderr logger and the
+     * commands log through the shared pail.
      */
     logger?: Console;
 }
@@ -301,11 +304,11 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 const UNKNOWN_COMMAND = /Command "(?<name>[^"]+)" not found/u;
 
 /**
- * Log a failed `cli.run`. For an unknown command, upgrade cerebro's bare
- * "not found" into a "did you mean …?" suggestion plus a help/docs pointer; any
- * other error is logged verbatim.
+ * Log a failed `cli.run` and resolve the exit code it should carry. For an
+ * unknown command, upgrade cerebro's bare "not found" into a "did you mean …?"
+ * suggestion plus a help/docs pointer; any other error is logged verbatim.
  */
-const reportRunError = (error: unknown): void => {
+const reportRunError = (error: unknown): number => {
     const logger = createLogger();
     const message = error instanceof Error ? error.message : String(error);
     const unknown = UNKNOWN_COMMAND.exec(message);
@@ -320,7 +323,7 @@ const reportRunError = (error: unknown): void => {
             logger.error(message);
         }
 
-        return;
+        return exitCodeForError(error);
     }
 
     const name = unknown.groups.name ?? "";
@@ -328,6 +331,34 @@ const reportRunError = (error: unknown): void => {
 
     logger.error(`Unknown command "${name}".${suggestion === undefined ? "" : ` Did you mean "${suggestion}"?`}`);
     logger.info("Run `lunora --help` to list commands, or `lunora docs` to open the documentation.");
+
+    // A name the CLI does not have is bad usage, not a failed run.
+    return EXIT_CODE.USAGE;
+};
+
+/**
+ * Adapt an injected `Console` to the commands' {@link Logger} shape. `success`
+ * has no Console equivalent, so it lands on `info` — the channel a Console-based
+ * caller already reads for it.
+ */
+const asCommandLogger = (console_: Console): Logger => {
+    return {
+        debug: (message) => {
+            console_.debug(message);
+        },
+        error: (message) => {
+            console_.error(message);
+        },
+        info: (message) => {
+            console_.info(message);
+        },
+        success: (message) => {
+            console_.info(message);
+        },
+        warn: (message) => {
+            console_.warn(message);
+        },
+    };
 };
 
 /**
@@ -339,12 +370,21 @@ const reportRunError = (error: unknown): void => {
 const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     const { cli, exitCode } = buildCli(options);
 
+    // An injected logger has to reach the command bodies too, not just cerebro's
+    // own rendering: they log through the shared pail, so without this a
+    // command's output went to the real stdout/stderr regardless — unassertable,
+    // and interleaved with the caller's own output. Cleared afterwards so one
+    // call cannot leave the override installed for the next.
+    if (options.logger !== undefined) {
+        setCommandLogger(asCommandLogger(options.logger));
+    }
+
     try {
         await cli.run({ shouldExitProcess: false });
     } catch (error: unknown) {
-        reportRunError(error);
-
-        return 1;
+        return reportRunError(error);
+    } finally {
+        setCommandLogger(undefined);
     }
 
     // Best-effort "update available" notice. A no-op for the unpublished dev

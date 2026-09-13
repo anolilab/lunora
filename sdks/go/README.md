@@ -77,11 +77,16 @@ client.SetOfflineQueue(lunora.NewOfflineQueue(lunora.OfflineQueueOptions{
 outcome, err := client.Submit(lunora.SubmitOptions{
     FunctionPath: "messages:send",
     Args:         map[string]any{"channel": "general", "text": "hi"},
-    // Layered onto the subscription registered under the same (path, args,
-    // shard). Re-run on every server frame, so derive from `current` rather than
-    // closing over a value.
-    Optimistic: func(current any) any {
-        return append(current.([]any), map[string]any{"text": "hi", "pending": true})
+    // Names the query the write affects. The `Optimistic` shorthand is for the
+    // narrower case where the write and the subscription share a path and args
+    // (a counter, a document by id) — it patches nothing here, where `send` and
+    // `list` are different functions. Every transform re-runs on each server
+    // frame, so derive from what it is handed rather than closing over a value.
+    OptimisticUpdate: func(store *lunora.OptimisticLocalStore, args any) {
+        listArgs := map[string]any{"channel": "general"}
+        current, _ := store.GetQuery("messages:list", listArgs).([]any)
+
+        store.SetQuery("messages:list", listArgs, append(current, map[string]any{"text": "hi", "pending": true}))
     },
     // Re-checked just before a QUEUED write replays: false drops it instead of
     // replaying a write that can only fail.

@@ -5,7 +5,9 @@ import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import type { Connection } from "./connect";
 import { connect, dialectFromUrl } from "./connect";
 import type { EmittedFile } from "./emit";
@@ -25,6 +27,8 @@ interface IntrospectCommandOptions {
     dryRun?: boolean;
     /** Overwrite files that already exist. */
     force?: boolean;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     logger: Logger;
     /** Emit `list`/`get` procedure modules alongside the schema. Defaults to `true`. */
     procedures?: boolean;
@@ -35,8 +39,23 @@ interface IntrospectCommandOptions {
     url?: string;
 }
 
+/** The `--format json` payload: what was read, and what was written from it. */
+interface IntrospectData {
+    dialect: SqlDialect;
+    dryRun: boolean;
+    tables: string[];
+    /** Paths (relative to `lunora/`) actually written. */
+    written: string[];
+}
+
 interface IntrospectCommandResult {
     code: number;
+    /** The source dialect the scaffold was read from; absent when the run failed before connecting. */
+    dialect?: SqlDialect;
+    /** Why the run failed, for the `--format json` envelope. */
+    error?: string;
+    /** The source tables that were introspected. */
+    tables?: string[];
     /** Paths (relative to `lunora/`) actually written. */
     written: string[];
 }
@@ -144,11 +163,15 @@ const mergeExistingSchema = async (
  */
 const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<IntrospectCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    // Routed once so the per-file "wrote …" progress and the dry-run preview land
+    // on stderr in json mode, leaving stdout to the result document.
 
     if (options.connection === undefined && (options.url === undefined || options.url === "")) {
-        options.logger.error("`lunora introspect` needs a database URL: pass --url, or set DATABASE_URL.");
+        const message = "`lunora introspect` needs a database URL: pass --url, or set DATABASE_URL.";
 
-        return { code: 1, written: [] };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message, written: [] };
     }
 
     // With an injected connection there is no URL scheme to read the dialect from,
@@ -171,9 +194,11 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
     const selected = selectTables(database, options);
 
     if (selected.length === 0) {
-        options.logger.error("no tables found to introspect — check --schema and --tables.");
+        const message = "no tables found to introspect — check --schema and --tables.";
 
-        return { code: 1, written: [] };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.NOT_FOUND, error: message, written: [] };
     }
 
     const { files, warnings } = emitIntrospection(
@@ -211,15 +236,18 @@ const runIntrospectCommand = async (options: IntrospectCommandOptions): Promise<
 
     options.logger.info(`introspected ${String(selected.length)} table(s) from ${dialect}. Review the generated files before running \`lunora dev\`.`);
 
-    return { code: 0, written };
+    const tables = selected.map((table) => table.name);
+
+    return { code: 0, dialect, tables, written };
 };
 
 /** `lunora introspect` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptions, IntrospectData>(async ({ cwd, format, logger, options }) => {
     const result = await runIntrospectCommand({
         cwd,
         dryRun: options.dryRun === true,
         force: options.force === true,
+        format,
         logger,
         procedures: options.procedures !== false,
         schema: options.schema,
@@ -227,8 +255,15 @@ const execute: CommandHandler<IntrospectOptions> = defineHandler<IntrospectOptio
         url: options.url ?? process.env.DATABASE_URL,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data:
+            result.dialect === undefined
+                ? undefined
+                : { dialect: result.dialect, dryRun: options.dryRun === true, tables: result.tables ?? [], written: result.written },
+        error: result.error,
+    };
 });
 
 export { execute, resolveServerImport, runIntrospectCommand };
-export type { IntrospectCommandOptions, IntrospectCommandResult };
+export type { IntrospectCommandOptions, IntrospectCommandResult, IntrospectData };

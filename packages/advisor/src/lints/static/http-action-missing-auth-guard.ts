@@ -25,8 +25,10 @@ const surfaceLabel = (kind: "httpAction" | "httpRoute", method?: string): string
  * (`context.httpActionGuards`); a runtime caller flags nothing. The feeder only
  * records handlers that already perform a side effect and whose `ctx` binding was
  * statically resolvable (a named-function or wrapped handler is skipped,
- * fail-safe), so this lint just filters to those that never read `ctx.auth`. One
- * finding per handler.
+ * fail-safe), and never records a handler that reads a signature-shaped request
+ * header — a provider webhook is authenticated by signature and carries no user
+ * identity, so `ctx.auth` is unsatisfiable on it. This lint just filters what is
+ * left to those that never read `ctx.auth`. One finding per handler.
  */
 const httpActionMissingAuthGuard: Lint = {
     categories: ["SECURITY"],

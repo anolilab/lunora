@@ -1,7 +1,9 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { DeploymentsOptions } from "./index";
@@ -12,8 +14,8 @@ interface DeploymentsCommandOptions {
     cwd?: string;
     /** Cloudflare environment name (`--env`). */
     env?: string;
-    /** `list` output as JSON. */
-    json?: boolean;
+    /** Output format: `pretty` (default) or `json`. Only `list` has a JSON rendering. */
+    format?: OutputFormat;
     logger: Logger;
     /** Reason recorded with rollback / promote. */
     message?: string;
@@ -27,6 +29,12 @@ interface DeploymentsCommandOptions {
 
 interface DeploymentsCommandResult {
     code: number;
+
+    /**
+     * True once `wrangler deployments list --json` has been spawned: wrangler
+     * writes that document to stdout itself, so the CLI must not add a second.
+     */
+    delegated?: boolean;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before spawning wrangler. */
     error?: string;
@@ -45,7 +53,10 @@ const withEnv = (args: string[], env: string | undefined): string[] => {
 const buildListArgs = (options: DeploymentsCommandOptions): string[] => {
     const args = withEnv(["deployments", "list"], options.env);
 
-    if (options.json) {
+    // `wrangler deployments list --json` writes the document to stdout itself —
+    // there is nothing for the CLI to re-serialize, so `--format json` forwards
+    // the flag rather than wrapping wrangler output in a shape of its own.
+    if (options.format === "json") {
         args.push("--json");
     }
 
@@ -112,24 +123,43 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
 };
 
 const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promise<DeploymentsCommandResult> => {
+    // Only `list` has a document. Refused rather than ignored: a caller that
+    // pipes `deployments rollback --format json` into a parser would otherwise
+    // get wrangler's prose and a zero exit.
+    if (options.format === "json" && options.subcommand !== "list") {
+        const unsupported = `deployments ${options.subcommand}: --format json is only available for \`deployments list\` — wrangler has no JSON rendering for the others.`;
+
+        options.logger.error(unsupported);
+
+        // Same class as an unknown `--format`: the invocation asks for something
+        // this subcommand cannot do, so it exits USAGE like every other refusal
+        // of a flag value.
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: unsupported };
+    }
+
     const { args, error } = buildArgs(options);
 
     if (error !== undefined || args === undefined) {
         options.logger.error(error ?? "deployments: nothing to run");
 
-        return { code: 1, descriptor: undefined, error };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error };
     }
 
+    // In json mode the echoed invocation moves to stderr so wrangler's document
+    // is the only thing on stdout.
+    const { logger } = options;
     const cwd = options.cwd ?? process.cwd();
     const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
     const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
 
-    options.logger.info(`${descriptor.command} ${descriptor.args.join(" ")}`);
+    logger.info(`${descriptor.command} ${descriptor.args.join(" ")}`);
 
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
-    return { code: result.code, descriptor };
+    // `list --json` puts wrangler's own document on stdout (see `buildListArgs`),
+    // so this run's stdout is already spoken for.
+    return { code: result.code, delegated: options.format === "json", descriptor };
 };
 
 /** Narrow a raw argument to a known {@link DeploymentsSubcommand}. */
@@ -137,19 +167,21 @@ const isDeploymentsSubcommand = (value: unknown): value is DeploymentsSubcommand
     value === "list" || value === "inspect" || value === "rollback" || value === "promote";
 
 /** `lunora deployments <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isDeploymentsSubcommand(sub)) {
-        logger.error(`deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`);
+        const message = `deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`;
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
     return runDeploymentsCommand({
         cwd,
         env: options.env,
-        json: options.json === true,
+        format,
         logger,
         message: options.message,
         subcommand: sub,

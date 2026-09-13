@@ -507,6 +507,7 @@ interface UseAgentToolEventsResult {
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: AuthStatus;
     token: string | null;
     user: User | null;
 }
@@ -1124,6 +1125,7 @@ interface Subscription {
     readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;

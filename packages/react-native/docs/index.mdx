@@ -76,7 +76,8 @@ Re-exported verbatim from [`@lunora/react`](/docs/packages/react): `LunoraProvid
 `usePresence`, `useConnectionStatus`, `usePaginatedQuery`, `useInfiniteQuery`,
 `useStream`, `useFlag`/`useFlags`, `useRateLimit`, the `Authenticated` /
 `Unauthenticated` / `AuthLoading` gates, and the framework-neutral error
-discriminators. Mount them inside a `<QueryClientProvider>` exactly as on the web.
+discriminators. Mount them inside `LunoraProvider` exactly as on the web (it
+creates, or reuses, the TanStack `QueryClient` they need).
 
 ## `@lunora/react-native/auth`
 

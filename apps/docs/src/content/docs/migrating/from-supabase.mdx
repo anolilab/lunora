@@ -213,11 +213,11 @@ const ownMessages = definePolicy({
 export const list = query.use(rls(definePolicies([ownMessages]))).query(async ({ ctx }) => ctx.db.query("messages").collect());
 ```
 
-Policies are pure functions bound to a `table` + operation (`on: "read"` /
-`"write"`) and applied per procedure via `.use(rls(...))`. A bare
-`query`/`mutation` sees an unguarded `ctx.db`, so RLS is opt-in exactly where
-you want it. Write authorization is an imperative `ctx.auth` check at the top of
-the mutation. There's no separate policy language to keep in sync with the app.
+Policies are pure functions bound to a `table` + operation (`on: "read"`,
+`"insert"`, `"update"`, or `"delete"`) and applied per procedure via
+`.use(rls(...))`. A bare `query`/`mutation` sees an unguarded `ctx.db`, so RLS is
+opt-in exactly where you want it — and it covers writes as well as reads. There's
+no separate policy language to keep in sync with the app.
 
 ## Edge Functions → actions
 
@@ -248,8 +248,10 @@ for the Zero Trust path.
 
 ## File storage
 
-Supabase Storage maps to `ctx.storage`, backed by **R2**. Uploads go straight
-to R2 via a presigned URL and downloads stream from the Worker:
+Supabase Storage maps to `ctx.storage`, backed by **R2**. Uploads go through a
+Worker-signed `PUT` URL (so your storage rules still apply) and downloads use
+`getUrl` against your `publicBaseUrl`; `getPresignedUrl` is the direct-to-R2
+escape hatch:
 
 ```ts
 // Supabase: supabase.storage.from(bucket).upload(path, file)
@@ -292,8 +294,8 @@ job for recurring work. Under the hood Lunora persists schedules in a
 8. **Wire the React provider.** Replace the `createClient(...)` init with
    `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
    `*.workers.dev` hostname).
-9. **Deploy.** `lunora deploy` builds, runs migrations, and calls
-   `wrangler deploy`. Your data plane now lives in your own Cloudflare account.
+9. **Deploy.** `lunora deploy` builds and calls `wrangler deploy` (data
+   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane now lives in your own Cloudflare account.
 
 ## Importing your data
 

@@ -10,7 +10,9 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsc --noEmit",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
     },
     "dependencies": {
         "@lunora/payment": "workspace:*",

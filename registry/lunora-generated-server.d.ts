@@ -50,4 +50,22 @@ declare module "#lunora/_generated/server.js" {
 
     /** The validator builder. The generated one additionally narrows `v.id(table)` to the app's tables. */
     export const v: typeof import("@lunora/server").v;
+
+    /**
+     * The project's Cloudflare bindings, mirroring what `emit.ts` writes into
+     * every real `_generated/server.ts`: an open index signature, because the
+     * bindings a project configures in wrangler (R2/KV/D1/vars/secrets/…) are not
+     * statically visible to codegen.
+     *
+     * This is the type every item narrows `cloudflare:workers`' `env` through.
+     * That module's own `env` is `Cloudflare.Env`, which `@cloudflare/workers-types`
+     * declares EMPTY and a project fills in only by running `wrangler types` — so
+     * indexing it directly is a `tsc` error in any scaffold that has not.
+     */
+    export interface CloudflareBindings {
+        readonly [binding: string]: unknown;
+    }
+
+    /** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
+    export type Env = CloudflareBindings;
 }

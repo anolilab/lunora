@@ -228,7 +228,7 @@ for (const finding of findings) {
 
 `runAdvisor(context, options)` returns a flat `Finding[]` in lint-declaration
 order. Each finding has `level`, `name`, `title`, `detail`, `description`,
-`remediation`, `categories`, `source`, and `metadata`. Options:
+`remediation`, `categories`, `facing`, `cacheKey`, and `metadata`. Options:
 
 - `lints`: the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
   `RUNTIME_LINTS` are also exported, as is each lint by name (e.g.

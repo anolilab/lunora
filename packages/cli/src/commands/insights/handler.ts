@@ -2,7 +2,9 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import type { FetchLike } from "../run/handler";
 import type { InsightsOptions } from "./index";
@@ -128,7 +130,7 @@ const formatSection = (heading: string, rows: InsightRow[], emptyNote: string, r
     ...(rows.length === 0 ? [`  ${emptyNote}`] : rows.map((row) => `  ${renderRow(row)}`)),
 ];
 
-/** Format the report as human-readable text — the default (non-`--json`) output. */
+/** Format the report as human-readable text — the default (`--format pretty`) output. */
 const formatInsightsReport = (report: InsightsReport): string => {
     const errorTail = (row: InsightRow): string => (row.lastErrorMessage ? ` — ${row.lastErrorMessage}` : "");
 
@@ -162,7 +164,8 @@ interface InsightsCommandOptions {
     /** Project root, so the running dev server's recorded URL can be found when `--url` is absent. */
     cwd?: string;
     fetchImpl?: FetchLike;
-    json?: boolean;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     limit?: number;
     logger: Logger;
     prod?: boolean;
@@ -173,8 +176,17 @@ interface InsightsCommandOptions {
 
 interface InsightsCommandResult {
     code: number;
+    /** Why the run failed, for the `--format json` envelope. */
+    error?: string;
     report?: InsightsReport;
 }
+
+/** Log the reason and fail with it — the message also rides the result document. */
+const insightsFailure = (logger: Logger, error: string, code: number): InsightsCommandResult => {
+    logger.error(error);
+
+    return { code, error };
+};
 
 /** Parse `--limit` to a positive integer, falling back to {@link DEFAULT_LIMIT} on an absent/invalid value. */
 const resolveLimit = (raw: number | undefined): number => {
@@ -189,21 +201,24 @@ const resolveLimit = (raw: number | undefined): number => {
  * `lunora insights` core: read the live worker's per-function metrics over the
  * `__lunora_admin__:getFunctionStats` admin RPC (bearer-gated, resolved by
  * `resolveAdminBearer`), then print the {@link buildInsightsReport} report as
- * text (default) or JSON (`--json`). The admin bearer rides the same
+ * text (default) or JSON (`--format json`). The admin bearer rides the same
  * `/_lunora/rpc` transport the studio uses; `resolveAdminBaseUrl` refuses to
  * send it in cleartext to a non-loopback host.
  */
 const runInsightsCommand = async (options: InsightsCommandOptions): Promise<InsightsCommandResult> => {
-    if (options.prod && options.url === undefined) {
-        options.logger.error("--prod requires an explicit --url (refusing to report from the implicit localhost worker)");
+    // In `--format json` mode the human/progress channel moves to stderr so
+    // stdout carries only the JSON report.
+    const { logger } = options;
 
-        return { code: 1 };
+    if (options.prod && options.url === undefined) {
+        return insightsFailure(logger, "--prod requires an explicit --url (refusing to report from the implicit localhost worker)", EXIT_CODE.USAGE);
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+    const baseUrl = resolveAdminBaseUrl(options.url, logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return { code: 1 };
+        // `resolveAdminBaseUrl` logged the reason it refused the target.
+        return { code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL" };
     }
 
     // Resolved after `baseUrl`, and through the shared resolver: the `.dev.vars`
@@ -213,9 +228,11 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
 
     if (!token) {
-        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
-
-        return { code: 1 };
+        return insightsFailure(
+            logger,
+            "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)",
+            EXIT_CODE.AUTH,
+        );
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
@@ -231,7 +248,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         payload.shardKey = options.shard;
     }
 
-    options.logger.info(`POST ${requestUrl} -> insights`);
+    logger.info(`POST ${requestUrl} -> insights`);
 
     const response = await fetchImpl(requestUrl, {
         body: JSON.stringify(payload),
@@ -242,9 +259,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const text = await response.text();
 
     if (!response.ok) {
-        options.logger.error(`insights failed: HTTP ${String(response.status)}: ${text}`);
-
-        return { code: 1 };
+        return insightsFailure(logger, `insights failed: HTTP ${String(response.status)}: ${text}`, exitCodeForStatus(response.status));
     }
 
     let parsed: unknown;
@@ -252,9 +267,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     try {
         parsed = JSON.parse(text);
     } catch {
-        options.logger.error(`insights failed: worker returned non-JSON: ${text}`);
-
-        return { code: 1 };
+        return insightsFailure(logger, `insights failed: worker returned non-JSON: ${text}`, 1);
     }
 
     // The RPC may wrap the function result in `{ result }` (the runner envelope)
@@ -263,26 +276,26 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     const { functions } = result as Partial<FunctionStatsResult>;
 
     if (!Array.isArray(functions)) {
-        options.logger.error("insights failed: response carried no `functions` array");
-
-        return { code: 1 };
+        return insightsFailure(logger, "insights failed: response carried no `functions` array", 1);
     }
 
     const report = buildInsightsReport(functions, resolveLimit(options.limit));
 
-    options.logger.info(options.json ? JSON.stringify(report, undefined, 2) : formatInsightsReport(report));
+    if (options.format !== "json") {
+        logger.info(formatInsightsReport(report));
+    }
 
     return { code: 0, report };
 };
 
 /** `lunora insights` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(({ cwd, logger, options }) => {
+const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions, InsightsReport>(async ({ cwd, format, logger, options }) => {
     const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
 
-    return runInsightsCommand({
+    const result = await runInsightsCommand({
         cwd,
         fetchImpl: undefined,
-        json: options.json,
+        format,
         limit,
         logger,
         prod: options.prod,
@@ -292,6 +305,8 @@ const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(
         // linked checkout doesn't need --url repeated for prod insights.
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
     });
+
+    return { code: result.code, data: result.report, error: result.error };
 });
 
 export { buildInsightsReport, execute, formatInsightsReport, runInsightsCommand };

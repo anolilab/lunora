@@ -75,7 +75,7 @@ function caller:
 | `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).               |
 | `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload. |
 | `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.    |
-| `context.event`        | The raw triggering event (`id`, `payload`, timestamp).                                                 |
+| `context.event`        | The raw triggering event (`instanceId`, `payload`, `timestamp`, `workflowName`).                       |
 | `context.env`          | The Worker environment bindings.                                                                       |
 
 ### Durable steps

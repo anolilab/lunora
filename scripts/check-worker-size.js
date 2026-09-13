@@ -124,15 +124,17 @@ const measure = (appDirectory) => {
         fail("check-worker-size: `lunora build` failed on the reference template (its output is above).");
     }
 
-    const result = JSON.parse(stdout);
+    // `--format json` puts every command's payload under `data` in the shared
+    // `{ code, data, error }` envelope, so the measurement is `data.bundle`.
+    const { bundle } = JSON.parse(stdout).data ?? {};
 
     // A measurement of zero must never pass as a healthy result: that is exactly
     // what a changed wrangler out-dir layout would look like.
-    if (!result.bundle || result.bundle.files < 1 || result.bundle.gzipBytes < 1) {
+    if (!bundle || bundle.files < 1 || bundle.gzipBytes < 1) {
         fail("check-worker-size: `lunora build` reported no bundle — the wrangler out-dir layout may have changed.");
     }
 
-    return result.bundle;
+    return bundle;
 };
 
 const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));

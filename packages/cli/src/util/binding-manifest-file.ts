@@ -2,7 +2,7 @@
  * The declarative description of what this Worker needs, for whoever is going to
  * provide it.
  *
- * Three entry points, one derivation. `lunora bindings` answers the question
+ * Three entry points, one derivation. `lunora info --bindings` answers the question
  * without running anything, for a supervisor planning its graph before it starts
  * a single process. `lunora build --emit-bindings` hands a deployer — Terraform,
  * Pulumi, Alchemy — the requirements it must provision. `lunora dev` writes the

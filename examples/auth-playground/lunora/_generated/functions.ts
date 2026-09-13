@@ -36,6 +36,14 @@ export interface RegisteredLunoraFunction {
      * `reactor` have no caller identity, so RLS has no user to scope to.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -125,7 +133,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     documents: {
         create: (args: { organizationId: string; title: string; body: string }) => Promise<Id<"documents">>;
-        list: (args: { organizationId: string }) => Promise<{ _id: Id<"documents">; organizationId: string; ownerId: string; title: string; body: string; createdAt: number }[]>;
+        list: (args: { organizationId: string }) => Promise<{ _id: Id<"documents">; body: string; createdAt: number; organizationId: string; ownerId: string; title: string }[]>;
     };
 }
 

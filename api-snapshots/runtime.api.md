@@ -1560,6 +1560,38 @@ interface QueryCoordinatorOptions {
 }
 ```
 
+### `QueueForwardBatch` (interface)
+
+```ts
+interface QueueForwardBatch {
+    messages: ReadonlyArray<QueueForwardMessage>;
+    queue: string;
+}
+```
+
+### `QueueForwardHandler` (type)
+
+```ts
+type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: ExecutionContextLike) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
+```
+
+### `QueueForwardMessage` (interface)
+
+```ts
+interface QueueForwardMessage {
+    body: unknown;
+    id: string;
+}
+```
+
+### `QueueForwardResult` (interface)
+
+```ts
+interface QueueForwardResult {
+    retry?: ReadonlyArray<string>;
+}
+```
+
 ### `RankFanOutRequest` (interface)
 
 ```ts
@@ -2235,6 +2267,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;

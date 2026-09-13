@@ -83,6 +83,13 @@ Configuration comes from the environment, so the spawn config stays a plain
   metadata, grouped error messages — is user data that lands in the model's
   context and therefore at its provider, so holding the admin bearer (which
   every tool needs) is not by itself consent to ship it.
+- `LUNORA_MCP_ALLOW_DATA_READS` (optional): set to `1`/`true`/`yes`/`on` to
+  expose `lunora_find_related`. Default: **disabled**. It returns **raw table
+  rows** read through the deployment's admin writer, so RLS policies and column
+  masks do **not** apply to what it hands the model — and it returns everything
+  reachable within `depth` hops of the start row, not just that row. Separate
+  from the observability gate on purpose: log lines and table rows are different
+  data classes, and enabling one must not silently enable the other.
 - `LUNORA_MCP_ALLOW_AGENTS` (optional): set to `1`/`true`/`yes`/`on` to expose
   the [agent tools](#expose-an-agent). Default: **agents disabled**.
 - `LUNORA_MCP_AGENTS` (optional): a `;`-separated list of `name:description`
@@ -109,37 +116,43 @@ Configuration comes from the environment, so the spawn config stays a plain
 ## Exposed tools
 
 Each tool maps onto a method `LunoraClient` already provides.
-`toolDefinitions(allowWrites, allowObservability)` returns the advertised tool
-surface for a given pair of gates (the tiers are also exported on their own as
-`READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS` and
-`WRITE_TOOL_DEFINITIONS`); `callTool` dispatches a call against a client.
+`toolDefinitions(allowWrites, allowObservability, allowDataReads)` returns the
+advertised tool surface for a given set of gates (the tiers are also exported on
+their own as `READ_ONLY_TOOL_DEFINITIONS`, `OBSERVABILITY_TOOL_DEFINITIONS`,
+`ROW_READ_TOOL_DEFINITIONS` and `WRITE_TOOL_DEFINITIONS`); `callTool` dispatches
+a call against a client.
 
-| Tool                          | Input                                | What it does                                                                                                                                 |
-| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lunora_list_functions`       | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds.                                                      |
-| `lunora_list_tables`          | _none_                               | Lists the deployment's `.global()` tables with their row counts.                                                                             |
-| `lunora_get_function_schema`  | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args.                                                      |
-| `lunora_run_query`            | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                                                                              |
-| `lunora_run_mutation`         | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data. **Requires writes enabled.**                                                            |
-| `lunora_run_action`           | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services. **Requires writes enabled.**                                              |
-| `agent_<name>`                | `prompt`, `threadKey?`, `title?`     | Starts a durable [`@lunora/agent`](/docs/packages/agent) run and awaits its answer. One tool per exposed agent. **Requires agents enabled.** |
-| `lunora_agent_status`         | `threadKey`                          | Polls a running agent by `threadKey` and returns its answer once finished. **Requires agents enabled.**                                      |
-| `lunora_get_logs`             | `limit?`, `level?`, `shardKey?`      | Recent `ctx.log.*` lines from the deployment. **Requires observability enabled.**                                                            |
-| `lunora_get_issues`           | `limit?`, `status?`, `shardKey?`     | Grouped error Issues with their fingerprints and messages. **Requires observability enabled.**                                               |
-| `lunora_get_advisories`       | `limit?`, `shardKey?`                | Advisor findings for the running deployment. **Requires observability enabled.**                                                             |
-| `lunora_get_query_insights`   | `limit?`, `range?`, `shardKey?`      | Slow/frequent query insights over a recent window. **Requires observability enabled.**                                                       |
-| `lunora_get_migration_status` | `shardKey?`                          | Applied and pending migrations for a shard. **Requires observability enabled.**                                                              |
+| Tool                          | Input                                                                                  | What it does                                                                                                                                                                                          |
+| ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`       | _none_                                                                                 | Lists the deployment's public functions (queries, mutations, actions) with their kinds.                                                                                                               |
+| `lunora_list_tables`          | _none_                                                                                 | Lists the deployment's `.global()` tables with their row counts.                                                                                                                                      |
+| `lunora_get_function_schema`  | `functionPath`                                                                         | Returns one function's argument descriptors and kind, so a caller can build valid args.                                                                                                               |
+| `lunora_run_query`            | `functionPath`, `args?`, `shardKey?`                                                   | Runs a query and returns its result. Read-only.                                                                                                                                                       |
+| `lunora_explain_error`        | `code?`, `message?`                                                                    | Explains a Lunora error from the static catalog: status, title, hint, any matched solution, and a link to the reference. No deployment needed.                                                        |
+| `lunora_run_mutation`         | `functionPath`, `args?`, `shardKey?`, `confirmed?`, `actionDigest?`, `idempotencyKey?` | Proposes, then (on a second confirming call) runs a mutation. Writes data. **Requires writes enabled.**                                                                                               |
+| `lunora_run_action`           | `functionPath`, `args?`, `shardKey?`, `confirmed?`, `actionDigest?`, `idempotencyKey?` | Proposes, then (on a second confirming call) runs an action. May call external services. **Requires writes enabled.**                                                                                 |
+| `agent_<name>`                | `prompt`, `threadKey?`, `title?`                                                       | Starts a durable [`@lunora/agent`](/docs/packages/agent) run and awaits its answer. One tool per exposed agent. **Requires agents enabled.**                                                          |
+| `lunora_agent_status`         | `threadKey`                                                                            | Polls a running agent by `threadKey` and returns its answer once finished. **Requires agents enabled.**                                                                                               |
+| `lunora_get_logs`             | `limit?`, `level?`, `shardKey?`                                                        | Recent `ctx.log.*` lines from the deployment. **Requires observability enabled.**                                                                                                                     |
+| `lunora_get_issues`           | `limit?`, `status?`, `shardKey?`                                                       | Grouped error Issues with their fingerprints and messages. **Requires observability enabled.**                                                                                                        |
+| `lunora_get_advisories`       | `limit?`, `shardKey?`                                                                  | Advisor findings for the running deployment. **Requires observability enabled.**                                                                                                                      |
+| `lunora_get_query_insights`   | `limit?`, `range?`, `shardKey?`                                                        | Slow/frequent query insights over a recent window. **Requires observability enabled.**                                                                                                                |
+| `lunora_get_migration_status` | `shardKey?`                                                                            | Applied and pending migrations for a shard. **Requires observability enabled.**                                                                                                                       |
+| `lunora_find_related`         | `table`, `id`, `depth?`, `direction?`, `edges?`, `limit?`, `cursor?`, `shardKey?`      | Follows the schema's foreign keys out of one row and returns what it is connected to. Reads through the ADMIN writer, so RLS policies and column masks do NOT apply. **Requires data reads enabled.** |
 
 <Callout type="warn">
-    The default surface is **read-only and non-privileged**: only the introspection tools and `lunora_run_query` are exposed. Two separate gates hold the rest
-    back, and each of them both hides the tools from the advertised list *and* refuses them at dispatch. `lunora_run_mutation` and `lunora_run_action` need
-    `LUNORA_MCP_ALLOW_WRITES` (or `allowWrites: true`). The five `lunora_get_*` tools need `LUNORA_MCP_ALLOW_OBSERVABILITY` (or `allowObservability: true`) —
-    they are read-only, but they return production log lines, request metadata and grouped error messages, all of which land in the model's context and
-    therefore at its provider. Those gates are the whole guarantee: the `token` must be the deployment's **admin** bearer (every tool reads admin-gated routes),
-    so it cannot be scoped down to enforce anything from the credential side. Guard who can reach the server process too.
+    The default surface is **read-only and non-privileged**: only the introspection tools, `lunora_run_query` and `lunora_explain_error` are exposed. Three
+    separate gates hold the rest back, and each of them both hides the tools from the advertised list *and* refuses them at dispatch. `lunora_run_mutation` and
+    `lunora_run_action` need `LUNORA_MCP_ALLOW_WRITES` (or `allowWrites: true`). The five `lunora_get_*` tools need `LUNORA_MCP_ALLOW_OBSERVABILITY` (or
+    `allowObservability: true`) — they are read-only, but they return production log lines, request metadata and grouped error messages, all of which land in
+    the model's context and therefore at its provider. `lunora_find_related` has its own gate, `LUNORA_MCP_ALLOW_DATA_READS` (or `allowDataReads: true`),
+    deliberately NOT folded into the observability one: it returns raw table rows read through the deployment's admin writer with RLS policies and column masks
+    bypassed, and enabling log reading for debugging must not silently also hand over every row. Those gates decide what the server may reach at all: the
+    `token` must be the deployment's **admin** bearer (every tool reads admin-gated routes), so it cannot be scoped down to enforce anything from the credential
+    side. Past the write gate, each individual write additionally needs its own [confirmation](#write-confirmation). Guard who can reach the server process too.
 </Callout>
 
-The three run-tools share one input schema:
+The three run-tools share one base input schema:
 
 - `functionPath` (**required**, string): a function reference, e.g.
   `"messages:send"`.
@@ -152,10 +165,101 @@ The three run-tools share one input schema:
 - `shardKey` (string): an optional shard key when the function is
   [`.shardBy()`](/docs/concepts/sharding)-partitioned.
 
+The two **write** tools take three more fields — `confirmed`, `actionDigest` and
+`idempotencyKey` — which drive the confirmation handshake below.
+
 Results are returned as MCP `content` text: the function's return value JSON,
 or the JSON `null` literal for a void-returning mutation/action. Unknown tools
 and thrown errors come back as `isError` tool results (not rejections), so the
 calling model sees the failure as tool output.
+
+### Write confirmation
+
+`allowWrites` decides whether this server may write at **all**. It says nothing
+about whether a _particular_ write was reviewed — and that is the gap that
+matters most for `lunora_run_action`, the tool that can send mail, charge a card,
+or call a third-party API. The `destructiveHint` annotation is a UI hint, not a
+gate.
+
+So past that gate, `lunora_run_mutation` and `lunora_run_action` each take **two**
+calls. The first executes nothing and returns the proposal:
+
+```jsonc
+{
+    "status": "action_required",
+    "actionDigest": "1789129912052.0ZR2…",
+    "expiresAt": "2026-09-11T14:41:52.052Z",
+    "proposedAction": {
+        "tool": "lunora_run_mutation",
+        "kind": "mutation",
+        "functionPath": "messages:send",
+        "args": { "roomId": "r1", "text": "hi" },
+    },
+    "nextStep": "Show proposedAction to a human. To execute, call …",
+}
+```
+
+The client renders `proposedAction` for a human, then calls the same tool again —
+before `expiresAt` — with the **identical** `functionPath`, `args`, `shardKey`
+and `idempotencyKey`, plus `confirmed: true` and that `actionDigest`. Only that
+second call writes.
+
+<Callout type="warn">
+    The confirmation is bound to the exact action a human saw, for ten minutes. `actionDigest` is `<expiresAt>.<signature>`, the signature an HMAC over a
+    canonical, sorted-key encoding of the tool name, function path, arguments, shard key, idempotency key and that deadline, keyed by the deployment's own
+    identity — so re-serializing `args` in a different key order still verifies, while changing the target, any argument, or the shard key produces a different
+    digest and the confirmation is **refused with nothing written**. A digest minted against another deployment never verifies, a `lunora_run_mutation` digest can
+    never confirm a `lunora_run_action`, and an expired one is refused rather than silently re-proposed.
+</Callout>
+
+The digest carries its own proof rather than naming a stored record, because
+there is no store to name: `createMcpFetchHandler` serves **statelessly** — a
+fresh MCP server per HTTP request, no session, no cross-request state — and the
+confirming request need not even reach the instance that issued the proposal. Any
+instance holding the same deployment URL and admin bearer recomputes and verifies
+the same digest; nothing without that bearer can mint one. The deadline rides
+inside the digest for the same reason: there is nowhere else to keep it.
+
+#### What the handshake does not do
+
+It binds **intent, not human presence**.
+
+A verified digest proves the call about to run is exactly the call that was
+proposed, on this deployment, inside its window. It does **not** prove a human
+saw it, and nothing server-side can: an MCP server has no channel to a person,
+and MCP puts the human-in-the-loop at the **host** — the client is what renders a
+tool call for approval. A client that asks nobody can send the digest it was just
+handed straight back with `confirmed: true` and the write runs.
+
+That is why the write surface is off by default and refused at dispatch as well
+as omitted from `ListTools`. Setting `allowWrites` is the operator's statement
+that the client on the other end does the asking; the handshake is a client-UI
+affordance and an audit record of what was proposed, not a gate against the
+model.
+
+Its scope is also **deployment-wide, not principal-bound**: the signing key is
+the deployment URL plus the admin bearer, with nothing identifying a user in it.
+On an OAuth-fronted server every principal shares that bearer, so inside the
+ten-minute window any principal holding write scope can confirm another's
+identical proposal. Binding a confirmation to a person would mean folding the
+verified `sub` claim into the key, which this package does not do today.
+
+#### What `idempotencyKey` does and does not guarantee
+
+`idempotencyKey` is an optional caller-chosen token folded into the digest.
+
+**It guarantees:** a client that timed out can resubmit the confirmation it
+already holds, for as long as that digest is inside its window, instead of asking
+for a second human review — and a deliberately-repeated _identical_ write sent
+under a **new** key gets its own digest, so it cannot ride the first review.
+
+**It does not guarantee deduplication.** This server keeps no state between
+requests, so it cannot remember that a call already ran and cannot replay an
+earlier result; it also never forwards the key to your function, which never
+declared it as an argument. A resubmitted confirmed call therefore **executes
+again**. If the underlying write must happen at most once, make the function
+itself idempotent — for example by storing a caller-supplied key in a row with a
+unique index and short-circuiting on a repeat.
 
 ### Recommended agent flow
 
@@ -164,7 +268,9 @@ An agent discovers the surface before it calls anything:
 1. `lunora_list_functions`: discover the available paths and their kinds.
 2. `lunora_get_function_schema`: fetch the argument descriptors for one path.
 3. `lunora_run_query` / `lunora_run_mutation` / `lunora_run_action`: call the
-   function with a well-formed `args` object.
+   function with a well-formed `args` object. For the two write tools this is
+   two calls — propose, have a human review `proposedAction`, then resubmit with
+   `confirmed: true` and the `actionDigest`.
 
 `lunora_get_function_schema` returns `{ path, kind, args }`, where `kind` is
 `"query"`, `"mutation"`, or `"action"` and `args` is an array of argument
@@ -209,7 +315,11 @@ through admin-gated `/_lunora/admin/*` routes.
 
 So the read-only guarantee does **not** come from the token's scope. It comes
 from `allowWrites` (`LUNORA_MCP_ALLOW_WRITES`) defaulting off, which omits the
-write tools from `tools/list` _and_ refuses them at dispatch. Beyond that,
+write tools from `tools/list` _and_ refuses them at dispatch. With writes on, the
+[confirmation handshake](#write-confirmation) is the second layer: a mutation or
+action executes only on a call carrying a digest issued for those exact
+arguments, so "this server may write" and "this write was reviewed" stay separate
+questions. Beyond that,
 gating is enforced by your deployment: the tools call ordinary queries,
 mutations, and actions, so whatever auth those functions require applies
 unchanged. Treat the MCP server process itself as the trust boundary and control
@@ -307,7 +417,10 @@ Any MCP client that can spawn a stdio server works. With the `mcpServers` config
 above, an agent like Claude can call `lunora_list_functions` to discover the
 deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
 `lunora_run_action` to invoke it, passing `functionPath` (e.g.
-`"messages:list"`), an `args` object, and an optional `shardKey`.
+`"messages:list"`), an `args` object, and an optional `shardKey`. The two write
+tools answer the first call with an `action_required` proposal; the client shows
+it to the user and calls again with `confirmed: true` and the returned
+`actionDigest` — see [write confirmation](#write-confirmation).
 
 ## Resources and annotations
 
@@ -319,7 +432,9 @@ before the model knows what to search for.
 Every tool carries **annotations** (`readOnlyHint`, `destructiveHint`,
 `idempotentHint`, `openWorldHint`, `title`), so a client can badge the read-only
 surface and prompt before a write. These are hints for presentation; the
-guarantee itself is still enforced at dispatch.
+guarantee itself is still enforced at dispatch — by the `allowWrites` /
+`allowObservability` gates, and for the two write tools by the
+[confirmation handshake](#write-confirmation).
 
 ## The documentation server
 

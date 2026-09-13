@@ -73,6 +73,7 @@ interface D1DatabaseLike {
 ```ts
 interface D1PreparedStatementLike {
     all: <T = unknown>() => Promise<{
+        meta?: Record<string, unknown>;
         results: T[];
         success: boolean;
     }>;
@@ -291,6 +292,7 @@ interface PlatformCapabilities {
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
+        relationGraph?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;
@@ -597,7 +599,9 @@ type ShardRegionHint = RegionHint;
 
 ```ts
 interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```
@@ -687,6 +691,12 @@ interface VectorRecordLike {
 }
 ```
 
+### `VectorValues` (type)
+
+```ts
+type VectorValues = Float32Array | Float64Array | ReadonlyArray<number>;
+```
+
 ### `VectorizeDeleteMutation` (interface)
 
 ```ts
@@ -701,9 +711,10 @@ interface VectorizeDeleteMutation {
 ```ts
 interface VectorizeIndexDetails {
     dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
+    processedUpToDatetime?: number | string;
+    processedUpToMutation?: number | string;
+    vectorCount?: number;
+    vectorsCount?: number;
 }
 ```
 
@@ -711,12 +722,12 @@ interface VectorizeIndexDetails {
 
 ```ts
 interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    describe?(this: void): Promise<VectorizeIndexDetails>;
+    getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
 ```
 
@@ -728,7 +739,7 @@ interface VectorizeMatch {
     metadata?: Record<string, unknown>;
     namespace?: string;
     score: number;
-    values?: ReadonlyArray<number>;
+    values?: VectorValues;
 }
 ```
 
@@ -747,7 +758,7 @@ interface VectorizeMatches {
 interface VectorizeQueryOptions {
     filter?: Record<string, unknown>;
     namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
+    returnMetadata?: "none" | "indexed" | "all" | boolean;
     returnValues?: boolean;
     topK?: number;
 }
@@ -768,7 +779,7 @@ interface VectorizeVector {
     id: string;
     metadata?: Record<string, unknown>;
     namespace?: string;
-    values: ReadonlyArray<number>;
+    values: VectorValues;
 }
 ```
 

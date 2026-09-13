@@ -1,8 +1,26 @@
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import type { ChessMove, ChessState, PieceColor, PieceType, Square } from "../../lunora/chess.js";
 import { getValidMoves, squareToName } from "../../lunora/chess.js";
+
+/**
+ * Callback ref that opens the dialog as it attaches.
+ *
+ * A native `<dialog>` is modal only once `showModal()` runs, and the choice
+ * really is modal: the move is not legal until a piece is named. The element is
+ * rendered only while a promotion is pending, so attaching IS the moment to open
+ * it — which is why this is a ref rather than an effect watching the state.
+ *
+ * Module scope keeps its identity stable, so React invokes it on attach and
+ * detach rather than on every render.
+ */
+const openAsModal = (node: HTMLDialogElement | null): void => {
+    node?.showModal();
+};
+
+/** `[0…7]` — board indices, reversed when Black is looking at it. */
+const RANKS = Array.from({ length: 8 }, (_, index) => index);
 
 /** Screen readers announce this, so it spells the piece out — "e2 white pawn", not "e2 white P". */
 const PIECE_NAMES: Record<PieceType, string> = { B: "bishop", K: "king", N: "knight", P: "pawn", Q: "queen", R: "rook" };
@@ -32,22 +50,13 @@ interface BoardProperties {
 export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElement => {
     const [selected, setSelected] = useState<Square | null>(null);
     const [pendingPromotion, setPendingPromotion] = useState<ChessMove | null>(null);
-    const promotionRef = useRef<HTMLDialogElement>(null);
-
-    useEffect(() => {
-        // A native dialog is modal only once `showModal()` runs — and the choice
-        // really is modal: the move is not legal until a piece is named.
-        if (pendingPromotion) {
-            promotionRef.current?.showModal();
-        }
-    }, [pendingPromotion]);
 
     const myTurn = myColor !== null && position.currentTurn === myColor;
     const legal = selected ? getValidMoves(position, selected.row, selected.col) : [];
 
     // Black sees the board from its own side.
-    const ranks = myColor === "black" ? [...Array.from({ length: 8 }).keys()].reverse() : [...Array.from({ length: 8 }).keys()];
-    const files = myColor === "black" ? [...Array.from({ length: 8 }).keys()].reverse() : [...Array.from({ length: 8 }).keys()];
+    const ranks = myColor === "black" ? RANKS.toReversed() : RANKS;
+    const files = myColor === "black" ? RANKS.toReversed() : RANKS;
 
     const onSquare = (row: number, col: number): void => {
         if (!myTurn) {
@@ -83,13 +92,15 @@ export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElem
 
                         return (
                             <button
-                                key={`${row}-${col}`}
                                 aria-label={`${squareToName({ col, row })}${piece ? ` ${piece.color} ${PIECE_NAMES[piece.type]}` : ""}`}
                                 className={["square", (row + col) % 2 === 0 ? "light" : "dark", isSelected ? "selected" : "", isTarget ? "target" : ""]
                                     .filter(Boolean)
                                     .join(" ")}
                                 disabled={!myTurn}
-                                onClick={() => onSquare(row, col)}
+                                key={`${String(row)}-${String(col)}`}
+                                onClick={() => {
+                                    onSquare(row, col);
+                                }}
                                 type="button"
                             >
                                 {piece ? GLYPHS[piece.color][piece.type] : ""}
@@ -100,7 +111,7 @@ export const Board = ({ myColor, onMove, position }: BoardProperties): ReactElem
             </div>
 
             {pendingPromotion && (
-                <dialog ref={promotionRef} aria-label="Choose a promotion piece" className="promotion">
+                <dialog aria-label="Choose a promotion piece" className="promotion" ref={openAsModal}>
                     {PROMOTIONS.map((choice) => (
                         <button
                             key={choice}

@@ -185,6 +185,26 @@ describe("createDatabasePaymentStore", () => {
         expect(all[0]?.state).toBe("canceled");
     });
 
+    it("round-trips the multi-item price set, and reads an absent column as undefined (regression)", async () => {
+        expect.assertions(3);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, priceIds: ["price_1", "price_addon"] });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_1", "price_addon"]);
+
+        // A row written without the column — every non-Stripe adapter, the webhook path, and anything
+        // stored before `priceIds` existed. It must read back ABSENT, not as an empty set: `undefined`
+        // is what makes the entitlement read fall back to `[priceId]`, so no backfill is needed.
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        const legacy = await store.getSubscription("stripe", "sub_2");
+
+        expect(legacy?.priceIds).toBeUndefined();
+        expect(legacy?.priceId).toBe("price_1");
+    });
+
     it("dedupes events via markEventProcessed", async () => {
         expect.assertions(3);
 

@@ -290,7 +290,7 @@ client is disconnected routinely rather than exceptionally, so a write it cannot
 send yet and a value it can show before the server confirms are the difference
 between a usable app and one that spins.
 
-Three things are Dart's alone, and each follows from this transport's own shape
+Two things are Dart's alone, and each follows from this transport's own shape
 rather than from taste:
 
 - **Connectivity is told, not observed.** The other seven flush on the socket
@@ -466,7 +466,7 @@ data race, and with no interior mutability, `static` or `unsafe` in the client
 that holds totally. Sharing is the caller's `Arc<Mutex<Client>>` — which required
 `Client: Send`, so the injected poster, sender and handlers carry a `+ Send`
 bound; without it one non-`Send` closure made the whole struct unshareable and no
-amount of wrapping helped. Note the difference that follows: the other five
+amount of wrapping helped. Note the difference that follows: the other six
 release their lock before invoking your callback and a caller's `Mutex` cannot,
 so a Rust handler must not re-lock the client it was called from.
 
@@ -527,7 +527,7 @@ Each of these is forced by what these SDKs are rather than chosen:
 | **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                 | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵. The window is also **passive and global**: nothing schedules a re-flush when it elapses (the caller's next flush is what tries again), a refusal carrying no hint sets no window at all, and the one field gates every shard rather than the shard that met the limiter. |
 | **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                    | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                                                                                                                                                                                                                                                                             |
 | **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                                                                                    | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working.                                                                                                                                                                                                                                                         |
-| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                                                                             | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                                                                                                                                                                                                                                                                            |
+| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                                                                             | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know eight languages' codec error hierarchies to spot this one.                                                                                                                                                                                                                                                                                                                            |
 
 **Multi-tab leader election** is the one browser-only half no port has — a Web
 Lock deciding which tab hydrates the shared durable queue, and there are no tabs
@@ -551,7 +551,7 @@ ways:
 | Go `sync.Mutex`, non-reentrant          | **Self-deadlock.** The second offline write past capacity hung the calling goroutine outright.                                                                     |
 | Ruby `Mutex`, non-reentrant             | **Silently swallowed.** It raised `ThreadError`, which the queue's own `rescue StandardError` then ate — so the evicted write never rolled back and never settled. |
 | Java / Kotlin `synchronized`, reentrant | No hang, but a consumer's callback ran inside the critical section guarding the subscription registry.                                                             |
-| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other five now match.                                                          |
+| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other six now match.                                                           |
 
 The Ruby failure is the instructive one: the mechanism that was supposed to stop
 an eviction dropping a durable write in silence was itself dropping it in silence.
@@ -564,7 +564,7 @@ its lock.** The optimistic transform is run against a snapshot and its result
 recorded; a queued write's `precondition` is evaluated on a snapshot too; the
 lock is then taken only to install what came back. Settle handlers, `on_settled`,
 and every subscription and error callback are likewise deferred and invoked after
-the lock is released. Four of the seven use a non-reentrant lock, so without this
+the lock is released. Four of the eight use a non-reentrant lock, so without this
 a callback reading `pending_mutation_count` would deadlock its own thread — a
 hazard the reference client cannot have, because it has no lock at all.
 
@@ -1084,8 +1084,8 @@ a generated call reaches the wire as
 every transport's tree because that is what they are — consumer code, importing
 `lunorasdk/lunoraapi` and `import LunoraApi`, which resolve only against generated
 output. `--from sdks` is passed for them, because the default fetch is the CLI's
-release tag and seven of the eight transports do not exist at any released tag
-yet.
+release tag, and CI has to exercise the transports in the checkout under test
+rather than whatever a published tag carries.
 
 The dart leg runs `dart analyze` in BOTH the generated package and the consumer,
 and the first is the one that matters: `dart analyze` only reports on the package

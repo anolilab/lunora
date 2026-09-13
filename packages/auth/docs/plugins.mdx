@@ -307,12 +307,18 @@ who guesses an address holding a session immediately and holding none.
 ### What it refuses that you may not expect
 
 Plugins that mint an account from something other than a real mailbox still
-synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
-`<wallet>@<domain>`, and `phoneNumber`'s sign-up-on-verification writes a temp
-address of its own. None of them can match an invitation, so the gate **rejects**
-those flows — but only once a user exists. Under `allowFirstUser: true` the
-bootstrap runs before the address is ever compared, so the first anonymous session
-or wallet sign-in is what claims it. Do not combine those plugins with this one.
+synthesize an address — `siwe` writes `<wallet>@<domain>`, and `phoneNumber`'s
+sign-up-on-verification writes a temp address of its own. Neither can match an
+invitation, so the gate **rejects** those flows — but only once a user exists.
+Under `allowFirstUser: true` the bootstrap runs before the address is ever
+compared, so the first wallet sign-in is what claims it. Do not combine those
+plugins with this one.
+
+`anonymous` is the one carve-out, because anonymous sign-in is not registration.
+Its throwaway identity is admitted, and converting it into a real account is
+gated like any other sign-up — better-auth creates a second, non-anonymous row
+for that, and the gate sees it. Installing both gives you "browse anonymously,
+invitation required to keep an account".
 
 Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
 the same internal adapter, so it is gated too. Issue an invitation first, or call
@@ -406,13 +412,6 @@ export const submit = mutation.input({ message: v.string(), turnstileToken: v.st
     /* args.message has passed the Turnstile check */
 });
 ```
-
-<Callout type="warn">
-    **`verifyTurnstileMiddleware`'s `token` selector cannot read the args.** A `.use()` middleware is handed only the context, and the builder never places the
-    parsed `args` onto it — so `token: (ctx) => ctx.turnstileToken` does not type-check, and cast past it reads `undefined` and the middleware throws
-    `FORBIDDEN "turnstile token missing"` on **every** submission. The selector is usable only for a token an earlier `.use()` already put on the context. For a
-    token that arrives in the args, use the in-handler `verifyTurnstile` call above.
-</Callout>
 
 <Callout type="warn">
     **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone

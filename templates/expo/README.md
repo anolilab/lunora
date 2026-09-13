@@ -23,7 +23,7 @@ Install dependencies with your package manager (`npm`, `pnpm`, `yarn`, or `bun`)
 
 Create a D1 database for the better-auth identity/session tables and paste the
 printed id into `wrangler.jsonc` (`d1_databases[0].database_id`, replacing
-`REPLACE_WITH_D1_ID`):
+`<replace-with-d1-create-id>`):
 
 ```bash
 npx wrangler d1 create {{name}}

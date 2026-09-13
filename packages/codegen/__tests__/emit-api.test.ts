@@ -179,6 +179,105 @@ describe("emitApi", () => {
         expect(rendered).toContain("limit?: number");
     });
 
+    it("renders `v.any()` as an optional property, matching what the runtime parses and `Infer` types (issue #688)", () => {
+        expect.assertions(5);
+
+        // `v.any()`'s parser returns its input unchanged, so an absent arg parses
+        // and `@lunora/values` types the key `data?: unknown`. Emitting the
+        // REQUIRED `data: unknown` made a handler's own `args` unassignable to
+        // the generated reference of a procedure declaring the identical
+        // validator: "Property 'data' is optional in type 'ObjectShapeType<…>'
+        // but required in type '{ data: unknown; id: string; }'".
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    // Nested under the `v.optional(v.object(...))` of the report.
+                    shape: {
+                        inner: {
+                            kind: "object",
+                            shape: { data: { kind: "any" }, id: { kind: "string" } },
+                        },
+                        kind: "optional",
+                    },
+                    // Top level — the same rule, asserted so the two stay in step.
+                    blob: { kind: "any" },
+                    // A sibling with no `undefined` in its type stays required.
+                    name: { kind: "string" },
+                },
+                exportName: "probeSink",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("shape?: { data?: unknown; id: string }");
+        expect(rendered).toContain("blob?: unknown");
+        expect(rendered).toContain("name: string");
+        expect(rendered).not.toContain("data: unknown");
+        expect(rendered).not.toContain("blob: unknown");
+    });
+
+    it("keeps a validator the IR could not resolve REQUIRED, even though it is recorded as `any`", () => {
+        expect.assertions(3);
+
+        // An expression the AST→IR step cannot follow is recorded as
+        // `{ kind: "any", sourceText }`. It is not a `v.any()` — the validator it
+        // stands for is very likely required — so it must NOT pick up the
+        // absent-tolerant treatment a genuine `v.any()` gets, at any depth.
+        // Otherwise an unreadable validator would silently let callers omit an
+        // argument the runtime rejects.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    hoisted: { kind: "any", sourceText: "sharedValidator" },
+                    inUnion: { kind: "union", members: [{ kind: "string" }, { kind: "any", sourceText: "sharedValidator" }] },
+                    nested: { kind: "object", shape: { field: { kind: "any", sourceText: "sharedValidator" } } },
+                },
+                exportName: "probeUnresolved",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("hoisted: unknown");
+        expect(rendered).toContain("inUnion: string | unknown");
+        expect(rendered).toContain("nested: { field: unknown }");
+    });
+
+    it("renders a `v.union()` with an absent-tolerant member as an optional property (issue #688)", () => {
+        expect.assertions(3);
+
+        // A union tries its members, so one that accepts `undefined` — `v.any()`
+        // or a `v.optional(...)` — makes the whole field absent-tolerant. The
+        // same rule `toJsonSchema`'s `required` list has always applied.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    loose: { kind: "union", members: [{ kind: "string" }, { kind: "any" }] },
+                    nullable: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                    partial: { kind: "union", members: [{ kind: "string" }, { inner: { kind: "number" }, kind: "optional" }] },
+                },
+                exportName: "probeUnions",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("loose?: string | unknown");
+        expect(rendered).toContain("partial?: string | number | undefined");
+        // `v.null()` admits `null`, never an absent field — the key stays required.
+        expect(rendered).toContain("nullable: string | null");
+    });
+
     it("renders a `v.optional()` nested inside `v.array(v.object(...))` as an optional property", () => {
         expect.assertions(2);
 

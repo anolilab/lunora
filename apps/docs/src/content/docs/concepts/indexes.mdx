@@ -42,6 +42,27 @@ export default defineSchema({
 `{ unique: true }` additionally enforces that no two rows share the indexed
 value.
 
+### Fields are top-level columns
+
+An index names columns of the row, not paths inside them — `"user.settings.theme"`
+is not accepted. A `v.object()` column is stored as one JSON value, so indexing
+inside it would mean an expression index over `json_extract(...)` on every engine
+_plus_ a `where` DSL that can route a dotted key to it. Half of that is worse than
+none: a predicate that missed the route would read as a silent full table scan
+rather than an error, which is the exact problem the index was declared to avoid.
+
+Denormalise the field you query onto the row and keep the copy current in the
+mutation that writes the nested value:
+
+```ts
+// lunora/schema.ts
+users: defineTable({
+    settings: v.object({ theme: v.string() }),
+    // Written alongside `settings.theme` on every update; this is the indexed one.
+    theme: v.string(),
+}).index("by_theme", ["theme"]),
+```
+
 ## Querying with `withIndex`
 
 `q.withIndex(name, q => …)` selects the index and builds a range over its

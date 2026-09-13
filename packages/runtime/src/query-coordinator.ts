@@ -1248,13 +1248,6 @@ const runBoundedJobs = async <T, R>(jobs: ReadonlyArray<T>, concurrency: number,
     return results;
 };
 
-/** Union of the live shard keys across every requested table, so a multi-table fan-out reaches each shard once. */
-const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>): Promise<string[]> => {
-    const perTableKeys = await Promise.all(tables.map(async (table) => registry.listShardKeys(table)));
-
-    return [...new Set(perTableKeys.flat())];
-};
-
 /**
  * Resolve the shards a fan-out should reach, falling back to the default shard
  * when discovery finds nothing.
@@ -1275,6 +1268,26 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
  */
 const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
     discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];
+
+/**
+ * Union of the live shard keys across every requested table, so a multi-table
+ * fan-out reaches each shard once.
+ *
+ * {@link withDefaultShard} is applied PER TABLE, before the union: an empty key
+ * list is that table's "the registry cannot answer", and a root-DO table's list
+ * is always empty. Unioning first and falling back only on an empty union
+ * answered the question once for the whole request, so a single registered
+ * `.shardBy(...)` key was enough to drop the default shard — and with it every
+ * root-table row — from a whole-deployment export.
+ *
+ * The caller still wraps the result: with no tables at all there is nothing to
+ * ask per table, and the fallback is the whole answer.
+ */
+const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): Promise<string[]> => {
+    const perTableKeys = await Promise.all(tables.map(async (table) => withDefaultShard(await registry.listShardKeys(table), defaultShardKey)));
+
+    return [...new Set(perTableKeys.flat())];
+};
 
 const runBoundedFanOut = async (
     namespace: ShardNamespaceInput,
@@ -1562,7 +1575,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const discovered = await unionShardKeys(options.registry, request.tables);
+            const discovered = await unionShardKeys(options.registry, request.tables, request.defaultShardKey);
 
             const shardKeys = withDefaultShard(discovered, request.defaultShardKey);
 
@@ -1584,7 +1597,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables), request.defaultShardKey);
+            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables, request.defaultShardKey), request.defaultShardKey);
             const cursors = request.cursors ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {

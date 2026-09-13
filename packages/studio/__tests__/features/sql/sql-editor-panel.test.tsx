@@ -27,7 +27,11 @@ const schemaMock = (): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.readTablePage) {
-                return { columns: ["id", "author", "body"], rows: [], total: 0 };
+                // `sqlColumns` is what the editor completes and lints against
+                // — the names a statement may actually write. A fixture without
+                // it models a shard too old to report them, which the hook
+                // deliberately treats as "columns unknown".
+                return { columns: ["id", "author", "body"], rows: [], sqlColumns: ["id", "author", "body"], total: 0 };
             }
 
             return { columns: [], rowCount: 0, rows: [], truncated: false };

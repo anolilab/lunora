@@ -29,7 +29,7 @@ import { TextInput } from "@visulima/tui-kit/text-input";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { useEffect, useState } from "react";
 
-import { PromptCancelledError } from "./prompt-cancelled";
+import PromptCancelledError from "./prompt-cancelled";
 
 /**
  * `@visulima/tui`'s `render` attaches a `process` `beforeExit` listener per

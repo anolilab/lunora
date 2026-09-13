@@ -4,6 +4,7 @@ import type { MaybeRefOrGetter, Ref } from "vue";
 import { shallowRef, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 import onScopeDisposeOrWarn from "./scope-dispose";
 import type { UseQueryOptions } from "./types";
@@ -95,9 +96,16 @@ export const useQuery = <F extends FunctionReference>(
     // `args` resolves once and the watcher never re-fires. The skip-handling,
     // subscribe, and cleanup are owned by the shared `@lunora/client/query` state
     // machine; this composable only binds it to a Vue `ref`.
+    //
+    // Key the watch on the args' CONTENT (`stableWireKey`), not on object
+    // identity: a getter such as `() => ({ id: props.id, limit: Math.min(n, 10) })`
+    // re-runs whenever any dependency ticks, and would otherwise tear the live
+    // subscription down and re-snapshot from the server — blanking the rendered
+    // value — for args that did not actually change. The live args are re-read
+    // inside the callback (matching `use-paginated-core`).
     watch(
-        () => toValue(args),
-        (current, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
             // Client-only: an `immediate: true` watcher fires once during
             // `renderToString` with no unmount to run `onCleanup` (see
             // `use-presence.ts`'s guard rationale) — skip the subscription
@@ -113,7 +121,7 @@ export const useQuery = <F extends FunctionReference>(
             const unsubscribe = createQuerySubscription(
                 client,
                 function_,
-                current,
+                toValue(args),
                 {
                     onData: (value) => {
                         data.value = value;

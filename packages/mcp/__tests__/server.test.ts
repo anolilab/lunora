@@ -95,6 +95,7 @@ describe("createLunoraMcpServer request handlers", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
         ]);
     });
 
@@ -109,6 +110,7 @@ describe("createLunoraMcpServer request handlers", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
@@ -249,6 +251,7 @@ describe("createLunoraMcpServer agent tools", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "agent_support",
             "lunora_agent_status",
         ]);

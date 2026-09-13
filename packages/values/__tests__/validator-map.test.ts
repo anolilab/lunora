@@ -21,6 +21,20 @@ describe("parseValidatorMap", () => {
         expect(parseValidatorMap({ nick: v.optional(v.string()) }, { nick: "ada" }, "args")).toStrictEqual({ nick: "ada" });
     });
 
+    it("accepts an absent bare `v.any()` arg, so the key infers optional (issue #688)", () => {
+        expect.assertions(3);
+
+        // Unlike `v.optional(...)` the arg is not SKIPPED — its parser runs and
+        // returns `undefined` unchanged — but it does not throw, so an absent
+        // `v.any()` arg is accepted. `InferValidatorMap` types it `data?: unknown`
+        // to match, and `@lunora/codegen` must emit the same optional key.
+        const parsed = parseValidatorMap({ data: v.any(), id: v.string() }, { id: "x" }, "args");
+
+        expect(parsed).toStrictEqual({ data: undefined, id: "x" });
+        expect(parsed.data).toBeUndefined();
+        expect(parseValidatorMap({ data: v.any() }, { data: { nested: 1 } }, "args")).toStrictEqual({ data: { nested: 1 } });
+    });
+
     it("fails a required field that is absent", () => {
         expect.assertions(1);
 

@@ -98,13 +98,17 @@ reads an object without its row, so the window itself is invisible.
 `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against that bucket.
 An action needs none of this for its own deletes — it is not transactional, so it
 calls `delete` directly — but a mutation it reaches through `ctx.runMutation`
-still queues, and those deletes are flushed when the action **returns**.
+still queues, and those deletes are flushed when **that mutation's** transaction
+commits, not when the action returns. The pairing therefore survives composition:
+the submutation opens its own transaction, so its queued deletes go with its
+commit and are dropped when it rolls back — even where the action swallows the
+failure and returns normally.
 
 <Callout type="warn">
-    **An action that throws drops its queued deletes.** The submutation's rows are already committed (`ctx.runMutation` does not put the action in a
-    transaction), so the row is gone and the object stays — and because the flush never ran, nothing is logged either. It is still the safe direction, an
-    orphaned object rather than a dangling row, but it is not the "the row and the bytes cannot disagree" guarantee a top-level mutation gives. If a delete has
-    to be observable, do the delete-and-row work in one top-level mutation rather than composing it from an action.
+    **A mutation composed from another mutation can orphan an object.** SQLite-in-DO has no savepoints, so a `ctx.runMutation` issued from inside a mutation
+    rides the enclosing transaction: if it throws and the outer handler swallows that, its ROWS stay (nothing rolled back) while its queued deletes are dropped
+    with it. The result is an orphaned object rather than a dangling row — the safe direction, but not the "the row and the bytes cannot disagree" guarantee. If
+    a delete has to be exact, do the delete-and-row work in one mutation rather than composing it from another.
 </Callout>
 
 Build the full `Storage` outside a handler (or to use the object-level reads,

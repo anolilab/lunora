@@ -128,6 +128,17 @@ describe("defineTable", () => {
         expect(settings.shardMode).toEqual({ backend: "hyperdrive", kind: "global" });
     });
 
+    it("rejects chaining .shardBy() and .global() in either order", () => {
+        expect.assertions(2);
+
+        // Both write the one `shardMode`, so the later call used to discard the
+        // earlier silently: the table landed on a tier the author never chose.
+        // The chain is the only place the collision is observable — by the time
+        // `defineSchema` runs, one of the two modes is simply gone.
+        expect(() => defineTable({ roomId: v.string() }).shardBy("roomId").global()).toThrow(/cannot be both \.shardBy\(key\) and \.global\(\)/u);
+        expect(() => defineTable({ roomId: v.string() }).global().shardBy("roomId")).toThrow(/cannot be both \.shardBy\(key\) and \.global\(\)/u);
+    });
+
     it("table without .vectorize exposes an empty vectorIndexes array", () => {
         expect.assertions(1);
 

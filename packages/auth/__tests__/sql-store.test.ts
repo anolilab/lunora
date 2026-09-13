@@ -468,3 +468,109 @@ describe("incrementOne — atomic guarded counter (both stores)", () => {
         }
     });
 });
+
+describe("createSqlAuthStore — `_creationTime` on `defineTable`-backed tables", () => {
+    /** The DDL `defineTable` produces for a global (D1) table: framework columns better-auth never writes. */
+    const createLunoraTable = (db: DatabaseSync): void => {
+        db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "key" TEXT, "count" INTEGER)`);
+    };
+
+    it("fills `_creationTime` in so the insert does not breach NOT NULL", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            const before = Date.now();
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "/sign-up/email" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["key"]).toBe("/sign-up/email");
+            expect(row?.["_creationTime"]).toBeGreaterThanOrEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("leaves an explicitly supplied `_creationTime` alone", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { _creationTime: 42, count: 0, id: "r1", key: "k" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["_creationTime"]).toBe(42);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not mistake a CHECK expression that merely names the column for the column", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // The DDL TEXT contains `_creationTime`; the table does not have the
+            // column. A substring test over `sqlite_master.sql` says yes here and
+            // the insert then dies with `table has no column named _creationTime`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "kind" TEXT CHECK ("kind" <> '_creationTime'))`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { id: "r1", kind: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not memoise a probe that failed, so a table created later is still seen", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            const store = createSqlAuthStore(executorFor(db));
+
+            // The table does not exist yet — `ensureMigrated` has not run. Caching
+            // that "answer" would pin the store to "no `_creationTime`" for the
+            // isolate's life, which is the outage this fill-in exists to prevent.
+            await expect(store.create("rateLimit", { id: "r0", key: "k" })).rejects.toThrow(/no such table/iu);
+
+            createLunoraTable(db);
+
+            await store.create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not invent the column on a table that has none — better-auth's own migrator makes those", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // `lunoraDoAdapter`'s tables come from `./do-schema.ts`, which mirrors
+            // better-auth's own DDL. Adding `_creationTime` there is `no such column`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "key" TEXT, "count" INTEGER)`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+});

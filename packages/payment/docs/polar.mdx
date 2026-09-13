@@ -355,24 +355,26 @@ export const processPolarWebhook = internalAction
 
 `handleWebhook` verifies the signature, normalizes the Polar event into a
 `WebhookAction`, and applies it through the state machine. Once verified it
-always returns `200` so Polar stops retrying; a duplicate or out-of-order event
-is acknowledged, not re-applied. Standard Webhooks carries no body id, so the
-adapter uses the `webhook-id` header as the idempotency key backing the
-append-only `events` log.
+returns `200` once applied or deduplicated, so Polar stops retrying; a duplicate is
+acknowledged, not re-applied. An **orphaned** event — one whose subscription or
+customer row has not been created yet, i.e. an out-of-order delivery — returns
+`500` instead, so Polar redelivers it after the parent row lands. Standard Webhooks
+carries no body id, so the adapter uses the `webhook-id` header as the
+idempotency key backing the append-only `events` log.
 
 ### Event mapping
 
 The adapter translates these Polar events into normalized transitions:
 
-| Polar event                                   | Normalized action                                              | Notes                                                                           |
-| --------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `order.created`, `order.paid`                 | `payment.captured`                                             | Amount from `total_amount` (falls back to `amount`); currency from `currency`.  |
-| `refund.created`                              | `payment.refunded` (delta)                                     | `amount` is this single refund; `sessionId` from `order_id`.                    |
-| `subscription.created`, `subscription.active` | `subscription.active`                                          | Routed by the subscription's `status` field.                                    |
-| `subscription.updated`                        | `subscription.active` / `.past_due` / `.canceled` / `.updated` | Derived from `status`; a pure metadata/period change is `subscription.updated`. |
-| `subscription.canceled`                       | derived from `status`                                          | Status-driven.                                                                  |
-| `subscription.revoked`                        | `subscription.canceled`                                        | Access revoked → terminal cancel.                                               |
-| anything else                                 | `unhandled`                                                    | Verified and logged (idempotency), but no state change.                         |
+| Polar event                                   | Normalized action                                             | Notes                                                                                                                                                                                               |
+| --------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `order.created`, `order.paid`                 | `payment.captured`                                            | `order.created` maps only when the order's `status` is already paid, otherwise it is `unhandled` until `order.paid`. Amount from `total_amount` (falls back to `amount`); currency from `currency`. |
+| `refund.created`                              | `payment.refunded` (delta)                                    | `amount` is this single refund; `sessionId` from `order_id`.                                                                                                                                        |
+| `subscription.created`, `subscription.active` | `subscription.active`                                         | Routed by the subscription's `status` field.                                                                                                                                                        |
+| `subscription.updated`                        | `subscription.active` / `.past_due` / `.paused` / `.canceled` | Derived from `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                                                                                            |
+| `subscription.canceled`                       | derived from `status`                                         | Status-driven.                                                                                                                                                                                      |
+| `subscription.revoked`                        | `subscription.canceled`                                       | Access revoked → terminal cancel.                                                                                                                                                                   |
+| anything else                                 | `unhandled`                                                   | Verified and logged (idempotency), but no state change.                                                                                                                                             |
 
 Polar's subscription `status` values (`active`, `trialing`, `past_due`,
 `canceled`, `incomplete`, `incomplete_expired`, `unpaid`) map onto Lunora's
@@ -433,7 +435,7 @@ tax) in integer minor units.
 <Callout type="info">
     - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw; MoR captures at checkout. - **Product-based.** The cross-provider `priceId`
     carries a Polar **product** id, not a separate price id. - **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade
-    exposes no refund call. - **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
+    also exposes `refundPayment` (see [Refunds](#refunds)). - **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
 </Callout>
 
 ## Troubleshooting

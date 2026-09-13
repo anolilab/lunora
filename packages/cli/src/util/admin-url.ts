@@ -18,7 +18,7 @@ const WRANGLER_DEV_URL = "http://localhost:8787";
  * every Vite-based project: those listen on 5173 and *bump to the next free
  * port* when it is taken, so the right port is not knowable in advance. The
  * running dev server already records its resolved URL in `.lunora/dev.json`
- * (the same record `lunora status`/`stop` and the MCP server read, and the same
+ * (the same record `lunora dev status`/`lunora dev stop` and the MCP server read, and the same
  * one that makes a second `lunora dev` idempotent), so read it instead of
  * guessing — a live record beats a hardcoded port every time.
  *

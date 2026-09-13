@@ -10,6 +10,7 @@
  * `create-worker` — no runtime values cross the edge.
  */
 import type { WorkerOptions } from "./create-worker";
+import { LunoraError } from "./errors";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -41,9 +42,19 @@ const partitionExportTables = (options: WorkerOptions, tables: ReadonlyArray<str
 };
 
 /**
- * Fan the shard-local export out via the coordinator and write each
- * successful shard's rows. A failed shard is skipped (its error was already
- * surfaced through the fan-out roll-up).
+ * Fan the shard-local export out via the coordinator and write each shard's
+ * rows.
+ *
+ * A shard that failed aborts the whole export. The rows it holds are simply
+ * absent from the roll-up, and there is no way to say so in-band: the NDJSON
+ * body is a row per line with no envelope, and the admin route has already
+ * committed `200` and its headers before the fan-out runs, so a shorter file is
+ * indistinguishable from a smaller deployment. Skipping the shard therefore
+ * handed the caller an incomplete snapshot labelled complete — one the scheduled
+ * backup then wrote a manifest for. Throwing is the one signal a consumer cannot
+ * mistake for success: the backup writes nothing, and the streamed response ends
+ * as an errored body rather than a clean short one (the CLI discards its staged
+ * partial file on exactly that).
  */
 const exportShardLocalRows = async (
     coordinator: QueryCoordinator,
@@ -79,11 +90,20 @@ const exportShardLocalRows = async (
         tables: shardLocalTables,
     });
 
-    for (const shard of result.shards) {
-        if (shard.error) {
-            continue;
-        }
+    // Checked before a single row is written, so a failed fan-out leaves the
+    // stream untouched rather than truncated mid-table.
+    const failed = result.shards.filter((shard) => shard.error);
 
+    if (failed.length > 0) {
+        const detail = failed.map((shard) => `${shard.shardKey}: ${shard.error?.message ?? "unknown error"}`).join("; ");
+
+        throw new LunoraError(`export failed on ${String(failed.length)} of ${String(result.shards.length)} shard(s) — ${detail}`, {
+            code: "EXPORT_SHARD_FAILED",
+            status: 502,
+        });
+    }
+
+    for (const shard of result.shards) {
         for (const row of shard.rows ?? []) {
             writeRow(row);
         }

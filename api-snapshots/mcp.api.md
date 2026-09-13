@@ -99,6 +99,7 @@ interface LunoraMcpServerOptions {
     agentPollIntervalMs?: number;
     agents?: ReadonlyArray<McpAgentExposure>;
     allowAgents?: boolean;
+    allowDataReads?: boolean;
     allowObservability?: boolean;
     allowWrites?: boolean;
     client?: LunoraClient;
@@ -316,7 +317,7 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
 ```
 
 ### `connectLocalStdio` (const)
@@ -394,7 +395,7 @@ const serveStateless: (server: Server, request: Request, options?: ServeStateles
 ### `toolDefinitions` (const)
 
 ```ts
-const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean) => ReadonlyArray<ToolDefinition>;
+const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean, allowDataReads?: boolean) => ReadonlyArray<ToolDefinition>;
 ```
 
 ## `@lunora/mcp/docs`

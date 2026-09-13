@@ -87,6 +87,7 @@ import {
     emitDrizzleSchema,
     emitFunctions,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitShard,
     emitVectors,
@@ -94,6 +95,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
     ContainerIR,
@@ -753,7 +755,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             ? []
             : [
                   ...runAdvisor(advisorContext, { source: "static" }),
-                  ...discoverUnregisteredProcedures(project, lunoraDirectory, functions),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
               ];
 
@@ -846,7 +854,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
     const shardContent = emitShard({
-        advisories,
+        // `_generated/shard.ts` is committed, and this finding is a fact about
+        // the machine codegen ran on rather than about the app — regenerating
+        // against a stale `dist/` would write it into a tracked file, so the
+        // diff would differ per developer. It still reaches the terminal through
+        // `CodegenResult.advisories`, which is where a fact about this run
+        // belongs. (`procedure_not_registered` is embedded like every other
+        // finding, and it is resolution-dependent too — a cold `dist/` drops it
+        // from the emitted list. That is the pre-existing cost of embedding
+        // advisories at all, not something this filter can fix.)
+        advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
@@ -893,6 +910,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
+    const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -932,9 +950,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
-        hasGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
+        hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
         hasHyperdrive: featureUsage.hyperdrive,
-        hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
+        hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
         hasImages: featureUsage.images,
         // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
         // config field is emitted on the usage signal — so this MUST stay
@@ -1002,21 +1020,46 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
+    // The `_generated/` files this run emits, in write order. Which files those
+    // are depends on the project (conditional features, `apiSpec`), so it is
+    // recorded here rather than restated by each caller — the CLI used to print
+    // a hardcoded three-file list that had been wrong since the fourth file was
+    // added, and nothing could have caught it.
+    const writtenFiles: string[] = [];
+
     if (!options.dryRun) {
         if (!existsSync(outputDirectory)) {
             mkdirSync(outputDirectory, { recursive: true });
         }
 
-        writeIfChanged(join(outputDirectory, "app.ts"), appContent);
-        writeIfChanged(dataModelPath, dataModelContent);
-        writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
-        writeIfChanged(serverPath, serverContent);
-        writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
-        writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
-        writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
-        writeIfChanged(join(outputDirectory, "vectors.ts"), vectorsContent);
-        writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
-        writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
+        /** Always-emitted file: write it and record the name. */
+        const emit = (fileName: string, content: string): void => {
+            writeIfChanged(join(outputDirectory, fileName), content);
+            writtenFiles.push(fileName);
+        };
+
+        /**
+         * Conditionally-emitted file: `writeIfPresent` DELETES it when `content`
+         * is `""`, so only a non-empty emit counts as written.
+         */
+        const emitOptional = (fileName: string, content: string): void => {
+            writeIfPresent(join(outputDirectory, fileName), content);
+
+            if (content !== "") {
+                writtenFiles.push(fileName);
+            }
+        };
+
+        emit("app.ts", appContent);
+        emit("dataModel.ts", dataModelContent);
+        emit("api.ts", apiContent);
+        emit("server.ts", serverContent);
+        emit("functions.ts", functionsContent);
+        emit("shard.ts", shardContent);
+        emit("crons.ts", cronsContent);
+        emit("vectors.ts", vectorsContent);
+        emit("drizzle.global.ts", drizzleFiles.global);
+        emit("drizzle.shard.ts", drizzleFiles.shard);
 
         // Conditionally-emitted files: each is written only when its feature is
         // in use (the `emit*` helper returns `""` otherwise), so projects that
@@ -1024,14 +1067,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - containers.ts  → `@lunora/container`, when containers are declared
         //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
         //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
-        writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
-        writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        emitOptional("containers.ts", containersContent);
+        emitOptional("workflows.ts", workflowsContent);
         //   - agents.ts      → `@lunora/agent`, when agents are declared
-        writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
-        writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
-        writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
+        emitOptional("agents.ts", agentsContent);
+        emitOptional("queues.ts", queuesContent);
+        emitOptional("scheduler.ts", schedulerContent);
+        emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
-        writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);
+        emitOptional("collections.ts", collectionsContent);
 
         // The `.json` is the portable artifact for external tooling; the `.ts`
         // (same document, inlined) is what the worker imports and passes to
@@ -1040,10 +1084,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // (empty content when the mode is off) so switching `apiSpec` away from a
         // format also DELETES its now-stale spec files instead of leaving a
         // portable artifact that documents endpoints/args that no longer exist.
-        writeIfPresent(join(outputDirectory, "openapi.json"), wantsOpenApi ? openApiContent : "");
-        writeIfPresent(join(outputDirectory, "openapi.ts"), wantsOpenApi ? openApiModuleContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.json"), wantsOpenRpc ? openRpcContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.ts"), wantsOpenRpc ? openRpcModuleContent : "");
+        emitOptional("openapi.json", wantsOpenApi ? openApiContent : "");
+        emitOptional("openapi.ts", wantsOpenApi ? openApiModuleContent : "");
+        emitOptional("openrpc.json", wantsOpenRpc ? openRpcContent : "");
+        emitOptional("openrpc.ts", wantsOpenRpc ? openRpcModuleContent : "");
 
         // Bless the schema baseline on first capture (so a project gets a
         // committed snapshot the moment it runs codegen) or when explicitly
@@ -1104,6 +1148,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schemaSnapshot,
         schemaSnapshotPath,
         workflows,
+        writtenFiles,
     };
 };
 
@@ -1319,6 +1364,17 @@ export interface CodegenResult {
      * adds no binding or migration. Empty when the project declares no workflows.
      */
     workflows: ReadonlyArray<WorkflowIR>;
+
+    /**
+     * The `_generated/` file names this run emitted, in write order, relative to
+     * {@link CodegenResult.outputDirectory}. Conditional files appear only when
+     * their feature is in use, and the spec artifacts only for the requested
+     * `apiSpec` — so this is what the project actually has, not a fixed list.
+     * Empty under `dryRun` (nothing is written). Callers report from this rather
+     * than restating the set, which is how the CLI came to advertise three of
+     * twelve files.
+     */
+    writtenFiles: ReadonlyArray<string>;
 }
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.

@@ -75,6 +75,27 @@ describe("patchViteConfig", () => {
             expect(result.reason).toBe("lunora plugin already present");
         });
 
+        it("patches a config that only MENTIONS lunora() in a comment or a string", () => {
+            expect.assertions(3);
+
+            // A commented-out plugin line, or a note about it, is not a call.
+            // Matching one made this report the config already wired and leave
+            // the project's dev server with no Lunora plugin in it at all.
+            const source = `import react from "@vitejs/plugin-react";
+
+// TODO: put lunora() back once the upgrade lands.
+export default defineConfig({
+    plugins: [react()],
+});
+`;
+
+            const result = patchViteConfig(source);
+
+            expect(result.changed).toBe(true);
+            expect(result.code).toContain('import { lunora } from "@lunora/vite";');
+            expect(result.code).toContain("plugins: [lunora(), react()]");
+        });
+
         it("is idempotent when called twice on the same source", () => {
             expect.assertions(2);
 

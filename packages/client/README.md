@@ -63,8 +63,21 @@ const client = new LunoraClient({ url: "https://app.acme.test" });
 // One-shot query (HTTP, carries the D1 bookmark for read-your-writes).
 const messages = await client.query(api.messages.list, { room: "general" });
 
-// Mutation with an optimistic update applied to matching subscribers.
-await client.mutation(api.messages.send, { body: "hi" }, { optimistic: (current = []) => [...current, { body: "hi", pending: true }] });
+// Mutation with an optimistic update. `optimisticUpdate` names the query it
+// patches — a write and the queries it affects are different functions, and only
+// you know which. (The per-call `optimistic` shortcut patches the subscription
+// registered under the mutation's OWN reference and args, nothing else.)
+await client.mutation(
+    api.messages.send,
+    { room: "general", body: "hi" },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { room: args.room }) ?? [];
+
+            store.setQuery(api.messages.list, { room: args.room }, [...current, { body: args.body, pending: true }]);
+        },
+    },
+);
 
 // Live subscription over WS — returns an unsubscribe function.
 const unsubscribe = client.subscribe(api.messages.list, { room: "general" }, (next) => {

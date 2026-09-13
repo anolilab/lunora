@@ -25,9 +25,10 @@
  *
  * When the emitter starts using a new base member, add it here.
  */
-import type { TraceRefLike } from "@lunora/do";
+import type { SubscriptionIdentity, TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
-import { beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
+import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes, withDeferredSchedules } from "@lunora/server";
+import type { SchedulerLike } from "@lunora/shard-engine";
 
 class EmittedShardContract extends ShardDO {
     public override async handleRpc(): Promise<unknown> {
@@ -59,16 +60,42 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * Mirrors the generated `scheduleOutboxScheduler` override — the seam the
+     * deferred-schedule outbox retries through. The generated body answers
+     * `config.scheduler?.(env)`, so the base's return type has to admit
+     * `undefined`; if it stops doing so, every generated shard stops compiling and
+     * this is where that surfaces.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reads `config.scheduler`
+    protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+        return undefined;
+    }
+
+    /**
+     * Mirrors the generated `buildCtx`'s scheduler wiring: the facade is handed
+     * `this.scheduleOutbox()`, which is `protected` for exactly this call.
+     */
+    protected wrapScheduler(scheduler: SchedulerLike): SchedulerLike {
+        return withDeferredSchedules(scheduler, this.scheduleOutbox());
+    }
+
+    /**
      * Mirrors the generated `executeStream` override. Its third parameter is the
-     * socket's verified identity, which the generated body threads by value into
-     * `buildCtx` — if the base signature ever drops it, the generated shard stops
-     * compiling and this file is where that surfaces.
+     * socket's verified caller context, which the generated body threads by value
+     * into `buildCtx` — if the base signature ever drops it, the generated shard
+     * stops compiling and this file is where that surfaces.
+     *
+     * Named as `SubscriptionIdentity`, not restated inline. An inline structural
+     * copy compiles against the base even when it is missing a member the base
+     * declares — method parameters are bivariant — so a restated shape here would
+     * pass while the emitted shard silently stopped seeing a field. Naming the
+     * type is what makes `tsc` the enforcer rather than this file's author.
      */
     // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reaches `this.buildCtx`
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
-        identity?: { identity?: Record<string, unknown>; userId?: string },
+        identity?: SubscriptionIdentity,
     ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         return {
             iterator: () =>
@@ -89,10 +116,12 @@ class EmittedShardContract extends ShardDO {
      */
     private async runMutationTransaction<T>(context: unknown, work: () => Promise<T>): Promise<T> {
         const settleSchedules = beginDeferredSchedules(context as { scheduler?: unknown });
+        const settleDeletes = beginDeferredDeletes(context);
 
         if (this.isInTransaction()) {
             const nested = await work();
 
+            settleDeletes(true);
             await settleSchedules(true);
 
             return nested;
@@ -100,6 +129,7 @@ class EmittedShardContract extends ShardDO {
 
         const result = await this.runInTransaction(work);
 
+        settleDeletes(true);
         await settleSchedules(true);
         await this.deferPastResponse(flushDeferredDeletes(context));
 

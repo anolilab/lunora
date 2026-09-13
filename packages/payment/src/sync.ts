@@ -257,6 +257,11 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
             currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
             priceId: action.priceId ?? existing.priceId,
+            // A plan change REPLACES the item set, so a reported set wins outright rather than
+            // merging — an item removed upstream has to disappear here too. The adapter only reports
+            // a set it could establish completely, so `undefined` means "unknown", not "empty", and
+            // leaves the stored set standing for the next reconcile sweep to confirm.
+            priceIds: action.priceIds ?? existing.priceIds,
             quantity: action.quantity ?? existing.quantity,
             updatedAt: now,
         });
@@ -278,6 +283,10 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             currentPeriodStart: action.currentPeriodStart ?? now,
             id: action.subscriptionId,
             priceId: action.priceId ?? "",
+            // Left ABSENT rather than defaulted to `[]`: an empty set would grant nothing, whereas
+            // absent falls back to `[priceId]` on read — the right answer for the single-price
+            // providers and for an adapter that could not establish the full set.
+            priceIds: action.priceIds,
             provider: action.provider,
             quantity: action.quantity ?? 1,
             referenceId: action.referenceId ?? "",
@@ -302,6 +311,8 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
         priceId: action.priceId ?? existing.priceId,
+        // Same wholesale-replace-or-preserve rule as the metadata patch above.
+        priceIds: action.priceIds ?? existing.priceIds,
         quantity: action.quantity ?? existing.quantity,
         state: nextState,
         updatedAt: now,

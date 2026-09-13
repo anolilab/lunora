@@ -233,7 +233,10 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             const records = await getMatchingRecords(indexName, ids, resolved);
 
             return records.map((record) => {
-                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: record.values };
+                // `Array.from`: the binding's own `values` may be a typed array
+                // (`VectorValues`), and `VectorRecordLike` — the ctx-facing shape — is
+                // a plain number array.
+                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: [...record.values] };
             });
         },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {
@@ -383,8 +386,8 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * AND the identical `shardedIndexNames` — so `ctx.vectors.query`/`getByIds`/
  * `deleteByIds` are scoped without any app code changes. One consequence of
  * sharing that instance: this hook's own internal `deleteByIds` calls (on row
- * delete, on a cleared inline field, and on compensation after a failed
- * upsert) now also go through the namespace-verifying path described on
+ * delete and on a cleared inline field) now also go through the
+ * namespace-verifying path described on
  * {@link createContextVectors} — an extra `getByIds` subrequest per
  * delete-shaped write, not a behavior change (the row being deleted was
  * written under this same shard's namespace, so the verification passes).
@@ -393,16 +396,19 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * processes a write for a sharded index, this instance IS a real per-tenant
  * shard (not root) — `namespace` here is never `undefined` for that index.
  *
- * Consistency — IMPORTANT: this hook runs inline within the mutation but talks
- * to Vectorize, which is external and non-transactional. The per-index calls
- * fan out; if one fails after others have already applied, the SQLite write may
- * roll back while the applied Vectorize mutations cannot — leaving SQLite and
- * Vectorize diverged. We mitigate, not eliminate: upserts/deletes are
- * idempotent (keyed by row id), so a retry of the same write converges; and on
- * a fan-out failure we attempt a best-effort compensating delete of the row's
- * id from every affected index before re-throwing. A delete after a failed
- * upsert can itself fail — this is best-effort, the authoritative recovery is
- * re-running the (idempotent) write.
+ * Consistency — IMPORTANT: Vectorize is external and non-transactional, so this
+ * hook runs AFTER the mutation's transaction has committed, never inside it (the
+ * shard host holds it — `ShardDO.deferAfterCommit`). That ordering is what stops
+ * a rolled-back write from leaving a vector for a row that does not exist, and a
+ * rolled-back delete from leaving a live row with its vector already purged.
+ *
+ * What remains is the opposite divergence, and it is the one worth having: the
+ * row is committed and this hook may still fail — fully, or partway through a
+ * fan-out that already applied to some indexes. The row is then indexed in some
+ * indexes and not others. Nothing is compensated, deliberately: the row SURVIVES
+ * a failure here, so purging the indexes that did apply would turn a partially
+ * indexed row into an unsearchable one. Upserts and deletes are idempotent
+ * (keyed by row id), so re-running the same write converges.
  */
 const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
     const { allowSharedNamespace, namespace, schema, vectors } = options;
@@ -416,8 +422,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
             return;
         }
 
-        // Every index sourced from this table, by name — used both to fan out
-        // deletes and to compensate after a partial upsert failure.
+        // Every index sourced from this table, by name — the delete fan-out.
         const allIndexNames = [...inlineIndexes.map((index) => index.name), ...standaloneIndexes.map(([name]) => name)];
 
         if (event.op === "delete") {
@@ -467,6 +472,10 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
         // the fan-out with the same cap as `upsertMany`: a table with many
         // vector indexes (or a bulk apply reusing this hook) must not spawn an
         // unbounded number of concurrent embedder + Vectorize subrequests.
+        //
+        // A partial failure is left partial — see the docblock: this runs after
+        // the row has committed, so purging the indexes that did apply would
+        // trade a partially indexed row for an unsearchable one.
         const operations: (() => Promise<void>)[] = [
             ...inlineToClear.map((entry) => async (): Promise<void> => {
                 await vectors.deleteByIds(entry.index.name, [event.id]);
@@ -499,17 +508,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
             }),
         ];
 
-        try {
-            await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
-        } catch (error) {
-            // Best-effort compensation: a partial fan-out leaves some indexes
-            // mutated. Purge this row's id from every affected index so the
-            // diverged state is at least empty rather than stale-but-present,
-            // then surface the original failure to the write path.
-            await Promise.allSettled(allIndexNames.map((name) => vectors.deleteByIds(name, [event.id])));
-
-            throw error;
-        }
+        await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
     };
 };
 

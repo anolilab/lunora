@@ -523,6 +523,23 @@ interface FrameworkDetection {
 }
 ```
 
+### `GENERATED_CLASS_MODULES` (const)
+
+```ts
+const GENERATED_CLASS_MODULES: readonly [
+    "agents",
+    "containers",
+    "scheduler",
+    "workflows"
+];
+```
+
+### `GeneratedClassModule` (type)
+
+```ts
+type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
+
 ### `HookLogger` (interface)
 
 ```ts
@@ -653,12 +670,6 @@ const LUNA_NAME = "Luna";
 const LUNA_SIGNOFF = "Safe travels, voyager.";
 ```
 
-### `LUNORA_CONFIG_FILE` (const)
-
-```ts
-const LUNORA_CONFIG_FILE = "lunora.json";
-```
-
 ### `LUNORA_EVENT_SOURCE` (const)
 
 ```ts
@@ -733,15 +744,6 @@ interface LunoraFormattedLine {
 
 ```ts
 type LunoraLineLevel = "error" | "info" | "warn";
-```
-
-### `LunoraProjectConfig` (interface)
-
-```ts
-interface LunoraProjectConfig {
-    remote?: unknown;
-    target?: unknown;
-}
 ```
 
 ### `LunoraReporter` (class)
@@ -897,7 +899,8 @@ interface SchemaIndex {
 
 ```ts
 interface SchemaInfo {
-    hasGlobalTable: boolean;
+    hasD1GlobalTable: boolean;
+    hasHyperdriveGlobalTable: boolean;
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
@@ -1587,7 +1590,7 @@ interface ExportGap {
     className: string;
     exportName: string;
     kind: "agent" | "container" | "workflow";
-    module: "agents" | "containers" | "workflows";
+    module: GeneratedClassModule;
 }
 ```
 
@@ -1805,6 +1808,12 @@ interface TailConsumer {
 }
 ```
 
+### `UNEXPORTED_CLASS_MARKER` (const)
+
+```ts
+const UNEXPORTED_CLASS_MARKER = "does not export it";
+```
+
 ### `WORKERS_CACHE_MIN_DATE` (const)
 
 ```ts
@@ -1894,6 +1903,9 @@ interface WranglerConfig {
         binding?: string;
         id?: string;
     } | null | undefined>;
+    limits?: {
+        cpu_ms?: number;
+    };
     logpush?: boolean;
     main?: string;
     migrations?: ReadonlyArray<{
@@ -1915,6 +1927,7 @@ interface WranglerConfig {
         logs?: {
             enabled?: boolean;
             head_sampling_rate?: number;
+            invocation_logs?: boolean;
         };
     };
     pipelines?: ReadonlyArray<{

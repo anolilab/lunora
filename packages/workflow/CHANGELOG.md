@@ -1,3 +1,59 @@
+## @lunora/workflow [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.54...@lunora/workflow@1.0.0-alpha.55) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/workflow [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.53...@lunora/workflow@1.0.0-alpha.54) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/workflow [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.52...@lunora/workflow@1.0.0-alpha.53) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/workflow [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.51...@lunora/workflow@1.0.0-alpha.52) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.46
+* **@lunora/server:** upgraded to 1.0.0-alpha.122
+
+## @lunora/workflow [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.50...@lunora/workflow@1.0.0-alpha.51) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+
+## @lunora/workflow [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.49...@lunora/workflow@1.0.0-alpha.50) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/workflow [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.48...@lunora/workflow@1.0.0-alpha.49) (2026-09-07)
 
 

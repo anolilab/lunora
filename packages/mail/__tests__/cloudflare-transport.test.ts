@@ -81,7 +81,7 @@ describe("cloudflare transport (default provider)", () => {
     });
 
     it("does not trip the cc/bcc guard on empty cc/bcc arrays", async () => {
-        expect.assertions(1);
+        expect.assertions(3);
 
         sendEmail.mockResolvedValue({ data: { messageId: "cf-3" }, success: true });
         const mailer = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" });
@@ -91,6 +91,14 @@ describe("cloudflare transport (default provider)", () => {
         const result = await mailer.send({ bcc: [], cc: [], subject: "Hi", text: "x", to: "user@x.test" });
 
         expect(result).toStrictEqual({ id: "cf-3" });
+
+        // The real provider tests cc/bcc for PRESENCE, so an empty list must reach
+        // it as `undefined` — an `[]` here is a send the binding never sees. See
+        // `cloudflare-binding.test.ts` for the same path against the real provider.
+        const [options] = sendEmail.mock.calls[0] as [{ bcc?: unknown; cc?: unknown }];
+
+        expect(options.cc).toBeUndefined();
+        expect(options.bcc).toBeUndefined();
     });
 
     it("throws a generic error and logs the provider detail on failure", async () => {

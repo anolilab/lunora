@@ -305,6 +305,12 @@ type ValidatorKind = "any" | "array" | "bigint" | "boolean" | "bytes" | "date" |
 type ValidatorMap = Record<string, Validator>;
 ```
 
+### `acceptsAbsent` (const)
+
+```ts
+const acceptsAbsent: <TNode>(node: TNode, reader: SchemaNodeReader<TNode>) => boolean;
+```
+
 ### `argsToJsonSchema` (const)
 
 ```ts

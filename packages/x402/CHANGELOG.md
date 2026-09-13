@@ -1,3 +1,51 @@
+## @lunora/x402 [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.71...@lunora/x402@1.0.0-alpha.72) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/x402 [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.70...@lunora/x402@1.0.0-alpha.71) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/x402 [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.69...@lunora/x402@1.0.0-alpha.70) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/x402 [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.68...@lunora/x402@1.0.0-alpha.69) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/x402 [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.67...@lunora/x402@1.0.0-alpha.68) (2026-09-12)
+
+## @lunora/x402 [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.66...@lunora/x402@1.0.0-alpha.67) (2026-09-11)
+
+## @lunora/x402 [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.65...@lunora/x402@1.0.0-alpha.66) (2026-09-11)
+
+## @lunora/x402 [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.64...@lunora/x402@1.0.0-alpha.65) (2026-09-10)
+
+## @lunora/x402 [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.63...@lunora/x402@1.0.0-alpha.64) (2026-09-10)
+
+## @lunora/x402 [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.62...@lunora/x402@1.0.0-alpha.63) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.61...@lunora/x402@1.0.0-alpha.62) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.60...@lunora/x402@1.0.0-alpha.61) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.59...@lunora/x402@1.0.0-alpha.60) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.58...@lunora/x402@1.0.0-alpha.59) (2026-09-08)
+
 ## @lunora/x402 [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.57...@lunora/x402@1.0.0-alpha.58) (2026-09-08)
 
 ## @lunora/x402 [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.56...@lunora/x402@1.0.0-alpha.57) (2026-09-07)

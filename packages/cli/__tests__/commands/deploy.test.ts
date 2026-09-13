@@ -8,8 +8,10 @@ import { runCodegen } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DeployCommandResult } from "../../src/commands/deploy/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import type { RecordedSpawn, Spawner } from "../../src/util/spawn";
@@ -182,11 +184,11 @@ describe("lunora deploy", () => {
 
     describe("lunora deploy", () => {
         describe("deploy target", () => {
-            it("rejects an unregistered target declared in lunora.json", async () => {
+            it("rejects an unregistered target declared in lunora.config.ts", async () => {
                 expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+                writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
@@ -196,7 +198,7 @@ describe("lunora deploy", () => {
                 // Deploy used to read only the `--target` flag, so a typo in the
                 // committed config failed `codegen`/`prepare`/`dev` and shipped
                 // fine from here — the one command where the fallback matters.
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toMatch(/unknown deploy target "clouflare"/);
 
                 // And it must abort BEFORE spawning wrangler: the resolution
@@ -204,11 +206,11 @@ describe("lunora deploy", () => {
                 expect(calls).toHaveLength(0);
             });
 
-            it("lets --target override lunora.json", async () => {
+            it("lets --target override lunora.config.ts", async () => {
                 expect.assertions(1);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                writeFileSync(join(workdir, "lunora.json"), `{ "target": "clouflare" }`, "utf8");
+                writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
                 const { spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
@@ -305,7 +307,7 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => false, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.MISSING_DEPENDENCY);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("no Docker-compatible engine");
         });
@@ -427,7 +429,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -456,7 +458,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("build directory");
         });
@@ -479,7 +481,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => true, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join(" ")).toContain("Dockerfile");
         });
@@ -565,7 +567,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, env: "production", logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toBe("wrangler validation failed");
                 // Never reached the wrangler spawn.
                 expect(calls).toHaveLength(0);
@@ -658,6 +660,86 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 expect(errors.join(" ")).toContain("point at localhost");
             });
 
+            it("blocks a localhost var the old name allowlist did not cover", async () => {
+                expect.assertions(3);
+
+                // The gate used to be a list of names (`LUNORA_ORIGIN_URL`, `AUTH_URL`).
+                // Neither of these is on it, and both shipped a localhost default from a
+                // registry item — so the check has to key on the VALUE being loopback,
+                // not on recognising the variable.
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "vars": {
+        "APP_BASE_URL": "http://localhost:5173",
+        "PUBLIC_STORAGE_BASE_URL": "http://127.0.0.1:8787",
+        "SOME_FLAG": "on"
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+                const reported = errors.join(" ");
+
+                expect(calls).toHaveLength(0);
+                expect(reported).toContain("APP_BASE_URL, PUBLIC_STORAGE_BASE_URL");
+                // A non-URL var is not an offender — the check must not flag every string.
+                expect(reported).not.toContain("SOME_FLAG");
+            });
+
+            it("blocks a loopback address outside 127.0.0.1, and only a real one", async () => {
+                expect.assertions(4);
+
+                // The whole 127.0.0.0/8 block is loopback, so a deployed Worker cannot
+                // reach 127.0.0.2 either — the gate keyed on the literal `127.0.0.1` and
+                // let the rest of the range through. `127.example.com` is the other half
+                // of the invariant: a dotted quad is an address, a "127."-prefixed NAME is
+                // a routable host and blocking it would be a false alarm.
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
+    "vars": {
+        "APP_BASE_URL": "http://127.0.0.2:8787",
+        "SHORTHAND_URL": "http://127.1:8787",
+        "NAMED_HOST_URL": "https://127.example.com"
+    }
+}
+`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+                const reported = errors.join(" ");
+
+                expect(calls).toHaveLength(0);
+                expect(reported).toContain("APP_BASE_URL");
+                // `new URL()` canonicalises 127.1 to 127.0.0.1, so the gate sees a quad.
+                expect(reported).toContain("SHORTHAND_URL");
+                expect(reported).not.toContain("NAMED_HOST_URL");
+            });
+
             it("does not block on a localhost origin the deployed environment overrides", async () => {
                 expect.assertions(1);
 
@@ -721,7 +803,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(errors.join("\n")).toContain("SchedulerDO");
             });
 
@@ -736,7 +818,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
                 const result = await runDeployCommand({ cwd: workdir, env: "canary", logger, secretLister: noRemoteSecrets, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(errors.some((line) => line.includes("names no environment declared"))).toBe(true);
             });
@@ -804,7 +886,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect(written).toContain('"DB"');
 
             // But deploy is blocked on the placeholder — wrangler is never spawned
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("placeholder database_id") || line.includes("wrangler d1 create"))).toBe(true);
         });
@@ -851,7 +933,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
         });
@@ -879,7 +961,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("placeholder database_id"))).toBe(true);
             expect(errors.some((line) => line.includes("wrangler d1 create"))).toBe(true);
@@ -912,7 +994,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             // The validator's own report, not a stack trace out of the gate.
             expect(errors.join(" ")).not.toContain("Cannot read properties");
@@ -1060,7 +1142,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.descriptor).toBeUndefined();
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("--migrate-yes"))).toBe(true);
@@ -1084,7 +1166,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.descriptor).toBeUndefined();
             expect(calls).toHaveLength(0);
             expect(errors.some((line) => line.includes("--migrate-url"))).toBe(true);
@@ -1175,24 +1257,26 @@ export const backfillNames = defineMigration({
         });
 
         describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", async () => {
-                expect.assertions(4);
+            it("hands back the structured result the envelope is built from", async () => {
+                expect.assertions(5);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
                 const { spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
+                let result: DeployCommandResult | undefined;
 
                 const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                    result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; descriptor: { args: string[] } | null; validation: { problems: unknown[] } };
-
-                expect(parsed.code).toBe(0);
-                expect(parsed).toHaveProperty("validation");
-                expect(parsed.validation.problems).toEqual([]);
-                expect(parsed.descriptor?.args).toContain("deploy");
+                // `defineHandler` writes the document; deploy itself writes nothing,
+                // which is what keeps the two from interleaving.
+                expect(stdout).toBe("");
+                expect(result?.code).toBe(0);
+                expect(result).toHaveProperty("validation");
+                expect(result?.validation.problems).toEqual([]);
+                expect(result?.descriptor?.args).toContain("deploy");
             });
 
             it("captures the spawned wrangler's stdout SILENTLY so it can't corrupt the JSON document", async () => {
@@ -1208,16 +1292,19 @@ export const backfillNames = defineMigration({
                 const { calls, spawner } = deployingSpawner();
                 const { logger } = silentLogger();
 
+                let result: DeployCommandResult | undefined;
+
                 const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                    result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
                 expect(calls[0]?.descriptor.captureStdoutSilently).toBe(true);
                 expect(calls[0]?.descriptor.captureStdout).toBe(false);
 
-                // Exactly one JSON document, with no wrangler text mixed in.
-                expect(stdout).not.toContain("Total Upload");
-                expect(JSON.parse(stdout)).toHaveProperty("deployment");
+                // Wrangler's own text never reaches stdout, so the document
+                // `defineHandler` writes there is the only thing on it.
+                expect(stdout).toBe("");
+                expect(result).toHaveProperty("deployment");
 
                 // Pretty mode tees, so the user still watches live progress.
                 const pretty = deployingSpawner();
@@ -1267,24 +1354,25 @@ export const backfillNames = defineMigration({
                 expect(prettyHookCall?.descriptor.stdoutToStderr).toBe(false);
             });
 
-            it("serializes the error into the JSON document when validation fails", async () => {
-                expect.assertions(2);
+            it("carries the failure reason for the envelope when validation fails", async () => {
+                expect.assertions(3);
 
                 // No wrangler.jsonc → validation failure, deploy never spawns.
                 const { spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
+                let result: DeployCommandResult | undefined;
 
                 const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                    result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; error?: string };
-
-                expect(parsed.code).toBe(1);
-                expect(parsed.error).toBeDefined();
+                // The document is `defineHandler`'s; deploy itself writes nothing.
+                expect(stdout).toBe("");
+                expect(result?.code).toBe(EXIT_CODE.USAGE);
+                expect(result?.error).toBeDefined();
             });
 
-            it("reports the deployed URL in the document, so an automation never has to read it with its eyes", async () => {
+            it("reports the deployed URL, so an automation never has to read it with its eyes", async () => {
                 expect.assertions(5);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -1292,19 +1380,13 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger } = silentLogger();
 
-                const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, env: undefined, secretLister: noRemoteSecrets, format: "json", logger, spawner });
-                });
+                const result = await runDeployCommand({ cwd: workdir, env: undefined, secretLister: noRemoteSecrets, format: "json", logger, spawner });
 
-                const parsed = JSON.parse(stdout) as {
-                    deployment?: { deployedAt: string; dryRun: boolean; preview: boolean; url?: string; workerName?: string };
-                };
-
-                expect(parsed.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
-                expect(parsed.deployment?.workerName).toBe("lunora-app");
-                expect(parsed.deployment?.dryRun).toBe(false);
-                expect(parsed.deployment?.preview).toBe(false);
-                expect(Number.isNaN(Date.parse(parsed.deployment?.deployedAt ?? ""))).toBe(false);
+                expect(result.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
+                expect(result.deployment?.workerName).toBe("lunora-app");
+                expect(result.deployment?.dryRun).toBe(false);
+                expect(result.deployment?.preview).toBe(false);
+                expect(Number.isNaN(Date.parse(result.deployment?.deployedAt ?? ""))).toBe(false);
             });
 
             it("--preview --format json reports the preview URL", async () => {
@@ -1315,14 +1397,10 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner("Worker Version ID: abc\n  https://preview-abc-lunora-app.acme.workers.dev\n");
                 const { logger } = silentLogger();
 
-                const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, preview: true, spawner });
-                });
+                const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, preview: true, spawner });
 
-                const parsed = JSON.parse(stdout) as { deployment?: { preview: boolean; url?: string } };
-
-                expect(parsed.deployment?.url).toBe("https://preview-abc-lunora-app.acme.workers.dev");
-                expect(parsed.deployment?.preview).toBe(true);
+                expect(result.deployment?.url).toBe("https://preview-abc-lunora-app.acme.workers.dev");
+                expect(result.deployment?.preview).toBe(true);
                 // A preview never becomes the checkout's recorded target.
                 expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
             });
@@ -1335,36 +1413,12 @@ export const backfillNames = defineMigration({
                 const { calls, spawner } = deployingSpawner();
                 const { logger } = silentLogger();
 
-                const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, dryRun: true, secretLister: noRemoteSecrets, format: "json", logger, spawner });
-                });
+                const result = await runDeployCommand({ cwd: workdir, dryRun: true, secretLister: noRemoteSecrets, format: "json", logger, spawner });
 
-                const parsed = JSON.parse(stdout) as { deployment?: { dryRun: boolean; url?: string } };
-
-                expect(parsed.deployment?.dryRun).toBe(true);
-                expect(parsed.deployment?.url).toBeUndefined();
+                expect(result.deployment?.dryRun).toBe(true);
+                expect(result.deployment?.url).toBeUndefined();
                 // Nothing to read → wrangler's stdout is not captured at all.
                 expect(calls[0]?.descriptor.captureStdoutSilently).toBe(false);
-            });
-
-            it("rejects an unknown --format the same way logs does", async () => {
-                expect.assertions(5);
-
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-                const { calls, spawner } = createRecordingSpawner();
-                const { errors, logger } = silentLogger();
-
-                const stdout = await captureStdout(async () => {
-                    const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "yaml", logger, spawner });
-
-                    expect(result.code).toBe(1);
-                    expect(result.error).toBeDefined();
-                });
-
-                expect(stdout).toBe("");
-                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
-                expect(calls).toHaveLength(0);
             });
         });
 
@@ -1443,7 +1497,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
                 expect(result.healthCheck?.error).toContain("returned HTTP 503");
                 // The deploy succeeded and the probe did not — different facts.
                 expect(errors.join("\n")).toContain("the deploy succeeded, but the new version did not answer");
@@ -1492,7 +1546,7 @@ export const backfillNames = defineMigration({
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
                 expect(healthFetch).not.toHaveBeenCalled();
                 expect(errors.join("\n")).toContain("no URL to probe could be resolved");
             });
@@ -1780,7 +1834,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 // Never reached the wrangler deploy spawn — a failed secret push must
                 // not fall through to shipping a worker still missing that secret.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
@@ -1844,7 +1898,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 // Never reached the wrangler deploy spawn.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
@@ -1867,7 +1921,7 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
             });
         });
@@ -1911,7 +1965,7 @@ export const backfillNames = defineMigration({
 
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, strictAdvisories: true });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(result.error).toContain("ERROR-level");
                 expect(errors.some((line) => line.includes("index_references_unknown_field"))).toBe(true);
@@ -1968,7 +2022,7 @@ export const backfillNames = defineMigration({
                     strictAdvisories: false,
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls).toHaveLength(0);
                 expect(result.error).toContain("ctx.ai");
                 expect(errors.some((line) => line.includes("platform_unsupported_feature"))).toBe(true);

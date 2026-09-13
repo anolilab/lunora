@@ -80,7 +80,7 @@ const maxSeq = (messages: ReadonlyArray<{ seq: number }>): number => {
  * persists only the user row (+1). Those non-(+2) turns are retired by the PRIMARY
  * seq-based content match below (which sees the user row land at a greater `seq`),
  * never by this count-based fallback. The fully robust fix is a server-echoed
- * correlation id on each persisted user row (deferred — see plan 188).
+ * correlation id on each persisted user row (deferred; no plan filed).
  *
  * KNOWN LIMITATION (inherent to a client-only heuristic): on an ownerless /
  * `instanceId`-less thread a FOREIGN writer that advances `seq` by >= 2 between this

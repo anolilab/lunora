@@ -83,7 +83,7 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `useSubscription`     | `useSubscription`     | Raw subscription `ShallowRef` — unbounded live stream.                            |
 | `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error`.         |
 | `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                   |
-| `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user` refs plus `setToken`.                      |
+| `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user`/`status` refs plus `setToken`.             |
 | `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.          |
 | `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.       |
 | `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.        |

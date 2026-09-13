@@ -185,11 +185,12 @@ the object (logged with its key) rather than failing a mutation that already
 committed. `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against
 that bucket.
 
-The pairing holds for a **top-level mutation**. Queue a delete inside a mutation
-an action called through `ctx.runMutation` and the flush waits until the action
-returns — so an action that throws afterwards leaves the row deleted (it
-committed on its own) and the object in place, with nothing logged. See
-[@lunora/storage](/docs/packages/storage) for the full treatment.
+The pairing holds through composition too: a mutation an action calls through
+`ctx.runMutation` opens its own transaction, so its queued deletes are flushed
+when **that mutation** commits and dropped when it rolls back — even where the
+action swallows the failure and returns normally. See
+[@lunora/storage](/docs/packages/storage) for the full treatment, including the
+one case that can still orphan an object.
 
 ## See also
 

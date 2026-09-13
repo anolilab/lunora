@@ -6,8 +6,9 @@ import type { EvalItemResult, EvalResult } from "@lunora/testing";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import { discoverEvalFiles, EVAL_FILE_SUFFIX } from "./discover-eval-files";
 import type { EvalOptions } from "./index";
 import type { EvalModule } from "./types";
@@ -58,7 +59,7 @@ interface EvalCommandOptions {
     dir?: string;
 
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 
     logger: Logger;
 
@@ -102,6 +103,11 @@ interface EvalCommandResult {
  * `result.items` the in-process {@link EvalRunOutcome} carries for callers
  * that already hold a reference to the full `EvalResult`.
  */
+/** The `--format json` payload: one flat outcome per discovered eval. */
+interface EvalData {
+    evals: EvalJsonOutcome[];
+}
+
 interface EvalJsonOutcome {
     average?: number;
     error?: string;
@@ -125,26 +131,20 @@ const toJsonOutcome = (outcome: EvalRunOutcome): EvalJsonOutcome => {
     };
 };
 
-/** Flatten a whole {@link EvalCommandResult} for `--format json` printing (see {@link toJsonOutcome}). */
-const toJsonResult = (result: EvalCommandResult): { code: number; error?: string; evals: EvalJsonOutcome[] } => {
-    return {
-        code: result.code,
-        error: result.error,
-        evals: result.evals.map((outcome) => toJsonOutcome(outcome)),
-    };
+/** Flatten a whole {@link EvalCommandResult} into the `--format json` payload (see {@link toJsonOutcome}). */
+const toJsonResult = (result: EvalCommandResult): EvalData => {
+    return { evals: result.evals.map((outcome) => toJsonOutcome(outcome)) };
 };
 
-/** Log `message` as the run's single top-level error, build the aborted {@link EvalCommandResult}, and print it as JSON when requested. */
-const abortWithTopLevelError = (logger: Logger, format: string | undefined, message: string): EvalCommandResult => {
+/**
+ * Log `message` as the run's single top-level error and build the aborted
+ * {@link EvalCommandResult}. `code` is the caller's: a rejected `--threshold` is
+ * a usage error, while the Node-floor `.ts` gap is the machine's.
+ */
+const abortWithTopLevelError = (logger: Logger, message: string, code: number): EvalCommandResult => {
     logger.error(message);
 
-    const result: EvalCommandResult = { code: 1, error: message, evals: [] };
-
-    if (isJsonFormat(format)) {
-        printJson(toJsonResult(result));
-    }
-
-    return result;
+    return { code, error: message, evals: [] };
 };
 
 /**
@@ -309,15 +309,7 @@ const renderEvalTable = (outcomes: EvalRunOutcome[]): string[] => {
  */
 const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const logger = loggerForFormat(options.format, options.logger);
-
-    const formatError = validateOutputFormat("eval", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, error: formatError, evals: [] };
-    }
+    const { logger } = options;
 
     // Cerebro parses `--threshold` with `type: Number`, so a non-numeric value
     // (`--threshold abc`) silently becomes NaN instead of erroring at the CLI
@@ -326,7 +318,7 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
     // `average >= NaN` comparison false, reporting every eval as FAIL with no
     // stated cause.
     if (options.threshold !== undefined && !isValidThreshold(options.threshold)) {
-        return abortWithTopLevelError(logger, options.format, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`);
+        return abortWithTopLevelError(logger, `eval: --threshold must be a number in [0, 1] — received "${String(options.threshold)}"`, EXIT_CODE.USAGE);
     }
 
     const directoryOption = options.dir ?? DEFAULT_EVAL_DIR;
@@ -342,13 +334,15 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
             throw error;
         }
 
-        return abortWithTopLevelError(logger, options.format, NODE_FLOOR_MESSAGE);
+        // Left generic: the Node build cannot execute `.ts` at all, which is
+        // neither the invocation nor a missing tool this command shells out to.
+        return abortWithTopLevelError(logger, NODE_FLOOR_MESSAGE, 1);
     }
 
     if (options.threshold !== undefined && outcomes.length === 0) {
         const message = `eval: --threshold ${String(options.threshold)} was set but 0 eval files were discovered under "${directoryOption}" — nothing was gated`;
 
-        return abortWithTopLevelError(logger, options.format, message);
+        return abortWithTopLevelError(logger, message, EXIT_CODE.USAGE);
     }
 
     for (const line of renderEvalTable(outcomes)) {
@@ -364,27 +358,21 @@ const runEvalCommand = async (options: EvalCommandOptions): Promise<EvalCommandR
         logger.error(`eval: ${String(failed.length)}/${String(outcomes.length)} eval(s) failed`);
     }
 
-    const result = { code, evals: outcomes };
-
-    if (isJsonFormat(options.format)) {
-        printJson(toJsonResult(result));
-    }
-
-    return result;
+    return { code, evals: outcomes };
 };
 
 /** `lunora eval` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<EvalOptions> = defineHandler<EvalOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<EvalOptions> = defineHandler<EvalOptions, EvalData>(async ({ cwd, format, logger, options }) => {
     const result = await runEvalCommand({
         cwd,
         dir: options.dir,
-        format: options.format,
+        format,
         logger,
         threshold: options.threshold,
     });
 
-    return { code: result.code };
+    return { code: result.code, data: toJsonResult(result), error: result.error };
 });
 
 export { execute, runEvalCommand };
-export type { EvalCommandOptions, EvalCommandResult, EvalRunOutcome };
+export type { EvalCommandOptions, EvalCommandResult, EvalData, EvalRunOutcome };

@@ -129,6 +129,80 @@ const unknownColumnDiagnostics = (masked: string, schema: SqlSchema, targets: Ma
 };
 
 /**
+ * An UNQUALIFIED identifier, quoted or bare — `status` or `"status"`. Excludes
+ * anything preceded by a `.` or followed by one (that is a qualifier or a
+ * qualified column, handled by {@link unknownColumnDiagnostics}) and anything
+ * followed by `(` (a function call, so `count(*)` is not read as a column).
+ */
+const UNQUALIFIED_IDENTIFIER = /(?<![\w$."])(?:"([a-z_][\w$]*)"|([a-z_][\w$]*))(?![.(])/giu;
+
+/** A name bound by `AS` — `… AS status`, `… AS "status"` — anywhere in the statement. */
+const ALIAS_BINDING = /\bas\s+"?([a-z_][\w$]*)"?/giu;
+
+/**
+ * Flag a `__doc__` FIELD written as though it were a column.
+ *
+ * A shard table physically has `id`, `_creationTime` and a `__doc__` JSON blob;
+ * the model's fields live inside that blob. Writing `SELECT status FROM posts`
+ * is therefore always wrong, and how wrong depends on the runtime: SQLite raises
+ * `no such column: status`, but workerd's build resolves a bare `"status"` that
+ * names nothing to the STRING LITERAL `'status'` instead — so the quoted
+ * spelling returns a column of the word "status", once per row, with no error
+ * anywhere. A silent wrong answer is worth a diagnostic even at the cost of one
+ * more rule in a deliberately conservative linter.
+ *
+ * Narrow enough to stay conservative. It fires only when the name is a known doc
+ * field of a table this statement reads, is NOT a real column of any of them,
+ * and is not bound as an alias anywhere in the statement — which is what keeps
+ * `SELECT json_extract(…) AS status FROM posts ORDER BY status` quiet. Tables,
+ * CTEs and qualified references are left to the rules above.
+ */
+const documentFieldAsColumnDiagnostics = (masked: string, schema: SqlSchema, targets: Map<string, string>, ctes: Set<string>): SqlDiagnostic[] => {
+    const scope = [...new Set(targets.values())];
+    const fields = new Map<string, string>();
+    const columns = new Set<string>();
+
+    for (const table of scope) {
+        for (const column of schema.columns[table] ?? []) {
+            columns.add(column.toLowerCase());
+        }
+
+        for (const field of schema.docFields?.[table] ?? []) {
+            fields.set(field.toLowerCase(), field);
+        }
+    }
+
+    if (fields.size === 0) {
+        return [];
+    }
+
+    const aliases = new Set([...masked.matchAll(ALIAS_BINDING)].map((match) => (match[1] ?? "").toLowerCase()));
+    const diagnostics: SqlDiagnostic[] = [];
+
+    for (const match of masked.matchAll(UNQUALIFIED_IDENTIFIER)) {
+        const quoted = match[1];
+        const name = quoted ?? match[2] ?? "";
+        const lower = name.toLowerCase();
+        const field = fields.get(lower);
+
+        if (field === undefined || columns.has(lower) || aliases.has(lower) || ctes.has(lower) || targets.has(lower)) {
+            continue;
+        }
+
+        diagnostics.push({
+            length: name.length,
+            message: `\`${field}\` is a \`__doc__\` field, not a column — use \`json_extract(__doc__, '$.${field}')\``,
+            // The capture is the bare name; a quoted form's opening `"` precedes it.
+            offset: match.index + (quoted === undefined ? 0 : 1),
+            severity: "error",
+            source: "schema",
+        });
+    }
+
+    return diagnostics;
+};
+
+/**
  * Lint a draft against the read-only gate and the known schema. Returns an empty
  * list for an empty draft — a blank editor is the resting state, not a mistake.
  *
@@ -172,7 +246,11 @@ const lintDraft = (draft: string, schema: SqlSchema): SqlDiagnostic[] => {
         const { ctes, masked, targets } = sqlContextOf(statement.sql, schema.tables);
 
         diagnostics.push(
-            ...[...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)].map((diagnostic) => {
+            ...[
+                ...unknownTableDiagnostics(masked, known, ctes),
+                ...unknownColumnDiagnostics(masked, schema, targets),
+                ...documentFieldAsColumnDiagnostics(masked, schema, targets, ctes),
+            ].map((diagnostic) => {
                 return {
                     ...diagnostic,
                     offset: diagnostic.offset === undefined ? offset : offset + diagnostic.offset,

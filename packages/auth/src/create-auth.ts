@@ -366,6 +366,10 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
  *
  * (Lunora can't set this for you — `ctx.waitUntil` is per-request, but
  * `createAuth` runs once at worker setup.)
+ *
+ * `databaseHooks` never receives a Lunora `MutationCtx` — the hook runs inside
+ * better-auth's own write path. A side effect on an app table is therefore a
+ * separate write and has to be idempotent; see `concepts/authentication`.
  */
 export type LunoraAuthOptions = BetterAuthOptions;
 

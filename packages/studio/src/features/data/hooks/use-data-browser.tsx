@@ -57,13 +57,23 @@ const facetValueText = (value: unknown): string => {
 
 /**
  * Hydrate the filter bar from URL/saved-query {@link FilterClause}s. The inverse
- * of `toFilterClauses`: the bar's value is always a string (it re-coerces numbers
- * on the wire), so every clause value is stringified back. Objects can't appear
- * on a real clause value, but are JSON-encoded defensively.
+ * of `toFilterClauses`: the bar's value is always a string, so every clause value
+ * is stringified back for display. Objects can't appear on a real clause value,
+ * but are JSON-encoded defensively.
+ *
+ * The clause's own value is pinned as the row's `literal` so the round-trip is
+ * exact — a shared link's `zip eq "12345"` must not come back as the number
+ * `12345` just because its display text parses as one. Editing the row clears
+ * the pin (see `EditableFilter.literal`).
  */
 const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter[] =>
     clauses.map((clause) => {
-        return { column: clause.column, operator: clause.operator, value: clause.value === undefined ? "" : facetValueText(clause.value) };
+        return {
+            column: clause.column,
+            ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
+            operator: clause.operator,
+            value: clause.value === undefined ? "" : facetValueText(clause.value),
+        };
     });
 
 /** Translate a single-sort `orderBy` into the TanStack sorting state the grid renders. */
@@ -263,6 +273,15 @@ interface DataBrowserModel {
     /** Toggle a column into / out of the facet sidebar (fetches its summary when turned on). */
     toggleFacet: (column: string) => void;
     total: number;
+
+    /**
+     * Whether {@link DataBrowserModel.total} is the COUNT the server returned, or
+     * still the first-load lower bound derived from the loaded page. A destructive
+     * confirmation must not quote the lower bound — the page is 50 rows and the
+     * delete is the whole predicate — so the buttons drop the number until this
+     * is `true`.
+     */
+    totalKnown: boolean;
     viewMode: "json" | "table";
     writeError: null | string;
     /** Outcome line for the last completed bulk op — how many rows it actually wrote. */
@@ -775,12 +794,14 @@ const useDataBrowser = ({
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
     // the view to those rows. Reuses the same `EditableFilter` machinery as the
-    // filter bar (its value is a string until coerced on the wire). Replaces any
+    // filter bar, but pins the facet's OWN value as the row's literal: the text
+    // is only what the box displays, and re-deriving a value from it is what let
+    // a facet's count disagree with the rows the click returned. Replaces any
     // existing clause for the same column so repeated clicks don't stack.
     const facetFilter = (column: string, value: unknown): void => {
-        const text = facetValueText(value);
+        const row: EditableFilter = { column, literal: [value], operator: "eq", value: facetValueText(value) };
 
-        setFilters((current) => [...current.filter((clause) => clause.column !== column), { column, operator: "eq", value: text }]);
+        setFilters((current) => [...current.filter((clause) => clause.column !== column), row]);
         setOffset(0);
     };
 
@@ -1093,7 +1114,9 @@ const useDataBrowser = ({
     // `offset + rows shown` — so a page with rows never briefly reads "0 of 0".
     // The count resolves alongside the page on first load and stays cached across
     // paging, so this fallback is a brief first-load transient only.
-    const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
+    const countTotal = countQuery.data?.total;
+    const totalKnown = countTotal !== undefined;
+    const total = countTotal ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
 
     // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
@@ -1102,7 +1125,11 @@ const useDataBrowser = ({
     // DROPPED there, so counting raw `filters.length` offered "Delete N matching"
     // over the whole table and then sent `filters: []`, which the server refuses.
     const hasPredicate = search !== "" || toFilterClauses(filters).length > 0;
-    const hasNext = page !== null && offset + page.rows.length < total;
+    // With the COUNT still pending, `total` is exactly `offset + rows.length`, so
+    // comparing against it always says "no next page" and freezes the pager on
+    // page one. A full page is the only next-page evidence available until the
+    // real count lands.
+    const hasNext = page !== null && (totalKnown ? offset + page.rows.length < total : page.rows.length === pageSize);
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
@@ -1310,6 +1337,7 @@ const useDataBrowser = ({
         tablesError,
         toggleFacet,
         total,
+        totalKnown,
         viewMode,
         writeError,
         writeNotice,

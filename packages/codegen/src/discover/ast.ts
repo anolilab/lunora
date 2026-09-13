@@ -335,11 +335,15 @@ const isDatabaseAccessor = (receiver: Node): boolean =>
 
 /**
  * List reads whose options object the `ctx.db` read feeders inspect. Only
- * `findMany` / `findFirst` / `findFirstOrThrow` take an options object — the
- * by-id `get` is id-only and the fluent `query(...)` reader carries no options
- * object, so both are excluded.
+ * `findMany` / `findFirst` / `findFirstOrThrow` / `findUnique` take an options
+ * object — the by-id `get` is id-only and the fluent `query(...)` reader carries
+ * no options object, so both are excluded.
+ *
+ * A read method missing from this set is INVISIBLE to every feeder that reads
+ * through `readTargetOf` — the soft-delete and relation-load analyses — so adding
+ * one to the facade means adding it here in the same change.
  */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
+const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique"]);
 
 /**
  * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the

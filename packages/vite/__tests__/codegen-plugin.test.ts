@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCodegenProject, findTsconfig } from "@lunora/codegen";
+import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
 import { runPostCodegenHook } from "@lunora/config";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -156,6 +156,26 @@ describe("codegen-plugin", () => {
             expect(dataModel).toContain("export interface Doc_users");
         });
 
+        it("configResolved generates, so output exists before any other plugin's configureServer", () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            // Vite runs every `configureServer` — the Cloudflare plugin's included —
+            // before the first `buildStart`, and that plugin reads the worker entry
+            // there. `virtual:lunora/worker` imports `_generated/app.ts`, so output
+            // that only lands in `buildStart` is an unresolvable specifier for the
+            // whole window in between (`_generated/` is gitignored, so CI is always
+            // cold). Nothing else in the plugin container may observe a cold
+            // `_generated/`.
+            expect(existsSync(join(workdir, "lunora", "_generated", "api.ts"))).toBe(true);
+        });
+
         it("serve: LUNORA_CODEGEN=0 writes nothing and registers no codegen watcher", () => {
             expect.assertions(4);
 
@@ -167,8 +187,10 @@ describe("codegen-plugin", () => {
             const plugin = codegenPlugin(makeOptions(workdir));
 
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
             (plugin.buildStart as (this: unknown) => void).call(undefined);
 
+            // Both hooks generate now, so both have to honour the dev switch.
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
 
             // No watcher registration: gating the RUN would still build or refresh
@@ -948,7 +970,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
     });
 
     describe("config-drift auto-restart (configureServer)", () => {
-        it("registers a config-drift watcher for wrangler + lunora.json", () => {
+        it("registers a config-drift watcher for wrangler + every lunora.config candidate", () => {
             expect.assertions(2);
 
             writeFixture(workdir);
@@ -959,11 +981,15 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             wireServer(plugin, server);
 
-            // The plugin added the config files (both wrangler names + lunora.json)
-            // to the watcher and registered a second `change` listener for them.
+            // The plugin added the config files (both wrangler names + every
+            // `lunora.config.*` candidate) to the watcher and registered a second
+            // `change` listener for them. Every candidate, because CREATING the
+            // config mid-session has to be picked up.
             const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
 
-            expect(added).toEqual(expect.arrayContaining([join(workdir, "wrangler.jsonc"), join(workdir, "lunora.json")]));
+            // Against the exported list, not two hand-picked members: adding an
+            // extension must not be able to leave it unwatched.
+            expect(added).toEqual(expect.arrayContaining([join(workdir, "wrangler.jsonc"), ...PROJECT_CONFIG_FILENAMES.map((name) => join(workdir, name))]));
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
@@ -1066,12 +1092,12 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).toHaveBeenCalledTimes(1);
         });
 
-        it("lunora.json drift restarts (the cloudflare plugin does not watch it)", async () => {
+        it("lunora.config.ts drift restarts (the cloudflare plugin does not watch it)", async () => {
             expect.assertions(2);
 
             writeFixture(workdir);
-            // No lunora.json initially → baseline records it absent.
-            const lunoraConfigPath = join(workdir, "lunora.json");
+            // No lunora.config.ts initially → baseline records it absent.
+            const lunoraConfigPath = join(workdir, "lunora.config.ts");
 
             const plugin = codegenPlugin(makeOptions(workdir));
             const { restart, server } = makeStubServer();
@@ -1087,7 +1113,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).not.toHaveBeenCalled();
 
             // …but writing a real remote preference is binding-relevant drift.
-            writeFileSync(lunoraConfigPath, '{ "remote": true }\n', "utf8");
+            writeFileSync(lunoraConfigPath, "export default { remote: true };\n", "utf8");
             onConfigChange(lunoraConfigPath);
 
             expect(restart).toHaveBeenCalledTimes(1);

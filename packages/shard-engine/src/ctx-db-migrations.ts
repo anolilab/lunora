@@ -33,6 +33,7 @@ import { migrateCommitSeq } from "./ctx-db-commit-seq";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateRelayShapes } from "./ctx-db-relay-shapes";
+import { migrateScheduleOutbox } from "./ctx-db-schedule-outbox";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runDrizzle } from "./do-exec";
@@ -69,6 +70,39 @@ import { recordSchemaVersion } from "./schema-history";
  * the user-declared index in line with them.
  */
 const INDEX_SORT_KEYS = dsql`_creationTime, id`;
+
+/**
+ * Refuse to build a UNIQUE index over rows that already violate it.
+ *
+ * `CREATE UNIQUE INDEX` raises a bare `UNIQUE constraint failed: index '<name>'`
+ * on duplicates, and it raises it from inside the cold-start migration —
+ * `ensureMigrated()` leaves `migrated` false, so every later dispatch re-runs
+ * the pass and re-throws. The shard never opens, and the de-dup
+ * `defineMigration` that would clear it cannot run either, because
+ * `runShardDataMigration` calls `ensureMigrated()` first. Probing first turns a
+ * wedged shard into a diagnostic that names the table and the remedy.
+ *
+ * Restricted to rows where EVERY indexed column is non-NULL, because the two
+ * sides disagree about NULL: `GROUP BY` treats NULLs as equal, a SQLite UNIQUE
+ * index treats them as distinct. `json_extract` yields NULL for an unset
+ * optional field, so without the filter two rows that simply never set an
+ * optional `.unique()` column read as a duplicate and a `CREATE UNIQUE INDEX`
+ * that would have SUCCEEDED is refused.
+ */
+const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, refs: ReadonlyArray<SQL>, situation: string): void => {
+    const nonNull = dsql.join(
+        refs.map((reference) => dsql`${reference} IS NOT NULL`),
+        dsql` AND `,
+    );
+    const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
+
+    if (duplicates.toArray().length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `unique index "${indexName}" on "${tableName}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
+        );
+    }
+};
 
 /**
  * Drop `indexName` when the index SQLite already holds was built from a
@@ -134,31 +168,35 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
     // already carry the same catalog-parsing logic, and a guard on one
     // destructive DDL path but not the other is worse than the duplication.
     if (unique) {
-        // Restricted to rows where EVERY indexed column is non-NULL, because the
-        // two sides disagree about NULL: `GROUP BY` treats NULLs as equal, a
-        // SQLite UNIQUE index treats them as distinct. `json_extract` yields NULL
-        // for an unset optional field, so without the filter two rows that simply
-        // never set an optional `.unique()` column read as a duplicate, this
-        // throws, and a `CREATE UNIQUE INDEX` that would have SUCCEEDED is
-        // refused — inside the shard migration, so the shard never opens again.
-        const nonNull = dsql.join(
-            refs.map((reference) => dsql`${reference} IS NOT NULL`),
-            dsql` AND `,
-        );
-        const duplicates = runDrizzle(
-            sql,
-            dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`,
-        );
-
-        if (duplicates.toArray().length > 0) {
-            throw new LunoraError(
-                "INTERNAL",
-                `unique index "${indexName}" on "${tableName}" cannot be re-created with its new column list: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
-            );
-        }
+        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, refs, "cannot be re-created with its new column list");
     }
 
     runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(indexName)}`);
+};
+
+/**
+ * Whether SQLite already holds an index under this name on this table.
+ *
+ * The duplicate probe below is a `GROUP BY` over the whole table, so it only
+ * runs when the `CREATE ... IF NOT EXISTS` that follows would really build
+ * something — an index already in place has been enforcing the constraint all
+ * along, and re-scanning for it on every cold start would be pure cost.
+ */
+const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolean =>
+    runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} AND tbl_name = ${tableName} LIMIT 1`).toArray().length > 0;
+
+/**
+ * Create one index, probing for duplicates first when it is UNIQUE and not yet
+ * provisioned — see {@link assertNoDuplicatesUnder}. Both producers of a UNIQUE
+ * index (a declared `unique: true` index, a `.unique()` column) go through here,
+ * so neither can reach `CREATE UNIQUE INDEX` unguarded.
+ */
+const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
+    if (unique && !indexIsHeld(sql, indexName, tableName)) {
+        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, refs, "cannot be created");
+    }
+
+    runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
 };
 
 /**
@@ -178,7 +216,7 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
         dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
-        runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
+        createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
     }
 
     // `.unique()` columns synthesize a UNIQUE expression index so SQLite
@@ -188,9 +226,9 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
             continue;
         }
 
-        const indexName = `${tableName}_unique_${field}`;
+        const reference = jsonPathSql(field);
 
-        runDrizzle(sql, createIndexSql(indexName, tableName, jsonPathSql(field), true));
+        createIndexGuarded(sql, `${tableName}_unique_${field}`, tableName, reference, true, [reference]);
     }
 };
 
@@ -446,6 +484,14 @@ export const runShardMigrations = (
     // Always present: the mutation-replay dedup table is independent of CDC and
     // costs nothing until the first id-bearing mutation writes to it.
     migrateIdempotency(sql);
+
+    // Always present, and always NEXT TO the dedup table: the outbox is what makes
+    // that table honest. A dedup row says "this mutation succeeded"; without the
+    // outbox it can say that about a mutation whose deferred `ctx.scheduler` job
+    // never reached the SchedulerDO. A `ctx.scheduler` call needs no schema change
+    // to appear, so the table must exist before the first mutation makes one. Empty
+    // (and free) on a shard that schedules nothing.
+    migrateScheduleOutbox(sql);
 
     // Always present: the durable per-socket baseline for `.global()`-shape diff
     // pokes. Independent of CDC (global shapes are polled, not poke-live) and

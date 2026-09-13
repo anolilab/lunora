@@ -549,7 +549,7 @@ describe("createVectorSyncHook", () => {
         expect(vectors.upserts).toEqual([]);
     });
 
-    it("compensates with deletes across every affected index then re-throws the original error", async () => {
+    it("leaves a partially applied fan-out in place and re-throws the original error", async () => {
         expect.assertions(3);
 
         const original = new Error("embedder boom");
@@ -572,66 +572,40 @@ describe("createVectorSyncHook", () => {
 
         await expect(hook({ doc: { body: "hi" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
 
-        // Compensation purges this row's id from every index sourced from the table.
-        expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
-        expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
+        // The hook runs AFTER the row committed, so the row survives this failure.
+        // Purging the index that DID apply would trade a partially indexed row for
+        // an unsearchable one; re-running the idempotent write is the recovery.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
-    it("runs compensation only after every in-flight upsert has settled (no stale-vector race)", async () => {
-        // Regression for the compensating-delete race: when one index's upsert
-        // fails, a slow SIBLING upsert must fully settle before compensation
-        // fires. Otherwise the sibling's write can land AFTER its index's
-        // compensating delete, leaving a searchable vector for a rolled-back row.
+    it("leaves the prior vector alone when an UPDATE fan-out fails partway", async () => {
         expect.assertions(3);
 
-        const events: string[] = [];
-        const original = new Error("docs-b upsert boom");
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
 
-        const vectors: VectorSearchLike = {
-            deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName) => {
-                events.push(`delete:${indexName}`);
-            }),
-            getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
-            query: vi.fn<VectorSearchLike["query"]>(async () => {
-                return { count: 0, matches: [] };
-            }),
-            upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName) => {
-                if (indexName === "docs-b") {
-                    throw original;
-                }
+        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
 
-                // A slow sibling: it must settle before compensation runs.
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
-                events.push(`upsert-done:${indexName}`);
-            }),
-            upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async () => {}),
-        };
+            vectors.upserts.push([indexName, input]);
+        });
 
         const schema: SchemaLike = {
-            tables: {
-                docs: {
-                    vectorIndexes: [
-                        { embed, field: "a", name: "docs-a" },
-                        { embed, field: "b", name: "docs-b" },
-                    ],
-                },
-            },
-            vectorIndexes: {},
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
         };
         const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
 
-        await expect(hook({ doc: { a: "aa", b: "bb" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
+        await expect(hook({ doc: { body: "edited" }, id: "d1", op: "update", table: "docs" })).rejects.toBe(original);
 
-        const slowDone = events.indexOf("upsert-done:docs-a");
-        const firstDelete = events.findIndex((event) => event.startsWith("delete:"));
-
-        // The slow sibling upsert was observed as completed (not still pending
-        // when the hook threw) AND completed strictly before any compensating
-        // delete fired — so no write can survive its own compensation.
-        expect(slowDone).toBeGreaterThanOrEqual(0);
-        expect(slowDone).toBeLessThan(firstDelete);
+        // The edited row is committed. `docs-body` holds the new vector and
+        // `docs-fulltext` still holds the prior one — stale in one index, correct
+        // in the other. Deleting either would make the live row unsearchable there.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
     it("warns once when a metadata index is synced without a namespace", async () => {

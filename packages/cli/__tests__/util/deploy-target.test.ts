@@ -18,7 +18,7 @@ describe("resolveRunnableTargetOrError", () => {
     let workdir: string;
 
     const writeTarget = (target: string): void => {
-        writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target }), "utf8");
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default ${JSON.stringify({ target })};\n`, "utf8");
     };
 
     beforeEach(() => {
@@ -70,7 +70,7 @@ describe("resolveRunnableTargetOrError", () => {
         expect(resolveRunnableTargetOrError(workdir).error).toMatch(/unknown deploy target "aws"/);
     });
 
-    it("honours an explicit --target over lunora.json", () => {
+    it("honours an explicit --target over lunora.config.ts", () => {
         expect.assertions(1);
 
         writeTarget("cloudflare");

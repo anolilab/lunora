@@ -1,31 +1,17 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyCommandData } from "../../src/commands/verify/handler";
+import { execute, runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyOptions } from "../../src/commands/verify/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
-
-/** Run async `body` while capturing everything written to `process.stdout`. */
-const captureStdout = async (body: () => Promise<void>): Promise<string> => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        await body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -149,7 +135,7 @@ describe("lunora verify", () => {
             // it. Dropping the one output that depends on that target let an app
             // whose nightly cron can never fire on this host verify clean.
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
@@ -172,7 +158,7 @@ describe("lunora verify", () => {
             // with two unsupported features had one of them silently dropped from
             // the machine-readable output that gates the pipeline.
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
@@ -190,6 +176,68 @@ describe("lunora verify", () => {
             expect(result.code).toBe(1);
             expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
             expect(result.errors.some((error) => error.toLowerCase().includes("ai"))).toBe(true);
+        });
+
+        describe("--env", () => {
+            /**
+             * `durable_objects` is non-inheritable, so an env-scoped binding is
+             * invisible from the top level. `verify` read the top level only —
+             * the cheap PR-CI gate validated a different surface from the
+             * `deploy --env` that would ship, and an env-only binding naming an
+             * unexported class was never cross-checked at all.
+             */
+            const ENV_SCOPED_WRANGLER = `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "y" }],
+    "env": {
+        "production": {
+            "durable_objects": {
+                "bindings": [
+                    { "name": "SHARD", "class_name": "ShardDO" },
+                    { "name": "SCHEDULER", "class_name": "SchedulerDO" }
+                ]
+            }
+        }
+    }
+}
+`;
+
+            const seedEnvScopedProject = (): void => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), ENV_SCOPED_WRANGLER, "utf8");
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+            };
+
+            it("validates the env.<name> view, catching a binding the top level never declares", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, env: "production", logger, typecheck: false });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("leaves the top-level view green — the env binding is not part of it", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+                expect(result.code).toBe(0);
+                expect(result.errors).toEqual([]);
+            });
         });
 
         it("returns 1 and surfaces wrangler errors", async () => {
@@ -429,54 +477,67 @@ describe("lunora verify", () => {
         });
 
         describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", async () => {
+            it("emits a single parseable JSON envelope with the structured result", async () => {
                 expect.assertions(5);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-                const { logger } = recordingLogger();
 
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; errors: unknown[]; warnings: unknown[]; wranglerPath: unknown };
-
-                expect(parsed.code).toBe(0);
-                expect(Array.isArray(parsed.errors)).toBe(true);
-                expect(Array.isArray(parsed.warnings)).toBe(true);
-                expect(parsed).toHaveProperty("wranglerPath");
-                expect(parsed.errors).toEqual([]);
+                expect(code).toBe(0);
+                expect(document?.code).toBe(0);
+                expect(Array.isArray(document?.data?.warnings)).toBe(true);
+                expect(document?.data).toHaveProperty("wranglerPath");
+                expect(document?.data?.errors).toEqual([]);
             });
 
-            it("serializes errors into the JSON document on failure", async () => {
-                expect.assertions(2);
+            /**
+             * A failure has to answer in the same shape a success does. Before the
+             * envelope, a failed command put NOTHING on stdout under `--format
+             * json` — the exit code said "it broke" and the reason existed only as
+             * English prose on stderr, which is exactly what the flag exists to
+             * avoid.
+             */
+            it("emits the envelope on failure too, with the reason in it", async () => {
+                expect.assertions(4);
 
                 // No wrangler.jsonc → validation error.
-                const { logger } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; errors: string[] };
-
-                expect(parsed.code).toBe(1);
-                expect(parsed.errors.length).toBeGreaterThan(0);
+                expect(code).toBe(1);
+                expect(document?.code).toBe(1);
+                expect(document?.data?.errors.length).toBeGreaterThan(0);
+                expect(document?.error).toBeDefined();
             });
 
-            it("rejects an unknown --format the same way logs does", async () => {
-                expect.assertions(3);
+            /**
+             * `runVerifyCommand` returns for an unresolved `--target` before it
+             * reaches its reporting tail, so this is the path a serialization
+             * written inside the command body would have skipped.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
 
-                const { logger, recorded } = recordingLogger();
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-                const stdout = await captureStdout(async () => {
-                    const result = await runVerifyCommand({ cwd: workdir, format: "yaml", logger, typecheck: false });
-
-                    expect(result.error).toBeDefined();
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope", typecheck: false },
                 });
 
-                expect(stdout).toBe("");
-                expect(recorded.errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.errors.join(" ")).toContain("unknown deploy target");
             });
         });
     });

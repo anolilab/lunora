@@ -45,6 +45,7 @@ describe("runBin", () => {
         expect(connect).toHaveBeenCalledWith({
             agents: [],
             allowAgents: false,
+            allowDataReads: false,
             allowObservability: false,
             allowWrites: false,
             token: "admin-token",
@@ -92,6 +93,7 @@ describe("runBin", () => {
         expect(connect).toHaveBeenCalledWith({
             agents: [],
             allowAgents: false,
+            allowDataReads: false,
             allowObservability: false,
             allowWrites: true,
             token: "admin-token",
@@ -116,6 +118,7 @@ describe("runBin", () => {
         expect(connect).toHaveBeenCalledWith({
             agents: [],
             allowAgents: false,
+            allowDataReads: false,
             allowObservability: true,
             allowWrites: false,
             token: "admin-token",
@@ -147,6 +150,7 @@ describe("runBin", () => {
                 { description: "Billing help", name: "billing" },
             ],
             allowAgents: true,
+            allowDataReads: false,
             allowObservability: false,
             allowWrites: false,
             token: "admin-token",

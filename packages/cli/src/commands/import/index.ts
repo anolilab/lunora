@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const importCommand: Command = {
     argument: { description: "Source NDJSON file, or a `npx convex export --path <dir>` directory", name: "file", type: String },
     description: "Bulk-insert rows from an NDJSON file — or a Convex export directory — via the worker's admin endpoint",
@@ -25,6 +27,7 @@ const importCommand: Command = {
             type: String,
         },
         { description: "Wrap each bare doc as `{table:<name>,doc:...}`", name: "table", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         {
             description: "Also migrate file storage — Convex `_storage` blobs, or a Supabase/Firebase bucket (verified upload)",
@@ -53,6 +56,7 @@ export { importCommand };
 
 export type ImportOptions = CreateOptions<{
     "batch-size": number | undefined;
+    format: string | undefined;
     from: string | undefined;
     prod: boolean | undefined;
     scan: boolean | undefined;

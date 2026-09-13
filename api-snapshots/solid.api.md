@@ -603,6 +603,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: Accessor<AuthStatus>;
     token: Accessor<string | null>;
     user: Accessor<User | null>;
 }

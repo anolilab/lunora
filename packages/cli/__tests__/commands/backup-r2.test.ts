@@ -18,6 +18,7 @@ import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
@@ -460,7 +461,7 @@ describe("lunora backup --bucket", () => {
         });
 
         // Unverifiable must not read as verified.
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(logs.some((line) => line.includes("carries no recorded checksum"))).toBe(true);
     });
 
@@ -484,7 +485,7 @@ describe("lunora backup --bucket", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(logs.some((line) => line.includes("--prefix applies only to an R2 destination"))).toBe(true);
             expect(logs.some((line) => line.includes("no backups found"))).toBe(false);
         });
@@ -505,7 +506,7 @@ describe("lunora backup --bucket", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(logs.some((line) => line.includes("--dir applies only to a local destination"))).toBe(true);
         });
     });
