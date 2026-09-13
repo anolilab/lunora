@@ -55,6 +55,48 @@ The client (`@lunora/client`) uses exponential backoff with jitter and
 **resumes by bookmark**: it sends the last delta sequence it acknowledged so
 the server can replay anything that was missed during the disconnect.
 
+## When WebSockets are blocked
+
+One-shot calls (`query`, `mutation`, `action`) ride HTTP POST, not the socket. So
+a corporate proxy or captive portal that refuses the `Upgrade` handshake does not
+break them — it breaks **reactivity**, and only that: every live query stops
+moving while the app otherwise works.
+
+After three consecutive connect attempts that never reach `open`, the client stops
+waiting on the socket for freshness and re-runs each subscribed query over the
+batch-RPC endpoint on an interval, applying the results through the same path a
+server `data` frame takes. `connectionStatus()` reports `"polling"`, and the
+moment a socket does open, polling stops and the normal resubscribe takes over.
+
+```ts
+const client = new LunoraClient({
+    url,
+    // Defaults shown. `intervalMs: 0` disables the fallback entirely.
+    pollingFallback: { afterFailedAttempts: 3, intervalMs: 5_000 },
+});
+```
+
+It is a **degradation, not a second transport**, and the gap matters:
+
+- Only plain live queries are polled. [Shapes](/docs/concepts/local-first)
+  (`@lunora/db` collections), durable streams and whispers are socket-only
+  surfaces with no request/response form to re-run — they stay dark until a
+  socket opens.
+- Freshness is bounded by the interval, not by the write. There is no CDC cursor
+  on this path: every tick is a full snapshot, so a poll costs what the query
+  costs, repeatedly.
+- It does not make an app offline-capable. A poll is an HTTP request; when nothing
+  can reach the origin, the [offline queue](/docs/concepts/offline-first) is what
+  carries you.
+
+Treat `"polling"` in a status indicator as _live, but slower and partial_ — which
+is why it is its own status rather than folded into `"connected"`.
+
+The trigger is deliberately "never opened", not "disconnected". A socket that
+opens and drops is a flaky link, and the reconnect backoff is the right answer to
+that; falling back to polling there would trade a self-healing channel for a
+permanently worse one.
+
 ## Durable streams
 
 A `.stream()` procedure is ephemeral by default: the producer belongs to the
