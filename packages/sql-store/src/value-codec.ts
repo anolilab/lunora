@@ -43,6 +43,27 @@ const WIRE_PREFIX = WIRE_TAG;
  */
 const NUMBER_TAG = "#";
 
+/**
+ * Second marker character, after {@link WIRE_PREFIX}, on a STRING stored in an
+ * untyped column that itself begins with {@link WIRE_PREFIX}.
+ *
+ * Without it the marker is ambiguous, because it is a bare prefix on the stored
+ * text and a string is stored verbatim: the user string `"$lunora.wire$hello"`
+ * was read back as `"hello"`, and `"$lunora.wire$42"` as the NUMBER `42` — a
+ * string field returning a number. Doubling the sentinel is the escape, so the
+ * encoded form of a colliding string is `$lunora.wire$$` + the string itself,
+ * and {@link decodeJsonColumn} strips exactly one marker back off. That makes it
+ * self-inverse: a string that begins with the ESCAPED form escapes again and
+ * round-trips too.
+ *
+ * `"$"` is picked the way {@link NUMBER_TAG} was — for where it sorts. It is
+ * above `NUMBER_TAG` and below every first character `JSON.stringify` can emit,
+ * so an escaped string keeps the position it already held relative to the marked
+ * numbers and booleans in the same column, and it can never be confused with
+ * either (JSON output never starts with `$`).
+ */
+const STRING_TAG = "$";
+
 /** The full marker a stored untyped number carries. Exported for the storage migration, which probes for the rows still missing it. */
 const UNTYPED_NUMBER_PREFIX: string = WIRE_TAG + NUMBER_TAG;
 
@@ -81,9 +102,20 @@ const decodeJsonColumn = (raw: string, parse: (text: string) => unknown): unknow
         return decodeFloat64SqlKey(payload.slice(NUMBER_TAG.length)) ?? raw;
     }
 
+    // A user string that itself begins with the marker, escaped on write by
+    // doubling it. Stripping exactly one marker is the inverse, so a string
+    // beginning with the escaped form round-trips as well.
+    if (payload.startsWith(STRING_TAG)) {
+        return payload.slice(STRING_TAG.length);
+    }
+
     // A number written BEFORE the key encoding is marked JSON (`$lunora.wire$42`)
     // and still decodes here, which is what lets a table read back correctly
     // between the format change and the rewrite pass that converts it.
+    //
+    // A row written before the escape existed reaches here too, and is returned
+    // exactly as it was before: the escape changes what new writes STORE, never
+    // how an already-stored row reads.
     return decodeWire(parse(payload));
 };
 
@@ -114,11 +146,16 @@ const UNTYPED_KINDS = new Set(["any", "from", "union"]);
  * `bigintSqlKey` exists for, in the one column kind that had been left on the
  * lossy form.
  *
- * Strings, bigints and composites are NOT handled here and keep the storage form
- * they already had: the WHERE path binds through {@link sqliteEncode} WITHOUT a
- * kind, so changing them would stop every existing equality filter from
- * matching — and a string stored verbatim is what `contains`/`startsWith` run
- * their substring test against.
+ * A STRING is stored verbatim — that is what `contains`/`startsWith` run their
+ * substring test against — with one exception: a string that itself begins with
+ * {@link WIRE_PREFIX} is indistinguishable on disk from a marked value, and was
+ * decoded as the payload it resembles rather than returned as itself. It goes
+ * out with the marker doubled ({@link STRING_TAG}), which the decode strips back
+ * off. Only these strings change form, so every other substring predicate and
+ * equality filter sees the bytes it always saw.
+ *
+ * Bigints and composites are NOT handled here and keep the storage form they
+ * already had.
  */
 const untypedStorageForm = (value: unknown, kind: string | undefined): string | undefined => {
     if (kind === undefined || !UNTYPED_KINDS.has(kind)) {
@@ -127,6 +164,10 @@ const untypedStorageForm = (value: unknown, kind: string | undefined): string | 
 
     if (typeof value === "number") {
         return UNTYPED_NUMBER_PREFIX + float64SqlKey(value);
+    }
+
+    if (typeof value === "string") {
+        return value.startsWith(WIRE_PREFIX) ? WIRE_PREFIX + STRING_TAG + value : undefined;
     }
 
     return typeof value === "boolean" ? WIRE_PREFIX + JSON.stringify(value) : undefined;
@@ -209,13 +250,15 @@ export const tryJsonParse = (raw: string): unknown => {
  * format from a second copy of the rules is how a migration corrupts the data
  * it was written to repair.
  *
- * Deliberately narrow. A marked BOOLEAN (`true`/`false`) keeps its form — the
- * key change moved only the numbers, and `NUMBER_TAG` was picked so the
- * number/boolean order is the one it already was. A marked COMPOSITE parses to
- * an array or object, not a number. A number an earlier build could not
- * represent at all (`NaN`/`±Infinity` stringified to `null`) parses to `null`,
- * so it is left alone and still reads back as the `null` it already read back
- * as — the pass cannot invent a value the row never held.
+ * Deliberately narrow. A marked STRING carries {@link STRING_TAG}, which is not
+ * JSON, so it parses back as itself and is left alone. A marked BOOLEAN
+ * (`true`/`false`) keeps its form — the key change moved only the numbers, and
+ * `NUMBER_TAG` was picked so the number/boolean order is the one it already was.
+ * A marked COMPOSITE parses to an array or object, not a number. A number an
+ * earlier build could not represent at all (`NaN`/`±Infinity` stringified to
+ * `null`) parses to `null`, so it is left alone and still reads back as the
+ * `null` it already read back as — the pass cannot invent a value the row never
+ * held.
  */
 export const rewriteLegacyUntypedNumber = (raw: unknown): string | undefined => {
     if (typeof raw !== "string" || !raw.startsWith(WIRE_PREFIX) || raw.startsWith(UNTYPED_NUMBER_PREFIX)) {
