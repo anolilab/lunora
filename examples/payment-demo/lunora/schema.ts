@@ -1,5 +1,6 @@
-import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
+
+import { ratelimit } from "./ratelimit/schema.js";
 
 /**
  * payment-demo schema.

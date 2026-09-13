@@ -29,18 +29,15 @@ let authReady: null | Promise<ReturnType<typeof buildAuth>> = null;
  * a permanent error.
  */
 const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
-    if (!authReady) {
-        authReady = (async (): Promise<ReturnType<typeof buildAuth>> => {
-            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
+    authReady ??= (async (): Promise<ReturnType<typeof buildAuth>> => {
+        await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
 
-            return buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
-        })().catch((error: unknown) => {
-            authReady = null;
+        return buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
+    })().catch((error: unknown) => {
+        authReady = null;
 
-            throw error;
-        });
-    }
-
+        throw error;
+    });
     return authReady;
 };
 
@@ -76,34 +73,31 @@ export default {
             return authResponse;
         }
 
-        if (!worker) {
-            worker = createWorker({
-                openApiSpec,
-                resolveIdentity: async (identityRequest) => {
-                    // HTTP RPC carries `Authorization: Bearer <token>`; the WS
-                    // upgrade can't set headers, so the client sends the same token
-                    // as `?token=`. Fold it into the header the `bearer` plugin reads
-                    // — but ONLY on the upgrade. Accepting a query-string credential
-                    // on ordinary HTTP requests too would make every URL a bearer
-                    // token: session tokens would land in access logs, `Referer`
-                    // headers and shared links, and the request would be
-                    // authenticated by a value a cross-origin link can set.
-                    const headers = new Headers(identityRequest.headers);
-                    const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
-                    const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
+        worker ??= createWorker({
+            openApiSpec,
+            resolveIdentity: async (identityRequest) => {
+                // HTTP RPC carries `Authorization: Bearer <token>`; the WS
+                // upgrade can't set headers, so the client sends the same token
+                // as `?token=`. Fold it into the header the `bearer` plugin reads
+                // — but ONLY on the upgrade. Accepting a query-string credential
+                // on ordinary HTTP requests too would make every URL a bearer
+                // token: session tokens would land in access logs, `Referer`
+                // headers and shared links, and the request would be
+                // authenticated by a value a cross-origin link can set.
+                const headers = new Headers(identityRequest.headers);
+                const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+                const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
 
-                    if (wsToken !== null && !headers.has("authorization")) {
-                        headers.set("authorization", `Bearer ${wsToken}`);
-                    }
+                if (wsToken !== null && !headers.has("authorization")) {
+                    headers.set("authorization", `Bearer ${wsToken}`);
+                }
 
-                    const session = await auth.api.getSession({ headers });
+                const session = await auth.api.getSession({ headers });
 
-                    return session?.user?.id ? { userId: session.user.id } : null;
-                },
-                shardDO: env.SHARD,
-            });
-        }
-
+                return session?.user.id ? { userId: session.user.id } : null;
+            },
+            shardDO: env.SHARD,
+        });
         return worker.fetch(request, env, ctx);
     },
 };

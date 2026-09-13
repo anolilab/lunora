@@ -1,27 +1,59 @@
 import { useConnectionStatus, useLunora, useMutation, useQuery } from "@lunora/react";
 import type { MutationSettledEvent } from "lunorash/client";
-import type { FormEvent, ReactElement } from "react";
+import type { ReactElement, SyntheticEvent } from "react";
 import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_, Id } from "../../lunora/_generated/dataModel.js";
+
+const tagStyle = { background: "#eee", borderRadius: 4, marginLeft: 6, padding: "1px 5px" } as const;
+
+const rowStyle = { border: "1px solid", borderRadius: 6, fontSize: 13, marginBottom: 6, padding: "6px 8px" } as const;
+
+const Panel = ({ children, hint, title }: { children: React.ReactNode; hint: string; title: string }): ReactElement => (
+    <div>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
+        <div style={{ color: "#777", fontSize: 12, marginBottom: 8 }}>{hint}</div>
+        {children}
+    </div>
+);
+
+const Empty = ({ children }: { children: React.ReactNode }): ReactElement => <div style={{ color: "#999", fontSize: 13 }}>{children}</div>;
+
+const StatusPill = ({ status }: { status: string }): ReactElement => {
+    const connected = status === "connected";
+
+    return (
+        <span
+            style={{
+                background: connected ? "#e6f6ea" : "#fdeaea",
+                borderRadius: 999,
+                color: connected ? "#0a7d33" : "#b00020",
+                fontSize: 13,
+                padding: "2px 10px",
+            }}
+        >
+            {status}
+        </span>
+    );
+};
 
 /** One row in the settled-events log fed by `client.onMutationSettled`. */
 interface SettledLog {
     code?: string;
     fn: string;
     hadAwaiter: boolean;
-    key: number;
+    key: string;
     status: "committed" | "rejected";
 }
 
 /** One row in the live-error log fed by the awaited `mutate()` Promise. */
 interface LiveError {
-    key: number;
+    key: string;
     message: string;
 }
 
-const shortFn = (functionPath: string): string => functionPath.split(":").at(-1) ?? functionPath;
+const shortFunction = (functionPath: string): string => functionPath.split(":").at(-1) ?? functionPath;
 
 // A stable author for this browser session — irrelevant to the demo, but `send`
 // requires one.
@@ -45,7 +77,7 @@ export const App = (): ReactElement => {
     const client = useLunora();
     const status = useConnectionStatus();
 
-    const messages = useQuery(api.messages.list, {}) as Doc<"messages">[] | undefined;
+    const messages = useQuery(api.messages.list, {}) as Document_<"messages">[] | undefined;
     const { mutate: send, pending } = useMutation(api.messages.send);
 
     const [draft, setDraft] = useState("");
@@ -54,24 +86,26 @@ export const App = (): ReactElement => {
 
     // The durable channel. Subscribe once; the unsubscribe is returned so React
     // (and StrictMode's double-invoke) cleans it up.
-    useEffect(() => {
-        return client.onMutationSettled((event: MutationSettledEvent) => {
-            setSettled((previous) =>
-                [
-                    {
-                        code: event.code,
-                        fn: shortFn(event.functionPath),
-                        hadAwaiter: event.hadAwaiter,
-                        key: Date.now() + Math.random(),
-                        status: event.status,
-                    },
-                    ...previous,
-                ].slice(0, 8),
-            );
-        });
-    }, [client]);
+    useEffect(
+        () =>
+            client.onMutationSettled((event: MutationSettledEvent) => {
+                setSettled((previous) =>
+                    [
+                        {
+                            code: event.code,
+                            fn: shortFunction(event.functionPath),
+                            hadAwaiter: event.hadAwaiter,
+                            key: crypto.randomUUID(),
+                            status: event.status,
+                        },
+                        ...previous,
+                    ].slice(0, 8),
+                );
+            }),
+        [client],
+    );
 
-    const submit = async (formEvent: FormEvent<HTMLFormElement>): Promise<void> => {
+    const submit = async (formEvent: SyntheticEvent<HTMLFormElement>): Promise<void> => {
         formEvent.preventDefault();
 
         const text = draft.trim();
@@ -90,9 +124,9 @@ export const App = (): ReactElement => {
                     // `messages.send` and `messages.list` are different
                     // functions, so nothing can infer the link for you.
                     optimisticUpdate: (store) => {
-                        const list = (store.getQuery(api.messages.list, {}) as Doc<"messages">[] | undefined) ?? [];
-                        const provisional: Doc<"messages"> = {
-                            _id: `optimistic_${Date.now()}` as Id<"messages">,
+                        const list = (store.getQuery(api.messages.list, {}) as Document_<"messages">[] | undefined) ?? [];
+                        const provisional: Document_<"messages"> = {
+                            _id: `optimistic_${String(Date.now())}` as Id<"messages">,
                             _creationTime: Date.now(),
                             author,
                             text,
@@ -108,7 +142,7 @@ export const App = (): ReactElement => {
             // (For a write queued offline, this rejects only on reconnect-flush —
             // and not at all if you reloaded first, which is why channel 2 exists.)
             setLiveErrors((previous) =>
-                [{ key: Date.now() + Math.random(), message: error instanceof Error ? error.message : String(error) }, ...previous].slice(0, 8),
+                [{ key: crypto.randomUUID(), message: error instanceof Error ? error.message : String(error) }, ...previous].slice(0, 8),
             );
         }
     };
@@ -124,7 +158,12 @@ export const App = (): ReactElement => {
                 back. Watch how that rejection is surfaced below. See the README for the offline / reload repro.
             </p>
 
-            <form onSubmit={submit} style={{ display: "flex", gap: 8, margin: "16px 0" }}>
+            <form
+                onSubmit={(event) => {
+                    void submit(event);
+                }}
+                style={{ display: "flex", gap: 8, margin: "16px 0" }}
+            >
                 <input
                     aria-label="Message"
                     onChange={(event) => {
@@ -140,7 +179,7 @@ export const App = (): ReactElement => {
             </form>
 
             <section style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr 1fr", marginBottom: 24 }}>
-                <Panel title="onMutationSettled (durable channel)" hint="Fires for every queued write — incl. post-reload replays with hadAwaiter: false.">
+                <Panel hint="Fires for every queued write — incl. post-reload replays with hadAwaiter: false." title="onMutationSettled (durable channel)">
                     {settled.length === 0 ? (
                         <Empty>No queued writes have settled yet.</Empty>
                     ) : (
@@ -154,7 +193,7 @@ export const App = (): ReactElement => {
                     )}
                 </Panel>
 
-                <Panel title="awaited mutate() Promise (live channel)" hint="Only fires while a caller is awaiting — i.e. an online rejection.">
+                <Panel hint="Only fires while a caller is awaiting — i.e. an online rejection." title="awaited mutate() Promise (live channel)">
                     {liveErrors.length === 0 ? (
                         <Empty>No live rejections yet.</Empty>
                     ) : (
@@ -179,34 +218,3 @@ export const App = (): ReactElement => {
         </main>
     );
 };
-
-const rowStyle = { border: "1px solid", borderRadius: 6, fontSize: 13, marginBottom: 6, padding: "6px 8px" } as const;
-const tagStyle = { background: "#eee", borderRadius: 4, marginLeft: 6, padding: "1px 5px" } as const;
-
-const StatusPill = ({ status }: { status: string }): ReactElement => {
-    const connected = status === "connected";
-
-    return (
-        <span
-            style={{
-                background: connected ? "#e6f6ea" : "#fdeaea",
-                borderRadius: 999,
-                color: connected ? "#0a7d33" : "#b00020",
-                fontSize: 13,
-                padding: "2px 10px",
-            }}
-        >
-            {status}
-        </span>
-    );
-};
-
-const Panel = ({ children, hint, title }: { children: React.ReactNode; hint: string; title: string }): ReactElement => (
-    <div>
-        <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
-        <div style={{ color: "#777", fontSize: 12, marginBottom: 8 }}>{hint}</div>
-        {children}
-    </div>
-);
-
-const Empty = ({ children }: { children: React.ReactNode }): ReactElement => <div style={{ color: "#999", fontSize: 13 }}>{children}</div>;

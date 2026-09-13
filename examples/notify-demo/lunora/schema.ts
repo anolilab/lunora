@@ -1,5 +1,6 @@
-import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
+
+import { ratelimit } from "./ratelimit/schema.js";
 
 /**
  * notify-demo — the end-to-end `@lunora/notify` push wiring.

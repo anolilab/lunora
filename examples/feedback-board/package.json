@@ -11,7 +11,9 @@
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
     },
     "dependencies": {
         "@lunora/ai": "workspace:*",

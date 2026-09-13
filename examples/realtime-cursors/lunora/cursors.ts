@@ -1,8 +1,8 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * The limiter comes from `lunora/ratelimit/schema.ts`, which owns both named
@@ -18,7 +18,7 @@ import { mutation, query, v } from "./_generated/server.js";
 const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
-interface CursorDoc {
+interface CursorDocument {
     _id: Id<"cursors">;
     color: string;
     lastSeen: number;
@@ -35,7 +35,7 @@ interface CursorDoc {
  * cross-shard fan-out and every connected client subscribes to the same
  * stream of deltas.
  */
-export const listCursors = query.input({ roomId: v.string().max(64) }).query(async ({ args: { roomId }, ctx }): Promise<CursorDoc[]> => {
+export const listCursors = query.input({ roomId: v.string().max(64) }).query(async ({ args: { roomId }, ctx }): Promise<CursorDocument[]> => {
     const rows = await ctx.db
         .query("cursors")
         .withIndex("by_room_session", (q) => q.eq("roomId", roomId))

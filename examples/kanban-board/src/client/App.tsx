@@ -3,9 +3,9 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
+import { Column } from "./Column.js";
 import type { Command } from "./CommandPalette.js";
 import { CommandPalette } from "./CommandPalette.js";
-import { Column } from "./Column.js";
 import type { Status, Task } from "./types.js";
 import { COLUMNS } from "./types.js";
 
@@ -69,8 +69,8 @@ export const App = (): ReactElement => {
     const [light, setLight] = useState(false);
     const [showArchived, setShowArchived] = useState(false);
     const [paletteOpen, setPaletteOpen] = useState(false);
-    const searchRef = useRef<HTMLInputElement>(null);
-    const draggingRef = useRef<Task | null>(null);
+    const searchReference = useRef<HTMLInputElement>(null);
+    const draggingReference = useRef<Task | null>(null);
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent): void => {
@@ -78,21 +78,36 @@ export const App = (): ReactElement => {
                 return;
             }
 
-            if (event.key === "k") {
-                event.preventDefault();
-                setPaletteOpen(true);
-            } else if (event.key === "f") {
-                event.preventDefault();
-                searchRef.current?.focus();
-            } else if (event.key === "a") {
-                event.preventDefault();
-                setShowArchived((previous) => !previous);
+            switch (event.key) {
+                case "a": {
+                    event.preventDefault();
+                    setShowArchived((previous) => !previous);
+
+                    break;
+                }
+                case "f": {
+                    event.preventDefault();
+                    searchReference.current?.focus();
+
+                    break;
+                }
+                case "k": {
+                    event.preventDefault();
+                    setPaletteOpen(true);
+
+                    break;
+                }
+                default: {
+                    break;
+                }
             }
         };
 
         globalThis.addEventListener("keydown", onKeyDown);
 
-        return () => globalThis.removeEventListener("keydown", onKeyDown);
+        return () => {
+            globalThis.removeEventListener("keydown", onKeyDown);
+        };
     }, []);
 
     // No `useMemo`: the React Compiler memoizes this already.
@@ -105,7 +120,7 @@ export const App = (): ReactElement => {
             id: "search",
             run: () => {
                 setPaletteOpen(false);
-                searchRef.current?.focus();
+                searchReference.current?.focus();
             },
             shortcut: "⌘F",
             title: "Search cards",
@@ -138,9 +153,9 @@ export const App = (): ReactElement => {
     const filtering = search.trim().length > 0;
 
     const onDrop = (status: Status, index: number): void => {
-        const card = draggingRef.current;
+        const card = draggingReference.current;
 
-        draggingRef.current = null;
+        draggingReference.current = null;
 
         if (card && (card.status !== status || index !== grouped[status].indexOf(card))) {
             void move({ id: card._id, index, status });
@@ -151,23 +166,45 @@ export const App = (): ReactElement => {
         <div className={light ? "app light" : "app"}>
             <header className="app-header">
                 <input
-                    ref={searchRef}
                     aria-label="Search cards"
                     className="search"
-                    onChange={(event) => setSearch(event.target.value)}
+                    onChange={(event) => {
+                        setSearch(event.target.value);
+                    }}
                     placeholder="Search"
+                    ref={searchReference}
                     type="search"
                     value={search}
                 />
 
                 <div className="header-actions">
-                    <button aria-label="Open command palette" onClick={() => setPaletteOpen(true)} title="⌘K" type="button">
+                    <button
+                        aria-label="Open command palette"
+                        onClick={() => {
+                            setPaletteOpen(true);
+                        }}
+                        title="⌘K"
+                        type="button"
+                    >
                         ⌘K
                     </button>
-                    <button aria-pressed={showArchived} onClick={() => setShowArchived((previous) => !previous)} title="⌘A" type="button">
+                    <button
+                        aria-pressed={showArchived}
+                        onClick={() => {
+                            setShowArchived((previous) => !previous);
+                        }}
+                        title="⌘A"
+                        type="button"
+                    >
                         Archived
                     </button>
-                    <button aria-pressed={light} onClick={() => setLight((previous) => !previous)} type="button">
+                    <button
+                        aria-pressed={light}
+                        onClick={() => {
+                            setLight((previous) => !previous);
+                        }}
+                        type="button"
+                    >
                         {light ? "Dark" : "Light"}
                     </button>
                 </div>
@@ -179,16 +216,22 @@ export const App = (): ReactElement => {
                 <div className="columns">
                     {visibleColumns.map((status, columnIndex) => (
                         <Column
-                            key={status}
                             columnIndex={columnIndex}
                             draggable={!filtering}
-                            onCreate={(column, title) => void create({ status: column, title })}
-                            onDelete={(task) => void remove({ id: task._id })}
+                            key={status}
+                            onCreate={(column, title) => {
+                                void create({ status: column, title });
+                            }}
+                            onDelete={(task) => {
+                                void remove({ id: task._id });
+                            }}
                             onDragStart={(task) => {
-                                draggingRef.current = task;
+                                draggingReference.current = task;
                             }}
                             onDrop={onDrop}
-                            onRename={(task, title) => void rename({ id: task._id, title })}
+                            onRename={(task, title) => {
+                                void rename({ id: task._id, title });
+                            }}
                             status={status}
                             tasks={grouped[status]}
                         />
@@ -196,7 +239,14 @@ export const App = (): ReactElement => {
                 </div>
             )}
 
-            {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
+            {paletteOpen && (
+                <CommandPalette
+                    commands={commands}
+                    onClose={() => {
+                        setPaletteOpen(false);
+                    }}
+                />
+            )}
         </div>
     );
 };

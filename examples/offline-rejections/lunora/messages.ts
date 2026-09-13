@@ -1,9 +1,11 @@
-import { LunoraError } from "lunorash/server";
 import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
+
+const BFAIL_B_RE = /\bfail\b/i;
 
 /**
  * The limiter comes from `lunora/ratelimit/schema.ts`, which owns the named
@@ -18,7 +20,7 @@ import { mutation, query, v } from "./_generated/server.js";
 const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
-interface MessageDoc {
+interface MessageDocument {
     _id: Id<"messages">;
     author: string;
     createdAt: number;
@@ -29,10 +31,10 @@ interface MessageDoc {
  * List messages newest-first. Subscribers receive deltas the moment `send`
  * commits a new row.
  */
-export const list = query.query(async ({ ctx }): Promise<MessageDoc[]> => {
+export const list = query.query(async ({ ctx }): Promise<MessageDocument[]> => {
     const rows = await ctx.db.query("messages").withIndex("by_creation").collect();
 
-    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
+    return rows.toSorted((a, b) => b.createdAt - a.createdAt);
 });
 
 /**
@@ -57,7 +59,7 @@ export const send = mutation
             throw new LunoraError("BAD_REQUEST", "message text cannot be empty");
         }
 
-        if (/\bfail\b/i.test(trimmed)) {
+        if (BFAIL_B_RE.test(trimmed)) {
             throw new LunoraError("CONFLICT", `the server refused to save "${trimmed}"`);
         }
 

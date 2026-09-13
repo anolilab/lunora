@@ -4,6 +4,16 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 
 import { authClient } from "./auth-client";
 
+const styles = StyleSheet.create({
+    button: { alignItems: "center", backgroundColor: "#3b82f6", borderRadius: 8, padding: 14 },
+    buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    container: { gap: 12, justifyContent: "center", padding: 24 },
+    error: { color: "#dc2626", textAlign: "center" },
+    input: { borderColor: "#d1d5db", borderRadius: 8, borderWidth: 1, fontSize: 16, padding: 12 },
+    pressed: { opacity: 0.85 },
+    switch: { color: "#3b82f6", textAlign: "center" },
+    title: { fontSize: 28, fontWeight: "700", marginBottom: 8, textAlign: "center" },
+});
 type Mode = "signin" | "signup";
 
 /**
@@ -30,7 +40,7 @@ const authenticate = async (mode: Mode, credentials: { email: string; name: stri
  * and `authClient.useSession()` in `App.tsx` flips to the chat on the next
  * render — no token to plumb through by hand.
  */
-export function Login(): ReactElement {
+export const Login = (): ReactElement => {
     const [mode, setMode] = useState<Mode>("signin");
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
@@ -66,7 +76,13 @@ export function Login(): ReactElement {
 
             <TextInput onChangeText={setPassword} placeholder="Password (min 8 chars)" secureTextEntry style={styles.input} value={password} />
 
-            <Pressable disabled={pending} onPress={() => void submit()} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+            <Pressable
+                disabled={pending}
+                onPress={() => {
+                    void submit();
+                }}
+                style={({ pressed }) => [styles.button, pressed && styles.pressed]}
+            >
                 {pending ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{mode === "signin" ? "Sign in" : "Sign up"}</Text>}
             </Pressable>
 
@@ -82,15 +98,4 @@ export function Login(): ReactElement {
             {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
     );
-}
-
-const styles = StyleSheet.create({
-    button: { alignItems: "center", backgroundColor: "#3b82f6", borderRadius: 8, padding: 14 },
-    buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    container: { gap: 12, justifyContent: "center", padding: 24 },
-    error: { color: "#dc2626", textAlign: "center" },
-    input: { borderColor: "#d1d5db", borderRadius: 8, borderWidth: 1, fontSize: 16, padding: 12 },
-    pressed: { opacity: 0.85 },
-    switch: { color: "#3b82f6", textAlign: "center" },
-    title: { fontSize: 28, fontWeight: "700", marginBottom: 8, textAlign: "center" },
-});
+};

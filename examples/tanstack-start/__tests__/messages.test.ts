@@ -26,6 +26,7 @@ const nextMillisecond = async (): Promise<void> => {
 };
 
 it("returns the newest message first, which is what the SSR loader renders", async () => {
+    expect.assertions(1);
     // `send` stamps `postedAt: Date.now()` and `by_posted` indexes that alone, so
     // two sends inside one millisecond tie and the order within the tie is
     // unspecified — this test failed roughly one run in four without the gap.
@@ -41,9 +42,12 @@ it("returns the newest message first, which is what the SSR loader renders", asy
 });
 
 it("honours the loader's limit", async () => {
-    for (const body of ["a", "b", "c"]) {
-        await t.mutation(send, { author: "ada", body });
-    }
+    expect.assertions(1);
+    // In parallel: this case only asserts the loader's page SIZE, so the sends
+    // need no ordering between them (the ordering assertion lives in the case
+    // above, which sends sequentially on purpose).
+    await Promise.all(["a", "b", "c"].map(async (body) => t.mutation(send, { author: "ada", body })));
 
-    expect((await t.query(board, { limit: 2 })).messages).toHaveLength(2);
+    const awaited1 = await t.query(board, { limit: 2 });
+    expect(awaited1.messages).toHaveLength(2);
 });

@@ -1,8 +1,8 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * The limiter comes from `lunora/ratelimit/schema.ts`, which owns the named
@@ -18,7 +18,7 @@ import { mutation, query, v } from "./_generated/server.js";
 const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
-interface TodoDoc {
+interface TodoDocument {
     _id: Id<"todos">;
     createdAt: number;
     done: boolean;
@@ -29,10 +29,10 @@ interface TodoDoc {
  * List todos newest-first. Subscribers receive deltas the moment any of
  * `add` / `toggle` / `remove` mutate the table.
  */
-export const list = query.query(async ({ ctx }): Promise<TodoDoc[]> => {
+export const list = query.query(async ({ ctx }): Promise<TodoDocument[]> => {
     const rows = await ctx.db.query("todos").withIndex("by_creation").collect();
 
-    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
+    return rows.toSorted((a, b) => b.createdAt - a.createdAt);
 });
 
 export const add = mutation

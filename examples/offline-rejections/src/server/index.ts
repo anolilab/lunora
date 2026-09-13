@@ -10,7 +10,7 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
 
 /**
  * Minimal Worker entry — pure root-scoped storage, no D1/R2/auth. All the demo
@@ -19,9 +19,7 @@ let worker: ReturnType<typeof createWorker> | null = null;
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!worker) {
-            worker = createWorker({ openApiSpec, shardDO: env.SHARD });
-        }
+        worker ??= createWorker({ openApiSpec, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

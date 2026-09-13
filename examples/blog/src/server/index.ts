@@ -1,17 +1,18 @@
 import type { LunoraAuth } from "@lunora/auth";
-import { lunoraD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
-import type { ExecutionContextLike, Route, ShardNamespaceLike } from "lunorash/runtime";
-import { createWorker } from "lunorash/runtime";
-import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/scheduler";
-import type { R2BucketLike } from "@lunora/storage";
-import { createStorage } from "@lunora/storage";
+import { createAuth, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
 import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
+import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
+import { createScheduler } from "@lunora/scheduler";
+import type { R2BucketLike } from "@lunora/storage";
+import { createStorage } from "@lunora/storage";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
+import { createWorker } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
-import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
+import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
 
@@ -55,12 +56,14 @@ export const ShardDO = createShardDO({
     },
     // Maps the schema's logical index name (`posts_search`) to the Vectorize
     // binding. This is what makes `ctx.vectors` live and auto-syncs writes.
-    vectors: (env) => ({ posts_search: (env as unknown as ShardEnv).POSTS_SEARCH }),
+    vectors: (env) => {
+        return { posts_search: (env as unknown as ShardEnv).POSTS_SEARCH };
+    },
 });
 
-let worker: ReturnType<typeof createWorker> | null = null;
-let auth: LunoraAuth | null = null;
-let authReady: Promise<LunoraAuth> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
+let auth: LunoraAuth | undefined;
+let authReady: Promise<LunoraAuth> | undefined;
 
 /**
  * Compose the full v0.1 add-on stack: better-auth for email/password sign-in
@@ -115,9 +118,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
             const session = await auth.api.getSession({ headers: request.headers });
 
-            return session?.user?.id ? { userId: session.user.id } : null;
+            return session?.user.id ? { userId: session.user.id } : null;
         },
-        routes: {} as Record<string, Route>,
+        routes: {},
         shardDO: env.SHARD,
     });
 

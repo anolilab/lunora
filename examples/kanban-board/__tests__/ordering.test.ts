@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { midpoint } from "../lunora/ordering";
 
+const OUT_OF_ORDER_RE = /out of order/u;
+
 describe("midpoint", () => {
     it("orders an empty board", () => {
+        expect.assertions(1);
         expect(midpoint(null, null)).toBe("n");
     });
 
     it("returns a key strictly between its neighbours", () => {
+        expect.assertions(2);
+
         const first = midpoint(null, null);
         const after = midpoint(first, null);
         const between = midpoint(first, after);
@@ -17,6 +22,8 @@ describe("midpoint", () => {
     });
 
     it("survives repeated insertion into the same gap", () => {
+        expect.hasAssertions();
+
         let low = midpoint(null, null);
         const high = midpoint(low, null);
 
@@ -33,16 +40,19 @@ describe("midpoint", () => {
     });
 
     it("keeps a whole column sorted as it is rebuilt front-to-back", () => {
+        expect.assertions(1);
+
         const keys: string[] = [];
 
         for (let index = 0; index < 50; index += 1) {
             keys.unshift(midpoint(null, keys[0] ?? null));
         }
 
-        expect([...keys].sort((left, right) => (left < right ? -1 : 1))).toStrictEqual(keys);
+        expect(keys.toSorted((left, right) => (left < right ? -1 : 1))).toStrictEqual(keys);
     });
 
     it("rejects neighbours the caller read out of order", () => {
-        expect(() => midpoint("z", "b")).toThrow(/out of order/u);
+        expect.assertions(1);
+        expect(() => midpoint("z", "b")).toThrow(OUT_OF_ORDER_RE);
     });
 });

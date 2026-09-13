@@ -11,6 +11,7 @@
  * lexicographic comparison is positional comparison. `a` is the zero digit and
  * a key therefore never ends in `a` — a trailing zero has no midpoint below it.
  */
+// eslint-disable-next-line no-secrets/no-secrets -- the base-26 digit alphabet, not a credential; every letter appears once so it reads as high entropy.
 const DIGITS = "abcdefghijklmnopqrstuvwxyz";
 const ZERO = "a";
 
@@ -28,7 +29,7 @@ export const midpoint = (before: string | null, after: string | null): string =>
         throw new Error(`midpoint: keys out of order (${a} >= ${b})`);
     }
 
-    if (a.endsWith(ZERO) || (b !== null && b.endsWith(ZERO))) {
+    if (a.endsWith(ZERO) || b?.endsWith(ZERO)) {
         throw new Error(`midpoint: key ends in the zero digit (${a}, ${String(b)})`);
     }
 
@@ -46,11 +47,11 @@ export const midpoint = (before: string | null, after: string | null): string =>
         }
     }
 
-    const digitA = a === "" ? 0 : DIGITS.indexOf(a[0] as string);
-    const digitB = b === null ? DIGITS.length : DIGITS.indexOf(b[0] as string);
+    const digitA = a === "" ? 0 : DIGITS.indexOf(a[0]);
+    const digitB = b === null ? DIGITS.length : DIGITS.indexOf(b[0]);
 
     if (digitB - digitA > 1) {
-        return DIGITS[Math.round((digitA + digitB) / 2)] as string;
+        return DIGITS[Math.round((digitA + digitB) / 2)];
     }
 
     // The leading digits are adjacent, so there is no room at this position.
@@ -59,5 +60,5 @@ export const midpoint = (before: string | null, after: string | null): string =>
         return b.slice(0, 1);
     }
 
-    return (DIGITS[digitA] as string) + midpoint(a.slice(1), null);
+    return DIGITS[digitA] + midpoint(a.slice(1), null);
 };

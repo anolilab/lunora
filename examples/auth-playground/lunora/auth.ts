@@ -1,5 +1,5 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
-import { lunoraD1Adapter, createAuth } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, twoFactor } from "@lunora/auth/plugins";
 
 /** Shown in authenticator apps (2FA issuer) and as the default email "from" name. */
@@ -32,54 +32,62 @@ const APP_NAME = "Lunora Auth Playground";
  * `@lunora/auth/plugins/client` to use `authClient.organization.*` /
  * `authClient.twoFactor.*` and the 2FA sign-in redirect.
  */
-const options = (env: { AUTH_SECRET: string }): LunoraAuthOptions => ({
-    appName: APP_NAME,
-    // `baseURL` is deliberately absent.
-    //
-    // `@lunora/auth` derives its production posture from it: an explicit
-    // `http://…` origin marks the deployment as local, which turns OFF
-    // `useSecureCookies` and downgrades the weak-secret guard from a throw to a
-    // warning. Hard-coding the Vite dev origin here would therefore ship session
-    // cookies without `Secure` over HTTPS and let a sample secret through. Left
-    // unset, better-auth resolves the origin from each request, which is correct
-    // in dev and in production. Pin one via an `AUTH_URL` secret if you must.
-    emailAndPassword: {
-        enabled: true,
-        // Revoke other sessions when a user resets their password so a leaked
-        // session can't outlive the reset.
-        revokeSessionsOnPasswordReset: true,
-        // Dev delivery: log the reset link. Replace with an `@lunora/mail` send
-        // in production.
-        sendResetPassword: async ({ url, user }) => {
-            // eslint-disable-next-line no-console
-            console.log(`[auth] password reset for ${user.email}: ${url}`);
+const options = (env: { AUTH_SECRET: string }): LunoraAuthOptions => {
+    return {
+        appName: APP_NAME,
+        // `baseURL` is deliberately absent.
+        //
+        // `@lunora/auth` derives its production posture from it: an explicit
+        // `http://…` origin marks the deployment as local, which turns OFF
+        // `useSecureCookies` and downgrades the weak-secret guard from a throw to a
+        // warning. Hard-coding the Vite dev origin here would therefore ship session
+        // cookies without `Secure` over HTTPS and let a sample secret through. Left
+        // unset, better-auth resolves the origin from each request, which is correct
+        // in dev and in production. Pin one via an `AUTH_URL` secret if you must.
+        emailAndPassword: {
+            enabled: true,
+            // Revoke other sessions when a user resets their password so a leaked
+            // session can't outlive the reset.
+            revokeSessionsOnPasswordReset: true,
+            // Dev delivery: log the reset link. Replace with an `@lunora/mail` send
+            // in production.
+            sendResetPassword: ({ url, user }) => {
+                console.log(`[auth] password reset for ${user.email}: ${url}`);
+
+                // The contract is async; this dev-only delivery has nothing to await.
+                return Promise.resolve();
+            },
         },
-    },
-    plugins: [
-        organization({
-            allowUserToCreateOrganization: true,
-            // Dev delivery: log the invitation. Replace with an `@lunora/mail`
-            // send (linking to your accept-invite page) in production.
-            sendInvitationEmail: async (data) => {
-                // eslint-disable-next-line no-console
-                console.log(`[auth] org invite to ${data.email} for "${data.organization.name}" (invitation ${data.id})`);
-            },
-        }),
-        admin({ defaultRole: "user" }),
-        twoFactor({
-            issuer: APP_NAME,
-            otpOptions: {
-                // Dev delivery: log the OTP. Replace with an `@lunora/mail` send
-                // in production.
-                sendOTP: async ({ otp, user }) => {
-                    // eslint-disable-next-line no-console
-                    console.log(`[auth] 2FA OTP for ${user.email}: ${otp}`);
+        plugins: [
+            organization({
+                allowUserToCreateOrganization: true,
+                // Dev delivery: log the invitation. Replace with an `@lunora/mail`
+                // send (linking to your accept-invite page) in production.
+                sendInvitationEmail: (data) => {
+                    console.log(`[auth] org invite to ${data.email} for "${data.organization.name}" (invitation ${data.id})`);
+
+                    // The contract is async; this dev-only delivery has nothing to await.
+                    return Promise.resolve();
                 },
-            },
-        }),
-    ],
-    secret: env.AUTH_SECRET,
-});
+            }),
+            admin({ defaultRole: "user" }),
+            twoFactor({
+                issuer: APP_NAME,
+                otpOptions: {
+                    // Dev delivery: log the OTP. Replace with an `@lunora/mail` send
+                    // in production.
+                    sendOTP: ({ otp, user }) => {
+                        console.log(`[auth] 2FA OTP for ${user.email}: ${otp}`);
+
+                        // The contract is async; this dev-only delivery has nothing to await.
+                        return Promise.resolve();
+                    },
+                },
+            }),
+        ],
+        secret: env.AUTH_SECRET,
+    };
+};
 
 /**
  * Runtime auth instance, backed by `@lunora/auth`'s SQL adapter over D1.
