@@ -40,6 +40,22 @@ invitations live in better-auth's D1 tables, which are not Lunora tables and
 cannot be read through `ctx.db`. `internal.saas.syncOrganization` keeps the two
 in step; when they disagree, better-auth wins.
 
+A `.global()` table needs a writer, and nothing infers one — chain it onto
+`defineApp()` beside `.shard(...)`:
+
+```ts
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .global({ d1: (env) => env.DB })
+    // …
+    .build();
+```
+
+`DB` is the binding the `auth` item this one requires already declares. Without
+the chain the shard has no global backend, so every admin list and every slug
+lookup throws `INTERNAL` ("requires a globalDb writer") at runtime — after
+compiling cleanly.
+
 ## The tenant comes from the identity, never from an argument
 
 No function here takes an `organizationId`. They read
