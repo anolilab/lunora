@@ -3624,7 +3624,7 @@ const cdcCanVouchFor: (sql: SqlExec, deps: ReadonlySet<string>) => boolean;
 ### `cdcForkedError` (const)
 
 ```ts
-const cdcForkedError: (cursor: number, sinceSeq: number, epoch: string) => LunoraError;
+const cdcForkedError: (cursor: number, sinceSeq: number, scope: "global" | "shard", epoch?: string) => LunoraError;
 ```
 
 ### `cdcSeqLeavingRows` (const)

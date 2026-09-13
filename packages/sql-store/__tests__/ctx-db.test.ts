@@ -1301,6 +1301,98 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         expect(next?.cursor).toBeGreaterThan(head);
     });
 
+    /**
+     * Rewind the changelog the way a D1 Time Travel restore does — the rows AND
+     * the `sqlite_sequence` bookkeeping that holds the high-watermark, because a
+     * restore reverts the whole database rather than a table in it. `toSeq` is
+     * the watermark at the point restored to.
+     */
+    const restoreLogTo = async (toSeq: number): Promise<void> => {
+        await harness.exec.run(`DELETE FROM "__cdc_log" WHERE "seq" > ?`, [toSeq]);
+        await harness.exec.run(`UPDATE sqlite_sequence SET seq = ? WHERE name = '__cdc_log'`, [toSeq]);
+    };
+
+    it("refuses a cursor above the high-watermark rather than reporting caught-up", async () => {
+        expect.assertions(3);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+        await writer.insert("notes", { archived: false, body: "c", priority: 1, slug: "c" });
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(3);
+
+        await restoreLogTo(0);
+
+        // Post-restore writes climb back through seqs the consumer has already
+        // passed. Served an empty page, it would call itself caught up and skip
+        // both of them permanently.
+        await writer.insert("notes", { archived: false, body: "d", priority: 1, slug: "d" });
+        await writer.insert("notes", { archived: false, body: "e", priority: 1, slug: "e" });
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toThrow(/rolled back/iu);
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    it("treats a changelog that was never written as a watermark of zero", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Provision the log without writing to it. SQLite creates the
+        // `sqlite_sequence` TABLE with the first AUTOINCREMENT table but the ROW
+        // only on the first insert, so this is the shape where the watermark has
+        // to be inferred rather than read.
+        await writer.cdcChangedTables?.(0);
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect)).resolves.toStrictEqual({ changes: [], cursor: 0 });
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 5 }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    it("serves a consumer sitting exactly at the high-watermark", async () => {
+        expect.assertions(1);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        // The boundary the refusal must NOT claim: a caught-up consumer holds the
+        // watermark itself, and `>` rather than `>=` is what keeps it served.
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 1 });
+    });
+
+    it("does not accuse a caught-up consumer after retention swept the log empty", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+
+        // A sweep DELETEs rows; it does not rewind the timeline. `MAX(seq)` is
+        // NULL here, which is exactly why the watermark is read from
+        // `sqlite_sequence` — reading the rows would refuse every healthy
+        // consumer of a quiet, fully swept log.
+        await harness.exec.run(`DELETE FROM "__cdc_log"`, []);
+
+        const head = await harness.exec.all(`SELECT MAX(seq) AS seq FROM "__cdc_log"`, []);
+
+        expect(head[0]?.["seq"]).toBeNull();
+
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 2 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 2 });
+    });
+
     it("round-trips a bigint / bytes post-image through the changelog", async () => {
         expect.assertions(3);
 
@@ -1398,6 +1490,120 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         // an integer — is never prefixed on either.
         expect(columnsOf(plain)).toBe(`"table", "seq"`);
         expect(plain).not.toMatch(/\(191\)/u);
+    });
+});
+
+/**
+ * Declaring a UNIQUE index over a global table that already holds duplicates is
+ * a migration that cannot succeed. `CREATE UNIQUE INDEX` raises a bare
+ * `UNIQUE constraint failed: <table>.<column>` from inside `ensureMigrated`,
+ * which every read and write on the `.global()` store awaits — and the table
+ * loop bails at the first throw, so one unmigratable index takes the whole
+ * global plane down and leaves every table declared after it unprovisioned.
+ * That has to arrive as a diagnostic naming the table and the remedy.
+ */
+describe("global table UNIQUE index over existing duplicates", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const plain: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string") }, shardMode: { kind: "global" } } },
+    } as never;
+
+    const withUniqueIndex: SchemaLike = {
+        tables: {
+            notes: { indexes: [{ fields: ["slug"], name: "by_slug", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+        },
+    } as never;
+
+    const withUniqueColumn: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string", { unique: true }) }, shardMode: { kind: "global" } } },
+    } as never;
+
+    /** Provision the index-free shape and write two rows sharing a slug. */
+    const seedDuplicates = async (): Promise<void> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "dup" });
+        await writer.insert("notes", { slug: "dup" });
+    };
+
+    /** Force the provisioning pass for `next` and return whatever it threw. */
+    const provision = async (next: SchemaLike): Promise<unknown> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: next });
+
+        try {
+            await writer.findMany("notes", {});
+        } catch (error) {
+            return error;
+        }
+
+        return undefined;
+    };
+
+    it("refuses a declared unique index whose column list already has duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueIndex);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_by_slug.*duplicates/isu);
+    });
+
+    it("refuses a `.unique()` column whose values already have duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueColumn);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_unique_slug.*duplicates/isu);
+    });
+
+    it("still creates the index when the values are duplicate-free", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "a" });
+        await writer.insert("notes", { slug: "b" });
+
+        await expect(provision(withUniqueIndex)).resolves.toBeUndefined();
+        await expect(harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`, [])).resolves.toHaveLength(1);
+    });
+
+    it("leaves an unrelated DDL failure as its own error rather than relabelling it", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        // The index name collides with an existing TABLE, so `CREATE UNIQUE INDEX`
+        // fails for a reason that has nothing to do with the rows — on a table
+        // that DOES hold duplicates, which is the case a probe run unconditionally
+        // would have mislabelled. The dialect does not call this a unique
+        // violation, so the probe never runs and the engine's own error stands.
+        await harness.exec.run(`CREATE TABLE "notes_by_other" ("x" TEXT)`, []);
+
+        const collidingName: SchemaLike = {
+            tables: {
+                notes: { indexes: [{ fields: ["slug"], name: "by_other", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+
+        const error = await provision(collidingName);
+
+        expect(error).not.toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/already (a table|another table or index) named/iu);
     });
 });
 

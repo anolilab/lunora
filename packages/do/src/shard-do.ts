@@ -3663,7 +3663,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
 
         if (args.sinceSeq > cursor) {
-            throw cdcForkedError(cursor, args.sinceSeq, this.sealForkedTimeline());
+            throw cdcForkedError(cursor, args.sinceSeq, "shard", this.sealForkedTimeline());
         }
 
         // Retention-gap guard, and it comes first of the two retention levels
