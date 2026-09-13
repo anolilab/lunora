@@ -150,17 +150,45 @@ export interface WorkflowLogger {
 
 /** Per-call options for {@link WorkflowRunFunction}. */
 export interface RunFunctionOptions {
+    /**
+     * The replay-dedup key for THIS ONE CALL, forwarded to the shard as the
+     * `(identity, mutationId)` dedup id so a re-issued dispatch of the same
+     * call applies once instead of twice.
+     *
+     * Usually leave it unset: `ctx.run`, a `ctx.runStep` body's `context.run`
+     * and a rollback's `context.run` each pin a deterministic id already (see
+     * `src/dedup-id.ts`), and a supplied id wins over that pin. Pass one when
+     * the automatic id cannot be right — a body whose `ctx.run` ORDER varies
+     * per attempt, or a bare `ctx.run` inside a raw `ctx.step.do(...)`
+     * callback, which the pin cannot see is being retried.
+     *
+     * Must be unique per call: the dedup table carries no function path and
+     * every server-initiated dispatch shares the `"system:"` identity, so
+     * reusing one id across two calls makes the second return the first's
+     * cached result without ever executing.
+     */
+    dedupId?: string;
+
     /** Routing hint forwarded to the Worker so the call lands on the right shard. */
     shardKey?: string;
 }
 
 /**
  * Calls a Lunora query / mutation / action from inside a workflow and resolves
- * with its result. Wrap it in {@link WorkflowStepLike.do} to make the call a
- * durable, memoized, retried step:
+ * with its result. Wrap it in a durable step to make the call memoized and
+ * retried — prefer {@link WorkflowRunStepFunction}, whose `context.run` also
+ * pins a retry-stable {@link RunFunctionOptions.dedupId}:
  *
  * ```ts
- * const charge = await ctx.step.do("charge", () => ctx.run(api.payments.charge, { id }));
+ * const { receiptId } = await ctx.runStep(charge, { id });
+ * ```
+ *
+ * A raw {@link WorkflowStepLike.do} retries its callback IN PLACE, which the
+ * automatic (positional) id cannot see, so a write made that way needs an
+ * explicit id or it applies once per attempt:
+ *
+ * ```ts
+ * await ctx.step.do("charge", () => ctx.run(api.payments.charge, { id }, { dedupId: `charge:${id}` }));
  * ```
  */
 export type WorkflowRunFunction = <F extends FunctionReference>(function_: F, args?: ArgsOf<F>, options?: RunFunctionOptions) => Promise<unknown>;

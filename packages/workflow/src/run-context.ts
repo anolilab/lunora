@@ -11,6 +11,7 @@ import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire } from "../../../shared/wire-codec";
+import { pinDedupId } from "./dedup-id";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { raiseNonRetryable } from "./errors";
@@ -40,7 +41,16 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // dispatch is identical — only the arg type narrows — hence the cast. (The
     // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
     // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
-    const run = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    const dispatch = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+
+    // A top-level `ctx.run` is not durable — the body re-executes from the top on
+    // every activation (after a `step.sleep`, a `waitForEvent`, an eviction) — so
+    // without a replay-stable dedup id it re-applies its mutation once per
+    // activation. Pinning the counter here, per context, is what restarts it at
+    // `.1` on each replay so the second activation reproduces the first's ids.
+    // `createRunStep` gets the UNPINNED dispatcher: it pins its own per-step
+    // scopes, which must not sit inside this one's numbering. See `dedup-id.ts`.
+    const run = pinDedupId(dispatch, `${options.event.instanceId}#body`);
 
     // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the
     // shared naming helper — the same derivation codegen and the config layer use,
@@ -125,7 +135,14 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         parallel: createParallel(fanOutDeps),
         params,
         run,
-        runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
+        runStep: createRunStep({
+            env: options.env,
+            instanceId: options.event.instanceId,
+            log,
+            nonRetryableErrorClass: options.nonRetryableErrorClass,
+            run: dispatch,
+            step: options.step,
+        }),
         spawn: createSpawn(fanOutDeps),
         step: options.step,
         waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),
