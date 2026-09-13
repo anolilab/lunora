@@ -256,6 +256,7 @@ describe("applyWebhookAction", () => {
         };
 
         await expect(applyWebhookAction(store, refunded("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
+
         await applyWebhookAction(store, refunded("evt_3"));
 
         const session = await store.getPaymentSession("polar", "pi_1");

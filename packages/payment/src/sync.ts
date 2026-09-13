@@ -75,15 +75,16 @@ const noRelease = async (): Promise<void> => {};
  * Book a DELTA provider's refund at most once, whoever reports it first.
  *
  * A delta event carries one refund's own amount, so the sync layer ADDS it — which is only correct
- * if each refund reaches this fold once. Two things break that:
+ * if each refund reaches this fold once. Two things break that.
  *
- * - `refundPayment` folds the refund it issued into the row immediately (that ledger is what stops a
- *   retry from issuing it twice) and leaves a marker. The confirming webhook is that same money
- *   coming back.
- * - A provider can report ONE refund under more than one event id. Polar maps both `refund.created`
- *   and `refund.updated` to a refund event, so a refund that reaches `succeeded` and is then touched
- *   again (a dispute attaching to it, say) restates the same money under a fresh event id — which
- *   the `markEventProcessed` dedupe cannot catch, because the event ids genuinely differ.
+ * `refundPayment` folds the refund it issued into the row immediately (that ledger is what stops a
+ * retry from issuing it twice) and leaves a marker; the confirming webhook is that same money coming
+ * back.
+ *
+ * And a provider can report ONE refund under more than one event id. Polar maps both
+ * `refund.created` and `refund.updated` to a refund event, so a refund that reaches `succeeded` and
+ * is then touched again (a dispute attaching to it, say) restates the same money under a fresh event
+ * id — which the `markEventProcessed` dedupe cannot catch, because the event ids genuinely differ.
  *
  * Both are the same shape, so one marker answers both: claim `local-refund:<session>:id:<refundId>`
  * and KEEP it. Whoever claims it first books the money, and every later restatement of that refund

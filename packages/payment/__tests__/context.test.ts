@@ -38,7 +38,9 @@ const makeDb = (): LunoraDatabaseLike => {
             // write of an optional column stayed green here.
             for (const field of Object.keys(patch)) {
                 if (patch[field] === undefined) {
-                    throw new Error(`Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`);
+                    throw new Error(
+                        `Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`,
+                    );
                 }
             }
 
