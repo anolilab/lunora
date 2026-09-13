@@ -53,6 +53,18 @@ interface CdcChange {
 const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
 
 /**
+ * Row-scoped index backing {@link readCdcDocAtOrBefore} (`("table", id, seq)`).
+ *
+ * Built only when some table declares `.dropStalePatches()`, because that is the
+ * only reader seeking ONE row's history rather than a table's. On the
+ * `("table", seq)` index alone that seek is a descending scan of every entry the
+ * table logged since the caller's baseline, discarding each one belonging to a
+ * different row — so a busy table would tax a stale client's every patch in
+ * proportion to the whole table's write volume.
+ */
+const CDC_LOG_TABLE_ID_SEQ_INDEX = "__cdc_log_table_id_seq";
+
+/**
  * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
  * each shard a monotonic cursor that streaming-export consumers and replay-PITR
  * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
@@ -65,7 +77,7 @@ const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
  * subscribers in proportion to the busy one's write volume. The composite index
  * covers both the filter and the ordering, so a shape reads only its own ops.
  */
-const migrateCdcLog = (sql: SqlExec): void => {
+const migrateCdcLog = (sql: SqlExec, options: { rowHistoryIndex?: boolean } = {}): void => {
     runDrizzle(
         sql,
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE)} (
@@ -98,6 +110,22 @@ const migrateCdcLog = (sql: SqlExec): void => {
         );
     } catch {
         /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
+    }
+
+    if (options.rowHistoryIndex !== true) {
+        return;
+    }
+
+    // Same isolation and the same reasoning as the index above: a cold start that
+    // cannot afford to build it degrades `readCdcDocAtOrBefore` to a scan rather
+    // than bricking the shard.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE_ID_SEQ_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (${dsql.identifier("table")}, id, seq)`,
+        );
+    } catch {
+        /* degraded read path; the next cold start retries */
     }
 };
 
@@ -360,6 +388,35 @@ interface CdcChangeKey {
  * the more accurate client-facing kind anyway (the client may already hold the
  * key), and for a non-member it is what earns the `delete` the client needs.
  */
+
+/**
+ * The post-image of `id` in `table` as of `atOrBeforeSeq` — the row as a client
+ * holding that CDC cursor last saw it, or `undefined` when the changelog cannot
+ * answer (the row predates the caller's cursor, the entry was trimmed, or CDC is
+ * off).
+ *
+ * `undefined` is deliberately indistinguishable from "no opinion": its only
+ * caller (`.dropStalePatches()`) reads it as "no baseline could be established"
+ * and applies the write, which is the historical behaviour. A changelog that has
+ * been trimmed must not start silently discarding writes.
+ *
+ * A `delete` entry answers `undefined` too — its `doc` is NULL, and a row the
+ * client last saw deleted has no field values to compare against.
+ */
+const readCdcDocAtOrBefore = (sql: SqlExec, table: string, id: string, atOrBeforeSeq: number): Record<string, unknown> | undefined => {
+    const rows = runDrizzle<{ doc: null | string }>(
+        sql,
+        dsql`SELECT doc FROM ${dsql.identifier(CDC_LOG_TABLE)}
+             WHERE ${dsql.identifier("table")} = ${table} AND id = ${id} AND seq <= ${atOrBeforeSeq}
+             ORDER BY seq DESC
+             LIMIT 1`,
+    ).toArray();
+
+    const doc = rows[0]?.doc;
+
+    return doc === null || doc === undefined ? undefined : decodeDocJson(doc);
+};
+
 const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
     // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
     // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
@@ -743,6 +800,7 @@ export {
     readCdcChangeKeys,
     readCdcChanges,
     readCdcCursor,
+    readCdcDocAtOrBefore,
     readCdcEpoch,
     trimCdcChanges,
 };
