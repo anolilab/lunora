@@ -420,6 +420,7 @@ export interface LunoraClientOptions {
      * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
+
     fetch?: typeof fetch;
 
     /**
@@ -485,6 +486,32 @@ export interface LunoraClientOptions {
      * breaking deploy you're protecting against — not purely speculatively.
      */
     persistenceVersion?: string;
+
+    /**
+     * HTTP polling fallback for live queries on a network that refuses WebSocket
+     * upgrades (a corporate proxy, a captive portal).
+     *
+     * One-shot `query`/`mutation`/`action` calls already ride HTTP POST, so such a
+     * network does not break them — it breaks reactivity, and only that. After a
+     * run of connect attempts that never reach `open`, the client re-runs each
+     * subscribed query over the batch-RPC endpoint on an interval and reports
+     * `"polling"` from the client's `connectionStatus()`.
+     *
+     * It is a degradation, not a second transport: shapes (`@lunora/db`
+     * collections), durable streams and whispers have no request/response form to
+     * re-run and stay unavailable until a socket opens. Freshness is bounded by
+     * the interval, and each tick costs a full re-run of every subscribed query.
+     *
+     * Defaults to polling every 5s after 3 consecutive failed opens. Set
+     * `intervalMs: 0` to disable it and keep the historical behaviour (live
+     * queries simply stop moving).
+     */
+    pollingFallback?: {
+        /** Consecutive connect attempts that must fail to reach `open` first. Default 3; `0` disables. */
+        afterFailedAttempts?: number;
+        /** Poll cadence in ms. Default 5000; `0` disables. */
+        intervalMs?: number;
+    };
 
     /**
      * Durable store for the read cache (Pillar 2). When active, query results
