@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.221...@lunora/config@1.0.0-alpha.222) (2026-09-13)
+
+### Bug Fixes
+
+* close template, CLI and reference drift ([#750](https://github.com/anolilab/lunora/issues/750)) ([a5188b5](https://github.com/anolilab/lunora/commit/a5188b5927b5e9233dab40c9521a62ca332c38cf))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.187
+* **@lunora/container:** upgraded to 1.0.0-alpha.51
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/seed:** upgraded to 1.0.0-alpha.132
+* **@lunora/studio:** upgraded to 1.0.0-alpha.185
+
 ## @lunora/config [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.220...@lunora/config@1.0.0-alpha.221) (2026-09-13)
 
 
