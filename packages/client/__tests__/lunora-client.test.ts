@@ -2017,10 +2017,13 @@ describe("lunoraClient", () => {
                 client.setAuthToken("user-b-token");
             };
 
-            // Reconnect and flush.
+            // Reconnect and flush. Bounded rather than `runAllTimersAsync`: the
+            // rotation to identity B is a genuine identity change, so the client
+            // now closes the socket B inherited from A and reconnects — and a
+            // reconnect loop against a mock that never opens has no last timer.
             await vi.advanceTimersByTimeAsync(20);
             latestSocket().open();
-            await vi.runAllTimersAsync();
+            await vi.advanceTimersByTimeAsync(200);
 
             // Both writes replayed — in ONE batch, under identity A's auth header
             // (never user-b, even though the token rotated mid-flight).

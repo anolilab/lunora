@@ -20,10 +20,22 @@
  *
  * | status             | meaning                                                          | gate            |
  * | ------------------ | ---------------------------------------------------------------- | --------------- |
- * | `unauthenticated`  | no credential, or the server answered that there is no session   | signed out      |
- * | `loading`          | a credential is held and the first identity resolve is in flight | loading         |
- * | `authenticated`    | a credential is held and the server returned a user              | authenticated   |
+ * | `unauthenticated`  | the server answered that there is no session                     | signed out      |
+ * | `loading`          | the first identity resolve is in flight                          | loading         |
+ * | `authenticated`    | the server returned a user                                       | authenticated   |
  * | `unreachable`      | a credential is held but the identity endpoint could not be reached | authenticated |
+ *
+ * No row says "no bearer token". A **cookie session carries no token here** —
+ * it is better-auth's default, what `@lunora/auth-ui` is built on, and what
+ * `examples/auth-playground` ships (`createAuthClient` plus
+ * `new LunoraClient({ url })`, never `setAuthToken`). Answering
+ * `unauthenticated` off a null token alone declared every user of every such
+ * app signed out without asking the server, which also left
+ * `LunoraClient`'s identity fingerprint `null` for all of them — and a
+ * fingerprint that is `null` for everyone is what turns the offline-queue,
+ * read-cache and socket identity gates into `null === null`. The first resolve
+ * therefore ALWAYS asks; only after an answer does a cleared token
+ * short-circuit.
  *
  * `unreachable` counts as authenticated because the **credential** is what
  * authorises requests; a failed identity round-trip is a fact about the network,
@@ -83,8 +95,16 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     const listeners = new Set<() => void>();
     // eslint-disable-next-line unicorn/no-null -- `user` is `User | null`; `null` is "no user record held"
     let user: User | null = null;
-    let status: AuthStatus = client.getAuthToken() === null ? "unauthenticated" : "loading";
+    // Never `unauthenticated` before the server has been asked — see the module
+    // header. Every adapter's SSR snapshot is already `"loading"`, so this is
+    // also the value the first hydration render agrees with.
+    let status: AuthStatus = "loading";
     let started = false;
+    // Whether the server has answered at least once for this store. Until it
+    // has, a null token is not evidence of anything (a cookie session holds no
+    // token here); after it has, a cleared token is a sign-out and reflects
+    // without a round trip.
+    let answered = false;
 
     const notify = (): void => {
         for (const listener of listeners) {
@@ -107,10 +127,17 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     const refresh = (): void => {
         generation += 1;
         const current = generation;
+        const hadAnswer = answered;
+
+        answered = true;
 
         // A cleared token short-circuits to signed-out without a round-trip so
-        // sign-out is reflected immediately.
-        if (client.getAuthToken() === null) {
+        // sign-out is reflected immediately — but only ONCE the server has
+        // answered this store at least once. The first resolve always asks,
+        // because a cookie session (better-auth's default) holds no token here
+        // and would otherwise be reported signed out for the whole session,
+        // leaving `identityFingerprint()` null for every user of the app.
+        if (client.getAuthToken() === null && hadAnswer) {
             // eslint-disable-next-line unicorn/no-null -- signed-out sentinel
             setState("unauthenticated", null);
 
@@ -133,9 +160,13 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
             })
             .catch(() => {
                 if (current === generation) {
-                    // The endpoint could not be reached. The credential is still
-                    // held and nothing contradicted it, so stay authenticated and
-                    // keep whatever user was last resolved.
+                    // The endpoint could not be reached. Whatever credential the
+                    // app has — a bearer token, or a cookie this code cannot see
+                    // — is still held and nothing contradicted it, so stay
+                    // authenticated and keep whatever user was last resolved.
+                    // Nothing is granted by this: every identity gate refuses a
+                    // `null` fingerprint, so an unreachable resolve seeds no
+                    // cached read and replays no queued write.
                     setState("unreachable", user);
                 }
             });

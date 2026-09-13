@@ -460,9 +460,12 @@ interface ShardConnection {
      *
      * A WebSocket credential is pinned in the upgrade URL and cannot be rotated
      * in place, so a `setAuthToken` that switches users leaves this socket
-     * authenticated as the PREVIOUS one — it keeps delivering that user's rows
-     * until something closes it, which on a client without `crossTabSync` is
-     * nothing. Reading the live fingerprint when such a frame lands stamps the
+     * authenticated as the PREVIOUS one — it would keep delivering that user's
+     * rows until something closed it, which for a long time was nothing on a
+     * client without `crossTabSync`. `evictPreviousIdentitySession` is that
+     * something now; this stamp still matters for the frames that land in the
+     * gap before the close, and for a socket the close could not reach.
+     * Reading the live fingerprint when such a frame lands stamps the
      * previous user's data with the new user's identity; the durable read cache
      * (on by default in browsers) then hydrates it into the new session on the
      * next reload. Stamping what the SOCKET is authenticated as instead keeps
@@ -1107,6 +1110,22 @@ class LunoraClient {
     private subjectToken: string | null = null;
 
     /**
+     * How many `getCurrentUser()` round trips are in flight.
+     *
+     * The identity gates need to tell two `null` fingerprints apart. For an app
+     * with no auth at all, and for a client the server has answered "no
+     * session" to, `null` is a real and stable identity — nobody else holds it,
+     * so a `null`-stamped queued write or cached read is this client's own and
+     * may be used. While a resolve is IN FLIGHT it is neither: the fingerprint
+     * may be one round trip away from `subj:<id>`, which is the window a cookie
+     * app spends every page load in, and where `null === null` handed one
+     * browser user's durable state to the next. Counted rather than flagged so
+     * two overlapping resolves (a token change during a probe) both have to
+     * finish before the gates reopen.
+     */
+    private sessionProbesInFlight = 0;
+
+    /**
      * Identity stamp recorded against each queued offline mutation, keyed by
      * the queue-assigned mutation id. Captured at enqueue from the auth token
      * in effect at the time, and re-checked at flush so a queued write can
@@ -1412,8 +1431,24 @@ class LunoraClient {
 
         const newIdentity = this.identityFingerprint();
 
+        // "The same credential" needs a credential. `!tokenChanged` proves one
+        // only when there IS a token: on a cookie app every identity — the
+        // outgoing user's included — sits at `authToken === null`, so treating
+        // two absent tokens as one hands the outgoing user's queued writes to
+        // the incoming one, relabelled as theirs.
+        const sameCredential = !tokenChanged && token !== null && subjectWasConfirmed;
+        // The one null-token relabel that carries no authorship: a cookie
+        // session being NAMED for the first time. `adoptResolvedSubject` lands
+        // here as `setAuthToken(null, id)` with nothing established before it,
+        // and the naming came from `/get-session` answering under the live
+        // cookie — so the open socket and this client's own watermarks provably
+        // belong to that subject, and the read cache it stamped may be handed
+        // over. Queued writes are NOT relabelled: a `null` stamp is evidence of
+        // nobody, and the replay gate settles those on its own terms.
+        const subjectFirstNamed = !tokenChanged && token === null && previousIdentity === null && subjectWasConfirmed;
+
         if (newIdentity !== previousIdentity) {
-            if (!tokenChanged && subjectWasConfirmed) {
+            if (sameCredential) {
                 // The token is unchanged (same credential) — the identity label
                 // just got more stable (a subject resolved). Migrate queued writes
                 // AND cached watermarks to the new fingerprint instead of dropping
@@ -1432,6 +1467,16 @@ class LunoraClient {
                 // against the raw token this one started with, and the
                 // subscription that would have consumed it is already open.
                 this.reseedFromHydratedCache();
+            } else if (subjectFirstNamed) {
+                // A cookie session naming itself. Nothing is reassigned: the
+                // socket and the watermarks were always this subject's, and the
+                // read cache reseed is gated per entry by
+                // `cachedQueryMatchesIdentity`, which only now has a subject to
+                // match `subj:<id>` entries against. This is the moment the
+                // durable read cache becomes usable for a cookie app at all.
+                this.restampWatermarks(previousIdentity, newIdentity);
+                this.restampConnectionIdentity(previousIdentity, newIdentity);
+                this.reseedFromHydratedCache();
             } else {
                 // A genuine credential change — reject the in-memory offline
                 // writes that can no longer replay as the identity now signed in.
@@ -1439,36 +1484,26 @@ class LunoraClient {
                 // kept: this path is reached on a plain sign-in too, where the
                 // queue belongs to the very user who just signed in.
                 this.rejectQueuedForIdentityChange(previousIdentity);
-            }
 
-            // The cross-tab channel name embeds the identity fingerprint (see
-            // `createTabCoordinator`) — restart on the re-derived channel so
-            // this tab doesn't keep leading/following the PREVIOUS identity's
-            // group. After the queue handling above, so drained/restamped
-            // writes settle before the new group's leader election begins.
-            // BroadcastChannel names are immutable, so a stop-old+construct-new
-            // is the only way to move channels — but that means the fresh
-            // coordinator would otherwise sit through the full
-            // claim-then-`leaderTimeout` dance (3s default) before any tab
-            // opens a socket again, freezing every live query for that long
-            // on EVERY identity change (including a routine JWT refresh for
-            // an app that doesn't pass a stable `subject` — the documented
-            // reason to pass one). If this tab was already the leader, it's
-            // overwhelmingly likely to remain the sole tab on the new
-            // channel too, so promote it immediately instead of waiting —
-            // `promoteImmediately`'s docblock covers the (self-healing) rare
-            // case where another tab does the same at once.
-            if (this.tabCoordinator) {
-                const wasLeader = this.tabCoordinator.isLeader();
-
-                this.tabCoordinator.stop();
-                this.tabCoordinator = this.createTabCoordinator();
-                this.tabCoordinator.start();
-
-                if (wasLeader) {
-                    this.tabCoordinator.promoteImmediately();
+                // And evict what the PREVIOUS identity left live. A socket pins
+                // its credential in the upgrade URL and cannot be rotated in
+                // place, so without this it keeps delivering the previous user's
+                // rows (see `ShardConnection.identity`), and every subscription
+                // keeps replaying the last of them to each new subscriber.
+                //
+                // Only when there WAS a previous identity, the same test
+                // `rejectQueuedForIdentityChange` applies to the read cache: a
+                // sign-in from signed-out has no other user's session to retire,
+                // and bouncing every socket there would cost a reconnect on the
+                // most common auth transition there is.
+                if (previousIdentity !== null) {
+                    this.evictPreviousIdentitySession();
                 }
             }
+
+            // Last, so drained/restamped writes settle before the new group's
+            // leader election begins.
+            this.restartTabCoordinatorForIdentity();
         }
 
         this.syncReadCacheToCredential(wasAwaitingReconfirm);
@@ -1521,6 +1556,20 @@ class LunoraClient {
      * is `null` for both), which is the safe conflation: holding a write for a
      * signed-out app costs a retry, dropping it costs the write.
      *
+     * It also covers a `null` stamp against a `null` fingerprint — but only
+     * while {@link identityUnresolved} says a session resolve is in flight.
+     * Two `null`s are the same identity for an app with no auth at all (nobody
+     * else shares that fingerprint, because nobody else exists) and for a
+     * client the server has told there is no session; they are NOT the same
+     * identity in the window where the fingerprint is about to become
+     * `subj:<id>`, which is where one browser user's queued write went out on
+     * the next one's cookie.
+     *
+     * A held write is not stranded: the hold ends when the resolve settles, and
+     * both {@link setAuthToken} and {@link getCurrentUser} re-flush there. If
+     * the identity that arrives is not the one that queued the write, the
+     * verdict is then `"mismatch"` and the write is settled terminally.
+     *
      * A sticky subject carried across a token change is `"unknown"` for the same
      * reason: the label says user A, the credential in hand has not been checked
      * against it, and the two answers (a refresh vs an account switch) call for
@@ -1536,6 +1585,18 @@ class LunoraClient {
         }
 
         const current = this.identityFingerprint();
+
+        // A `null` fingerprint that is about to become `subj:<id>` is not an
+        // identity yet, so nothing may be matched against it — least of all
+        // another `null`. This is the window the leak lived in: the socket's
+        // `open` flush races `/get-session`, and `null === null` sent the
+        // PREVIOUS browser user's queued write out on the CURRENT one's cookie,
+        // with no `authorization` header for the server to disagree with.
+        // Held, not dropped: the probe settles within the round trip and
+        // re-flushes, and the verdict is then honest either way.
+        if (current === null && this.identityUnresolved()) {
+            return "unknown";
+        }
 
         if (stamped === current) {
             return "match";
@@ -1697,29 +1758,39 @@ class LunoraClient {
             headers["authorization"] = `Bearer ${this.authToken}`;
         }
 
-        // Deliberately un-caught: a rejection here means the endpoint was
-        // unreachable, and nothing about the session is known — including for
-        // `adoptResolvedSubject`, which must not run on a non-answer.
-        const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
-            credentials: "include",
-            headers,
-            method: "GET",
-        });
+        // Every identity gate holds while this is outstanding — see
+        // `sessionProbesInFlight`. Incremented before the await and released in
+        // `finally` so a rejection (offline) reopens the gates too: an endpoint
+        // that cannot be reached is never going to name anyone.
+        this.sessionProbesInFlight += 1;
 
-        if (!response.ok) {
-            // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
-            return null;
+        try {
+            // Deliberately un-caught: a rejection here means the endpoint was
+            // unreachable, and nothing about the session is known — including for
+            // `adoptResolvedSubject`, which must not run on a non-answer.
+            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+                credentials: "include",
+                headers,
+                method: "GET",
+            });
+
+            if (!response.ok) {
+                // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
+                return null;
+            }
+
+            // better-auth returns `{ user, session }` when authenticated and
+            // `null` (or an empty body) when not. Narrow defensively.
+            const body: { user?: User } | null = await response.json();
+            // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
+            const user = body?.user ?? null;
+
+            this.adoptResolvedSubject(requestToken, user);
+
+            return user;
+        } finally {
+            this.releaseSessionProbe();
         }
-
-        // better-auth returns `{ user, session }` when authenticated and
-        // `null` (or an empty body) when not. Narrow defensively.
-        const body: { user?: User } | null = await response.json();
-        // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
-        const user = body?.user ?? null;
-
-        this.adoptResolvedSubject(requestToken, user);
-
-        return user;
     }
 
     /**
@@ -1739,18 +1810,9 @@ class LunoraClient {
         this.wsToken = token;
 
         // Close every open/connecting socket so the reconnect uses the new
-        // token. `handleDisconnect` (registered as the `close` handler) will
-        // schedule the retry. Don't tear down the connection record itself —
-        // pending subscriptions/streams need to ride the next socket.
-        for (const conn of this.connections.values()) {
-            if (conn.socket) {
-                try {
-                    conn.socket.close();
-                } catch {
-                    /* ignore */
-                }
-            }
-        }
+        // token. Don't tear down the connection record itself — pending
+        // subscriptions/streams need to ride the next socket.
+        this.bounceShardSockets();
     }
 
     /**
@@ -5015,6 +5077,17 @@ class LunoraClient {
         const socketIdentity = this.getConnection(state.shardKey)?.identity;
         const identity = socketIdentity === undefined ? this.identityFingerprint() : socketIdentity;
 
+        // Refuse to file rows under an identity that is still resolving. The
+        // durable store is IndexedDB — keyed by origin, outliving the session —
+        // so a `null` stamp written in this window is a row belonging to a user
+        // the client was about to name, left where the NEXT user of the browser
+        // profile reads it back. The mirror of the read gate above: a signed-out
+        // (or auth-less) client still caches, because `null` is a settled
+        // identity there and nobody else's rows are behind it.
+        if (identity === null && this.identityUnresolved()) {
+            return;
+        }
+
         this.pendingCacheWrites.set(key, {
             identity,
             serverCursor: state.serverCursor,
@@ -6943,8 +7016,16 @@ class LunoraClient {
 
     /**
      * Stable, non-reversible fingerprint of the current auth identity used to
-     * stamp queued offline writes. `null` (signed out) is its own identity and
-     * never matches a bearer-token fingerprint. The raw token is never stored;
+     * stamp queued offline writes.
+     *
+     * `null` never matches a bearer-token fingerprint — but it is only an
+     * IDENTITY of its own once this client knows no subject is coming. An app
+     * with no auth at all, and a client the server has answered "no session"
+     * to, both hold a `null` nobody else shares. A client mid-`/get-session`
+     * holds a `null` that may be one round trip from `subj:<id>`, which is
+     * every cookie app's page load: ask {@link identityUnresolved} before
+     * treating it as an identity, or `null === null` matches two different
+     * people. The raw token is never stored;
      * a length-prefixed FNV-1a hash is enough to detect an identity *change*
      * without keeping the credential around in the queue map.
      */
@@ -7060,6 +7141,17 @@ class LunoraClient {
      * gate exists for still seeds.
      */
     private cachedQueryMatchesIdentity(entry: CachedQuery): boolean {
+        // A `null` fingerprint with a session resolve still in flight is not an
+        // identity yet — it may be one round trip from `subj:<id>`, which is
+        // the window every cookie app spends its page load in. Matching an
+        // entry against it there (`null === null`, case 1) seeded the PREVIOUS
+        // browser user's rows into this one's first render, synchronously,
+        // before any socket frame. Cases 2 and 3 need a credential this client
+        // holds, which it does not have here either.
+        if (this.identityFingerprint() === null && this.identityUnresolved()) {
+            return false;
+        }
+
         if (!this.subjectAwaitingReconfirm() && entry.identity === this.identityFingerprint()) {
             return true;
         }
@@ -7093,6 +7185,35 @@ class LunoraClient {
         const token = this.authToken;
 
         return token === null ? false : this.hashToken(token) === stamped;
+    }
+
+    /**
+     * Release one {@link sessionProbesInFlight} hold and re-flush anything that
+     * was waiting on it.
+     *
+     * A resolve that names a user re-flushes through {@link setAuthToken} (the
+     * identity changed). One that does not — signed out, or unreachable —
+     * changes no identity and so fires no listener, and the writes held for the
+     * duration of the probe would sit queued until the next reconnect. Same
+     * connected-only gate as `setAuthToken`'s, so this stays a re-flush of a
+     * live connection rather than a reason to replay an offline queue.
+     */
+    private releaseSessionProbe(): void {
+        this.sessionProbesInFlight -= 1;
+
+        if (this.sessionProbesInFlight === 0 && !this.closed && this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
+            this.flushAllOfflineQueues();
+        }
+    }
+
+    /**
+     * Whether this client's `null` identity fingerprint is still provisional —
+     * a {@link getCurrentUser} resolve is in flight and may be about to name a
+     * subject. The one question every identity gate asks before it is willing
+     * to treat `null` as an identity rather than as an absence of one.
+     */
+    private identityUnresolved(): boolean {
+        return this.sessionProbesInFlight > 0;
     }
 
     /**
@@ -7287,6 +7408,99 @@ class LunoraClient {
         this.pendingCacheWrites.clear();
         this.hydratedQueryCache.clear();
         this.queryCache?.clear().catch(() => undefined);
+    }
+
+    /**
+     * Retire everything the PREVIOUS identity left live on a genuine identity
+     * change: the sockets it is authenticated on, and the rows they delivered.
+     *
+     * A WebSocket credential is pinned in its upgrade URL and cannot be rotated
+     * in place, so `setAuthToken` alone left the previous user's socket open and
+     * delivering — the consequence `ShardConnection.identity`'s docblock already
+     * described, with "nothing" as the thing that closes it on a client without
+     * `crossTabSync`. And each `SubscriptionState` keeps the last value that
+     * socket delivered, which `subscribe()` replays synchronously to every new
+     * subscriber, so the incoming user's first render was the outgoing user's
+     * rows even after the socket did go.
+     *
+     * Both halves are needed: closing the socket without clearing the values
+     * leaves them on screen until a frame replaces them (which never comes for a
+     * query the new user cannot read), and clearing the values without closing
+     * the socket lets the next frame put them straight back.
+     */
+    private evictPreviousIdentitySession(): void {
+        // Cache-seeded values go back to `hydratedQueryCache`, where the identity
+        // gate decides whether they are ever shown again, rather than being
+        // dropped outright — `revokeCacheSeededValues` also blanks their state.
+        this.revokeCacheSeededValues();
+
+        for (const state of this.subscriptions.all()) {
+            state.serverBase = undefined;
+            state.serverCursor = undefined;
+            state.serverEpoch = undefined;
+            // The resubscribe rides the next socket, so this one is no longer
+            // acknowledged by anything.
+            state.acked = false;
+
+            notifySubscription(state, foldOptimistic(undefined, state.optimisticLayers));
+        }
+
+        this.bounceShardSockets();
+    }
+
+    /**
+     * Move this tab's cross-tab coordinator onto the channel the new identity
+     * derives, after an identity change.
+     *
+     * The channel name embeds the identity fingerprint (see
+     * {@link createTabCoordinator}), so without this the tab keeps
+     * leading/following the PREVIOUS identity's group. BroadcastChannel names
+     * are immutable, so a stop-old+construct-new is the only way to move
+     * channels — but that means the fresh coordinator would otherwise sit
+     * through the full claim-then-`leaderTimeout` dance (3s default) before any
+     * tab opens a socket again, freezing every live query for that long on
+     * EVERY identity change (including a routine JWT refresh for an app that
+     * doesn't pass a stable `subject` — the documented reason to pass one). If
+     * this tab was already the leader, it's overwhelmingly likely to remain the
+     * sole tab on the new channel too, so promote it immediately instead of
+     * waiting — `promoteImmediately`'s docblock covers the (self-healing) rare
+     * case where another tab does the same at once.
+     */
+    private restartTabCoordinatorForIdentity(): void {
+        if (!this.tabCoordinator) {
+            return;
+        }
+
+        const wasLeader = this.tabCoordinator.isLeader();
+
+        this.tabCoordinator.stop();
+        this.tabCoordinator = this.createTabCoordinator();
+        this.tabCoordinator.start();
+
+        if (wasLeader) {
+            this.tabCoordinator.promoteImmediately();
+        }
+    }
+
+    /**
+     * Close every open shard socket so each reconnects carrying the credential
+     * in effect now.
+     *
+     * Non-terminal, unlike {@link close}: the `ShardConnection` records and the
+     * subscriptions riding them survive, and the registered `close` handler
+     * (`handleDisconnect`) schedules the retry and replays the subscribes. This
+     * is the only way to move a WS credential — it lives in the upgrade URL.
+     */
+    private bounceShardSockets(): void {
+        for (const conn of this.connections.values()) {
+            if (conn.socket) {
+                try {
+                    conn.socket.close();
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
     }
 
     /**
