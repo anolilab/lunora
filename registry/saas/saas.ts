@@ -92,7 +92,7 @@ const claim = (identity: Record<string, unknown>, name: string): string | undefi
  * property on `ctx.auth`; reaching for `ctx.auth.activeOrganizationId` does not
  * compile, which is the type system keeping the trust boundary honest.
  *
- * Callers get `UNAUTHORIZED` with no session and `FAILED_PRECONDITION` with a
+ * Callers get `UNAUTHORIZED` with no session and `UNPROCESSABLE` with a
  * session but no organisation — different screens (sign in vs. create your
  * first organisation), so they must not collapse into one code.
  */
@@ -107,7 +107,7 @@ const requireOrganization = async (ctx: MutationCtx | QueryCtx): Promise<{ organ
     const organizationId = claim(identity, "activeOrganizationId");
 
     if (organizationId === undefined) {
-        throw new LunoraError("FAILED_PRECONDITION", "no active organization — create or switch to one first");
+        throw new LunoraError("UNPROCESSABLE", "no active organization — create or switch to one first");
     }
 
     return { organizationId, userId };
@@ -202,7 +202,7 @@ export const createProject = mutation
         const slug = toSlug(name);
 
         if (!slug) {
-            throw new LunoraError("INVALID_ARGUMENT", "name must contain at least one letter or digit");
+            throw new LunoraError("VALIDATION_ERROR", "name must contain at least one letter or digit");
         }
 
         // The unique index would reject the duplicate anyway; checking first turns a
@@ -213,7 +213,7 @@ export const createProject = mutation
             .first();
 
         if (clash) {
-            throw new LunoraError("ALREADY_EXISTS", `a project named "${name}" already exists`);
+            throw new LunoraError("CONFLICT", `a project named "${name}" already exists`);
         }
 
         const projectId = await ctx.db.insert("saas_projects", { createdBy: userId, name, organizationId, slug });

@@ -29,7 +29,7 @@ describe("createFormController", () => {
     it("maps a thrown LunoraError code to a readable message", async () => {
         const form = createFormController({
             fields: { name: {} },
-            onSubmit: () => Promise.reject(Object.assign(new Error("raw"), { code: "ALREADY_EXISTS" })),
+            onSubmit: () => Promise.reject(Object.assign(new Error("raw"), { code: "CONFLICT" })),
         });
 
         await expect(form.submit()).resolves.toBe(false);
