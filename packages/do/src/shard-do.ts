@@ -1031,6 +1031,34 @@ interface SubscriptionMemo {
  * always re-sends a full snapshot rather than a delta against a value the client
  * never saw. See {@link ShardDO.pushSubscriptionData}.
  */
+
+/**
+ * Run every side effect a committed transaction queued, in order.
+ *
+ * Sequential, because the queue is one row's history: an update queued after an
+ * insert of the same id must apply after it, and a parallel fan-out has no
+ * ordering to give.
+ *
+ * Never throws. The transaction has already committed — the rows are durable and,
+ * for a mutation dispatch, so is the replay-dedup row that answers the client's
+ * retry from cache. Rejecting here would report a write that DID happen as
+ * failed, and a caller acting on that error by retrying a non-idempotent insert
+ * writes the row twice. So a failure is a reported divergence, not a failed
+ * response: the row exists, its external projection does not, and re-running the
+ * (idempotent) write converges.
+ */
+const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise<void> => {
+    for (const work of queued) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- ordered replay of one row's history; see the docblock
+            await work();
+        } catch (error) {
+            // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose external projection diverged
+            console.error("[@lunora/do] after-commit write hook failed; the write committed and its external projection did not:", error);
+        }
+    }
+};
+
 const UNDELIVERED_BASELINE = "<undelivered>";
 
 /**
@@ -1617,6 +1645,14 @@ abstract class ShardDO {
     private shardInitOnce?: Promise<void>;
 
     private transactionDepth: number = 0;
+
+    /**
+     * Side effects queued by {@link ShardDO.deferAfterCommit} while a transaction
+     * is open, in the order they were queued. Present only for the span of
+     * {@link ShardDO.runInTransaction}; `undefined` means "nothing to wait for,
+     * run it now".
+     */
+    private afterCommitQueue?: (() => Promise<void> | void)[];
 
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
@@ -2991,6 +3027,34 @@ abstract class ShardDO {
         await work;
     }
 
+    /**
+     * Run `work` once the open transaction has COMMITTED — or right now when
+     * none is open.
+     *
+     * For the side effects a transaction cannot roll back: the write-through
+     * vector sync (`ctx.db`'s `onWrite`) upserts into Vectorize, which lives
+     * outside this shard's SQLite. Run inline, such a side effect survives a
+     * rollback that takes its row away, leaving a vector that points at a
+     * document which does not exist — and a search surfaces it. The mirror image
+     * is worse on the delete path: the vector is gone and the row is back.
+     *
+     * Queued work that never commits is DROPPED, which is the point. The trade
+     * is the opposite failure: work queued for a commit that did happen can
+     * still fail on its own (Vectorize unreachable), and then the row exists
+     * with no vector. See `flushAfterCommit` for why that is reported rather
+     * than thrown.
+     * @param work the side effect to hold until the commit lands
+     */
+    protected async deferAfterCommit(work: () => Promise<void> | void): Promise<void> {
+        if (this.afterCommitQueue) {
+            this.afterCommitQueue.push(work);
+
+            return;
+        }
+
+        await work();
+    }
+
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
             throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
@@ -3014,15 +3078,28 @@ abstract class ShardDO {
         //
         // Only the depth bookkeeping stays here: it is `ShardDO` state, and the
         // nested-transaction error above reads it.
-        return this.runner.runInTransaction(async () => {
+        // Opened INSIDE the gate, next to `transactionDepth`, so a dispatch still
+        // waiting on `runSerialized` cannot install its queue over the one the
+        // running transaction is filling. `queued` escapes to the flush below;
+        // when the transaction throws we never reach it and the work is dropped.
+        let queued: (() => Promise<void> | void)[] = [];
+
+        const result = await this.runner.runInTransaction(async () => {
             this.transactionDepth = 1;
+            queued = [];
+            this.afterCommitQueue = queued;
 
             try {
                 return await handler();
             } finally {
                 this.transactionDepth = 0;
+                this.afterCommitQueue = undefined;
             }
         });
+
+        await flushAfterCommit(queued);
+
+        return result;
     }
 
     /**

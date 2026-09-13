@@ -1495,7 +1495,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // keeps its own "degrade a provable slice to a whole-table dep"
                 // fallback rather than reporting into a no-op.
                 onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),
-                onWrite,
+                // Vectorize is outside this shard's SQLite and cannot roll back, so
+                // the sync is held until the mutation's transaction has COMMITTED
+                // (`deferAfterCommit`) instead of running inline. Inline, a write
+                // that later aborted left a vector pointing at a row that does not
+                // exist — which a search then surfaces — and a rolled-back delete
+                // left the row with its vector already purged. Outside a
+                // transaction (an action) nothing is open and it runs at once.
+                onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
