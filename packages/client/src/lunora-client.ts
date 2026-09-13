@@ -23,6 +23,8 @@ import type { OptimisticLayerHandle } from "./optimistic-layers";
 import { applyOptimisticLayer, dropConfirmedLayers, foldOptimistic, notifySubscription } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
+import type { PollingFallback } from "./polling-fallback";
+import { createPollingFallback } from "./polling-fallback";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
@@ -154,6 +156,22 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
+ * How often the HTTP polling fallback re-runs the live queries on a shard whose
+ * socket will not open. Five seconds trades freshness against load deliberately:
+ * a poll re-runs every subscribed query against the origin with no CDC cursor to
+ * shortcut it, so a tighter interval multiplies real query cost on a link that is
+ * already degraded.
+ */
+const DEFAULT_POLLING_FALLBACK_INTERVAL_MS = 5000;
+
+/**
+ * Consecutive connect attempts that must fail to reach `open` before the polling
+ * fallback engages. Three, so a cold Worker start, a deploy bounce, or one
+ * unlucky `connectTimeoutMs` does not move a healthy client onto the slow path.
+ */
+const DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS = 3;
+
+/**
  * Debounce window (ms) for durable read-cache writes (Pillar 2). A burst of
  * deltas on one subscription coalesces into a single `put` per key after the
  * socket settles, keeping IndexedDB off the per-frame hot path.
@@ -274,9 +292,16 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  * Aggregate live-socket health across every shard connection, for a UI status
  * indicator. `idle` = no socket opened yet; `connecting` = at least one socket
  * is (re)connecting and none is open; `connected` = at least one socket is open;
- * `offline` = sockets exist but all are down (between reconnect attempts).
+ * `polling` = no socket would open, so live queries are being refreshed over HTTP
+ * instead (see {@link file://./polling-fallback.ts} — live but slower, and shapes
+ * / streams / whispers are dark); `offline` = sockets exist but all are down
+ * (between reconnect attempts).
+ *
+ * `polling` outranks `connecting`: while the fallback is running a reconnect is
+ * still armed in the background, and reporting that attempt would flicker the
+ * indicator between two states while data is in fact arriving on the slow path.
  */
-type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 
 /** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
 interface ClientDebugShard {
@@ -486,6 +511,8 @@ interface ShardConnection {
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
+    /** HTTP polling fallback for this shard's live queries (see {@link file://./polling-fallback.ts}). */
+    readonly polling: PollingFallback;
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     /** `undefined` for the default shard (connects without a `shard` param). */
@@ -903,6 +930,12 @@ class LunoraClient {
     /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link LunoraClientOptions.heartbeatIntervalMs}. */
     private readonly heartbeatIntervalMs: number;
 
+    /** Failed-open run that engages the HTTP polling fallback; `0` disables it. */
+    private readonly pollingFallbackAfterFailedAttempts: number;
+
+    /** Polling-fallback cadence (ms); `0` disables it. See {@link LunoraClientOptions.pollingFallback}. */
+    private readonly pollingFallbackIntervalMs: number;
+
     private readonly offlineQueue: OfflineQueue;
 
     /**
@@ -1271,6 +1304,8 @@ class LunoraClient {
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+        this.pollingFallbackIntervalMs = options.pollingFallback?.intervalMs ?? DEFAULT_POLLING_FALLBACK_INTERVAL_MS;
+        this.pollingFallbackAfterFailedAttempts = options.pollingFallback?.afterFailedAttempts ?? DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS;
         this.defaultConnectionContext = options.connectionContext;
         // Auto-probe durable stores: an omitted option defaults to IndexedDB when
         // the environment supports it (browsers), so the bare client is local-first
@@ -4276,6 +4311,8 @@ class LunoraClient {
      */
     private teardownConnection(conn: ShardConnection): void {
         /* eslint-disable no-param-reassign -- mutate the shared, long-lived ShardConnection record so every timer/socket field observes the same teardown (matches `handleDisconnect`'s established pattern in this file) */
+        conn.polling.stop();
+
         const streamKey = connectionKey(conn.shardKey);
 
         for (const [id, stream] of this.streams) {
@@ -5080,6 +5117,13 @@ class LunoraClient {
             return "connected";
         }
 
+        // Ahead of `connecting`: a polling connection always has a reconnect
+        // armed too, and reporting that attempt would flicker the indicator
+        // between two states while data is in fact arriving over HTTP.
+        if (conns.some((conn) => conn.polling.isPolling())) {
+            return "polling";
+        }
+
         if (conns.some((conn) => conn.wsState === "connecting")) {
             return "connecting";
         }
@@ -5087,6 +5131,70 @@ class LunoraClient {
         // Sockets exist but none is open or actively connecting — i.e. all are
         // down between reconnect attempts.
         return "offline";
+    }
+
+    /**
+     * One polling-fallback pass for a shard: re-run every live query bound to it
+     * over the batch-RPC endpoint and feed each result into the same frame-apply
+     * path a server `data` frame takes.
+     *
+     * Reusing {@link LunoraClient.batch} and {@link LunoraClient.handleDataMessage}
+     * rather than forking either is the whole point. The apply path is where
+     * optimistic layers rebase, the durable read cache is seeded, and subscriber
+     * callbacks fan out; a second implementation of that would drift, and it would
+     * drift into exactly the bugs the live path has already had fixed.
+     *
+     * The result is re-encoded on the way in because `batch` hands back a decoded
+     * value while the frame path expects the wire form. `encodeWire` is identity
+     * for JSON-safe data and lossless for the rest (that is the codec's contract),
+     * so the round trip costs an allocation and changes nothing.
+     *
+     * **No cursor rides this path.** A poll is a full snapshot, so the frames it
+     * synthesizes carry no `cursor`/`epoch` and cannot advance a subscription's
+     * resume watermark — which is correct: the watermark describes what the CDC
+     * log has delivered, and this delivered none of it. When the socket comes
+     * back, the resubscribe resumes from the last cursor the SOCKET saw, and the
+     * server re-snapshots whatever it needs to.
+     *
+     * A slot that failed is fanned to the subscription's error callbacks rather
+     * than being swallowed: the whole point of the fallback is that the app keeps
+     * working, and a query that is now failing (a permission change, a bad arg)
+     * has to be visible.
+     */
+    private async pollSubscriptions(shardKey: string | undefined): Promise<void> {
+        const key = connectionKey(shardKey);
+        const states = this.subscriptions.all().filter((state) => connectionKey(state.shardKey) === key);
+
+        if (states.length === 0) {
+            return;
+        }
+
+        const slots = await this.batch(
+            states.map((state) => {
+                return { args: state.args, fn: state.fn, shardKey: state.shardKey };
+            }),
+        );
+
+        for (const [index, state] of states.entries()) {
+            const slot = slots[index];
+
+            if (slot === undefined) {
+                continue;
+            }
+
+            if (!slot.ok) {
+                fanSubscriptionError(state.errorCallbacks, {
+                    code: slot.error.code,
+                    message: slot.error.message,
+                });
+
+                continue;
+            }
+
+            // A subscription unsubscribed while the batch was in flight is gone
+            // from the registry; `handleDataMessage` resolves by id and no-ops.
+            this.handleDataMessage({ data: encodeWire(slot.value), id: state.id, type: "data" });
+        }
     }
 
     /** Recompute the aggregate status and notify listeners if it changed. */
@@ -5259,11 +5367,24 @@ class LunoraClient {
         let conn = this.connections.get(key);
 
         if (!conn) {
-            conn = {
+            const created: ShardConnection = {
                 connectTimer: undefined,
                 heartbeatTimer: undefined,
                 lastFrameAt: 0,
                 pendingUnsubscribes: [],
+                polling: createPollingFallback({
+                    afterFailedAttempts: this.pollingFallbackAfterFailedAttempts,
+                    intervalMs: this.pollingFallbackIntervalMs,
+                    onStateChange: () => {
+                        this.emitConnectionStatus();
+                    },
+                    // Resolved through the map rather than captured, so the poll
+                    // always reads the connection record the rest of the client
+                    // is mutating.
+                    poll: async () => {
+                        await this.pollSubscriptions(shardKey);
+                    },
+                }),
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
                 shardKey,
@@ -5272,6 +5393,8 @@ class LunoraClient {
                 wasEverConnected: false,
                 wsState: "idle",
             };
+
+            conn = created;
             this.connections.set(key, conn);
         }
 
@@ -5882,6 +6005,11 @@ class LunoraClient {
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
 
+                // A socket opened, so whatever was refusing the upgrade is gone:
+                // stop polling and let the resubscribe handshake below take the
+                // subscriptions back onto the live channel.
+                conn.polling.noteOpen();
+
                 // See `ShardConnection.stableTimer` for why `open` is not proof.
                 clearTimeout(conn.stableTimer);
                 conn.stableTimer = setTimeout(() => {
@@ -6024,6 +6152,16 @@ class LunoraClient {
         // a second invocation must not re-arm the reconnect timer.
         if (conn.wsState === "idle" || conn.wsState === "closed") {
             return;
+        }
+
+        // Read BEFORE the state machine is reset below: an attempt still in
+        // `"connecting"` at close never reached `open`, which is the signature of
+        // something refusing the upgrade rather than a flaky link. A socket that
+        // opened and dropped resets nothing here — the reconnect backoff is the
+        // right answer to that, and trading a self-healing channel for a
+        // permanently slower one would be a bad deal.
+        if (conn.wsState === "connecting") {
+            conn.polling.noteFailedOpen();
         }
 
         // Intentional mutation of the shared, long-lived connection record so

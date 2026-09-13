@@ -243,7 +243,7 @@ interface ClientToSwMessage {
 ### `ConnectionStatus` (type)
 
 ```ts
-type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
 ### `CronJobInfo` (interface)
@@ -818,6 +818,10 @@ interface LunoraClientOptions {
     outbox?: OutboxSink;
     persistence?: false | PersistenceAdapter;
     persistenceVersion?: string;
+    pollingFallback?: {
+        afterFailedAttempts?: number;
+        intervalMs?: number;
+    };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
     url: string;
