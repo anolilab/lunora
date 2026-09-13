@@ -315,12 +315,21 @@ describe("schema-drift — table modifiers", () => {
     });
 
     describe("changes that must stay breaking", () => {
-        it.each([
+        /*
+         * Annotated, not `as Partial<TableIR>` per row: a cast inside the array
+         * literal reads as redundant to `no-unnecessary-type-assertion`, whose
+         * autofix strips it — and the rows then widen `kind` to `string`, which
+         * only `tsc` objects to. Declaring the tuple keeps the narrowing where a
+         * formatter cannot take it away.
+         */
+        const reHomeCases: ReadonlyArray<readonly [string, Partial<TableIR>, Partial<TableIR>]> = [
             ["root → shardBy", {}, { shardMode: { field: "orgId", kind: "shardBy" } }],
             ["shardBy:x → shardBy:y", { shardMode: { field: "orgId", kind: "shardBy" } }, { shardMode: { field: "teamId", kind: "shardBy" } }],
             ["shardBy → global", { shardMode: { field: "orgId", kind: "shardBy" } }, { shardMode: "global" }],
             ["global → root", { shardMode: "global" }, {}],
-        ])("%s re-homes the rows", (_label, before, after) => {
+        ];
+
+        it.each(reHomeCases)("%s re-homes the rows", (_label, before, after) => {
             expect.assertions(4);
 
             const change = soleChange(before, after);
