@@ -103,18 +103,20 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .withIndex("by_reference", (q) => q.eq("referenceId", DEMO_REFERENCE))
         .collect();
 
-    return rows.map((row) => ({
-        cancelAtPeriodEnd: row.cancelAtPeriodEnd,
-        currentPeriodEnd: row.currentPeriodEnd,
-        currentPeriodStart: row.currentPeriodStart,
-        priceId: row.priceId,
-        priceIds: row.priceIds,
-        provider: row.provider,
-        providerSubscriptionId: row.providerSubscriptionId,
-        quantity: row.quantity,
-        referenceId: row.referenceId,
-        state: row.state,
-    }));
+    return rows.map((row) => {
+        return {
+            cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+            currentPeriodEnd: row.currentPeriodEnd,
+            currentPeriodStart: row.currentPeriodStart,
+            priceId: row.priceId,
+            priceIds: row.priceIds,
+            provider: row.provider,
+            providerSubscriptionId: row.providerSubscriptionId,
+            quantity: row.quantity,
+            referenceId: row.referenceId,
+            state: row.state,
+        };
+    });
 });
 
 /**
