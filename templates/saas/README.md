@@ -46,14 +46,27 @@ not a design.
    `openssl rand -base64 32`) and `BETTER_AUTH_URL`. In dev they live in
    `.dev.vars`; in production use `wrangler secret put`.
 
-3. **Call `internal.saas.syncOrganization`** when an organization is created,
+3. **Set `APP_BASE_URL`** to this deployment's public origin. It builds the
+   checkout return URLs, and a Lunora context carries no `Request` to derive an
+   origin from, so it has to be configured rather than inferred.
+   `wrangler.jsonc` ships it empty on purpose — that key is deployed
+   configuration, so a committed localhost value would be read in production,
+   where `checkout` would hand the payment provider a `success_url` on the
+   customer's own machine. For local dev put it in `.dev.vars`, which wins over
+   `wrangler.jsonc` under `wrangler dev`:
+
+    ```
+    APP_BASE_URL=http://localhost:5173
+    ```
+
+4. **Call `internal.saas.syncOrganization`** when an organization is created,
    renamed or changes plan. The `organization()` and `admin()` better-auth
    plugins are already enabled in `lunora/auth/index.ts` — they own the records
    this app projects. Users, organizations, members and invitations live in
    better-auth's own tables; `saas_organizations` is a projection of them, never
    a second source of truth.
 
-4. **Seed the admin** so it has something to show before you have customers:
+5. **Seed the admin** so it has something to show before you have customers:
 
     ```bash
     pnpm run seed
