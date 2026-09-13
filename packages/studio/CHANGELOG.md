@@ -1,3 +1,21 @@
+## @lunora/studio [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.185...@lunora/studio@1.0.0-alpha.186) (2026-09-13)
+
+### Bug Fixes
+
+* **codegen:** record table modifiers in the drift snapshot ([#751](https://github.com/anolilab/lunora/issues/751)) ([b8e9212](https://github.com/anolilab/lunora/commit/b8e92129ef721619405e1f4df274932fc28635a5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.138
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/react:** upgraded to 1.0.0-alpha.114
+* **@lunora/mail:** upgraded to 1.0.0-alpha.84
+* **@lunora/notify:** upgraded to 1.0.0-alpha.60
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/studio [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.184...@lunora/studio@1.0.0-alpha.185) (2026-09-13)
 
 

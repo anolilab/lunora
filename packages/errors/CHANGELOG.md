@@ -1,3 +1,19 @@
+## @lunora/errors [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.38...@lunora/errors@1.0.0-alpha.39) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **cdc:** `cdcSync` now throws `CDC_TIMELINE_FORKED` for a `sinceSeq` above the shard's
+changelog high-watermark instead of echoing the cursor back with an empty page.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **cdc:** detect a changelog that rolled back ([#752](https://github.com/anolilab/lunora/issues/752)) ([b468b96](https://github.com/anolilab/lunora/commit/b468b9680cb6666a5686c9ea675449d161a6013d))
+
 ## @lunora/errors [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.37...@lunora/errors@1.0.0-alpha.38) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

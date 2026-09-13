@@ -1,3 +1,25 @@
+## @lunora/shard-engine [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.71...@lunora/shard-engine@1.0.0-alpha.72) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **cdc:** `cdcSync` now throws `CDC_TIMELINE_FORKED` for a `sinceSeq` above the shard's
+changelog high-watermark instead of echoing the cursor back with an empty page.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **cdc:** detect a changelog that rolled back ([#752](https://github.com/anolilab/lunora/issues/752)) ([b468b96](https://github.com/anolilab/lunora/commit/b468b9680cb6666a5686c9ea675449d161a6013d))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+
 ## @lunora/shard-engine [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.70...@lunora/shard-engine@1.0.0-alpha.71) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

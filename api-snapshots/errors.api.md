@@ -608,6 +608,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "CDC log trimmed";
     };
+    readonly CDC_TIMELINE_FORKED: {
+        readonly status: 409;
+        readonly title: "CDC timeline forked";
+    };
     readonly CDC_PAYLOAD_COMPACTED: {
         readonly status: 409;
         readonly title: "CDC payloads compacted";
