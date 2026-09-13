@@ -2,7 +2,7 @@
 
 **Baseline:** `fc9965e` (2026-09-08)
 **Revised:** 2026-09-11 — the kit must work across every meta-framework we template, which changes its architecture (§2.5, D1). The original "one framework first" decision is withdrawn.
-**Status:** TODO
+**Status:** IN PROGRESS — A–F and H have landed (the registry item, the core, both views, the template, billing and presence). G, I, J, K, L, M and N remain; see §5.
 
 ## 0. Headline finding
 
@@ -207,7 +207,7 @@ Sized S/M/L, status recorded inline as each lands.
 - **J — Public API surface (S, optional v1).** Scoped API keys + serve the generated `lunora/_generated/openapi.json` + expose `@lunora/mcp`. Cheap only because it is generated; do not hand-write what the CF template hand-wrote.
 - **K — React Native view + `templates/saas-expo` (M, v2).** The seventh view; the "web and mobile, one backend" story.
 - **L — Surface (S).** A public demo, a gallery entry, a docs page, and a `/pricing` route in `apps/docs` (there is none today).
-- **M — Gates (S).** Enrol every `templates/saas-*` in `pnpm run test:templates`, add a Playwright smoke to `tests/e2e`, check the kit's worker bundle against `worker-size.json`.
+- **M — Gates (S).** **Partly done.** `templates/saas` is in `pnpm run test:templates` — the matrix discovers templates rather than listing them, so it enrolled itself, and the leg passes scaffold, install, `lunora add auth-ui`, build, typecheck and the credential-free deploy dry run. It earned its place immediately: the deploy leg is what caught a committed localhost `APP_BASE_URL`, and the build leg a `.global()` table with no writer. Remaining: a Playwright smoke in `tests/e2e`, and the kit's worker bundle against `worker-size.json`.
 - **N — The finishing touches (S).** Impersonation (part of G), a changelog page, cookie consent, and a waitlist on the marketing home (§2.4.9).
 
 ## 6. Platform parity
