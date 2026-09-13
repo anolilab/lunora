@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
+import type { Id } from "../../lunora/_generated/dataModel";
 import { ActivityFeed, OverviewStats, PresenceBar, ProjectsCard } from "../../lunora/saas-ui/react";
 
 import "../../lunora/saas-ui/styles.css";
@@ -59,9 +60,11 @@ function DashboardPage() {
     /*
      * The cards hand back a plain string id — they are framework-agnostic and
      * know nothing about branded `Id<"saas_projects">` types — so the cast
-     * happens here, at the one boundary that owns the mutation.
+     * happens here, at the one boundary that owns the mutation. Named rather
+     * than `as never`: the id IS one of these, and a reader copying this line
+     * should see which table it belongs to.
      */
-    const archive = async (id: string) => archiveProject({ projectId: id as never }); // secret-scanner:allow -- a mutation argument name, not a Cypress project id.
+    const archive = async (id: string) => archiveProject({ projectId: id as Id<"saas_projects"> }); // secret-scanner:allow -- a mutation argument name, not a Cypress project id.
     const create = async (name: string) => createProject({ name });
 
     return (
