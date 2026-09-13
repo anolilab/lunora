@@ -58,7 +58,7 @@ organisation" — a bug that reads as data loss.
    `api.saas.*`.
 2. **Resolve the identity** in your Worker's `createWorker(...)` call. The
    snippet is in `lunora/identity.ts`; without it, every org-scoped function
-   fails closed with `FAILED_PRECONDITION`.
+   fails closed with `UNPROCESSABLE`.
 3. **Enable better-auth's `organization()` and `admin()` plugins** in
    `lunora/auth/index.ts` — they own the records this item projects.
 4. **Call `internal.saas.syncOrganization`** after an organisation is created,

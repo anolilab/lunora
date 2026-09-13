@@ -102,7 +102,7 @@ const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ acti
     }
 
     if (!identity.activeOrganizationId) {
-        throw new LunoraError("FAILED_PRECONDITION", "billing is per-organization — create or switch to one first");
+        throw new LunoraError("UNPROCESSABLE", "billing is per-organization — create or switch to one first");
     }
 
     return identity.activeOrganizationId;

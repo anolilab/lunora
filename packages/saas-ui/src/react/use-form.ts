@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { FormController, FormState } from "../core/create-form-controller";
 
@@ -18,24 +18,31 @@ const sameDeps = (a: ReadonlyArray<unknown>, b: ReadonlyArray<unknown>): boolean
  * validation, double-submit, error mapping — is in `core/`, tested once, and
  * identical in the Svelte port ten lines away.
  *
- * The cache is a ref rather than `useMemo(factory, deps)`: `deps` arrives as a
- * parameter, and both React's lint and the compiler require a dependency list to
- * be an array literal they can read at the call site. A hook that forwards someone
- * else's array cannot satisfy that, so it opts out of the contract instead of
- * pretending to keep it — and comparing the array here is exactly what `useMemo`
- * would have done anyway.
+ * The controller is held in state rather than in `useMemo(factory, deps)`:
+ * `deps` arrives as a parameter, and both React's lint and the compiler require
+ * a dependency list to be an array literal they can read at the call site. A
+ * hook forwarding someone else's array cannot satisfy that. Comparing the array
+ * and re-deriving state during render is React's documented answer for state
+ * that depends on changed inputs — React re-renders immediately with the new
+ * controller and discards this pass, so nothing stale ever commits, and unlike a
+ * ref it stays readable by the compiler.
  */
 const useForm = <TFields extends string>(
     factory: () => FormController<TFields>,
     deps: ReadonlyArray<unknown> = [],
 ): [FormState<TFields>, FormController<TFields>] => {
-    const cache = useRef<{ controller: FormController<TFields>; deps: ReadonlyArray<unknown> } | undefined>(undefined);
+    const [cache, setCache] = useState<{ controller: FormController<TFields>; deps: ReadonlyArray<unknown> }>(() => {
+        return {
+            controller: factory(),
+            deps: [...deps],
+        };
+    });
 
-    if (cache.current === undefined || !sameDeps(cache.current.deps, deps)) {
-        cache.current = { controller: factory(), deps: [...deps] };
+    if (!sameDeps(cache.deps, deps)) {
+        setCache({ controller: factory(), deps: [...deps] });
     }
 
-    const { controller } = cache.current;
+    const { controller } = cache;
     const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 
     useEffect(() => controller.destroy, [controller]);

@@ -2,8 +2,8 @@
 
 import type { ReactNode } from "react";
 
-import type { OverviewPayload } from "../core";
-import { deriveOverviewStats, isFirstRun } from "../core";
+import { deriveOverviewStats, isFirstRun } from "../core/overview";
+import type { OverviewPayload } from "../core/types";
 import { Empty } from "./primitives";
 
 interface OverviewProps {
