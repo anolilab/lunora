@@ -31,7 +31,7 @@
  * sequence it has seen the whole of. See the "Checkpoint on a sequence boundary"
  * section of the commit-ordering doc.
  *
- * Two properties callers should NOT read into it:
+ * Four properties callers should NOT read into it:
  *
  * - **It is not gapless.** A mutation that allocates and then throws rolls its
  * writes back, but the counter row rolls back with them — so no gap from an
@@ -43,6 +43,23 @@
  * independently and their sequences say nothing about each other. `.global()`
  * tables live in D1 with no shard-local transaction to allocate inside, so
  * `.commitOrdered()` is rejected on them at schema-build time.
+ * - **It does not survive a point-in-time restore.** The counter is a row in the
+ * same SQLite database as everything it orders, so a restore rewinds it along
+ * with the rows: the allocator re-issues sequences an external consumer has
+ * already checkpointed past, and hands them to different writes. Measured on the
+ * faithful model of a restore (counter AND rows reverted together, since nothing
+ * local can restore only one): a consumer checkpointed at 5 is served nothing
+ * until post-restore writes climb back over 5, and the writes numbered 3, 4, 5
+ * in between are skipped permanently. Nothing inside the shard can detect this —
+ * every durable record of the old timeline reverts at the same instant — so a
+ * feed that must survive one has to pair its cursor with something minted
+ * OUTSIDE SQLite. The CDC epoch is that discriminator (`__cdc_meta`, re-minted
+ * by `ShardDO.sealForkedTimeline` the first time any consumer or the changelog
+ * archive proves the fork), and `_commitSeq` has no channel of its own to carry
+ * it: a consumer pages this field with its own `WHERE _commitSeq > cursor`
+ * query. A changefeed whose consumer cannot tolerate a silent rewind should read
+ * `__cdc_log` through `cdcSync`, which refuses a rewound cursor outright
+ * (`CDC_TIMELINE_FORKED`).
  * - **A hard delete is invisible to it.** `_commitSeq` lives on the row, so a
  * physically removed row takes its sequence with it: a consumer paging
  * `_commitSeq > cursor` sees the row stop appearing but is never told it went

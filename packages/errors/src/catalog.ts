@@ -503,13 +503,16 @@ export const ERROR_CATALOG = {
      * `NESTED_TRANSACTION` and `SQL_UNAVAILABLE` are "should never happen" state
      * invariants (mirrors `RUN_DEPTH_EXCEEDED`'s posture above): today's message
      * is static and safe, but flagged internal so a future edit that adds
-     * diagnostic detail can't accidentally start leaking it. The two `CDC_*`
-     * codes are the opposite — ordinary, expected, operator-configured outcomes
-     * — and both are `409` because the cursor the caller holds is real but no
-     * longer serveable, so the recovery is a snapshot rather than a retry.
+     * diagnostic detail can't accidentally start leaking it. The three `CDC_*`
+     * codes are the opposite — ordinary, expected outcomes of a configured
+     * retention window or an operator-ordered restore — and all three are `409`
+     * because the cursor the caller holds is real but no longer serveable, so
+     * the recovery is a snapshot rather than a retry.
      */
     /** A resume below the deleted changelog prefix: the entries are gone outright, for every consumer. */
     CDC_LOG_TRIMMED: { status: 409, title: "CDC log trimmed" },
+    /** A resume from ABOVE the changelog's high-watermark: the shard's log rewound (a point-in-time restore), so the cursor indexes a timeline that no longer exists. Carries the surviving cursor and the freshly minted epoch to resynchronise against. */
+    CDC_TIMELINE_FORKED: { status: 409, title: "CDC timeline forked" },
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },

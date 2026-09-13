@@ -371,6 +371,24 @@ const servePull = (host: ReplicaOwnerHost, epoch: string, sinceSeq: number): Res
         return replicaResponse({ changes: [], cursor: host.ownerCursor() ?? sinceSeq, epoch, floor });
     }
 
+    const ownerCursor = host.ownerCursor() ?? 0;
+
+    // A follower ASKING from above the owner's high-watermark has applied changes
+    // the owner can no longer account for: the owner's log rolled back under it,
+    // which a native point-in-time restore does WITHOUT minting a new epoch —
+    // the restore reverts `__cdc_meta` along with everything else, so the epoch
+    // comes back identical and cannot report the one fork it exists to report.
+    //
+    // Answered here rather than left to `readChanges`, which refuses such a
+    // cursor outright, for exactly the reason the floor is answered here: a
+    // thrown response reaches the follower as a bare non-2xx it reads as "owner
+    // unreachable", so it would retry the identical doomed round trip forever
+    // instead of bootstrapping. The rewound cursor routes it through
+    // `hasDiverged` into `bootstrap`, which is the recovery that exists.
+    if (sinceSeq > ownerCursor) {
+        return replicaResponse({ changes: [], cursor: ownerCursor, epoch, ...(floor === undefined ? {} : { floor }) });
+    }
+
     const { changes, cursor } = host.readChanges(sinceSeq, PULL_PAGE_SIZE);
 
     return replicaResponse({ changes, cursor, epoch, ...(floor === undefined ? {} : { floor }) });
@@ -608,7 +626,19 @@ class ShardReplica {
         const floor = page.floor ?? (compactedEmpty ? page.cursor : 0);
         const compactedPastUs = floor > 0 && floor > state.appliedSeq + 1;
 
-        if (page.epoch === state.epoch && !compactedPastUs) {
+        // The owner's high-watermark BELOW our applied position is a rollback on
+        // the owner, and it is the case the epoch cannot report: a point-in-time
+        // restore reverts the owner's whole SQLite database, the `__cdc_meta` row
+        // holding that epoch included, so the epoch comes back identical while
+        // the log underneath it is a different timeline. Our own applied position
+        // is then the only surviving record of the timeline we replayed, and
+        // following on means replaying a second timeline's changes over a first
+        // one's rows. Detectable only while the owner is still behind us — once
+        // it has written back past our cursor neither side can tell, the same
+        // blind spot `ShardDO.sealForkedTimeline` documents for its subscribers.
+        const rewoundBeneathUs = page.cursor < state.appliedSeq;
+
+        if (page.epoch === state.epoch && !compactedPastUs && !rewoundBeneathUs) {
             return false;
         }
 

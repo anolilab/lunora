@@ -341,6 +341,39 @@ describe("read replicas", () => {
         expect(replica?.isDivergent()).toBe(true);
     });
 
+    it("bootstraps when the owner's log rewound beneath it on the SAME epoch", async () => {
+        expect.assertions(4);
+
+        const replica = createReplicaLink(host);
+
+        owner.changes = [change(1, "a"), change(2, "b"), change(3, "c")];
+
+        await replica?.ensureFresh(3);
+
+        // A NATIVE point-in-time restore is the case the epoch cannot report: it
+        // reverts the owner's whole SQLite database, the `__cdc_meta` row that
+        // holds the epoch included, so the timeline forks and the epoch comes
+        // back identical. The follower's own applied position is then the only
+        // surviving record of the pre-restore timeline — and a high-watermark
+        // BELOW it is proof the owner can no longer account for rows the
+        // follower has already replayed.
+        owner.changes = [change(1, "z")];
+        // The owner's changelog read refuses such a cursor outright; the pull
+        // must answer with its rewound high-watermark before reaching it, since a
+        // thrown response reads here as "owner unreachable" and would be retried
+        // forever instead of bootstrapping.
+        owner.readThrows = true;
+
+        const pullsBefore = owner.pulls;
+
+        await expect(replica?.ensureFresh(4)).resolves.toBe("unavailable");
+        expect(replica?.isDivergent()).toBe(true);
+        // Nothing from the second timeline was replayed over the snapshot the
+        // first one produced, which is the corruption this refusal prevents.
+        expect(applied).toStrictEqual([]);
+        expect(owner.pulls).toBe(pullsBefore);
+    });
+
     it("reports unavailable when the log was compacted past its position", async () => {
         expect.assertions(2);
 
