@@ -35,6 +35,14 @@ export interface RegisteredLunoraFunction {
      * `reactor` have no caller identity, so RLS has no user to scope to.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -118,7 +126,7 @@ export interface Caller {
     billing: {
         apiCallsRemaining: (args?: {}) => Promise<{ allowed: boolean; balance?: number; }>;
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
-        mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        mySubscriptions: (args?: {}) => Promise<{ cancelAtPeriodEnd: boolean; currentPeriodEnd?: number; currentPeriodStart?: number; priceId: string; priceIds?: string[]; provider: string; providerSubscriptionId: string; quantity: number; referenceId: string; state: string }[]>;
         portal: (args?: {}) => Promise<{ url: string; }>;
         processWebhook: (args: { body: string; headers: Record<string, string> }) => Promise<{ applied: boolean; status: number; }>;
         recordApiCall: (args?: {}) => Promise<{ recorded: boolean; }>;

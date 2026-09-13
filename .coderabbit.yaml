@@ -51,6 +51,18 @@
         # filter here and was skipped in full — including the cache-key encoder
         # and the base64url codec on the HMAC signed-URL path.
         - "shared/**"
+        # `registry/` is shipped consumer code — `lunora registry add` copies it
+        # verbatim into a user's project — but it is not a workspace, so it
+        # matched no filter here and every item was skipped in full. A payment
+        # item that handed Stripe a localhost `success_url` in production got
+        # zero automated review for exactly this reason.
+        - "registry/**"
+        # ...except the `auth-ui-*` payloads, which `scripts/sync-auth-ui-registry.mjs`
+        # copies VERBATIM from `packages/auth-ui/src` (and `lint:registry:sync`
+        # guards). 575 of registry's 648 files live here, so a sync regeneration
+        # would blow the 100-file cap below and skip the PR entirely — and the
+        # review would duplicate `packages/**` on the same source anyway.
+        - "!registry/auth-ui-*/**"
         - "apps/**"
         - "tools/**"
         - "scripts/**"

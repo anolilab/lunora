@@ -35,13 +35,20 @@
  *     log rather than a snapshot.
  */
 import { internalAction, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
 import { createStorage } from "@lunora/storage";
 import type { R2BucketLike } from "@lunora/storage";
 // `env` from `cloudflare:workers` exposes the worker's configured bindings (here
 // the BACKUP_BUCKET R2 bucket) — the standard Workers way to reach a binding
-// outside the top-level `fetch`/`scheduled` handler. Ambient types come from
-// your project's `@cloudflare/workers-types` + generated `Env`.
-import { env } from "cloudflare:workers";
+// outside the top-level `fetch`/`scheduled` handler.
+import { env as workerEnv } from "cloudflare:workers";
+
+// `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+// `@cloudflare/workers-types` declares EMPTY until the project runs
+// `wrangler types` — so reading `env.BACKUP_BUCKET` off it is a `tsc` error in a
+// fresh scaffold. Go through the generated `CloudflareBindings` (an open index
+// signature of `unknown`) and narrow the binding where it is used.
+const env = workerEnv as CloudflareBindings;
 
 // TODO: list every table you want backed up. Lunora can't enumerate tables from
 // an action context, so this list is the source of truth for what `snapshot`
@@ -294,8 +301,8 @@ export const snapshot = internalAction
             throw new Error("backup/snapshot: no tables configured — edit the TABLES list in lunora/backup/index.ts (or pass { tables }) before scheduling.");
         }
 
-        // `env` values are typed `unknown` (see the registry's cloudflare-workers
-        // shim); narrow the R2 binding explicitly, then guard it.
+        // `CloudflareBindings` values are typed `unknown`; narrow the R2 binding
+        // explicitly, then guard it.
         const bucket = env.BACKUP_BUCKET as R2BucketLike | undefined;
 
         if (!bucket) {
@@ -392,9 +399,9 @@ export const prune = internalAction
             throw new Error("backup/prune: pass keepDays and/or keepLast — refusing to prune with no retention window configured.");
         }
 
-        // Same binding narrowing the `snapshot` action uses: `env` values are
-        // typed `unknown` (registry cloudflare-workers shim), so cast the R2
-        // binding explicitly, then guard it.
+        // Same binding narrowing the `snapshot` action uses: `CloudflareBindings`
+        // values are typed `unknown`, so cast the R2 binding explicitly, then
+        // guard it.
         const bucket = env.BACKUP_BUCKET as R2BucketLike | undefined;
 
         if (!bucket) {

@@ -1,3 +1,169 @@
+## @lunora/studio [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.186...@lunora/studio@1.0.0-alpha.187) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.64
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+* **@lunora/react:** upgraded to 1.0.0-alpha.115
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.125
+
+## @lunora/studio [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.185...@lunora/studio@1.0.0-alpha.186) (2026-09-13)
+
+### Bug Fixes
+
+* **codegen:** record table modifiers in the drift snapshot ([#751](https://github.com/anolilab/lunora/issues/751)) ([b8e9212](https://github.com/anolilab/lunora/commit/b8e92129ef721619405e1f4df274932fc28635a5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.138
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/react:** upgraded to 1.0.0-alpha.114
+* **@lunora/mail:** upgraded to 1.0.0-alpha.84
+* **@lunora/notify:** upgraded to 1.0.0-alpha.60
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.124
+
+## @lunora/studio [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.184...@lunora/studio@1.0.0-alpha.185) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.137
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.62
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/react:** upgraded to 1.0.0-alpha.113
+* **@lunora/mail:** upgraded to 1.0.0-alpha.83
+* **@lunora/notify:** upgraded to 1.0.0-alpha.59
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.123
+
+## @lunora/studio [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.183...@lunora/studio@1.0.0-alpha.184) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.136
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.61
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/react:** upgraded to 1.0.0-alpha.112
+* **@lunora/mail:** upgraded to 1.0.0-alpha.82
+* **@lunora/notify:** upgraded to 1.0.0-alpha.58
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.122
+
+## @lunora/studio [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.182...@lunora/studio@1.0.0-alpha.183) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.135
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/react:** upgraded to 1.0.0-alpha.111
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.121
+
+## @lunora/studio [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.181...@lunora/studio@1.0.0-alpha.182) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.134
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.60
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/react:** upgraded to 1.0.0-alpha.110
+* **@lunora/mail:** upgraded to 1.0.0-alpha.81
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.120
+
+## @lunora/studio [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.180...@lunora/studio@1.0.0-alpha.181) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.133
+
+## @lunora/studio [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.179...@lunora/studio@1.0.0-alpha.180) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,do:** `TablePage` now carries `sqlColumns`, the table's physical
+column names. A caller feeding columns to anything SQL-shaped wants that list,
+not `columns`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+* **studio,codegen:** `ColumnMeta` (`@lunora/shard-engine`, mirrored in `@lunora/studio`) gains
+an optional `onDelete`, and the generated shard's `tableColumns` signature widens with it.
+Regenerate with `lunora codegen`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,codegen:** confirm only what a delete measured ([#728](https://github.com/anolilab/lunora/issues/728)) ([da7be59](https://github.com/anolilab/lunora/commit/da7be59f282403363115b82ae0937c18fb84034d))
+* **studio,do:** make SQL surfaces report what the DB holds ([#729](https://github.com/anolilab/lunora/issues/729)) ([b756d58](https://github.com/anolilab/lunora/commit/b756d58859dce16ad1fd2d7050e6f97bb437cbfc))
+* **studio,do:** probe the real path, guard a blank search ([#726](https://github.com/anolilab/lunora/issues/726)) ([ebeeba9](https://github.com/anolilab/lunora/commit/ebeeba9f8eff51b74d7b10d4246a54d92a315795))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.132
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.59
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/react:** upgraded to 1.0.0-alpha.109
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/studio [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.178...@lunora/studio@1.0.0-alpha.179) (2026-09-12)
 
 

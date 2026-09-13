@@ -46,7 +46,12 @@ interface ReadAuthAuditQuery {
     event?: string;
     /** Max rows to return; clamped by the reader. */
     limit?: number;
-    /** Return only events with `seq` strictly greater than this (forward paging). */
+
+    /**
+     * Return only events with `seq` strictly greater than this. Supplying it
+     * switches the reader's page to oldest-first so the cursor walks forward;
+     * omit it for the newest-first feed.
+     */
     sinceSeq?: number;
 }
 
@@ -66,7 +71,7 @@ interface AuthAuditReader {
     read: (options: ReadAuthAuditQuery) => Promise<AuthAuditEntry[]>;
 }
 
-/** Payload of a {@link GET_AUTH_AUDIT_LOG_OP} call: the recorded entries, newest first. */
+/** Payload of a {@link GET_AUTH_AUDIT_LOG_OP} call: the recorded entries — newest first, or oldest first when the query carried a `sinceSeq` cursor. */
 interface AuthAuditLogResult {
     entries: AuthAuditEntry[];
 }

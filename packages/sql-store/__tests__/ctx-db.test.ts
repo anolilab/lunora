@@ -1208,7 +1208,12 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         expect(insert?.params[1]).toBe(1);
     });
 
-    it("replace() mints clock() and ignores a forged document _creationTime", async () => {
+    it("replace() preserves the stored _creationTime and ignores a forged one", async () => {
+        // `_creationTime` is when the row was INSERTED, and every default order
+        // and keyset cursor is built on it — so a rewrite must not re-stamp it,
+        // or the row jumps to the end of every ordered read and a paginating
+        // client sees it twice or never. `patch` preserves it; the two write
+        // verbs cannot disagree about a system field.
         expect.assertions(3);
 
         // resolveTableName + the OCC snapshot both read; return this row for every SELECT.
@@ -1221,9 +1226,24 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
         expect(update).toBeDefined();
-        // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
-        expect(update?.params[0]).toBe(CLOCK);
+        // The SET clause binds `_creationTime = ?` first, so the stored 42 is the leading param — never the forged 5, never a fresh clock().
+        expect(update?.params[0]).toBe(42);
         expect(update?.params).not.toContain(5);
+    });
+
+    it("replace() WITH allowExplicitId honors the document _creationTime (import/CDC replay)", async () => {
+        expect.assertions(2);
+
+        const snapshotRow = { _creationTime: 42, archived: 0, body: "x", id: "row1", priority: 1, slug: "s" };
+        const { calls, exec } = recordingExecWithParams([snapshotRow]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, undefined, { allowExplicitId: true });
+
+        const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
+
+        expect(update).toBeDefined();
+        expect(update?.params[0]).toBe(5);
     });
 });
 

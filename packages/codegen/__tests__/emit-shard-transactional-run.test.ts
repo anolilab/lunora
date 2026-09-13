@@ -103,7 +103,13 @@ describe("emitShard — deferred scheduling", () => {
         // admin/lifecycle ctx with no registered kind — got the BEGIN/COMMIT span
         // for a mutation they composed with the schedule buffer missing, and the
         // job reached the SchedulerDO while that span was still open.
-        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);');
+        //
+        // The second argument is the durable custody the buffer needs to be honest:
+        // everything between the COMMIT and the scheduler's acknowledgement is
+        // outside the transaction, so without it a failure there leaves durable
+        // writes, a durable replay-dedup row answering the client's retry with a
+        // cached success, and a job that exists nowhere.
+        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());');
         expect(emitted).toContain("scheduler,");
     });
 
@@ -128,7 +134,7 @@ describe("emitShard — deferred scheduling", () => {
         expect(emitted).toContain(
             'const schedulerBase = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);',
         );
-        expect(emitted.indexOf("const schedulerBase =")).toBeLessThan(emitted.indexOf("withDeferredSchedules(schedulerBase)"));
+        expect(emitted.indexOf("const schedulerBase =")).toBeLessThan(emitted.indexOf("withDeferredSchedules(schedulerBase,"));
     });
 
     it("settles the buffer against the transaction outcome, and only after it resolves", () => {

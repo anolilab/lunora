@@ -63,9 +63,11 @@ box that gives you:
   [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
   import paths.
 - **Invite-only sign-up**: `inviteOnly()` closes self-serve registration to
-  addresses an administrator invited, on every path that mints a user — read the
-  security section before you rely on it, because an invitation is keyed by
-  email address and carries no secret token. See
+  addresses an administrator invited, on every path that mints a user. The
+  invitation carries a 256-bit secret token, so read the security section before
+  you rely on it: the link is a bearer credential anyone who receives it can
+  spend, and without `requireEmailVerification` whoever spends it holds a session
+  immediately. See
   [invite-only sign-up](/docs/packages/auth/plugins#invite-only-sign-up).
 
 ```ts

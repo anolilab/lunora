@@ -51,6 +51,7 @@ export {
     backfillSearchIndexes,
     CDC_LOG_TABLE,
     cdcCanVouchFor,
+    cdcForkedError,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     cdcTrimmedError,
@@ -63,6 +64,7 @@ export {
     readCdcChangeKeys,
     readCdcChanges,
     runShardMigrations,
+    stripReservedPatchFields,
     trimCdcChanges,
 } from "./ctx-db";
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
@@ -78,7 +80,7 @@ export {
     readCdcEpoch,
 } from "./ctx-db-cdc";
 export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
-export { archiveCdcSegment, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
+export { archiveCdcSegment, cdcArchiveRewound, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
@@ -96,6 +98,18 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
+export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
+export {
+    deferScheduleOutbox,
+    forgetScheduleOutbox,
+    migrateScheduleOutbox,
+    parkScheduleOutbox,
+    probeScheduleOutbox,
+    readDueScheduleOutbox,
+    recordScheduleOutbox,
+    SCHEDULE_OUTBOX_TABLE,
+    trimScheduleOutbox,
+} from "./ctx-db-schedule-outbox";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
 export type { ShapePokeCursorRow } from "./ctx-db-shape-poke-cursor";
 export {

@@ -184,6 +184,50 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(0);
     });
 
+    it("upload() enforces maxSize for an ArrayBufferView and a string body", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        // R2's `put` stores bytes from a view and a string too, and both were
+        // measured as `body.size` — `undefined` for either, and
+        // `undefined > maxSize` is false, so the uncapped body was forwarded
+        // verbatim and stored.
+        await expect(storage.upload("view.bin", new Uint8Array(100).fill(65), { maxSize: 10 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        await expect(storage.upload("string.txt", "x".repeat(100), { maxSize: 10 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() measures a string body in UTF-8 bytes, not UTF-16 code units", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        // 6 characters, 12 bytes: counting `String.length` would wave this
+        // through a 10-byte cap and let R2 store more than the cap allows.
+        await expect(storage.upload("accents.txt", "é".repeat(6), { maxSize: 10 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        expect(bucket.puts).toHaveLength(0);
+
+        await storage.upload("ascii.txt", "abcdefghij", { maxSize: 10 });
+
+        expect(bucket.puts).toHaveLength(1);
+    });
+
+    it("upload() refuses a body whose length it cannot measure rather than uploading it uncapped", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        // Untyped JS reaches this path. Anything that is not one of R2's body
+        // shapes has no length to compare, and the old `body.size` read answered
+        // `undefined` for all of them — which compares false against any cap.
+        await expect(storage.upload("weird.bin", { not: "a body" } as never, { maxSize: 10 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(bucket.puts).toHaveLength(0);
+    });
+
     it("upload() accepts ArrayBuffer and DataView chunks in a streamed body", async () => {
         expect.assertions(2);
 
@@ -434,7 +478,7 @@ describe("createStorage", () => {
         await expect(storage.head("missing")).resolves.toBeNull();
     });
 
-    it("head() falls back to a 0-length ranged get on a binding with no HEAD", async () => {
+    it("head() falls back to a plain get on a binding with no HEAD", async () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
@@ -449,7 +493,11 @@ describe("createStorage", () => {
         const object = await storage.head("k");
 
         expect(object?.size).toBe(99);
-        expect(bucket.get).toHaveBeenCalledWith("k", { range: { length: 0 } });
+        // Not a ranged get: R2 refuses a zero-length range outright
+        // (`The requested range is not satisfiable (10039)`), so the fallback
+        // this branch documents used to throw on every call against a real
+        // bucket. A 1-byte range fails the same way on a 0-byte object.
+        expect(bucket.get).toHaveBeenCalledWith("k");
     });
 
     it("getMetadata() derives a hex sha256 from R2 checksums", async () => {
@@ -474,12 +522,12 @@ describe("createStorage", () => {
         expect(meta?.sha256).toBe("deadbeef");
     });
 
-    it("getMetadata() falls back to a 0-length ranged GET when the bucket has no head()", async () => {
+    it("getMetadata() falls back to a plain GET when the bucket has no head()", async () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
 
-        // No `head` on this double — exercises the ranged-GET fallback path.
+        // No `head` on this double — exercises the body-discarding GET fallback.
         delete bucket.head;
 
         vi.spyOn(bucket, "get").mockImplementation(async (key) => {
@@ -501,7 +549,7 @@ describe("createStorage", () => {
         const meta = await storage.getMetadata("hello.txt");
 
         expect(meta).toMatchObject({ contentType: "text/plain", key: "hello.txt", size: 7 });
-        expect(bucket.get).toHaveBeenCalledWith("hello.txt", { range: { length: 0 } });
+        expect(bucket.get).toHaveBeenCalledWith("hello.txt");
 
         const missing = await storage.getMetadata("missing");
 
@@ -532,7 +580,7 @@ describe("createStorage", () => {
         expect(bucket.list).not.toHaveBeenCalled();
     });
 
-    it("list() clamps the page limit into the [1, 1000] window", async () => {
+    it("list() clamps the page limit to R2's 1000 ceiling", async () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
@@ -542,9 +590,64 @@ describe("createStorage", () => {
 
         expect(bucket.list).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1000 }));
 
-        await storage.list("p/", { limit: 0 });
+        await storage.list("p/", { limit: 50 });
 
-        expect(bucket.list).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1 }));
+        expect(bucket.list).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 50 }));
+    });
+
+    it("list() rejects a limit that is not a positive integer instead of forwarding it to R2", async () => {
+        expect.assertions(5);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, bucketName: "default" });
+
+        // `Math.floor(NaN)` is `NaN` and passed both clamps, so a
+        // `limit: Number(env.PAGE_SIZE)` with the variable unset reached R2,
+        // which answers `MaxKeys params must be positive integer <= 1000.
+        // (10022)` — a remote error naming a parameter the caller never wrote.
+        await expect(storage.list("p/", { limit: Number.NaN })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        // `0` used to be clamped up to a 1-row page, and a fractional limit
+        // silently floored — both answer a page size nobody asked for.
+        await expect(storage.list("p/", { limit: 0 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(storage.list("p/", { limit: -5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(storage.list("p/", { limit: 12.5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+        expect(bucket.list).not.toHaveBeenCalled();
+    });
+
+    it("head() reads metadata through a head-less binding without asking for a byte range", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const cancel = vi.fn<() => Promise<void>>(async () => undefined);
+        // A binding without `head` — the case `R2BucketLike.head?` exists for.
+        // `get` mirrors real R2: a zero-length range is refused outright
+        // (`The requested range is not satisfiable (10039)`), which is what the
+        // old fallback asked for on every call.
+        const headless: R2BucketLike = {
+            ...bucket,
+            get: vi.fn<R2BucketLike["get"]>(async (key, options) => {
+                if (options?.range !== undefined) {
+                    throw new Error("get: The requested range is not satisfiable (10039)");
+                }
+
+                return {
+                    ...fakeObject(key),
+                    arrayBuffer: async () => new ArrayBuffer(0),
+                    body: { cancel } as unknown as ReadableStream,
+                    text: async () => "ok",
+                };
+            }),
+            head: undefined,
+        };
+
+        const storage = createStorage({ bucket: headless, bucketName: "default" });
+
+        await expect(storage.head("some/key")).resolves.toMatchObject({ key: "some/key", size: 4 });
+        expect(headless.get).toHaveBeenCalledWith("some/key");
+        // The body is discarded rather than left dangling: `head()` promises no
+        // body transfer, and this path is the one that cannot use R2's HEAD.
+        expect(cancel).toHaveBeenCalledTimes(1);
     });
 
     it("list() forwards the R2 truncated flag", async () => {

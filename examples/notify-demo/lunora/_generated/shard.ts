@@ -343,7 +343,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "8a48946130734b93", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"announcements\": {\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"sentAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_sent\": {\n          \"fields\": [\n            \"sentAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "3ce9099384bbabad", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"announcements\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"sentAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_sent\": {\n          \"fields\": [\n            \"sentAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -488,8 +488,23 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
         }
 
-        protected override isQueryFunction(functionPath: string): boolean {
-            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        protected override isCacheableQuery(functionPath: string): boolean {
+            // NOT `kind === "query"` alone. A cache hit answers without running
+            // `handleRpc`, so the `internal` refusal at the top of it is skipped —
+            // and an `internalQuery` primed by a trusted system dispatch was then
+            // served to an anonymous client that the refusal would have 404'd.
+            //
+            // `perDispatch` is the same argument one layer out: the procedure's
+            // own `.use()` chain runs INSIDE `handleRpc`, so a hit skips it too.
+            // A `.use(rateLimit(...))` query was therefore charged once and then
+            // served from the memo to every later request — each of which still
+            // reached this Durable Object and still cost it a dispatch, so only
+            // the accounting was skipped. Metering and memoizing are mutually
+            // exclusive; the author asking for the first is choosing against the
+            // second.
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            return registered?.kind === "query" && registered.visibility !== "internal" && registered.perDispatch !== true;
         }
 
         protected override isPaidFunction(functionPath: string): boolean {
@@ -666,6 +681,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         // paths answer `false`; `handleRpc` above rejects them anyway.
         protected override isMutationFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
+        }
+
+        // The scheduler the deferred-schedule outbox retries through. Only the
+        // CONFIGURED one: falling back to `schedulerStub` would have an app with no
+        // scheduler retry every entry against a thrower until the attempt ceiling
+        // parked it, and there is nothing to park — an app with no scheduler has no
+        // `ctx.scheduler` call that reached the buffer in the first place.
+        protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
         }
 
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
@@ -1103,7 +1127,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // stays unwrapped.
             //
             // Wrapped OUTSIDE the read-stamping facade so `get`/`list` stay stamped.
-            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);
+            //
+            // `this.scheduleOutbox()` is what keeps the buffer honest. Everything
+            // between the COMMIT and the scheduler's acknowledgement is outside the
+            // transaction, so a failure there leaves writes that are durable and a
+            // job that exists nowhere — and the mutation's replay-dedup row committed
+            // inside the span, so the client's retry is answered from cache and told
+            // it succeeded. The outbox takes custody of each buffered call inside the
+            // transaction and releases it once the scheduler has the job; what
+            // survives is retried by `pollScheduleOutbox` on the shared poll alarm.
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
@@ -1218,10 +1251,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // `ctx.now`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
-            // Query/mutation handlers must be deterministic (they may be re-run on
-            // OCC retry / subscription re-eval), so they must read time through
-            // `ctx.now` instead of `Date.now()` — the `nondeterministic_query_mutation`
-            // advisor flags the latter. Actions may still use ambient `Date.now()`.
+            // A `query` handler is re-run by every live subscription that reads it,
+            // so `Date.now()` there flickers between re-evaluations. A `mutation`
+            // handler does not replay under ordinary dispatch (an OCC conflict throws
+            // to the caller rather than retrying internally), but one called from a
+            // workflow step or queue consumer runs again when that step replays. Both
+            // read time through `ctx.now` — the `nondeterministic_query_mutation`
+            // advisor flags `Date.now()`. Actions may still use ambient `Date.now()`.
             const now = Date.now();
 
             const ctx: Record<string, unknown> = {
@@ -1235,7 +1271,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // is visible and its spans join this trace. Degrades to the bare
                 // global when no sink is configured.
                 fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
-                ip,
+                // A GETTER, not a plain field, so the reactive cache can tell a
+                // handler that reads the caller's address from the majority that
+                // never do. `ctx.ip` is per-request state the memo must be keyed
+                // by — otherwise two anonymous callers share one entry and the
+                // second is served the first's address — but keying every entry
+                // by address would shard the cache per client for every query.
+                // Reading it here marks the dispatch's scope; `runCachedQuery`
+                // folds the address into the key for this function from then on.
+                get ip() {
+                    options.scope?.markIpRead();
+
+                    return ip;
+                },
                 log,
                 metrics,
                 now,

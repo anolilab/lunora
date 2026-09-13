@@ -398,3 +398,78 @@ describe("effectiveColumnKind", () => {
         expect(effectiveColumnKind(validator("optional", validator("bytes")))).toBe("bytes");
     });
 });
+
+describe("effectiveColumnKind — a literal resolves to the kind of its payload", () => {
+    const literal = (value: unknown): ValidatorLike => {
+        return { _meta: { value }, kind: "literal" };
+    };
+
+    // `v.literal(x)` holds exactly one value, so its STORAGE kind is that
+    // value's. Answering `"literal"` sends every payload to a TEXT column with
+    // no encode/decode pairing: SQLite's TEXT affinity rewrites the bound number
+    // `1` as the text `"1.0"`, and the decode has no kind to reverse it with —
+    // so the column reads back a string and the next `patch` fails validation
+    // against its own literal.
+    it.each([
+        ["bigint", 7n, "bigint"],
+        ["boolean", true, "boolean"],
+        ["number", 1, "number"],
+        ["string", "x", "string"],
+        ["null", null, "null"],
+    ])("resolves a %s literal to that kind", (_label, value, expected) => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind(literal(value))).toBe(expected);
+    });
+
+    it("resolves v.optional(v.literal(1)) the same way", () => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind({ _meta: { inner: literal(1) }, kind: "optional" })).toBe("number");
+    });
+
+    it('falls back to "literal" when the validator declares no payload', () => {
+        expect.assertions(1);
+
+        // A hand-built validator with no `_meta.value` keeps the behaviour it
+        // already had rather than silently acquiring a different column type.
+        expect(effectiveColumnKind({ _meta: {}, kind: "literal" })).toBe("literal");
+    });
+});
+
+describe("sqliteEncode/sqliteDecode — a user string that looks like a wire payload", () => {
+    // The wire marker is a bare prefix on the stored text, so a user string that
+    // merely BEGINS with it was decoded as the payload it resembles: the string
+    // `"$lunora.wire$hello"` read back as `"hello"`, and `"$lunora.wire$42"` read
+    // back as the NUMBER 42 — a string field returning a number.
+    it.each(["any", "from", "union"])("round-trips a %s column string beginning with the sentinel", (kind) => {
+        expect.assertions(2);
+
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$hello", kind), kind)).toBe("$lunora.wire$hello");
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$42", kind), kind)).toBe("$lunora.wire$42");
+    });
+
+    it("round-trips a string beginning with the ESCAPED form", () => {
+        expect.assertions(1);
+
+        // The escape must itself be escaped, or the fix only moves the collision
+        // one character along.
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$$abc", "any"), "any")).toBe("$lunora.wire$$abc");
+    });
+
+    it("leaves an ordinary string byte-identical", () => {
+        expect.assertions(2);
+
+        expect(sqliteEncode("plain", "any")).toBe("plain");
+        expect(sqliteDecode("plain", "any")).toBe("plain");
+    });
+
+    it("reads a row stored BEFORE the escape exactly as it did before", () => {
+        expect.assertions(1);
+
+        // Pre-fix rows hold the unescaped text. The decode must not start
+        // reinterpreting them — it keeps returning what it already returned, so
+        // the fix changes no stored row's meaning.
+        expect(sqliteDecode("$lunora.wire$hello", "any")).toBe("hello");
+    });
+});

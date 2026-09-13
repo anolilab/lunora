@@ -164,9 +164,52 @@ interface SqlCtxExec {
  */
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
-/** Structural read of a validator's `.nullable()` flag — `.nullable()` is the one thing that clears `notNull`. */
-const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } | undefined): boolean =>
-    validator?._meta?.column?.notNull === false;
+/**
+ * Does this validator's type admit the value `null`?
+ *
+ * `.nullable()` — the one modifier that clears `notNull` — is the explicit
+ * signal, and it used to be the ONLY one read. That made the answer a proxy for
+ * "was `.nullable()` called", not for "can this hold null", and several
+ * validators admit null without it:
+ *
+ * - `v.any()` accepts every value, `null` included.
+ * - `v.null()` accepts nothing else.
+ * - `v.literal(null)` permits exactly that one value.
+ * - `v.union(...)` admits null when any MEMBER does — `v.union(v.string(), v.null())`
+ *   is the shape that gets written in practice.
+ *
+ * `v.from(schema)` is the one shape left out: an external Standard Schema
+ * decides `null` in code we cannot read without running it, so it keeps the
+ * conservative answer it already had.
+ */
+const acceptsNull = (validator: TableDefinitionLike["shape"][string] | undefined): boolean => {
+    if (validator === undefined) {
+        return false;
+    }
+
+    if (validator._meta?.column?.notNull === false) {
+        return true;
+    }
+
+    switch (validator.kind) {
+        case "any":
+        case "null": {
+            return true;
+        }
+        case "literal": {
+            return validator._meta?.value === null;
+        }
+        case "optional": {
+            return acceptsNull(validator._meta?.inner);
+        }
+        case "union": {
+            return validator._meta?.members?.some((member) => acceptsNull(member)) === true;
+        }
+        default: {
+            return false;
+        }
+    }
+};
 
 /**
  * Does a stored SQL NULL in this column mean the field is ABSENT rather than
@@ -181,21 +224,23 @@ const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonl
  * throws, so every row that simply had no value for an optional column was
  * missing from the restore.
  *
- * `v.string().nullable()` and `v.optional(v.string().nullable())` are the
- * opposite case — NULL is a value the column genuinely holds — so those keep it.
+ * A column whose inner type ADMITS null is the opposite case — NULL is a value
+ * the column genuinely holds — so those keep it. That covers
+ * `v.optional(v.string().nullable())`, and (this is what {@link acceptsNull} was
+ * widened for) `v.optional(v.any())` and
+ * `v.optional(v.union(v.string(), v.null()))`, where a `null` the caller wrote
+ * EXPLICITLY was being discarded as "field unset" while the DO plane kept it.
+ *
+ * One column cannot hold both answers: SQL NULL is the only thing either case
+ * can store, so a table reads it one way or the other. Reading it as `null`
+ * whenever the type admits null is the direction that never loses a written
+ * value, and it never produces one outside the declared type either —
+ * `v.optional(v.any())` infers `any` and `v.optional(v.union(v.string(), v.null()))`
+ * infers `string | null | undefined`; both accept `null`. What remains is that an
+ * UNSET field of such a column reads back as `null` rather than as missing. That
+ * is a shape the declared type permits; discarding a written value was not.
  */
-const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => {
-    if (validator.kind !== "optional" || acceptsNull(validator)) {
-        return false;
-    }
-
-    // `@lunora/values` stashes the wrapped validator on `_meta.inner`, which
-    // `ValidatorLike` declares (see `shared/effective-kind`, which reads it the
-    // same way for the same reason).
-    const inner = validator._meta?.inner;
-
-    return !acceptsNull(inner);
-};
+const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => validator.kind === "optional" && !acceptsNull(validator);
 
 /**
  * The `field → [effective column kind, NULL means absent]` mapping for a table,

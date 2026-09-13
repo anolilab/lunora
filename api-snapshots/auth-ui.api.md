@@ -5763,7 +5763,6 @@ interface PhoneVerifyState {
 interface PluginFlags {
     admin?: boolean;
     anonymous?: boolean;
-    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;

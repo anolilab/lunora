@@ -92,25 +92,51 @@ export interface SqlClient {
 /**
  * Structural projection of a `pg` (node-postgres) `Client`/`Pool`. Only the
  * `query` method `fromNodePg` calls is required, kept structural for testing.
+ *
+ * Method syntax, not an arrow property — see {@link PostgresJsLike}.
  */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (the drivers declare mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface NodePgLike {
-    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<{ rows: unknown[] }>;
+    query(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<{ rows: unknown[] }>;
 }
 
 /**
  * Structural projection of a `postgres` (postgres.js) tagged-template client.
  * The adapter uses the `.unsafe(text, params)` escape hatch so callers keep
  * full control of the parameter list.
+ *
+ * **`unsafe` is declared with METHOD syntax, and that is load-bearing.** Under
+ * `strictFunctionTypes` an arrow PROPERTY is checked contravariantly in its
+ * parameters, so a driver whose `unsafe` takes a MUTABLE array — which real
+ * postgres.js does (`parameters?: ParameterOrJSON<never>[]`) — is not assignable
+ * to one declared `params?: ReadonlyArray<unknown>`. As an arrow property this
+ * projection could therefore never accept the package it projects: every
+ * consumer got
+ * `TS2345: Argument of type 'Sql<{}>' is not assignable to parameter of type
+ * 'PostgresJsLike'`, and this repo's own test reached for
+ * `as unknown as PostgresJsLike` to get past it. Method syntax is checked
+ * bivariantly, which is what a structural projection of someone else's type
+ * needs — `readonly unknown[]` and postgres.js's mutable array relate in one
+ * direction, which is all bivariance asks for.
  */
 export interface PostgresJsLike {
-    unsafe: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
 }
 
 /**
  * Structural projection of a `mysql2/promise` connection/pool. `mysql2`'s
  * `execute` resolves to a `[rows, fields]` tuple; the adapter takes the first
  * element as the rows.
+ *
+ * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
+ * that is necessary and NOT sufficient, so the live-driver test still casts.
+ * mysql2 types its second argument as a single `ExecuteValues`, a union of
+ * scalars, `ExecuteValues[]` and `{ [key: string]: ExecuteValues }`. Neither
+ * direction relates to `ReadonlyArray<unknown>`, so no variance rule can bridge
+ * it: closing this needs a deliberate widening of the parameter type here (and
+ * of what {@link SqlClient} promises), not a declaration-style change.
  */
 export interface Mysql2Like {
-    execute: (text: string, params?: ReadonlyArray<unknown>) => Promise<[unknown, unknown]>;
+    execute(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<[unknown, unknown]>;
 }
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */

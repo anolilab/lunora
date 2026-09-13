@@ -21,6 +21,7 @@ import type { R2BucketLike } from "@lunora/platform";
 import type { CdcChange, SqlExec } from "@lunora/shard-engine";
 import {
     archiveCdcSegment,
+    cdcArchiveRewound,
     cdcSeqLeavingRows,
     compactCdcDocs,
     envOptionalPositiveInt,
@@ -95,8 +96,17 @@ interface CdcRetentionHost {
     epoch: () => string | undefined;
     /** Report a swallowed failure; retention is maintenance and must never surface on a write path. */
     recordError: (scope: string, error: unknown) => void;
+
     /** Lowest cursor any durable in-shard consumer has reached — the seq a sweep may not cross. */
     retentionFloor: (sql: SqlExec) => number;
+
+    /**
+     * Re-mint the CDC epoch because this shard's changelog has provably forked —
+     * `ShardDO.sealForkedTimeline`. The sweep calls it when the ARCHIVE turns out
+     * to know about segments the shard has no record of writing, which is what a
+     * rewound watermark looks like from the one place a restore cannot reach.
+     */
+    sealTimeline: () => void;
     /** This DO's shard key, or `__root__` for the single-DO default. */
     shardKey: () => string;
     sql: () => SqlExec;
@@ -314,8 +324,26 @@ class CdcRetentionRunner {
                     // epoch the read path refuses, so they would cost storage
                     // forever and answer nothing.
                     const epoch = this.host.epoch() as string;
+                    const scope = { epoch, shard: this.host.shardKey() };
 
-                    await archiveCdcSegment(bucket, { epoch, shard: this.host.shardKey() }, batch);
+                    // A segment above the watermark means the shard and the
+                    // archive disagree about what has been written, and the
+                    // reachable cause is a point-in-time restore: it reverts the
+                    // watermark and the epoch together, so without this the
+                    // rewound timeline archives over the old one's objects under
+                    // the same prefix. Seal the fork and let the NEXT sweep write
+                    // under the fresh prefix — the watermark did not advance, so
+                    // nothing in this batch is lost by skipping a cycle, and the
+                    // retention below it must not run either: trimming rows whose
+                    // only copy lives under a prefix this shard has just stopped
+                    // reading would destroy them outright.
+                    if (await cdcArchiveRewound(bucket, scope, archivedAlready)) {
+                        this.host.sealTimeline();
+
+                        return;
+                    }
+
+                    await archiveCdcSegment(bucket, scope, batch);
 
                     // Only now. The watermark is the claim "this is durable
                     // elsewhere", and advancing it over an upload that did not

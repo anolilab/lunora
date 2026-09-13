@@ -110,7 +110,10 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         outputDirectory: result.outputDirectory,
     };
 
-    logger.success(`codegen wrote dataModel.ts, api.ts, server.ts to ${result.outputDirectory}`);
+    // What was actually emitted, from codegen itself — the set varies with the
+    // project's features and `--api-spec`, so any list restated here is wrong
+    // for someone.
+    logger.success(`codegen wrote ${result.writtenFiles.join(", ")} to ${result.outputDirectory}`);
 
     // Static schema advisories (unindexed FKs, …). Surface each with its
     // remediation so the warning is actionable; one grouped `warn` keeps it in

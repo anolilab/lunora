@@ -91,6 +91,14 @@ every file:
   in place produces `TS2349: not callable` and, worse, degrades every parameter
   inside it to implicit `any`, which is where a big share of a port's
   `TS7006`/`TS7031` mass comes from.
+- **The hooks return a handle, not a function.** Convex's
+  `useMutation(api.x.y)` _is_ the invoker, so `const send = useMutation(...);
+send({...})` is idiomatic there and `TS2349: not callable` here. Every
+  verb-named Lunora hook resolves to an object — destructure the invoker:
+  `useMutation` and `useMutator` expose `mutate`, `useAction` exposes `call`,
+  `useAgent` exposes `run`. Each also carries `pending`/`error`/`reset`, which
+  is the reason for the shape: destructuring at the call site lets the React
+  linter track a dependency on each field independently.
 - **`.filter()` takes a predicate, not a query builder.** Convex passes a
   builder (`q.eq(q.field("status"), "connected")`); Lunora passes the document
   (`(document) => document.status === "connected"`).

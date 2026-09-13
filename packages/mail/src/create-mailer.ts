@@ -94,8 +94,12 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         });
 
         return {
-            bcc: options_.bcc,
-            cc: options_.cc,
+            // Drop an empty optional recipient list rather than carrying `[]` into
+            // the payload: downstream (providers, custom transports, the capture
+            // sink) tests these for presence, so an empty list must be spelled the
+            // same way an absent field is.
+            bcc: options_.bcc?.length ? options_.bcc : undefined,
+            cc: options_.cc?.length ? options_.cc : undefined,
             from,
             headers: options_.headers,
             html,

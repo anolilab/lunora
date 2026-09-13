@@ -53,6 +53,7 @@ export const subscriptions = sqliteTable("subscriptions", {
     currentPeriodEnd: real("currentPeriodEnd"),
     currentPeriodStart: real("currentPeriodStart"),
     priceId: text("priceId").notNull(),
+    priceIds: text("priceIds", { mode: "json" }).$type<Array<string>>(),
     provider: text("provider").notNull(),
     providerSubscriptionId: text("providerSubscriptionId").notNull(),
     quantity: real("quantity").notNull(),

@@ -233,7 +233,7 @@ describe("inviteOnly", () => {
         });
     });
 
-    it("refuses an expired invitation", async () => {
+    it("refuses an expired invitation with the same message a wrong token earns", async () => {
         expect.assertions(1);
 
         const token = await invite("ada@example.com", 60);
@@ -241,10 +241,11 @@ describe("inviteOnly", () => {
         vi.useFakeTimers();
         vi.setSystemTime(Date.now() + 61 * 1000);
 
-        // The token still matches — expiry is the database gate's business, so the
-        // holder of a stale link gets the "ask for an invitation" message rather
-        // than the deliberately vague one a wrong token earns.
-        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
+        // The token still matches, but the route hook checks usability too, so the
+        // holder of a stale link gets the one uniform `SIGN_UP_INVITE_INVALID`
+        // rejection — not a different code that tells them the address is on the
+        // list and only the link went stale.
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/not valid/);
     });
 
     it("refuses a revoked invitation", async () => {
@@ -266,7 +267,8 @@ describe("inviteOnly", () => {
         await signUp("ada@example.com", token);
         database["user"] = [];
 
-        await expect(signUp("ada@example.com", token)).rejects.toThrow(/invite-only/);
+        // Spent, like expired, is refused at the route hook with the uniform message.
+        await expect(signUp("ada@example.com", token)).rejects.toThrow(/not valid/);
     });
 
     /**

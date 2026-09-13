@@ -3216,6 +3216,12 @@ const installPlugins: <T extends Record<string, TableDefinition>, const Plugins 
 const isDeny: (where: WhereInput) => boolean;
 ```
 
+### `isPerDispatchMiddleware` (const)
+
+```ts
+const isPerDispatchMiddleware: (middleware: unknown) => boolean;
+```
+
 ### `isSafeHeaderValue` (const)
 
 ```ts
@@ -3298,6 +3304,12 @@ const serveStorageObject: (context: ContextWithStorage, key: string, request: Re
 const storageRules: <Context extends StorageContextIn = StorageContextIn>(rules: ReadonlyArray<StorageRule<Context>>, options?: StorageRulesOptions) => Middleware<Context, Context>;
 ```
 
+### `tagPerDispatchMiddleware` (const)
+
+```ts
+const tagPerDispatchMiddleware: <M extends object>(middleware: M) => M;
+```
+
 ### `toWhereInput` (const)
 
 ```ts
@@ -3317,7 +3329,7 @@ const withDeferredDeletes: (storage: unknown) => unknown;
 ### `withDeferredSchedules` (const)
 
 ```ts
-const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox) => S;
 ```
 
 ## `@lunora/server/data-model`
@@ -6016,6 +6028,21 @@ interface SchedulableWorkflowReference {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: {
+        args: unknown;
+        options: Record<string, unknown> | undefined;
+        target: unknown;
+        when: number;
+    }) => void;
+    wake: () => void;
 }
 ```
 

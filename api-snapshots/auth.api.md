@@ -603,7 +603,6 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
-    basePath?: string;
     internalSecret: string | undefined;
     namespace: AuthNamespaceLike | undefined;
     objectName?: string;

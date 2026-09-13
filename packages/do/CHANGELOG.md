@@ -1,3 +1,180 @@
+## @lunora/do [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.144...@lunora/do@1.0.0-alpha.145) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.64
+
+## @lunora/do [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.143...@lunora/do@1.0.0-alpha.144) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **cdc:** `cdcSync` now throws `CDC_TIMELINE_FORKED` for a `sinceSeq` above the shard's
+changelog high-watermark instead of echoing the cursor back with an empty page.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **cdc:** detect a changelog that rolled back ([#752](https://github.com/anolilab/lunora/issues/752)) ([b468b96](https://github.com/anolilab/lunora/commit/b468b9680cb6666a5686c9ea675449d161a6013d))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/observability:** upgraded to 1.0.0-alpha.81
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.45
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+
+## @lunora/do [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.142...@lunora/do@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/observability:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.44
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.62
+
+## @lunora/do [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.141...@lunora/do@1.0.0-alpha.142) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/observability:** upgraded to 1.0.0-alpha.79
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.43
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.61
+
+## @lunora/do [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.140...@lunora/do@1.0.0-alpha.141) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.78
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
+## @lunora/do [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.139...@lunora/do@1.0.0-alpha.140) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** `withDeferredSchedules` takes an optional second argument, the
+outbox the generated shard supplies; the emitted `buildCtx` passes it and
+`ShardDO` gains `scheduleOutbox`, `scheduleOutboxScheduler` and
+`pollScheduleOutbox`. Regenerate `_generated` after upgrading.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** hold deferred schedules in a durable outbox ([#735](https://github.com/anolilab/lunora/issues/735)) ([40482b9](https://github.com/anolilab/lunora/commit/40482b92278b956c39e5b148c6a1ea61f89f7b87))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/do [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.138...@lunora/do@1.0.0-alpha.139) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardDO`'s protected `isQueryFunction` is renamed to `isCacheableQuery`, and
+`QueryReadScope` gains a required `markIpRead` member. A hand-written subclass overriding the
+former, or constructing the latter, must be updated; generated shards are regenerated.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** key the reactive cache on the whole caller ([#714](https://github.com/anolilab/lunora/issues/714)) ([0bbf506](https://github.com/anolilab/lunora/commit/0bbf506c1982cd58aa2aafc4f7c6be79c4c44efb))
+
+## @lunora/do [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.137...@lunora/do@1.0.0-alpha.138) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,do:** `TablePage` now carries `sqlColumns`, the table's physical
+column names. A caller feeding columns to anything SQL-shaped wants that list,
+not `columns`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,do:** make SQL surfaces report what the DB holds ([#729](https://github.com/anolilab/lunora/issues/729)) ([b756d58](https://github.com/anolilab/lunora/commit/b756d58859dce16ad1fd2d7050e6f97bb437cbfc))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.76
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.41
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.59
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
 ## @lunora/do [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.136...@lunora/do@1.0.0-alpha.137) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

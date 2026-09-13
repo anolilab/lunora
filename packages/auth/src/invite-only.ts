@@ -57,7 +57,9 @@
  *
  * - `databaseHooks.user.create.before` — the universal backstop. An unspent,
  *   unexpired invitation must exist for the address, whatever created the row.
- * - `hooks.before` on `/sign-up/email` — additionally requires the token.
+ * - `hooks.before` on `/sign-up/email` — additionally requires the token, and
+ *   re-checks that the invitation is unspent and unexpired so a stale link earns
+ *   the same vague rejection a wrong token does.
  *
  * Without the token this would be guessable in bulk, and that is not theoretical:
  * the common case is inviting a team, where addresses are `first.last@company`.
@@ -315,10 +317,8 @@ const hasAnonymousPlugin = (options: BetterAuthOptions): boolean => (options.plu
  */
 const isAnonymousUser = (user: Readonly<Record<string, unknown>>): boolean => user["isAnonymous"] === true;
 
-/** Whether `email` has an invitation that is present, unspent, and unexpired. */
-const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> => {
-    const row = await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] });
-
+/** Whether an already-loaded invitation row is present, unspent, and unexpired. */
+const isUsableInvitation = (row: null | Record<string, unknown>): boolean => {
     if (row === null || row["acceptedAt"] instanceof Date) {
         return false;
     }
@@ -326,12 +326,17 @@ const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise
     return row["expiresAt"] instanceof Date && row["expiresAt"].getTime() > Date.now();
 };
 
+/** Whether `email` has an invitation that is present, unspent, and unexpired. */
+const hasUsableInvitation = async (adapter: AuthAdapter, email: string): Promise<boolean> =>
+    isUsableInvitation(await adapter.findOne<Record<string, unknown>>({ model: INVITATION_MODEL, where: [{ field: "email", value: email }] }));
+
 /**
  * Warn once per auth context when the password provider is on without
- * `requireEmailVerification`. It does not make an invited address secret (see the
- * security section above) — it is the difference between an attacker who guesses
- * one holding a session immediately and holding none until the invitee clicks a
- * link she was expecting. Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it
+ * `requireEmailVerification`. The token already stops address-guessing (see the
+ * security section above); this is about the residual risk the token cannot
+ * cover — a link that reached the wrong person. It is the difference between
+ * whoever holds a forwarded link holding a session immediately and holding none
+ * until someone clicks a link delivered to the address itself. Mirrors `./plugins-enterprise.ts`'s `sso()` warning: it
  * does not change the default, it just refuses to let the gap be silent.
  */
 const warnIfVerificationOff = (options: BetterAuthOptions): void => {
@@ -342,9 +347,9 @@ const warnIfVerificationOff = (options: BetterAuthOptions): void => {
     // eslint-disable-next-line no-console
     console.warn(
         "@lunora/auth: inviteOnly() is installed with password sign-up but without " +
-            "`emailAndPassword: { requireEmailVerification: true }`. An invitation is keyed by email address " +
-            "alone, so anyone who learns an invited address can sign up as it — and without verification they " +
-            "hold a session the moment they do.",
+            "`emailAndPassword: { requireEmailVerification: true }`. The invitation link is a bearer " +
+            "credential, so anyone it reaches — a forwarded mail, a shared inbox — can sign up as that " +
+            "address, and without verification they hold a session the moment they do.",
     );
 };
 
@@ -464,7 +469,13 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                         // token cost the same.
                         const presentedHash = await hashToken(presented);
 
-                        if (typeof stored !== "string" || !digestsMatch(stored, presentedHash)) {
+                        // Usability is checked HERE as well as in `user.create.before`,
+                        // not only there: the database gate answers
+                        // `SIGN_UP_INVITE_REQUIRED`, and letting a spent or expired
+                        // invitation past this hook to earn that code tells the holder
+                        // of a stale link that the address IS on the list — the exact
+                        // distinction the uniform rejection exists to hide.
+                        if (typeof stored !== "string" || !digestsMatch(stored, presentedHash) || !isUsableInvitation(row)) {
                             refuse();
                         }
                     }),

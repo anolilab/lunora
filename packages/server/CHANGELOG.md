@@ -1,3 +1,69 @@
+## @lunora/server [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.128...@lunora/server@1.0.0-alpha.129) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.76
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/observability:** upgraded to 1.0.0-alpha.81
+
+## @lunora/server [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.127...@lunora/server@1.0.0-alpha.128) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.75
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/observability:** upgraded to 1.0.0-alpha.80
+
+## @lunora/server [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.126...@lunora/server@1.0.0-alpha.127) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.74
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/observability:** upgraded to 1.0.0-alpha.79
+
+## @lunora/server [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.125...@lunora/server@1.0.0-alpha.126) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.78
+
+## @lunora/server [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.124...@lunora/server@1.0.0-alpha.125) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** `withDeferredSchedules` takes an optional second argument, the
+outbox the generated shard supplies; the emitted `buildCtx` passes it and
+`ShardDO` gains `scheduleOutbox`, `scheduleOutboxScheduler` and
+`pollScheduleOutbox`. Regenerate `_generated` after upgrading.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** hold deferred schedules in a durable outbox ([#735](https://github.com/anolilab/lunora/issues/735)) ([40482b9](https://github.com/anolilab/lunora/commit/40482b92278b956c39e5b148c6a1ea61f89f7b87))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+* **@lunora/observability:** upgraded to 1.0.0-alpha.77
+
 ## @lunora/server [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.123...@lunora/server@1.0.0-alpha.124) (2026-09-12)
 
 

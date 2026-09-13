@@ -81,12 +81,19 @@ interface CdcSegment {
 interface CdcArchiveScope {
     /**
      * The shard's CDC epoch. Part of the key PREFIX rather than a metadata field,
-     * because an epoch change means the timeline forked (a PITR restore rolled
-     * the log back) and every segment written before it describes changes that no
-     * longer happened. Keying by epoch makes those segments unreachable by
-     * construction instead of relying on a reader to remember to check a field —
-     * a forked shard finds an empty archive and falls back to the re-seed it
-     * would have demanded anyway.
+     * because an epoch change means the timeline forked and every segment written
+     * before it describes changes that no longer happened. Keying by epoch makes
+     * those segments unreachable by construction instead of relying on a reader
+     * to remember to check a field — a forked shard finds an empty archive and
+     * falls back to the re-seed it would have demanded anyway.
+     *
+     * That only separates two timelines if the epoch actually changes when one
+     * forks, and a native PITR restore is precisely the fork it cannot see by
+     * itself: `__cdc_meta` is a SQLite row, so the restore reverts the epoch
+     * along with the log it was supposed to discriminate. The change has to come
+     * from a witness the restore could not reach — a consumer's cursor, or this
+     * archive's own contents ({@link cdcArchiveRewound}) — and the sweep re-mints
+     * the epoch on either before it writes another segment.
      */
     epoch: string;
     /** The DO's shard key, or `__root__` for the single-DO default. */
@@ -134,10 +141,12 @@ const migrateCdcArchive = (sql: SqlExec): void => {
  * a cost that grows with everything ever written, paid on a write path, to
  * answer a question the shard already knows.
  *
- * A restore that rolls the changelog back also rolls this back with it, which is
- * correct: the epoch changes at the same moment (see {@link CdcArchiveScope}),
- * so the new timeline writes under a fresh prefix and cannot collide with what
- * the old one left behind.
+ * A restore rolls this back along with the changelog, and — this is the part
+ * that was assumed rather than true — it rolls the EPOCH back as well, since
+ * that is a SQLite row too. So the rewound shard does not automatically write
+ * under a fresh prefix; it re-issues the old prefix's keys for different
+ * changes. The rewind of this very watermark is what makes that detectable:
+ * see {@link cdcArchiveRewound}, which the sweep consults before it writes.
  */
 const readCdcArchivedThrough = (sql: SqlExec): number => {
     migrateCdcArchive(sql);
@@ -193,6 +202,46 @@ const archiveCdcSegment = async (bucket: R2BucketLike, scope: CdcArchiveScope, c
     await bucket.put(segmentKey(scope, to), JSON.stringify({ changes, from, to } satisfies CdcSegment), {
         httpMetadata: { contentType: "application/json" },
     });
+};
+
+/**
+ * Does the archive hold a segment this shard has no record of writing?
+ *
+ * The watermark ({@link readCdcArchivedThrough}) lives in SQLite and the
+ * segments live in object storage, and that split is what makes this question
+ * answerable at all: a point-in-time restore reverts the watermark — and the
+ * epoch, and the changelog — while R2 keeps every segment already written. A
+ * segment above the watermark is therefore the archive's own record of a
+ * timeline the shard has forgotten, and the one witness to a rollback that the
+ * rollback cannot reach.
+ *
+ * It matters because a segment's key IS its range's last `seq`. A rewound shard
+ * re-issues that range for different changes, so the next sweep either puts the
+ * second timeline's rows over the first's (the object holding rows already
+ * deleted from SQLite is simply replaced) or lands beside them, where the
+ * read-back stitches the two into one ascending run and serves a consumer
+ * rolled-back changes as if they were the ones it missed. Neither is reported
+ * anywhere. Answering `true` lets the caller re-mint the epoch first, which puts
+ * the new timeline under its own prefix and leaves the old one intact and
+ * unreachable — the behaviour {@link CdcArchiveScope} describes and, until the
+ * epoch could be shown to survive a restore, did not get.
+ *
+ * One `list` of one key, and in the steady state it matches nothing: the
+ * watermark only ever trails what has been written.
+ *
+ * **The benign false positive**, stated because it is the cost of keeping this
+ * to a single listing: a sweep that uploads a segment and dies before
+ * {@link writeCdcArchivedThrough} lands leaves exactly this shape without any
+ * rollback. It is read as a fork, so the epoch is re-minted and consumers
+ * re-seed once. Nothing is lost — the watermark never advanced, so the trim that
+ * would have destroyed those rows never ran, and the next sweep re-archives them
+ * under the fresh prefix. The inverse error is not survivable in the same way.
+ */
+const cdcArchiveRewound = async (bucket: R2BucketLike, scope: CdcArchiveScope, archivedThrough: number): Promise<boolean> => {
+    const prefix = scopePrefix(scope);
+    const listing = await bucket.list({ limit: 1, prefix, startAfter: `${prefix}${padSeq(archivedThrough)}.json` });
+
+    return listing.objects.length > 0;
 };
 
 /** Parse a stored segment, returning `undefined` for anything that is not one (a truncated write, a foreign object under the prefix). */
@@ -382,5 +431,5 @@ const readArchivedCdcChanges = async (
     return { changes: served, cursor: served.at(-1)?.seq ?? sinceSeq };
 };
 
-export { archiveCdcSegment, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough };
+export { archiveCdcSegment, cdcArchiveRewound, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough };
 export type { CdcArchiveScope };

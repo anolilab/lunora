@@ -23,6 +23,11 @@
  * that makes a queue impossible to debug.
  * - `mode: "pull"` queues are still written to; nothing here consumes them, and
  * `poll()` skips them.
+ * - Cloudflare's byte ceilings are enforced on send: 128 KiB per message and
+ * 256 KiB per `sendBatch`, measured over the encoded body. `@lunora/queue`
+ * leaves both to the platform rather than serializing every body twice on its
+ * own send path, and this is the point where those bytes already exist — so a
+ * producer that works here is one that survives its first deploy.
  */
 
 import { randomUUID } from "node:crypto";
@@ -45,6 +50,19 @@ const DEFAULTS = {
 
 /** Cloudflare caps a per-message delay at 12 hours. */
 const MAX_DELAY_SECONDS = 43_200;
+
+/**
+ * Cloudflare Queues caps one message at 128 KiB and one `sendBatch` at 256 KiB.
+ *
+ * `@lunora/queue`'s producer deliberately leaves both to the platform —
+ * measuring them there means serializing every body a second time on the send
+ * path — "which rejects them clearly". This host is the platform for this
+ * target, and it is the only point where the encoded bytes already exist, so
+ * the measurement is free here and nowhere else. Without it a producer works
+ * all the way through development and fails on its first deploy.
+ */
+const MAX_MESSAGE_BYTES = 131_072;
+const MAX_BATCH_BYTES = 262_144;
 
 /** Row shape of `_lunora_queue_messages`. */
 interface MessageRow {
@@ -88,6 +106,20 @@ const encodeBody = (body: unknown, contentType: QueueContentType): Buffer => {
             return Buffer.from(JSON.stringify(body ?? null), "utf8");
         }
     }
+};
+
+/** Encode a body for the wire and refuse one past Cloudflare's per-message ceiling. */
+const encodeMessage = (body: unknown, contentType: QueueContentType, queueName: string): Buffer => {
+    const encoded = encodeBody(body, contentType);
+
+    if (encoded.byteLength > MAX_MESSAGE_BYTES) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: a message for queue "${queueName}" encodes to ${String(encoded.byteLength)} bytes, over the Cloudflare Queues ceiling of ${String(MAX_MESSAGE_BYTES)} (128 KiB) per message — store the payload and enqueue a reference to it`,
+        );
+    }
+
+    return encoded;
 };
 
 /** Inverse of {@link encodeBody}. */
@@ -306,8 +338,13 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     const visibilityTimeoutMs = options.visibilityTimeoutMs ?? DEFAULTS.visibilityTimeoutMs;
     const clock = options.now ?? Date.now;
 
-    const enqueue = (queueName: string, body: unknown, contentType: QueueContentType, delay: number, now: number): void => {
-        insert.run(randomUUID(), queueName, encodeBody(body, contentType), contentType, now + delay, now);
+    // Takes the ENCODED body, not the value: every producer path has to measure
+    // the bytes against the per-message ceiling before this point anyway, and
+    // the dead-letter re-enqueue below already holds the stored buffer — round
+    // -tripping that one back through `decodeBody`/`encodeBody` was work whose
+    // only possible effect was to re-serialize a payload differently.
+    const enqueue = (queueName: string, encoded: Buffer, contentType: QueueContentType, delay: number, now: number): void => {
+        insert.run(randomUUID(), queueName, encoded, contentType, now + delay, now);
     };
 
     /** Settle one message: ack deletes it, retry re-arms it, an exhausted retry dead-letters or parks it. */
@@ -339,7 +376,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
                 // Re-enqueued as a real message on the dead-letter queue rather
                 // than flagged in place, so that queue's consumer receives it the
                 // way it receives anything else.
-                enqueue(deadLetter, decodeBody(row.body, row.content_type), row.content_type as QueueContentType, 0, now);
+                enqueue(deadLetter, row.body, row.content_type as QueueContentType, 0, now);
                 remove.run(row.id);
             }
 
@@ -358,7 +395,9 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         const binding: QueueBindingLike = {
             // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async so a real binding can await the network; SQLite is synchronous
             send: async (message: unknown, sendOptions?: QueueSendOptions): Promise<unknown> => {
-                enqueue(queue.name, message, sendOptions?.contentType ?? "json", delayMs(sendOptions?.delaySeconds), clock());
+                const contentType = sendOptions?.contentType ?? "json";
+
+                enqueue(queue.name, encodeMessage(message, contentType, queue.name), contentType, delayMs(sendOptions?.delaySeconds), clock());
 
                 return undefined;
             },
@@ -366,14 +405,32 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
             sendBatch: async (messages: Iterable<MessageSendRequestLike>, batchOptions?: { delaySeconds?: number }): Promise<unknown> => {
                 const now = clock();
                 const batchDelay = delayMs(batchOptions?.delaySeconds);
+                // Encoded up front, so both ceilings are checked before a single
+                // row is written — and so the batch total is the sum of the same
+                // bytes that go on the wire rather than a second estimate.
+                const prepared = [...messages].map((message) => {
+                    const contentType = message.contentType ?? "json";
+
+                    return {
+                        contentType,
+                        delay: message.delaySeconds === undefined ? batchDelay : delayMs(message.delaySeconds),
+                        encoded: encodeMessage(message.body, contentType, queue.name),
+                    };
+                });
+                const total = prepared.reduce((sum, message) => sum + message.encoded.byteLength, 0);
+
+                if (total > MAX_BATCH_BYTES) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: a sendBatch for queue "${queue.name}" encodes to ${String(total)} bytes, over the Cloudflare Queues ceiling of ${String(MAX_BATCH_BYTES)} (256 KiB) per batch — split it across more calls`,
+                    );
+                }
 
                 // One transaction: a half-written batch is the failure mode a
                 // caller cannot see and cannot undo.
                 database.transaction(() => {
-                    for (const message of messages) {
-                        const delay = message.delaySeconds === undefined ? batchDelay : delayMs(message.delaySeconds);
-
-                        enqueue(queue.name, message.body, message.contentType ?? "json", delay, now);
+                    for (const message of prepared) {
+                        enqueue(queue.name, message.encoded, message.contentType, message.delay, now);
                     }
                 })();
 

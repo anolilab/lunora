@@ -166,7 +166,7 @@ export const ERROR_CATALOG = {
         hint: [
             "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
             "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`).",
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`).",
         ],
         status: 400,
         title: "Email domain not allowed",
@@ -300,9 +300,27 @@ export const ERROR_CATALOG = {
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    EXPORT_SHARD_FAILED: {
+        hint: [
+            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
+            "",
+            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows.",
+        ],
+        status: 502,
+        title: "Export failed on one or more shards",
+    },
     EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
     FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
     GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
+    ID_COLLISION: {
+        hint: [
+            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
+            "",
+            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.",
+        ],
+        status: 409,
+        title: "Document id already belongs to another table",
+    },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
@@ -485,13 +503,16 @@ export const ERROR_CATALOG = {
      * `NESTED_TRANSACTION` and `SQL_UNAVAILABLE` are "should never happen" state
      * invariants (mirrors `RUN_DEPTH_EXCEEDED`'s posture above): today's message
      * is static and safe, but flagged internal so a future edit that adds
-     * diagnostic detail can't accidentally start leaking it. The two `CDC_*`
-     * codes are the opposite — ordinary, expected, operator-configured outcomes
-     * — and both are `409` because the cursor the caller holds is real but no
-     * longer serveable, so the recovery is a snapshot rather than a retry.
+     * diagnostic detail can't accidentally start leaking it. The three `CDC_*`
+     * codes are the opposite — ordinary, expected outcomes of a configured
+     * retention window or an operator-ordered restore — and all three are `409`
+     * because the cursor the caller holds is real but no longer serveable, so
+     * the recovery is a snapshot rather than a retry.
      */
     /** A resume below the deleted changelog prefix: the entries are gone outright, for every consumer. */
     CDC_LOG_TRIMMED: { status: 409, title: "CDC log trimmed" },
+    /** A resume from ABOVE the changelog's high-watermark: the shard's log rewound (a point-in-time restore), so the cursor indexes a timeline that no longer exists. Carries the surviving cursor and the freshly minted epoch to resynchronise against. */
+    CDC_TIMELINE_FORKED: { status: 409, title: "CDC timeline forked" },
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },

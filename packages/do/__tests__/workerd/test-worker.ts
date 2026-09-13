@@ -12,6 +12,7 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import { readRequestLog } from "@lunora/observability";
 import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
 import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { DurableObject } from "cloudflare:workers";
@@ -103,8 +104,37 @@ class ConcreteCountingShard extends ShardDO {
 
     private migrated = false;
 
-    public override async handleRpc(): Promise<unknown> {
+    /** Resolver for the in-flight `counter:park` dispatch, fired by `counter:release`. */
+    private releasePark: (() => void) | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
         this.ensureMigrated();
+
+        // `counter:park` and `counter:release` are ACTIONS (see
+        // `isMutationFunction`), so neither takes the single-writer gate and a
+        // parked one really is interleavable with a sibling dispatch — the
+        // window `restoreRequestScope` exists for.
+        if (functionPath === "counter:park") {
+            await new Promise<void>((resolve) => {
+                this.releasePark = resolve;
+            });
+
+            return { parked: true };
+        }
+
+        if (functionPath === "counter:release") {
+            this.releasePark?.();
+            this.releasePark = undefined;
+
+            return { released: true };
+        }
+
+        // The durable request log, as the studio and Logpush see it. Read
+        // through the shard's own sql handle so the rows are the ones this DO
+        // actually wrote.
+        if (functionPath === "counter:reqlog") {
+            return readRequestLog(this.sql as Parameters<typeof readRequestLog>[0]);
+        }
 
         return this.runInTransaction(() => {
             this.runs += 1;
@@ -124,6 +154,11 @@ class ConcreteCountingShard extends ShardDO {
 
         runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema);
         this.migrated = true;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- pure predicate over the path, mirroring the codegen override
+    protected override isMutationFunction(functionPath: string): boolean {
+        return functionPath !== "counter:park" && functionPath !== "counter:release" && functionPath !== "counter:reqlog";
     }
 }
 

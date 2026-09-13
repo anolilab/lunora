@@ -152,8 +152,14 @@ interface ResolvedItem {
 
 /** Outcome of reconciling a single file. */
 type ReconcileOutcome = { kind: "skipped" | "written"; path: string };
-/** Per-run reconcile modifiers. */
-type ReconcileOptions = { diff?: boolean; overwrite?: boolean };
+
+/**
+ * Per-run reconcile modifiers. `pinnedVersions` is the plan's resolved
+ * dependency-name → concrete-version map (see `resolvePinnedDepVersions`), so
+ * `workspace:*` ranges land in package.json as the exact published version the
+ * CLI's release channel currently points at rather than a floating dist-tag.
+ */
+type ReconcileOptions = { diff?: boolean; overwrite?: boolean; pinnedVersions?: ReadonlyMap<string, string> };
 
 /** An empty (no-op) command result; spread to set a non-zero `code`. */
 const emptyResult = (): AddCommandResult => {

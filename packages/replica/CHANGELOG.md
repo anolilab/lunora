@@ -1,3 +1,49 @@
+## @lunora/replica [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.105...@lunora/replica@1.0.0-alpha.106) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/replica [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.104...@lunora/replica@1.0.0-alpha.105) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/replica [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.103...@lunora/replica@1.0.0-alpha.104) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/replica [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.102...@lunora/replica@1.0.0-alpha.103) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/replica [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.101...@lunora/replica@1.0.0-alpha.102) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/replica [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.100...@lunora/replica@1.0.0-alpha.101) (2026-09-12)
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/replica [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.99...@lunora/replica@1.0.0-alpha.100) (2026-09-12)
 
 

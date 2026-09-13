@@ -108,25 +108,65 @@ const sqlLiteral = (value: unknown): string => {
     return `'${text.replaceAll("'", "''")}'`;
 };
 
+/** The JSON blob column a canonical shard table keeps every user field in. */
+const DOC_COLUMN = "__doc__";
+
 /**
  * Serialize the given columns + rows to a SQL dump: one or more multi-row
  * `INSERT INTO "…" (...) VALUES ...;` statements, batched at
  * {@link SQL_INSERT_BATCH} rows each. `name` is the target table (the selected
  * table, or the SQL console's `query-result` placeholder). Mirrors the CSV/JSON
  * exports — the loaded page only.
+ *
+ * ## Why `sqlColumns` is not optional for a shard table
+ *
+ * A shard table physically has `id`, `_creationTime` and a `__doc__` JSON blob;
+ * the page's `columns` is the DISPLAY list, with every `__doc__` field lifted to
+ * a top-level column so the browser shows fields instead of one opaque cell.
+ * Targeting those lifted names produced a statement that reads perfectly
+ * plausibly and cannot be replayed — SQLite answers `table … has no column named
+ * body` — and, if it had been accepted, would have written rows with no
+ * `__doc__` at all, which every read path then fails on. So when `sqlColumns`
+ * says the table carries a `__doc__`, the dump targets the PHYSICAL columns and
+ * re-assembles the blob from the lifted fields.
+ *
+ * `sqlColumns` is optional because one caller has no physical table behind its
+ * grid at all: the SQL console exports an arbitrary query's result set, whose
+ * columns are whatever the query projected. That dump stays a literal
+ * column-for-column rendering, as before.
+ *
+ * Known lossy, exactly as the CSV and JSON exports are: a `bigint` field is
+ * re-assembled as its decimal string and a `v.bytes()` field as the
+ * `<bytes: n B>` placeholder (see `jsonRowReplacer`), because the grid holds the
+ * decoded value and not the sort-key projection the writer stores alongside it.
  */
-const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>): string => {
+const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>, sqlColumns?: ReadonlyArray<string>): string => {
     if (columns.length === 0 || rows.length === 0) {
         return "";
     }
 
-    const columnList = columns.map((column) => sqlIdentifier(column)).join(", ");
+    // Only when the page was actually expanded: a table whose `__doc__` did not
+    // parse (or a non-doc table) is reported with `__doc__` still in `columns`,
+    // and there the display list already IS the physical list.
+    const documentFields =
+        sqlColumns?.includes(DOC_COLUMN) === true && !columns.includes(DOC_COLUMN) ? columns.filter((column) => !sqlColumns.includes(column)) : undefined;
+    const targets = documentFields === undefined ? columns : (sqlColumns as ReadonlyArray<string>);
+
+    const cell = (row: GridRow, column: string): string => {
+        if (documentFields === undefined || column !== DOC_COLUMN) {
+            return sqlLiteral(row[column]);
+        }
+
+        return sqlLiteral(JSON.stringify(Object.fromEntries(documentFields.map((field) => [field, row[field]])), jsonRowReplacer));
+    };
+
+    const columnList = targets.map((column) => sqlIdentifier(column)).join(", ");
     const statements: string[] = [];
 
     for (let start = 0; start < rows.length; start += SQL_INSERT_BATCH) {
         const values = rows
             .slice(start, start + SQL_INSERT_BATCH)
-            .map((row) => `  (${columns.map((column) => sqlLiteral(row[column])).join(", ")})`)
+            .map((row) => `  (${targets.map((column) => cell(row, column)).join(", ")})`)
             .join(",\n");
 
         statements.push(`INSERT INTO ${sqlIdentifier(name)} (${columnList}) VALUES\n${values};`);
@@ -169,10 +209,13 @@ const ExportMenu = ({
     columns,
     name,
     rows,
+    sqlColumns,
 }: {
     readonly columns: ReadonlyArray<string>;
     readonly name: string;
     readonly rows: ReadonlyArray<GridRow>;
+    /** The table's physical columns, so the SQL dump can be replayed — see {@link toSql}. Absent for a query result. */
+    readonly sqlColumns?: ReadonlyArray<string>;
 }): ReactElement => {
     const t = useT();
 
@@ -185,7 +228,7 @@ const ExportMenu = ({
     };
 
     const onSql = (): void => {
-        downloadFile(`${name}.sql`, toSql(name, columns, rows), "application/sql;charset=utf-8");
+        downloadFile(`${name}.sql`, toSql(name, columns, rows, sqlColumns), "application/sql;charset=utf-8");
     };
 
     return (
@@ -519,6 +562,7 @@ const GridActionsBar = ({
     onBulkDelete,
     onToggleTranspose,
     rows,
+    sqlColumns,
     table,
     transposed,
 }: {
@@ -532,6 +576,8 @@ const GridActionsBar = ({
     readonly onToggleBackRelation?: (key: string) => void;
     readonly onToggleTranspose: () => void;
     readonly rows: ReadonlyArray<GridRow>;
+    /** The table's physical columns, threaded to the SQL export so its dump can be replayed. */
+    readonly sqlColumns?: ReadonlyArray<string>;
     readonly table: Table<GridTableFeatures, GridRow>;
     readonly transposed: boolean;
 }): ReactElement => {
@@ -549,7 +595,7 @@ const GridActionsBar = ({
 
     return (
         <div className="flex flex-wrap items-center gap-1.5" data-testid="grid-actions">
-            <ExportMenu columns={columns} name={name} rows={rows} />
+            <ExportMenu columns={columns} name={name} rows={rows} sqlColumns={sqlColumns} />
             <ColumnsMenu backRelations={backRelations} enabledBackRelations={enabledBackRelations} onToggleBackRelation={onToggleBackRelation} table={table} />
             <button
                 aria-pressed={transposed}

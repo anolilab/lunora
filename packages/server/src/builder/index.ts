@@ -15,6 +15,7 @@ import type {
     QueryCtx as QueryContext,
     X402ProcedureConfig,
 } from "../types";
+import { isPerDispatchMiddleware } from "./per-dispatch-tag";
 import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
@@ -211,6 +212,21 @@ const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): u
 };
 
 /**
+ * Whether the chain carries a step with a per-dispatch effect — limiter budget
+ * consumed, a single-use token burned — that a memoized response cannot stand
+ * in for. Hoisted onto the registered function as `perDispatch: true`; the
+ * generated `isCacheableQuery` refuses such a query, because a reactive-cache
+ * hit answers without running the chain at all and the effect would silently
+ * happen once for an unbounded number of requests.
+ *
+ * Read off the DIRECT elements of the `.use(...)` chain, exactly like the
+ * `rls()` / `mask()` tags — which is why `composeMiddleware` re-stamps it onto
+ * the arrow it folds a chain into.
+ */
+const collectPerDispatch = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): boolean =>
+    middlewares.some((middleware) => isPerDispatchMiddleware(middleware));
+
+/**
  * Shadow the mutators `Object.freeze` cannot reach.
  *
  * A frozen `Map`/`Set` still accepts `.set()` / `.add()` / `.delete()` /
@@ -316,6 +332,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             const rls = collectRls(state.middlewares);
             const maskedTables = unionMaskColumns(state.middlewares);
+            const perDispatch = collectPerDispatch(state.middlewares);
 
             return {
                 args: state.args,
@@ -323,6 +340,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
                 ...(maskedTables ? { maskedTables } : {}),
+                ...(perDispatch ? { perDispatch } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
@@ -356,6 +374,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                   ) => {
                       const rls = collectRls(state.middlewares);
                       const maskedTables = unionMaskColumns(state.middlewares);
+                      const perDispatch = collectPerDispatch(state.middlewares);
                       // `durable: true` and `durable: { … }` are the same thing to
                       // the runtime — normalise here so it only ever sees the object
                       // (and `false`/omitted collapse to "not durable").
@@ -368,6 +387,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler, state.meta),
                           kind: "stream" as const,
                           ...(maskedTables ? { maskedTables } : {}),
+                          ...(perDispatch ? { perDispatch } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),

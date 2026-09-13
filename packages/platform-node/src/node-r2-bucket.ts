@@ -47,6 +47,17 @@
  * overwhelming majority — pass through byte-identical, so the bucket directory
  * stays browsable.
  *
+ * # Limits R2 enforces, enforced here
+ *
+ * A put this host accepts has to be one R2 would accept, or an app is written
+ * against a bucket more permissive than the one it deploys to. So `put` refuses
+ * `customMetadata` over R2's summed 2048-byte ceiling, verifies a declared
+ * `sha256` against the bytes it actually received and stores nothing on a
+ * mismatch, and — because R2 has no directories — never lets a deleted key's
+ * empty directory stand in the way of a later object at that prefix, nor lets
+ * `delete` of a prefix escape as a raw `fs` error rather than the no-op R2
+ * makes of a key it does not hold.
+ *
  * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
  * multipart" error) and S3 presigned URLs (those need real R2 credentials anyway).
@@ -54,8 +65,8 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { mkdir, open, readdir, rename, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
@@ -77,6 +88,16 @@ const MAX_KEY_LENGTH = 1024;
 
 /** The name limit every filesystem this runs on shares. Applied to the ESCAPED segment. */
 const MAX_SEGMENT_BYTES = 255;
+
+/**
+ * R2's ceiling on `customMetadata`, measured over the SUM of every entry's key
+ * and value bytes — not per entry. Probed against Miniflare's R2 emulator: one
+ * entry totalling 2048 bytes is accepted, 2049 is not, and two entries of 1003
+ * bytes each (2006 in total) are accepted while two of 1303 are not. Over it R2
+ * answers `Your metadata headers exceed the maximum allowed metadata size.
+ * (10012)` and stores nothing.
+ */
+const MAX_CUSTOM_METADATA_BYTES = 2048;
 
 /** Per-object metadata, persisted in the object file's trailer. */
 interface NodeObjectMeta {
@@ -236,6 +257,53 @@ const validateKey = (key: string): void => {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (no segment may be "${TMP_DIR}")`);
         }
     }
+};
+
+/**
+ * Refuse `customMetadata` over R2's ceiling, so a put that this host accepts is
+ * one R2 would accept. Measured the way R2 measures it — the summed UTF-8
+ * length of every key and value — and raised before anything is staged, because
+ * R2 stores nothing on this failure either.
+ */
+const validateCustomMetadata = (customMetadata: Record<string, string> | undefined): void => {
+    if (customMetadata === undefined) {
+        return;
+    }
+
+    let total = 0;
+
+    for (const [name, value] of Object.entries(customMetadata)) {
+        total += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value, "utf8");
+    }
+
+    if (total > MAX_CUSTOM_METADATA_BYTES) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: R2 customMetadata is ${String(total)} bytes, over the ${String(MAX_CUSTOM_METADATA_BYTES)}-byte ceiling R2 applies to the summed keys and values — your metadata headers exceed the maximum allowed metadata size`,
+        );
+    }
+};
+
+/** A SHA-256 in the hex form R2 accepts: 64 hex digits, either case. */
+const SHA256_HEX = /^[\da-f]{64}$/;
+
+/** Lowercase hex of a caller-declared SHA-256, which R2 accepts as hex or as a 32-byte buffer. */
+const normalizeSha256 = (sha256: ArrayBuffer | string): string => {
+    if (typeof sha256 === "string") {
+        const hex = sha256.toLowerCase();
+
+        if (!SHA256_HEX.test(hex)) {
+            throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 put sha256 must be 64 hex characters or a 32-byte buffer");
+        }
+
+        return hex;
+    }
+
+    if (sha256.byteLength !== 32) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 put sha256 must be 64 hex characters or a 32-byte buffer");
+    }
+
+    return Buffer.from(sha256).toString("hex");
 };
 
 /** True when an `fs/promises` error is a missing path. */
@@ -610,13 +678,62 @@ const firstIndexGreaterThan = (values: ReadonlyArray<string>, value: string): nu
     return low;
 };
 
+/**
+ * Errors `unlinkIfPresent` reads as "no object at this path".
+ *
+ * `ENOENT` is the obvious one. The rest are what `unlink` says about a
+ * DIRECTORY — `EPERM` on macOS, `EISDIR` on Linux, `ENOTDIR` when a parent of
+ * the path is a file — and a directory is never an object: it is the prefix
+ * holding other keys, or the husk one left behind. R2 answers a delete of a key
+ * it does not hold by doing nothing, so letting a raw `fs` code out here made
+ * `delete("a")` after `put("a/b")` throw where R2 succeeds, and made
+ * `flushDeferredDeletes` log "object leaked" for an object that never existed.
+ */
+const ABSENT_UNLINK_CODES = new Set(["EISDIR", "ENOENT", "ENOTDIR", "EPERM"]);
+
 const unlinkIfPresent = async (path: string): Promise<void> => {
     try {
         await unlink(path);
     } catch (error: unknown) {
-        if (!isMissing(error)) {
+        const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+        if (code === undefined || !ABSENT_UNLINK_CODES.has(code)) {
             throw error;
         }
+    }
+};
+
+/**
+ * Remove `path` and each ancestor up to (but never including) `root` that is
+ * now an empty directory.
+ *
+ * A directory in this tree is never an object — it exists only to hold the keys
+ * under a prefix, so once the last of them is gone it is a husk. Leaving it
+ * made the bucket contradict itself: `put("a/b")`, `delete("a/b")`, `put("a")`
+ * reported that `a` "collides with an existing object at one of its path
+ * prefixes" while `list()` returned nothing, and R2 accepts that same sequence.
+ * Any keyspace that reuses a prefix after cleanup (`users/<id>` after
+ * `users/<id>/avatar`) hits it.
+ */
+const pruneEmptyDirectories = async (path: string, root: string): Promise<void> => {
+    let current = path;
+
+    while (current !== root && current.startsWith(`${root}${sep}`)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- strictly sequential: a parent cannot be empty until its child is gone
+            await rmdir(current);
+        } catch (error: unknown) {
+            // `ENOENT` is the ordinary case one level in: `delete` has just
+            // unlinked the object file, so its own path is gone and its parent
+            // is the first directory worth trying. Anything else — a file, or a
+            // prefix still holding objects — means this level is occupied, and
+            // then no ancestor of it is empty either.
+            if (!isMissing(error)) {
+                return;
+            }
+        }
+
+        current = dirname(current);
     }
 };
 
@@ -632,7 +749,13 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         delete: async (key: string): Promise<void> => {
             validateKey(key);
 
-            await unlinkIfPresent(join(directory, encodeKey(key)));
+            const filePath = join(directory, encodeKey(key));
+
+            await unlinkIfPresent(filePath);
+            // Starting at the key's own path, not its parent: the key may itself
+            // be an empty directory left by an earlier prefix, and the unlink
+            // above reads that as "no object here" rather than removing it.
+            await pruneEmptyDirectories(filePath, directory);
         },
 
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
@@ -803,10 +926,14 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         put: async (
             key: string,
             body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-            putOptions?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
+            putOptions?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
         ): Promise<R2ObjectLike> => {
             validateKey(key);
+            validateCustomMetadata(putOptions?.customMetadata);
 
+            // Normalised before a byte is staged so a malformed digest fails the
+            // same way an over-large metadata block does — with nothing written.
+            const declaredSha256 = putOptions?.sha256 === undefined ? undefined : normalizeSha256(putOptions.sha256);
             const filePath = join(directory, encodeKey(key));
             const temporaryPath = join(directory, TMP_DIR, randomUUID());
 
@@ -832,10 +959,27 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                         await handle.write(chunk);
                     }
 
+                    const sha256Hex = hash.digest("hex");
+
+                    // A declared digest makes the write a CHECKED one on R2, and
+                    // it has to be one here too. Recording the digest of
+                    // whatever bytes arrived instead published a corrupt object
+                    // under a verified write, and then reported a `head()`
+                    // checksum contradicting the one the caller declared — while
+                    // the same call against R2 stores nothing at all. Raised
+                    // here, before the trailer and therefore before the rename,
+                    // so the staged file is discarded by the handler below.
+                    if (declaredSha256 !== undefined && declaredSha256 !== sha256Hex) {
+                        throw new LunoraError(
+                            "VALIDATION_ERROR",
+                            `@lunora/platform-node: the SHA-256 checksum you specified for R2 key "${key}" did not match what we received. You provided a SHA-256 checksum with value: ${declaredSha256}. Actual SHA-256 was: ${sha256Hex}`,
+                        );
+                    }
+
                     meta = {
                         customMetadata: putOptions?.customMetadata,
                         httpMetadata: putOptions?.httpMetadata,
-                        sha256Hex: hash.digest("hex"),
+                        sha256Hex,
                         size,
                         uploaded: new Date().toISOString(),
                     };
@@ -854,10 +998,29 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             // in this file together, so there is no window where they disagree.
             try {
                 await rename(temporaryPath, filePath);
-            } catch (error: unknown) {
-                await unlinkIfPresent(temporaryPath);
+            } catch {
+                // Two recoverable states, both left by an object that is gone: an
+                // EMPTY directory sitting where this key goes (the husk of a
+                // deleted key under this prefix — R2 has no directories, so it
+                // cannot be a real collision), and a parent a concurrent
+                // `delete`'s prune removed between the `mkdir` above and here.
+                // Clear both and publish once more; a prefix still holding
+                // objects fails `rmdir` and then fails the retry, which is the
+                // genuine collision `asKeyCollision` is there to name.
+                try {
+                    await rmdir(filePath);
+                } catch {
+                    // Not an empty directory — the retry reports what it is.
+                }
 
-                throw asKeyCollision(key, error);
+                try {
+                    await mkdir(dirname(filePath), { recursive: true });
+                    await rename(temporaryPath, filePath);
+                } catch (retryError: unknown) {
+                    await unlinkIfPresent(temporaryPath);
+
+                    throw asKeyCollision(key, retryError);
+                }
             }
 
             return toObject(key, meta);

@@ -1,3 +1,147 @@
+## @lunora/sql-store [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.122...@lunora/sql-store@1.0.0-alpha.123) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+
+## @lunora/sql-store [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.121...@lunora/sql-store@1.0.0-alpha.122) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** a `v.literal(<bigint>)` column on a `.global()` table is now
+rejected by `defineSchema`, by the same guard that already rejects `v.bigint()`
+there. It used to be accepted and read back as key padding.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(d1): pin the value encodings on a real D1 database
+
+Every one of these assertions is about what an engine does to a bound value, and
+the `node:sqlite` harness cannot settle that on its own — it is a different
+SQLite build from the one workerd ships, and the whole defect class is a column
+whose declared affinity silently rewrites what is stored in it. So the column
+types D1 actually provisioned are asserted alongside the round-tripped values,
+both read back from the real binding.
+
+Run against the unfixed code the new suite reproduces each symptom exactly:
+`TEXT` where `REAL` was expected, the string `"1.0"` where `1` was written, the
+number `42` from a string field, and an explicitly written `null` gone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **sql-store:** stop three value encodings corrupting reads ([#748](https://github.com/anolilab/lunora/issues/748)) ([7278722](https://github.com/anolilab/lunora/commit/72787225df560213fec3fe7d09f3ec7e72ab05ee))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+
+## @lunora/sql-store [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.120...@lunora/sql-store@1.0.0-alpha.121) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/do:** upgraded to 1.0.0-alpha.142
+
+## @lunora/sql-store [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.119...@lunora/sql-store@1.0.0-alpha.120) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `replace()` no longer re-stamps `_creationTime`. The sql-store test
+"replace() mints clock() and ignores a forged document _creationTime" pinned the old
+contract and is rewritten to pin preservation — that flip is deliberate, not incidental.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(shard-engine): refuse a unique index over duplicate rows
+
+Adding a `unique: true` index classified as `severity: "safe", remediation: "none"`, so
+the deploy gate waved it through. `runShardMigrations` then ran `CREATE UNIQUE INDEX`,
+which throws on existing duplicates — from inside the cold-start pass, where
+`ensureMigrated()` leaves `migrated` false. Every later dispatch re-ran the pass and
+re-threw, so the shard never opened, and the de-dup `defineMigration` that would clear it
+could not run either: `runShardDataMigration` calls `ensureMigrated()` first.
+
+Two changes, because the gate and the runtime each need to hold on their own:
+
+- `diffIndexes` classifies an added unique index as breaking with a backfill remedy, the
+  same as an added `.unique()` column already was. A non-unique index stays safe.
+- Both producers of a unique index (a declared `unique: true` index, a `.unique()` column)
+  now route through one create helper that runs the existing
+  `GROUP BY … HAVING COUNT(*) > 1` probe first, so an unmigratable schema fails as a
+  diagnostic naming the table and the remedy rather than as a wedged shard. The probe runs
+  only when the index is not already held, so a cold start costs nothing extra.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(shard-engine): make a paused data migration resumable again
+
+Three ways the per-shard runner broke its own "each row is visited exactly once …
+survives a failure" promise.
+
+A resume cursor persisted under the `~3` prefix was refused forever. `restampResumeCursor`
+only re-stamped `~2`, while `CURSOR_PREFIX` has since reached `~4`, so a migration paused
+on a `~3` build threw `invalid cursor` on resume and the catch re-persisted `failed` with
+the same doomed cursor. It now re-stamps every prior prefix. The claim that this is safe
+was re-verified against both bumps: the runner mints from the fixed
+`MIGRATION_ORDER_KEYS`, which held the same value at each, so the payload is
+`[_creationTime, _id]` under `~2`, `~3` and `~4` alike.
+
+A throw AFTER the row's write had committed re-applied a non-idempotent transform on
+resume. `replace` commits its guarded UPDATE and only then awaits its after-update
+triggers and `onWrite`, so a throw out of it is not proof the write failed — but the
+cursor advanced only on a clean return, leaving it behind a row that was already
+rewritten. The row is now counted and the cursor advanced from inside the call, the moment
+the write is known to have landed; the error path reads the row back to tell a committed
+write from one that never happened, so a genuinely failed row is still re-visited.
+
+Soft-deleted rows were never visited at all: the page read passed no `includeDeleted`, so
+`softDeleteScope` filtered tombstones out, the run recorded `completed`, and `restore(id)`
+then handed the application a pre-migration document. `countLegacyRows` counts tombstones
+(it is raw SQL) and so never reached zero for the same reason.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* five data-correctness defects on the write and migration paths ([#745](https://github.com/anolilab/lunora/issues/745)) ([0ac0181](https://github.com/anolilab/lunora/commit/0ac0181f730feaa9ec1a94a17ddb0477118bbf55))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+
+## @lunora/sql-store [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.118...@lunora/sql-store@1.0.0-alpha.119) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+
+## @lunora/sql-store [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.117...@lunora/sql-store@1.0.0-alpha.118) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+
 ## @lunora/sql-store [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.116...@lunora/sql-store@1.0.0-alpha.117) (2026-09-12)
 
 ### Documentation

@@ -1,3 +1,272 @@
+## @lunora/codegen [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.188...@lunora/codegen@1.0.0-alpha.189) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.145
+
+## @lunora/codegen [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.187...@lunora/codegen@1.0.0-alpha.188) (2026-09-13)
+
+### Bug Fixes
+
+* **codegen:** record table modifiers in the drift snapshot ([#751](https://github.com/anolilab/lunora/issues/751)) ([b8e9212](https://github.com/anolilab/lunora/commit/b8e92129ef721619405e1f4df274932fc28635a5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.138
+* **@lunora/agent:** upgraded to 1.0.0-alpha.116
+* **@lunora/container:** upgraded to 1.0.0-alpha.52
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/queue:** upgraded to 1.0.0-alpha.59
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.76
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.55
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+
+## @lunora/codegen [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.186...@lunora/codegen@1.0.0-alpha.187) (2026-09-13)
+
+### Bug Fixes
+
+* close template, CLI and reference drift ([#750](https://github.com/anolilab/lunora/issues/750)) ([a5188b5](https://github.com/anolilab/lunora/commit/a5188b5927b5e9233dab40c9521a62ca332c38cf))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.137
+* **@lunora/agent:** upgraded to 1.0.0-alpha.115
+* **@lunora/container:** upgraded to 1.0.0-alpha.51
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/queue:** upgraded to 1.0.0-alpha.58
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.75
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.54
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+
+## @lunora/codegen [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.185...@lunora/codegen@1.0.0-alpha.186) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.136
+* **@lunora/agent:** upgraded to 1.0.0-alpha.114
+* **@lunora/container:** upgraded to 1.0.0-alpha.50
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/queue:** upgraded to 1.0.0-alpha.57
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.74
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.53
+* **@lunora/do:** upgraded to 1.0.0-alpha.142
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+
+## @lunora/codegen [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.184...@lunora/codegen@1.0.0-alpha.185) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `replace()` no longer re-stamps `_creationTime`. The sql-store test
+"replace() mints clock() and ignores a forged document _creationTime" pinned the old
+contract and is rewritten to pin preservation — that flip is deliberate, not incidental.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(shard-engine): refuse a unique index over duplicate rows
+
+Adding a `unique: true` index classified as `severity: "safe", remediation: "none"`, so
+the deploy gate waved it through. `runShardMigrations` then ran `CREATE UNIQUE INDEX`,
+which throws on existing duplicates — from inside the cold-start pass, where
+`ensureMigrated()` leaves `migrated` false. Every later dispatch re-ran the pass and
+re-threw, so the shard never opened, and the de-dup `defineMigration` that would clear it
+could not run either: `runShardDataMigration` calls `ensureMigrated()` first.
+
+Two changes, because the gate and the runtime each need to hold on their own:
+
+- `diffIndexes` classifies an added unique index as breaking with a backfill remedy, the
+  same as an added `.unique()` column already was. A non-unique index stays safe.
+- Both producers of a unique index (a declared `unique: true` index, a `.unique()` column)
+  now route through one create helper that runs the existing
+  `GROUP BY … HAVING COUNT(*) > 1` probe first, so an unmigratable schema fails as a
+  diagnostic naming the table and the remedy rather than as a wedged shard. The probe runs
+  only when the index is not already held, so a cold start costs nothing extra.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(shard-engine): make a paused data migration resumable again
+
+Three ways the per-shard runner broke its own "each row is visited exactly once …
+survives a failure" promise.
+
+A resume cursor persisted under the `~3` prefix was refused forever. `restampResumeCursor`
+only re-stamped `~2`, while `CURSOR_PREFIX` has since reached `~4`, so a migration paused
+on a `~3` build threw `invalid cursor` on resume and the catch re-persisted `failed` with
+the same doomed cursor. It now re-stamps every prior prefix. The claim that this is safe
+was re-verified against both bumps: the runner mints from the fixed
+`MIGRATION_ORDER_KEYS`, which held the same value at each, so the payload is
+`[_creationTime, _id]` under `~2`, `~3` and `~4` alike.
+
+A throw AFTER the row's write had committed re-applied a non-idempotent transform on
+resume. `replace` commits its guarded UPDATE and only then awaits its after-update
+triggers and `onWrite`, so a throw out of it is not proof the write failed — but the
+cursor advanced only on a clean return, leaving it behind a row that was already
+rewritten. The row is now counted and the cursor advanced from inside the call, the moment
+the write is known to have landed; the error path reads the row back to tell a committed
+write from one that never happened, so a genuinely failed row is still re-visited.
+
+Soft-deleted rows were never visited at all: the page read passed no `includeDeleted`, so
+`softDeleteScope` filtered tombstones out, the run recorded `completed`, and `restore(id)`
+then handed the application a pre-migration document. `countLegacyRows` counts tombstones
+(it is raw SQL) and so never reached zero for the same reason.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* five data-correctness defects on the write and migration paths ([#745](https://github.com/anolilab/lunora/issues/745)) ([0ac0181](https://github.com/anolilab/lunora/commit/0ac0181f730feaa9ec1a94a17ddb0477118bbf55))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.135
+* **@lunora/agent:** upgraded to 1.0.0-alpha.113
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
+## @lunora/codegen [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.183...@lunora/codegen@1.0.0-alpha.184) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** `withDeferredSchedules` takes an optional second argument, the
+outbox the generated shard supplies; the emitted `buildCtx` passes it and
+`ShardDO` gains `scheduleOutbox`, `scheduleOutboxScheduler` and
+`pollScheduleOutbox`. Regenerate `_generated` after upgrading.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** hold deferred schedules in a durable outbox ([#735](https://github.com/anolilab/lunora/issues/735)) ([40482b9](https://github.com/anolilab/lunora/commit/40482b92278b956c39e5b148c6a1ea61f89f7b87))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.134
+* **@lunora/agent:** upgraded to 1.0.0-alpha.112
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+* **@lunora/queue:** upgraded to 1.0.0-alpha.56
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.73
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+
+## @lunora/codegen [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.182...@lunora/codegen@1.0.0-alpha.183) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardDO`'s protected `isQueryFunction` is renamed to `isCacheableQuery`, and
+`QueryReadScope` gains a required `markIpRead` member. A hand-written subclass overriding the
+former, or constructing the latter, must be updated; generated shards are regenerated.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen,advisor:** drop the OCC-retry claim from advisories ([#710](https://github.com/anolilab/lunora/issues/710)) ([e5b7734](https://github.com/anolilab/lunora/commit/e5b77343804dc5e0683233bb9547ad5ba4ed3624))
+* **do:** key the reactive cache on the whole caller ([#714](https://github.com/anolilab/lunora/issues/714)) ([0bbf506](https://github.com/anolilab/lunora/commit/0bbf506c1982cd58aa2aafc4f7c6be79c4c44efb))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.133
+* **@lunora/do:** upgraded to 1.0.0-alpha.139
+
+## @lunora/codegen [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.181...@lunora/codegen@1.0.0-alpha.182) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,codegen:** `ColumnMeta` (`@lunora/shard-engine`, mirrored in `@lunora/studio`) gains
+an optional `onDelete`, and the generated shard's `tableColumns` signature widens with it.
+Regenerate with `lunora codegen`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,codegen:** confirm only what a delete measured ([#728](https://github.com/anolilab/lunora/issues/728)) ([da7be59](https://github.com/anolilab/lunora/commit/da7be59f282403363115b82ae0937c18fb84034d))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.132
+* **@lunora/agent:** upgraded to 1.0.0-alpha.111
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/queue:** upgraded to 1.0.0-alpha.55
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
 ## @lunora/codegen [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.180...@lunora/codegen@1.0.0-alpha.181) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

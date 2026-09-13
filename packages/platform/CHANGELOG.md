@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.31...@lunora/platform@1.0.0-alpha.32) (2026-09-12)
+
+### Bug Fixes
+
+* **platform-node:** apply the limits R2 and Queues apply ([#741](https://github.com/anolilab/lunora/issues/741)) ([c0d69f5](https://github.com/anolilab/lunora/commit/c0d69f553adb22336bc4d53a7755cec71fe0a15f))
+
 ## @lunora/platform [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.30...@lunora/platform@1.0.0-alpha.31) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES

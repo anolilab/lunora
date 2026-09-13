@@ -70,6 +70,9 @@ interface ActionHook<F extends FunctionReference> {
  *
  * await runCommand({ command: "lunora", args: ["verify"] });
  * ```
+ *
+ * Not callable: `const run = useAction(api.x.y); run({ … })` is a `TS2349`.
+ * Destructure the invoker — `const { call: run } = useAction(api.x.y)`.
  */
 const useAction = <F extends FunctionReference>(function_: F): ActionHook<F> => {
     const client = useLunora();
