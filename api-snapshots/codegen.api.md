@@ -114,6 +114,7 @@ interface CodegenResult {
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
     workflows: ReadonlyArray<WorkflowIR>;
+    writtenFiles: ReadonlyArray<string>;
 }
 ```
 

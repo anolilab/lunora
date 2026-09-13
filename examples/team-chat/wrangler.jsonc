@@ -13,7 +13,7 @@
         // better-auth's identity tables (user, session, account, verification)
         // plus the `.global()` `profiles` table, which has to be readable from
         // every message shard.
-        { "binding": "DB", "database_name": "lunora-example-team-chat", "database_id": "REPLACE_WITH_D1_ID" },
+        { "binding": "DB", "database_name": "lunora-example-team-chat", "database_id": "<replace-with-d1-create-id>" },
     ],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "lunora-example-team-chat-files" }],
     "vars": {

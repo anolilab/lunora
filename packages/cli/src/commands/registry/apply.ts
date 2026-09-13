@@ -10,9 +10,24 @@ import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 
 import type { Logger } from "../../util/logger";
-import { resolveDistTag } from "../../util/source-ref";
+import { resolveDistTag, resolveTagVersions } from "../../util/source-ref";
 import { tuiConfirm } from "../../util/tui-prompts";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
+
+/**
+ * True when a manifest range is a bare `workspace:` alias — the forms that
+ * carry no version of their own and therefore have to be resolved against the
+ * CLI's release channel. See {@link resolveDepRange}.
+ */
+const isBareWorkspaceRange = (range: string): boolean => {
+    if (!range.startsWith("workspace:")) {
+        return false;
+    }
+
+    const rest = range.slice("workspace:".length);
+
+    return rest === "" || rest === "*" || rest === "^" || rest === "~";
+};
 
 /**
  * Translate a pnpm `workspace:` protocol range into a publishable one.
@@ -22,14 +37,21 @@ import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryM
  * But `add` writes these ranges into a *consumer's* package.json, where the
  * workspace protocol is meaningless — pnpm aborts with
  * `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`. So when the range carries an explicit
- * version (`workspace:^1.2.3` → `^1.2.3`) we strip the prefix; the bare alias
- * forms (`workspace:*` / `^` / `~`) have no version to recover, so they pin to
- * the CLI's release-channel dist-tag (the packages are independently versioned —
- * there is no single version to pin to from here, and on a pre-release channel
- * the `latest` tag is a placeholder, so the channel tag is what actually
- * resolves to installable code). See {@link resolveDistTag}.
+ * version (`workspace:^1.2.3` → `^1.2.3`) we strip the prefix.
+ *
+ * The bare alias forms (`workspace:*` / `^` / `~`) have no version to recover.
+ * `pinned` carries the CONCRETE version the CLI's release-channel dist-tag
+ * currently resolves to (looked up once per invocation by
+ * {@link resolvePinnedDepVersions}); a scaffolded package.json must pin that
+ * rather than the floating tag, because a tag lets a stale lockfile or pnpm
+ * metadata cache silently keep an older release — the specifier still
+ * "matches", so the lockfile is never re-resolved. This is the same reason
+ * `init` pins. When the lookup failed (offline, registry unreachable) the name
+ * is absent from `pinned` and we fall back to the channel tag, which still
+ * resolves to installable code — unlike `latest` on a pre-release channel.
+ * See {@link resolveDistTag} and {@link resolveTagVersions}.
  */
-const resolveDepRange = (range: string): string => {
+const resolveDepRange = (range: string, pinned?: ReadonlyMap<string, string>, name?: string): string => {
     if (!range.startsWith("workspace:")) {
         return range;
     }
@@ -37,10 +59,33 @@ const resolveDepRange = (range: string): string => {
     const rest = range.slice("workspace:".length);
 
     if (rest === "" || rest === "*" || rest === "^" || rest === "~") {
-        return resolveDistTag();
+        return (name === undefined ? undefined : pinned?.get(name)) ?? resolveDistTag();
     }
 
     return rest;
+};
+
+/**
+ * Resolve every bare `workspace:` dependency across a whole plan to the
+ * CONCRETE version the CLI's release-channel dist-tag points at — one batched
+ * registry lookup per invocation, so the plan preview and the package.json it
+ * writes cannot disagree. Names whose lookup fails are simply absent (the
+ * offline-safe fallback lives in {@link resolveDepRange}).
+ */
+const resolvePinnedDepVersions = async (manifests: ReadonlyArray<RegistryManifest>): Promise<ReadonlyMap<string, string>> => {
+    const names = new Set<string>();
+
+    for (const manifest of manifests) {
+        for (const section of [manifest.deps, manifest.devDependencies]) {
+            for (const [name, range] of Object.entries(section ?? {})) {
+                if (isBareWorkspaceRange(range)) {
+                    names.add(name);
+                }
+            }
+        }
+    }
+
+    return names.size === 0 ? new Map() : resolveTagVersions([...names], resolveDistTag());
 };
 
 /**
@@ -101,6 +146,10 @@ const rewriteUmbrellaImports = (source: string): string =>
  * When `useUmbrella` is set, base packages the `lunorash` umbrella re-exports
  * ({@link UMBRELLA_REEXPORTED_DEPS}) are skipped — the umbrella already provides
  * them, and adding a parallel copy risks a second instance.
+ *
+ * `pinned` is the plan's resolved dist-tag → concrete version map
+ * ({@link resolvePinnedDepVersions}); omitting it writes the floating channel
+ * tag, which is only correct when no registry is reachable.
  */
 const applyDeps = (
     deps: Readonly<Record<string, string>>,
@@ -108,6 +157,7 @@ const applyDeps = (
     logger: Logger,
     section: "dependencies" | "devDependencies" = "dependencies",
     useUmbrella = false,
+    pinned?: ReadonlyMap<string, string>,
 ): ReadonlyArray<string> => {
     const entries = Object.entries(deps);
 
@@ -143,7 +193,7 @@ const applyDeps = (
             continue;
         }
 
-        const edits = modify(text, [section, name], resolveDepRange(range), {
+        const edits = modify(text, [section, name], resolveDepRange(range, pinned, name), {
             formattingOptions: { insertSpaces: true, tabSize: 4 },
         });
 
@@ -483,16 +533,22 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
  * Returns the deps + bindings added. `useUmbrella` routes base-package deps
  * through the `lunorash` umbrella (skipping the granular duplicates).
  */
-const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Logger, useUmbrella = false): { bindings: string[]; deps: string[] } => {
+const applyItemResources = (
+    manifest: RegistryManifest,
+    cwd: string,
+    logger: Logger,
+    useUmbrella = false,
+    pinned?: ReadonlyMap<string, string>,
+): { bindings: string[]; deps: string[] } => {
     const deps: string[] = [];
     const bindings: string[] = [];
 
     if (manifest.deps) {
-        deps.push(...applyDeps(manifest.deps, cwd, logger, "dependencies", useUmbrella));
+        deps.push(...applyDeps(manifest.deps, cwd, logger, "dependencies", useUmbrella, pinned));
     }
 
     if (manifest.devDependencies) {
-        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies", useUmbrella));
+        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies", useUmbrella, pinned));
     }
 
     if (manifest.bindings) {
@@ -585,4 +641,13 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
 };
 
 export type { ConfirmOutcome };
-export { applyDeps, applyItemResources, confirmDepMutation, isCustomRegistrySource, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };
+export {
+    applyDeps,
+    applyItemResources,
+    confirmDepMutation,
+    isCustomRegistrySource,
+    projectUsesUmbrella,
+    resolveDepRange,
+    resolvePinnedDepVersions,
+    rewriteUmbrellaImports,
+};

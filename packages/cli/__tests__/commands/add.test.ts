@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
 import { applyDeps, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
@@ -394,19 +394,57 @@ describe("lunora add", () => {
             rmSync(customRegistry, { force: true, recursive: true });
         });
 
-        it("rewrites a manifest's workspace: dep range to a publishable one", async () => {
-            expect.assertions(2);
+        it("rewrites a manifest's workspace: dep range to the concrete published version", async () => {
+            expect.assertions(3);
 
             // The ratelimit fixture pins `@lunora/ratelimit: workspace:*`. The
             // workspace protocol is only resolvable inside the monorepo — leaking
             // it into a consumer's package.json makes `pnpm install` abort with
             // ERR_PNPM_WORKSPACE_PKG_NOT_FOUND.
-            await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+            //
+            // What replaces it is the CONCRETE version the CLI's channel tag
+            // currently points at, not the tag: a dist-tag in package.json lets a
+            // stale lockfile or pnpm metadata cache keep an older release, since
+            // the specifier still matches and is never re-resolved. `init` pins
+            // for exactly this reason and `add` used to write a floating "alpha"
+            // right beside init's pinned `lunorash`.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ "dist-tags": { [resolveDistTag()]: "9.9.9-test.1" } }));
 
-            const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+            try {
+                const { lines, logger } = makeLogger();
 
-            expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
-            expect(JSON.stringify(pkg)).not.toContain("workspace:");
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe("9.9.9-test.1");
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+                // The plan preview resolves through the same map, so what it
+                // advertises is what lands.
+                expect(lines.join("\n")).toContain("@lunora/ratelimit@9.9.9-test.1");
+            } finally {
+                fetchSpy.mockRestore();
+            }
+        });
+
+        it("falls back to the channel dist-tag when the registry is unreachable", async () => {
+            expect.assertions(2);
+
+            // Offline, there is no version to pin. The channel tag still resolves
+            // to installable code (unlike `latest` on a pre-release channel), so
+            // it is the right fallback — never the `workspace:` protocol.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("getaddrinfo ENOTFOUND registry.npmjs.org"));
+
+            try {
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+            } finally {
+                fetchSpy.mockRestore();
+            }
         });
     });
 

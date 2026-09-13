@@ -142,43 +142,53 @@ automation contract.
 ### `lunora init`
 
 Scaffolds a new Lunora project by fetching a template from
-`gh:anolilab/lunora/templates/<type>#<version>`. `init` (and `add`) resolve
-that release branch to the immutable commit SHA it currently points at (logged
-as `pinned … → <sha>`), so the fetch is reproducible and tamper-evident; if the
-SHA can't be resolved (offline / rate-limited) it falls back to the branch with
-a one-line UNPINNED warning. Pass `-t` / `--template` to choose the starting
-point:
+`gh:anolilab/lunora/templates/<type>#<ref>`. The ref is a **branch**, derived
+from the running CLI's own version: a pre-release resolves to its channel
+(`alpha`, `beta`, `next`), a stable release to `main`. `--ref` overrides it with
+any branch, tag or commit. `init` (and `add`) then resolve that ref to the
+immutable commit SHA it currently points at (logged as `pinned … → <sha>`), so
+the fetch is reproducible and tamper-evident; if the SHA can't be resolved
+(offline / rate-limited) it falls back to the ref itself with a one-line
+UNPINNED warning. Pass `-t` / `--template` to choose the starting point:
 
-| Value                  | Description                                                               |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `react`                | React SPA: the official create-vite base + the Lunora layer (default)     |
-| `vue`                  | Vue SPA: create-vite base + Lunora                                        |
-| `solid`                | Solid SPA: create-vite base + Lunora                                      |
-| `svelte`               | Svelte SPA: create-vite base + Lunora                                     |
-| `next`                 | Next.js (App Router): OpenNext on Cloudflare + a standalone Lunora worker |
-| `tanstack-start-react` | TanStack Start (React): SSR with live-loader routes                       |
-| `tanstack-start-solid` | TanStack Start (Solid)                                                    |
-| `react-router`         | React Router v7 (framework mode): SSR composed into the Lunora worker     |
-| `astro`                | Astro + a standalone Lunora worker                                        |
-| `analog`               | AnalogJS (Angular): single-worker, Lunora mounted in Nitro                |
-| `nuxt`                 | Nuxt (Vue): single-worker, Lunora mounted in Nitro                        |
-| `sveltekit`            | SvelteKit + a standalone Lunora worker                                    |
-| `expo`                 | React Native (Expo): an iOS/Android/web app + a Lunora worker backend     |
-| `standalone`           | Worker only, no frontend                                                  |
+| Value                  | Description                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `react`                | React SPA — official create-vite base + the Lunora layer (the default)               |
+| `vue`                  | Vue SPA — create-vite base + Lunora                                                  |
+| `solid`                | Solid SPA — create-vite base + Lunora                                                |
+| `solid-v2`             | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)               |
+| `svelte`               | Svelte SPA — create-vite base + Lunora                                               |
+| `next`                 | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker           |
+| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes                                 |
+| `tanstack-start-solid` | TanStack Start (Solid)                                                               |
+| `vinext`               | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental) |
+| `vinext-pages`         | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)      |
+| `react-router`         | React Router (v7, framework mode) — SSR composed into the Lunora worker              |
+| `astro`                | Astro (islands) — single-worker, Lunora composed into the adapter worker             |
+| `analog`               | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                          |
+| `nuxt`                 | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                  |
+| `sveltekit`            | SvelteKit — single-worker, Lunora composed into the adapter worker                   |
+| `expo`                 | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend               |
+| `standalone`           | Worker only — no frontend                                                            |
 
-The four create-vite frameworks (`react`, `vue`, `solid`, `svelte`) scaffold
-through the **overlay** engine (the official create-vite base plus the Lunora
-layer), while the rest are bespoke Lunora templates. Run `lunora init` with no
-`-t` to pick from the same list interactively.
+The create-vite frameworks (`react`, `vue`, `solid`, `svelte`, plus
+`vanilla` via `--vite`) scaffold through the **overlay** engine (the official
+create-vite base plus the Lunora layer), while the rest are bespoke Lunora
+templates — `solid-v2` included, because create-vite's Solid base is still
+1.x. Run `lunora init` with no `-t` to pick from the same list interactively.
 
 Additional flags:
 
+- `--vite <framework>`: scaffold via the create-vite overlay for `react` | `vue` | `solid` | `svelte` | `vanilla`. Equivalent to passing the same value to `-t`.
 - `--from <dir>`: copy from a local templates root instead of fetching remotely (offline-friendly; expects `<type>/` subdirs)
 - `--source <ref>`: override the remote template source (e.g. `gh:owner/repo/sub#ref`)
+- `--ref <ref>`: fetch templates from a git branch, tag or commit (e.g. `--ref alpha`), overriding the version-derived default above
 - `--allow-unsafe-source`: permit `--source` values outside `gh:/github:/https://`
 - `--here`: add Lunora to an existing project (detect the framework, patch the config, scaffold `lunora/`, print per-framework wiring steps)
 - `-i` / `--interactive`: after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
 - `-y` / `--yes`: scaffold only — skip every post-scaffold prompt (the auth/email offer, the dependency-install offer, and `git init`). The project is complete; run the printed install command yourself.
+- `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
+- `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
 - `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --preview` on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.
 
 ### `lunora add`
@@ -192,12 +202,35 @@ lunora add auth --yes           # default provider (email & password), no prompt
 lunora add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
 ```
 
-| Feature | Installs                                                  | Notes                                                                                                              |
-| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@lunora/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
-| `email` | the `mail` registry item                                  | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher                                   |
+These are the features the interactive picker offers and `lunora init --add`
+accepts. Each is the registry item of the same name, applied with its shipped
+defaults — except `email`, which maps to the `mail` item, and `auth`, which
+picks between `auth`, `auth-clerk` and `auth-auth0`:
 
-Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
+| Feature             | Installs                                                         |
+| ------------------- | ---------------------------------------------------------------- |
+| `ai`                | LLMs via Workers AI (summarize, generate, stream)                |
+| `auth`              | Sign-up / sign-in (asks which provider)                          |
+| `auth-ui`           | Copy-in auth screens for your framework (sign in/up, reset, 2FA) |
+| `backup`            | Snapshot + restore your Durable Object data                      |
+| `browser`           | Headless browser screenshots + PDFs                              |
+| `cloudflare-access` | Zero Trust identity via Cloudflare Access                        |
+| `crons`             | Scheduled jobs via Cron Triggers (`@lunora/scheduler`)           |
+| `email`             | Cloudflare Email Workers + a dev mail catcher                    |
+| `flags`             | OpenFeature feature flags (`ctx.flags`)                          |
+| `hyperdrive`        | External Postgres/MySQL via Hyperdrive                           |
+| `payment`           | Stripe-first payments (checkout, subscription, webhooks)         |
+| `presence`          | Live presence / who's-online over hibernated WebSockets          |
+| `queue`             | Async message queues (push/pull consumers)                       |
+| `storage`           | Typed R2 buckets + signed URLs (`@lunora/storage`)               |
+| `workflow`          | Durable long-running workflows (`step.do`, sleep, branch)        |
+
+`auth` adds `@lunora/auth` plus a D1 `DB` binding, and its verification / reset
+mail is captured into the studio **Mail** tab in dev. Any other registry item
+name works here too (`auth-clerk`, …) — this table is the curated shortlist, not
+the whole registry; `lunora registry list` enumerates that.
+
+Flags: `--provider <auth\|clerk\|auth0>`, `--db <name>`, `--bucket <name>`, `--mail-to <address>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--ref <ref>`, `--allow-unsafe-source`.
 
 ### `lunora view`
 
@@ -708,6 +741,31 @@ first use, idempotently and additively. What it will never do is drop or
 retype, so the `DROP TABLE` / `DROP INDEX` statements and the hand-written
 block under "NOT auto-generated" are the parts worth applying.
 
+#### `lunora migrate d1-to-hyperdrive`
+
+The third kind: a **backend** migration that copies `.global()` table data out
+of a D1-backed deployment into a Hyperdrive-backed one, for when a project
+outgrows D1. It is a guided orchestration over the admin export/import — it
+streams the source's global rows to an NDJSON dump, imports them into the
+target (whose `.global({ backend: "hyperdrive" })` tables route the writes to
+Hyperdrive), and verifies the row counts match. The blue-green flow: deploy the
+new Hyperdrive worker alongside the old D1 one, then point the two legs at them.
+
+```bash
+lunora migrate d1-to-hyperdrive \
+  --from-url https://old-worker.example.workers.dev \
+  --to-url   https://new-worker.example.workers.dev
+```
+
+The two URLs must be **distinct deployments**: given one, both legs would
+address the same database and the run would report "counts match" having done
+nothing, so the command refuses. `--from-token` / `--to-token` each fall back to
+`--token` (prefer `LUNORA_ADMIN_TOKEN`). `--tables a,b` limits the move to named
+`.global()` tables (default: all of them), and `--out <path>` keeps the
+intermediate NDJSON dump — without it the dump is staged in a private `0700`
+temp directory and discarded. Sharded tables are untouched: they live in
+per-Durable-Object SQLite, not in D1.
+
 ### `lunora run`
 
 Send a single RPC to a running Worker without spinning up the client SDK:
@@ -744,6 +802,70 @@ is printed for you to paste rather than rewritten.
 `--api-spec` selects which API description to emit alongside the generated
 modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
 `openrpc.json`, `both` writes both, and `none` writes neither.
+
+The success line names the files this run actually emitted, which is not a fixed
+set: alongside the always-written modules, the per-feature ones (containers,
+workflows, agents, queues, scheduler, seed, collections) are written only while
+their feature is in use and **deleted** when it stops being, and the spec
+artifacts follow `--api-spec`. [Codegen output](#codegen-output) below describes
+what each file is for.
+
+### `lunora advisor`
+
+Scores your app's static advisor findings — the splinter-style schema, query and
+security lints from `@lunora/advisor` — into a health map, so the trend is a
+number CI can gate on rather than a wall of warnings:
+
+```bash
+lunora advisor                              # score the app, write lunora.advisor.map.json
+lunora advisor --all                        # every procedure as a check matrix
+lunora advisor --entry messages#sendMessage # inspect one procedure
+lunora advisor --min-score 80               # exit non-zero below 80
+lunora advisor --baseline                   # fail on any regression vs the committed map
+lunora advisor --no-write                   # report only, write no artifact
+```
+
+Commit the map: `--baseline` diffs against it, so a PR that makes the schema
+worse fails even while the absolute score is still above `--min-score`. The same
+findings drive the studio's **Advisors** tab.
+
+### `lunora eval`
+
+Discovers every `*.eval.ts` under `evals/` and runs it through its default-
+exported `run()`, which calls `evaluate` / `agentHarness` from
+`@lunora/testing`. Entirely in-process — unlike `seed` and `insights` it needs
+no running worker:
+
+```bash
+lunora eval                                     # run every eval, print the aggregate table
+lunora eval --threshold 0.8                     # non-zero exit below an average of 0.8
+lunora eval --dir evals/support --format json   # a subset, machine-readable
+```
+
+`--threshold` is a global score gate in `[0, 1]`; an eval that exports its own
+`threshold` wins over it for that eval.
+
+### `lunora sdk`
+
+Generates a self-contained, typed client SDK for another language from the
+project's OpenRPC surface — transport included, so the emitted package has no
+Lunora runtime dependency:
+
+```bash
+lunora sdk generate --lang python                  # → ./sdk/python
+lunora sdk generate --lang go --out ./clients/go   # choose the output directory
+lunora sdk generate --lang dart                    # Flutter-ready; live queries arrive as a Stream
+lunora sdk generate --lang rust --from ./sdks      # copy the transport from a local checkout
+```
+
+`--lang` defaults to `python`; `lunora sdk generate --help` lists the registered
+targets, and an unrecognised one is refused with the same list. The spec
+defaults to `./lunora/_generated/openrpc.json`, so run `lunora codegen
+--api-spec openrpc` (or `both`) first — `--spec <path>` points at another
+document. The transport is
+fetched at this CLI's own release tag so it matches the generated surface;
+`--ref` overrides that and `--from <dir>` copies from a local directory of
+per-language transports instead.
 
 ### `lunora insights`
 
@@ -791,11 +913,21 @@ lunora env list              # list all keys in .dev.vars
 lunora env get DATABASE_URL  # read a single key
 lunora env set FOO bar       # write a key
 lunora env unset FOO         # remove a key
+lunora env generate          # generate strong values for the project's secrets
+lunora env generate AUTH_SECRET --set  # generate one and write it into .dev.vars
 lunora env push              # upload to Cloudflare (prompts unless --yes)
 lunora env push --prod --yes # push to the production environment
 lunora env diff              # compare local .dev.vars keys against Cloudflare
 lunora env doctor            # validate .dev.vars against .dev.vars.example
 ```
+
+`generate` mints cryptographically-strong values (32-byte hex). With no key it
+mints every secret this project can generate locally (`AUTH_SECRET`, …); name
+one to mint just that. By default it **prints** `KEY=value` lines on stdout — so
+you can pipe them into `wrangler secret put` — and `--set` writes them into
+`.dev.vars` instead. Minting replaces a value irreversibly, so `--set` refuses
+to overwrite a key that already holds a live (non-placeholder) secret unless you
+add `--yes`.
 
 `diff` reads the deployed Worker's secret **names** via `wrangler secret list`
 and reports which keys are local-only (need a `push`), remote-only, or in both.

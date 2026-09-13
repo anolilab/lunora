@@ -461,7 +461,7 @@ const reconcileItems = (
                 continue;
             }
 
-            const applied = applyItemResources(manifest, cwd, logger, useUmbrella);
+            const applied = applyItemResources(manifest, cwd, logger, useUmbrella, reconcileOptions.pinnedVersions);
 
             depsAdded.push(...applied.deps);
             bindingsApplied.push(...applied.bindings);

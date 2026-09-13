@@ -10,7 +10,7 @@ import { join } from "@visulima/path";
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { confirmDepMutation, resolveDepRange } from "./apply";
+import { confirmDepMutation, resolveDepRange, resolvePinnedDepVersions } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
 import safe from "./display";
 import { readItemFile, reconcileItems } from "./reconcile";
@@ -18,8 +18,12 @@ import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, s
 import type { AddCommandOptions, AddCommandResult, RegistryManifest, RegistryPlanItem } from "./types";
 import { emptyResult } from "./types";
 
-/** Render the human-readable plan for one item. */
-const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
+/**
+ * Render the human-readable plan for one item. `pinned` is the plan's resolved
+ * dependency-name → concrete-version map, so the printed range is the one that
+ * will actually be written.
+ */
+const printPlan = (logger: Logger, manifest: RegistryManifest, pinned?: ReadonlyMap<string, string>): void => {
     const label = manifest.title ?? manifest.description;
 
     logger.info(`plan: ${safe(manifest.name)}${label ? ` — ${safe(label)}` : ""}`);
@@ -33,30 +37,15 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     // resolves to the local checkout, but that protocol is meaningless in a
     // consumer's package.json — printing it raw made the plan look like it was
     // about to break `pnpm install`.
-    // `resolveDepRange` resolves the CLI's dist-tag for every bare `workspace:`
-    // specifier, so it is memoised across the whole plan rather than re-resolved
-    // per dependency line.
-    const renderedRange = new Map<string, string>();
-    const rangeFor = (range: string): string => {
-        const cached = renderedRange.get(range);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const resolved = resolveDepRange(range);
-
-        renderedRange.set(range, resolved);
-
-        return resolved;
-    };
-
+    // `resolveDepRange` resolves the CLI's dist-tag to the concrete version in
+    // `pinned` for every bare `workspace:` specifier — the same resolution the
+    // write path uses, so preview and package.json cannot disagree.
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${safe(dep)}@${safe(rangeFor(range))}`);
+        logger.info(`  dep   ${safe(dep)}@${safe(resolveDepRange(range, pinned, dep))}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${safe(dep)}@${safe(rangeFor(range))}`);
+        logger.info(`  dev   ${safe(dep)}@${safe(resolveDepRange(range, pinned, dep))}`);
     }
 
     for (const binding of manifest.bindings ?? []) {
@@ -243,8 +232,15 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
             : resolvedItems;
 
         // --- Plan ---
+        // One batched registry lookup for the whole plan: every bare
+        // `workspace:` range resolves to the CONCRETE version the CLI's channel
+        // dist-tag points at. Written into package.json rather than the floating
+        // tag, because a tag lets a stale lockfile keep an older release — the
+        // same reason `init` pins. Offline, the map is empty and the tag stands.
+        const pinnedVersions = await resolvePinnedDepVersions(items.map((item) => item.manifest));
+
         for (const { manifest } of items) {
-            printPlan(logger, manifest);
+            printPlan(logger, manifest, pinnedVersions);
         }
 
         // The plan IS the document: it says what this invocation resolved, and it
@@ -279,7 +275,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
         }
 
         // --- Reconcile ---
-        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, logger, { overwrite: options.overwrite });
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, logger, { overwrite: options.overwrite, pinnedVersions });
 
         reportAddResult(items, deps, written.length, skipped.length, logger, cwd);
 
@@ -334,7 +330,8 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
 
             const manifest = readManifest(directory, name);
 
-            printPlan(options.logger, manifest);
+            // eslint-disable-next-line no-await-in-loop -- one lookup per viewed item; the loop is already sequential by design
+            printPlan(options.logger, manifest, await resolvePinnedDepVersions([manifest]));
 
             for (const file of manifest.files) {
                 options.logger.info(`--- ${safe(file.to)} (${safe(file.merge)}) ---`);
