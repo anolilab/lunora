@@ -2,7 +2,7 @@
     "name": "@lunora/saas-ui",
     "version": "1.0.0-alpha.0",
     "private": true,
-    "description": "Internal: source-of-truth for the copy-in, user-owned SaaS kit screens distributed via the `saas-ui-*` registry items. Not published \u2014 synced into registry/saas-ui-<framework>/ and copied into consumer projects.",
+    "description": "Internal: source-of-truth for the copy-in, user-owned SaaS kit screens distributed via the `saas-ui-*` registry items. Not published — synced into registry/saas-ui-<framework>/ and copied into consumer projects.",
     "keywords": [
         "dashboard",
         "lunora",

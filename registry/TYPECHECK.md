@@ -18,6 +18,15 @@ Two classes of defect are invisible to `tsc` here, both by construction.
 
 Same reason as the auth-ui-* items below: `auth-emails` is TSX rendered by @react-email/render, so it needs a JSX config this backend-oriented program does not have. It is type-checked at its source, `packages/auth-ui/src/emails/index.tsx`.
 
+## The `saas-ui-*` items
+
+Same reason as the `auth-ui-*` items: they are copy-in UI in framework dialects
+(React TSX, Svelte SFCs) that this backend-oriented program has no `--jsx` or
+Svelte plugin for. They are type-checked at their source in `@lunora/saas-ui` —
+`tsc --noEmit` for core and React, `svelte-check` for the Svelte port, both wired
+into that package's `lint:types` — and again in a consumer's project after
+`lunora registry add saas-ui-<framework>`.
+
 ## The `auth-ui-*` items
 
 The auth-ui-* items are copy-in UI templates in framework dialects (React/Vue/Svelte/Solid/Angular) — they import UI frameworks (react, vue, solid-js, @angular/core) and cross-file JSX/SFCs this backend-oriented tsconfig can't resolve. They're type-checked at their source in @lunora/auth-ui (core + react) and in the consumer's own project after `lunora add auth-ui`.

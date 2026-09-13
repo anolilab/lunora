@@ -19,8 +19,7 @@
  *      none.
  */
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, createDbStore } from "lunorash/ratelimit";
-import { rateLimit } from "lunorash/ratelimit";
+import { RateLimiter, createDbStore, rateLimit } from "lunorash/ratelimit";
 
 import type { Doc, Id, MutationCtx, QueryCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";

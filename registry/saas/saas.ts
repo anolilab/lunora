@@ -19,8 +19,7 @@
  *      none.
  */
 import { LunoraError } from "@lunora/errors";
-import { RateLimiter, createDbStore } from "@lunora/ratelimit";
-import { rateLimit } from "lunorash/ratelimit";
+import { RateLimiter, createDbStore, rateLimit } from "@lunora/ratelimit";
 
 import type { Doc, Id, MutationCtx, QueryCtx } from "#lunora/_generated/server.js";
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
@@ -50,7 +49,14 @@ const limiter = (ctx: MutationCtx): RateLimiter<keyof typeof saasLimits> =>
  * — an argument-derived key is one a caller rotates per request to get a fresh
  * bucket each time, which is a rate limit that reads as one and is not one.
  */
-const byCaller = { key: (ctx: MutationCtx): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
+/**
+ * Generic in the context rather than annotated `MutationCtx`: `rateLimit` infers
+ * its `Context` from the options object, so naming a concrete context here pins
+ * that inference to THIS module's view of it and every handler downstream of the
+ * middleware degrades to `unknown`. Taking only the two fields the key reads keeps
+ * the helper shared across query and mutation without pinning anything.
+ */
+const byCaller = <TContext extends { auth: { userId?: string | null }; ip?: string | undefined }>(ctx: TContext): string => ctx.auth.userId ?? ctx.ip ?? "anon";
 
 /**
  * Table names appear as literals in every TYPE position below, never as
@@ -60,6 +66,23 @@ const byCaller = { key: (ctx: MutationCtx): string => ctx.auth.userId ?? ctx.ip 
  */
 /** Roles allowed to change an organisation's projects. better-auth's defaults. */
 const WRITER_ROLES = new Set(["admin", "owner"]);
+
+/**
+ * Read one declared claim as a non-empty string.
+ *
+ * `ctx.auth.getIdentity()` is typed by the consumer's `lunora/identity.ts`, so in a
+ * scaffolded project these claims are already strings. The item cannot assume that:
+ * it compiles against the base contract (`Record<string, unknown> | null`), and a
+ * project that has not wired `identity.ts` still installs it. Checking here rather
+ * than asserting means the tenancy decisions below rest on a value this module has
+ * actually seen be a string — which is the right posture for the claims that decide
+ * which organisation's data a caller reaches.
+ */
+const claim = (identity: Record<string, unknown>, name: string): string | undefined => {
+    const value = identity[name];
+
+    return typeof value === "string" && value !== "" ? value : undefined;
+};
 
 /**
  * The caller's verified user id and tenant, or a thrown error.
@@ -75,16 +98,19 @@ const WRITER_ROLES = new Set(["admin", "owner"]);
  */
 const requireOrganization = async (ctx: MutationCtx | QueryCtx): Promise<{ organizationId: string; userId: string }> => {
     const identity = await ctx.auth.getIdentity();
+    const userId = identity === null ? undefined : claim(identity, "userId");
 
-    if (!identity) {
+    if (identity === null || userId === undefined) {
         throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
-    if (!identity.activeOrganizationId) {
+    const organizationId = claim(identity, "activeOrganizationId");
+
+    if (organizationId === undefined) {
         throw new LunoraError("FAILED_PRECONDITION", "no active organization — create or switch to one first");
     }
 
-    return { organizationId: identity.activeOrganizationId, userId: identity.userId };
+    return { organizationId, userId };
 };
 
 /** As {@link requireOrganization}, and additionally that the caller may write. */
@@ -92,7 +118,7 @@ const requireWriter = async (ctx: MutationCtx): Promise<{ organizationId: string
     const scope = await requireOrganization(ctx);
     const identity = await ctx.auth.getIdentity();
 
-    if (!WRITER_ROLES.has(identity?.orgRole ?? "member")) {
+    if (!WRITER_ROLES.has((identity === null ? undefined : claim(identity, "orgRole")) ?? "member")) {
         throw new LunoraError("FORBIDDEN", "requires the admin or owner role in this organization");
     }
 
@@ -170,7 +196,7 @@ export const listActivity = query.query(async ({ ctx }): Promise<Doc<"saas_activ
 
 export const createProject = mutation
     .input({ name: v.string().max(120) })
-    .use(rateLimit(limiter, "project", byCaller))
+    .use(rateLimit(limiter, "project", { key: byCaller }))
     .mutation(async ({ args: { name }, ctx }): Promise<Id<"saas_projects">> => {
         const { organizationId, userId } = await requireWriter(ctx);
         const slug = toSlug(name);
@@ -215,7 +241,7 @@ export const createProject = mutation
 // constant — only the validator needs the literal.
 export const archiveProject = mutation
     .input({ projectId: v.id("saas_projects") })
-    .use(rateLimit(limiter, "project", byCaller))
+    .use(rateLimit(limiter, "project", { key: byCaller }))
     .mutation(async ({ args: { projectId }, ctx }): Promise<void> => {
         const { organizationId, userId } = await requireWriter(ctx);
         const project = await ctx.db.get(projectId);
@@ -263,7 +289,7 @@ export const listOrganizations = query.query(async ({ ctx }): Promise<Doc<"saas_
         throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
-    if (identity.appRole !== "admin") {
+    if (claim(identity, "appRole") !== "admin") {
         throw new LunoraError("FORBIDDEN", "requires the platform admin role");
     }
 
@@ -287,7 +313,11 @@ export const syncOrganization = internalMutation
         const row = { ...args, updatedAt: Date.now() };
 
         if (existing) {
-            await ctx.db.patch(existing._id, row);
+            // `_id` through the index signature, and named as the id it is: a row
+            // read from `ctx.db` is `Doc<"saas_organizations">` in your project,
+            // where this cast is the identity. The item itself compiles against the
+            // base, table-generic context, which cannot know that.
+            await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, row);
 
             return;
         }
