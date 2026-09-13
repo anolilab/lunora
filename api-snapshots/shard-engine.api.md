@@ -3609,10 +3609,22 @@ const buildShapeDiff: (sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, 
 const bumpCdcEpoch: (sql: SqlExec) => string;
 ```
 
+### `cdcArchiveRewound` (const)
+
+```ts
+const cdcArchiveRewound: (bucket: R2BucketLike, scope: CdcArchiveScope, archivedThrough: number) => Promise<boolean>;
+```
+
 ### `cdcCanVouchFor` (const)
 
 ```ts
 const cdcCanVouchFor: (sql: SqlExec, deps: ReadonlySet<string>) => boolean;
+```
+
+### `cdcForkedError` (const)
+
+```ts
+const cdcForkedError: (cursor: number, sinceSeq: number, epoch: string) => LunoraError;
 ```
 
 ### `cdcSeqLeavingRows` (const)

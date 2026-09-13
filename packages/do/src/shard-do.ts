@@ -143,6 +143,7 @@ import {
     bumpCdcEpoch,
     CDC_LOG_TABLE,
     cdcCanVouchFor,
+    cdcForkedError,
     cdcTouchesTables,
     cdcTrimmedError,
     clearCapturedMail,
@@ -1820,6 +1821,9 @@ abstract class ShardDO {
             this.recordShapeError(scope, error);
         },
         retentionFloor: (sql) => this.retentionFloor(sql),
+        sealTimeline: () => {
+            this.sealForkedTimeline();
+        },
         shardKey: () => this.currentShardKey(),
         sql: () => this.sql as SqlExec,
         waitUntil: (promise) => this.shardHost.waitUntil?.(promise),
@@ -3558,8 +3562,35 @@ abstract class ShardDO {
             return { changes: [], cursor: args.sinceSeq };
         }
 
-        // Retention-gap guard, and it comes first because it is the more
-        // destructive of the two levels. `trimCdcChanges` DELETES rows, so a
+        // Rollback guard, ahead of both retention levels because it is the only
+        // one that says the cursor itself is meaningless rather than merely out
+        // of range.
+        //
+        // A consumer cannot legitimately hold a `seq` above the high-watermark:
+        // it is monotonic and outlives a trim (`readCdcCursor` reads
+        // `sqlite_sequence`). A cursor above it is therefore proof that the log
+        // rolled back under the consumer — a native point-in-time restore, which
+        // reverts this shard's whole SQLite database and with it every durable
+        // record of the pre-restore timeline, the `__cdc_meta` epoch included.
+        //
+        // Returning the empty page this read would otherwise produce tells that
+        // consumer it is caught up, and the shard's post-restore writes then
+        // climb back through seqs the consumer has already passed — skipped one
+        // by one, permanently, with nothing anywhere reporting it. So refuse,
+        // and seal the fork for everyone else at the same time: the subscription
+        // path already treats exactly this proof this way (see
+        // {@link ShardDO.sealForkedTimeline} and {@link ShardDO.evaluateResume}),
+        // and this path — the one warehouse connectors and `cdcSync` use — did
+        // not. The freshly minted epoch also re-prefixes the changelog archive,
+        // so the rewound timeline stops writing segments over the old one's.
+        const cursor = readCdcCursor(sql);
+
+        if (args.sinceSeq > cursor) {
+            throw cdcForkedError(cursor, args.sinceSeq, this.sealForkedTimeline());
+        }
+
+        // Retention-gap guard, and it comes first of the two retention levels
+        // because it is the more destructive of them. `trimCdcChanges` DELETES rows, so a
         // consumer resuming below the retained floor would be handed the surviving
         // tail with an advanced cursor and no indication that anything was
         // skipped — a warehouse table permanently missing the trimmed range, and
@@ -3656,14 +3687,19 @@ abstract class ShardDO {
      * no longer account for. Only a rollback produces that — in practice a native
      * PITR restore, which is armed in {@link handlePitrAdminOp}.
      *
-     * **Why the signal has to come from a client.** A restore reverts the whole
-     * SQLite database, `__cdc_meta` included, so the proactive bump `pitrRestore`
-     * performs is rolled back along with everything else — the epoch cannot
-     * detect the one event it exists for. Nothing durable inside a SQLite-backed
-     * Durable Object escapes that: the KV half of `state.storage` is the same
-     * database, and an alarm is a row in it. The only record of the pre-restore
-     * timeline that the restore cannot reach is the cursor each CLIENT cached, so
-     * that is what this reads. Turning one client's refusal into a shard-wide
+     * **Why the signal has to come from outside SQLite.** A restore reverts the
+     * whole SQLite database, `__cdc_meta` included, so the proactive bump
+     * `pitrRestore` performs is rolled back along with everything else — the
+     * epoch cannot detect the one event it exists for. Nothing durable inside a
+     * SQLite-backed Durable Object escapes that: the KV half of `state.storage`
+     * is the same database, and an alarm is a row in it. So every record of the
+     * pre-restore timeline that survives is somewhere the restore could not
+     * reach, and this shard has exactly two: the cursor a CONSUMER cached (a
+     * subscriber's `sinceSeq` here, a connector's in
+     * {@link ShardDO.runShardCdcSync}, a follower's in `replica.ts`), and the
+     * changelog ARCHIVE's own segments, which R2 keeps while the watermark
+     * naming them rolls back (`cdcArchiveRewound`, consulted by the retention
+     * sweep). Either one calls this, and turning one witness into a shard-wide
      * epoch bump is what extends the protection to clients that reconnect later,
      * after post-restore writes have climbed the AUTOINCREMENT back past their
      * own `sinceSeq` and the `sinceSeq > cursor` guard no longer fires for them.
@@ -3674,9 +3710,10 @@ abstract class ShardDO {
      * subscriber set reconnects with pre-restore cursors while the restored
      * cursor is still low. The first of them seals the fork for the rest.
      *
-     * **What it cannot detect.** A rollback on a shard whose clients ALL stay
-     * offline until the cursor has climbed back past their cursors — nobody is
-     * left to present the proof. A shard with no subscribers at all is the
+     * **What it cannot detect.** A rollback on a shard whose consumers ALL stay
+     * offline until the cursor has climbed back past their cursors, and which
+     * archives nothing — nobody is left to present the proof. A shard with no
+     * subscribers, no connector, no follower and no archive bucket is the
      * degenerate case of that, and is also the case where nothing is stale.
      *
      * **On trusting `sinceSeq`.** It is client-supplied, so a caller that already
@@ -3774,9 +3811,9 @@ abstract class ShardDO {
         // Rollback guard: a legitimate `sinceSeq` can never exceed the current
         // high-watermark (the cursor is monotonic and survives trims). A client
         // claiming to have seen MORE than the shard holds, on THIS epoch, is
-        // proof the log rolled back under it — and is the only such proof that
-        // exists (see {@link sealForkedTimeline}). Refuse this client, and seal
-        // the fork for every other one.
+        // proof the log rolled back under it — one of the few such proofs that
+        // survive a restore at all (see {@link sealForkedTimeline}). Refuse this
+        // client, and seal the fork for every other one.
         if (sinceSeq > cursor) {
             return { cursor, epoch: this.sealForkedTimeline(), resumable: false };
         }
@@ -9188,10 +9225,11 @@ abstract class ShardDO {
         // cover is the one between arming and the restart.
         //
         // The other half is reactive and lives in
-        // {@link ShardDO.sealForkedTimeline}: the first client to present a
-        // cursor ahead of the rewound log, on the reverted epoch, proves the fork
-        // from outside SQLite and re-mints the epoch for everyone. Read that
-        // comment for what the pair can and cannot detect.
+        // {@link ShardDO.sealForkedTimeline}: the first witness from OUTSIDE
+        // SQLite — a subscriber's cursor, a `cdcSync` consumer's, a replica
+        // follower's, or the changelog archive's own segments — proves the fork
+        // and re-mints the epoch for everyone. Read that comment for what the
+        // pair can and cannot detect.
         //
         // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
         // pre-CDC shard, so the bump simply no-ops there.

@@ -539,6 +539,33 @@ const cdcTrimmedError = (floor: number, sinceSeq: number, scope: "global" | "sha
     );
 
 /**
+ * The refusal a read path returns to a consumer whose cursor sits ABOVE the
+ * changelog's high-watermark.
+ *
+ * That is not a cursor, it is proof: `seq` is monotonic and survives a trim
+ * (`readCdcCursor` reads `sqlite_sequence`), so no consumer can legitimately
+ * hold one this shard has not issued. The one thing that produces it is a
+ * rollback of the log itself — in practice a native point-in-time restore, which
+ * reverts the whole SQLite database and every durable record of the old timeline
+ * inside it, `__cdc_meta`'s epoch included. The consumer's own cursor is then the
+ * only surviving witness, which is why it is treated as one.
+ *
+ * The alternative — echoing `sinceSeq` back with an empty page — tells that
+ * consumer it is caught up, and it then never asks for the post-restore range:
+ * the shard's writes climb back through seqs the consumer has already passed and
+ * are skipped one by one, silently and permanently. So this refuses, and carries
+ * what a resynchronisation needs: the surviving `cursor`, and the `epoch` the
+ * seal re-minted, which is what tells the consumer it is a different timeline
+ * rather than the same one shortened.
+ */
+const cdcForkedError = (cursor: number, sinceSeq: number, epoch: string): LunoraError =>
+    new LunoraError(
+        "CDC_TIMELINE_FORKED",
+        `cdc cursor ${String(sinceSeq)} is above this shard's high-watermark ${String(cursor)}; the changelog rolled back (a point-in-time restore) and the changes you hold are on a timeline that no longer exists — resume from a snapshot at epoch ${epoch}`,
+        { data: { cursor, epoch }, status: 409 },
+    );
+
+/**
  * Oldest `seq` still retained in the changelog, or `undefined` when the log is
  * empty. A reconnecting subscriber whose `sinceSeq` is below `floor - 1` has
  * missed changes that `trimCdcChanges` already compacted away, so it must take a
@@ -703,6 +730,7 @@ export {
     CDC_LOG_TABLE_SEQ_INDEX,
     CDC_META_TABLE,
     cdcCanVouchFor,
+    cdcForkedError,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     cdcTrimmedError,
