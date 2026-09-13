@@ -2565,15 +2565,25 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  */
 
 /**
- * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect/init
- * function-path arrays the generated ShardDO iterates — the first two on socket
- * open/close, `init` once per instance before any handler runs. Each
- * entry is the same `${namespace}:${fn}` key the function lands under in
- * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
- * registered function. Functions arrive pre-sorted, so the arrays are stable.
+ * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the
+ * connect/disconnect/init/reactor/whisper function-path arrays the generated
+ * ShardDO iterates — the first two on socket open/close, `init` once per instance
+ * before any handler runs, `reactor` after a write flush, `whisper` before a
+ * topic join or broadcast. Each entry is the same `${namespace}:${fn}` key the
+ * function lands under in `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path
+ * like any other registered function. Functions arrive pre-sorted, so the arrays
+ * are stable.
  */
-const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } => {
-    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } = { connect: [], disconnect: [], init: [], reactor: [] };
+const renderLifecycleManifest = (
+    functions: ReadonlyArray<FunctionIR>,
+): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[]; whisper: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[]; whisper: string[] } = {
+        connect: [],
+        disconnect: [],
+        init: [],
+        reactor: [],
+        whisper: [],
+    };
 
     for (const definition of functions) {
         if (!definition.lifecycle) {
@@ -2682,11 +2692,12 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`. Read at
-     * dispatch to decide whether the function runs system-trusted: \`init\` and
-     * \`reactor\` have no caller identity, so RLS has no user to scope to.
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * \`init\` and \`reactor\` have no caller identity, so RLS has no user to scope
+     * to. \`whisper\` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     /**
      * Hoisted by the builder when the \`.use()\` chain carries a step with a
      * per-dispatch effect — \`rateLimit(...)\` consuming budget, a single-use
@@ -2713,17 +2724,25 @@ ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once
- * per Durable Object instance before any handler runs (\`init\`), and after a
- * write flush when a watched read's result changed (\`reactor\`). Each path also
- * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; \`init\` and \`reactor\` have no caller, so they run
- * anonymous — all via system dispatch.
+ * per Durable Object instance before any handler runs (\`init\`), after a
+ * write flush when a watched read's result changed (\`reactor\`), and before a
+ * socket joins or broadcasts to a whisper topic (\`whisper\`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket-scoped moments run under
+ * the socket's verified identity; \`init\` and \`reactor\` have no caller, so they
+ * run anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: {
+    connect: readonly string[];
+    disconnect: readonly string[];
+    init: readonly string[];
+    reactor: readonly string[];
+    whisper: readonly string[];
+} = {
     connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
     disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
     init: [${lifecycleHooks.init.map((path) => JSON.stringify(path)).join(", ")}],
     reactor: [${lifecycleHooks.reactor.map((path) => JSON.stringify(path)).join(", ")}],
+    whisper: [${lifecycleHooks.whisper.map((path) => JSON.stringify(path)).join(", ")}],
 };
 
 /**
@@ -5841,7 +5860,7 @@ ${relationFanout.override}
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
-        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 ${shardInitOverride}

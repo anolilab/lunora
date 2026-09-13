@@ -2199,6 +2199,32 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
             expect(result.generated.shard).toContain("protected override lifecycleHookPaths(event:");
         });
 
+        it("registers an onWhisper export as an internal QUERY in the whisper manifest", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "whisper.ts"),
+                `import { onWhisper } from "@lunora/server";
+export const authorize = onWhisper(async (ctx, event) => { void ctx; return event.topic.startsWith("room:"); });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain('"whisper:authorize":');
+            expect(result.generated.functions).toContain('whisper: ["whisper:authorize"]');
+
+            // A query, NOT a mutation: `handleRpc` transaction-wraps a mutation, so
+            // misclassifying the authorizer would open a write span on every topic
+            // join — and would let an authorization check write.
+            expect(result.generated.api).toContain('authorize: FunctionReference<"query"');
+
+            // Internal: the namespace lands AFTER the `InternalApiTypes` opener, i.e.
+            // in the server-only surface rather than the client-facing `api`.
+            expect(result.generated.api.indexOf("whisper: {")).toBeGreaterThan(result.generated.api.indexOf("InternalApiTypes"));
+        });
+
         it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
             expect.assertions(5);
 

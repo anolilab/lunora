@@ -326,7 +326,7 @@ abstract class ShardDO {
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
     protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;

@@ -304,7 +304,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
