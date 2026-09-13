@@ -319,6 +319,7 @@ const DataBrowserPage = ({
                     onToggleBackRelation={backRelations.onToggle}
                     onToggleTranspose={preferences.onToggleTranspose}
                     rows={maskRows(page.rows, preferences.maskView)}
+                    sqlColumns={page.sqlColumns}
                     table={browser.table.table}
                     transposed={preferences.transposed}
                 />
