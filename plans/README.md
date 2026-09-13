@@ -1820,9 +1820,9 @@ core files against 15–18 per view) mirrored into six registry items by
 views cover eleven of the thirteen templates. No kit surveyed makes live data the
 default read path, and six payment providers is a breadth none of them match.
 
-| Plan | Title                                                                | Pri | Cat     | Status |
-| ---- | -------------------------------------------------------------------- | --- | ------- | ------ |
-| 454  | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry | P2  | product | TODO   |
+| Plan | Title                                                                | Pri | Cat     | Status                                                                                                                                                                                                                                                                    |
+| ---- | -------------------------------------------------------------------- | --- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 454  | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry | P2  | product | IN PROGRESS — the registry item, `packages/saas-ui` core, the React and Svelte views, `templates/saas`, billing and presence have landed; app admin, the four remaining view ports, the public API surface, React Native, the docs/demo surface and the last gates remain |
 
 ## Reference — Convex primitives gap analysis (2026-08-21)
 
