@@ -146,9 +146,8 @@ overrides:
 
   # ---------------------------------------------------------------------------
   # Internal packages → local workspace source. Lives in root overrides (NOT each
-  # package's dependencies) so semantic-release-pnpm's per-package range rewrite
-  # never clobbers it; published tarballs are unaffected (overrides are
-  # install-time).
+  # package's dependencies) so the release's per-package specifier rewrite never
+  # clobbers it; published tarballs are unaffected (overrides are install-time).
   # ---------------------------------------------------------------------------
   "@lunora/advisor": "workspace:*"
   "@lunora/agent": "workspace:*"
@@ -234,17 +233,8 @@ catalogs:
     "rollup-plugin-svelte": ^7.2.3
     "unplugin-vue": ^7.2.0
   dev:
-    "@anolilab/semantic-release-pnpm": ^8.1.21
-    "@anolilab/semantic-release-preset": ^13.4.22
-    "@semantic-release/exec": ^7.1.0
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node24": ^24.0.5
-    # Held on the 9.x line: the preset's 10.x templates need
-    # conventional-changelog-writer@9, and @semantic-release/release-notes-generator
-    # (via semantic-release 25) pulls writer 8. On 10.x every release fails in
-    # generateNotes with `Missing helper`. 9.x is the newest major that writer 8
-    # renders — lift this range only once the generator ships writer 9.
-    conventional-changelog-conventionalcommits: ^9.3.1
     cross-env: ^10.1.0
   lint:
     # Held at 28.0.1: 28.1.x turns on ~20 new `unicorn/*` rules (filename-case,
@@ -305,7 +295,6 @@ catalogs:
     adm-zip: 0.6.0
     csv-parse: 7.0.2
     "@anolilab/commitlint-config": 10.1.2
-    "@anolilab/multi-semantic-release": ^4.4.9
     "@anolilab/textlint-config": 13.0.6
     "@commitlint/cli": ^21.2.2
     "@commitlint/config-conventional": ^21.2.2
@@ -758,7 +747,6 @@ catalogs:
     "@resvg/resvg-wasm": 2.6.2
     rimraf: 6.1.3
     secretlint: 13.0.5
-    semantic-release: 25.0.9
     shiki: ^4.4.3
     tailwind-csstree: 0.4.0
     tailwind-merge: 3.6.0
@@ -862,9 +850,9 @@ catalogs:
     "@visulima/free-email-domains": 1.0.1
     "@visulima/email-verifier": 1.0.9
 
-# multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
-# to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
-# commits that. pnpm 10+ defaults `linkWorkspacePackages` to false, which makes
+# The release rewrites every intra-repo dependency from `workspace:*` to the
+# exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and commits
+# that. pnpm 10+ defaults `linkWorkspacePackages` to false, which makes
 # those pins resolve from the npm registry instead of the local package — so a
 # lockfile refresh would silently swap workspace sources for published tarballs
 # and `preferWorkspacePackages` below would be inert (it only applies once

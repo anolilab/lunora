@@ -1,17 +1,35 @@
-"name": "Semantic Release"
+# Releases every publishable package with `vis release` — the `release` block in
+# vis.config.ts is the whole configuration.
+#
+# The FILENAME is load-bearing and must not change: npm's trusted publishers are
+# registered per package against `semantic-release.yml` (see
+# scripts/publish-name-placeholder.mjs), so renaming this file breaks publishing for
+# every package until all 52 trusted-publisher entries are updated.
+
+"name": "Release"
 
 "on": # yamllint disable-line rule:truthy
     "push":
-        # main → stable releases; alpha/next/beta → prereleases (per the
-        # @anolilab/semantic-release-preset branches config).
+        # main → stable releases; alpha/next/beta → prereleases, per the channel
+        # table in `release.channels`.
         "branches": ["main", "alpha", "next", "beta"]
-    "workflow_dispatch": # yamllint disable-line rule:empty-values
+    "workflow_dispatch":
+        "inputs":
+            # A dispatch carries no `github.event.before`, and there is no safe way to
+            # guess one: any baseline narrower than the real one silently drops every
+            # earlier unreleased commit from the change file, the version and the
+            # changelog. So the operator states it. Find it with
+            # `git describe --tags --abbrev=0 <branch>` — the tag of that branch's last
+            # release.
+            "base":
+                "description": "Release the commits AFTER this commit-ish (exclusive) — normally the last release tag, e.g. @lunora/cli@1.0.0-alpha.245."
+                "required": true
+                "type": "string"
 
 # Never cancel an in-progress release (GitHub may still replace a run that is only
-# pending). Each package gets a git tag AND a channel note
-# (refs/notes/semantic-release-<tag>); a run cancelled between those two pushes leaves
-# a tag with no note, which the next run reads as "never released" — it then recomputes
-# an existing version and dies on `git tag`.
+# pending). A wave versions, commits, tags and publishes in sequence; a run cancelled
+# between the tag push and the publish leaves a tag whose version was never published,
+# and the next run refuses that tag as a collision rather than republishing over it.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
     "cancel-in-progress": false
@@ -20,8 +38,8 @@
     "contents": "read" # for checkout
 
 "jobs":
-    "semantic-release":
-        "name": "Semantic Release"
+    "release":
+        "name": "Release"
         "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -45,7 +63,7 @@
               "with":
                   "egress-policy": "audit"
 
-            # Persist credentials so multi-semantic-release can push tags/release commits.
+            # Persist credentials so the release can push tags and release commits.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
@@ -55,14 +73,6 @@
                   "GIT_COMMITTER_NAME": "GitHub Actions Shell"
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
-
-            # Deliberate redundancy: semantic-release fetches notes itself, but a run
-            # cancelled mid-push can leave a tag without its channel note. Fetching every
-            # notes ref keeps each @lunora/*@<ver> tag mappable to its channel, so an
-            # already-published version is never released twice.
-            - "name": "Fetch semantic-release notes"
-              "shell": "bash"
-              "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
 
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
@@ -119,20 +129,84 @@
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
-            - "name": "Multi semantic release"
+            # `vis release` is change-file driven (changesets-style) and `ci release` does
+            # NOT derive them, so a commit-driven release has to write one first.
+            #
+            # The baseline is exclusive (`generate` runs `git log <from>..HEAD`) and is
+            # never guessed:
+            #
+            #   push     — `github.event.before`, the branch tip this push replaced, so the
+            #              range is exactly "the commits this push added". That also excludes
+            #              the previous run's own release commits — `generate` transcribes
+            #              commit subjects verbatim, so a wider range copies old changelog
+            #              headers into the new entry.
+            #   dispatch — the required `base` input.
+            #
+            # Anything else fails the job: a force-push whose old tip is gone, a branch's
+            # first push, an unresolvable input. The `HEAD~1` fallback this replaces looked
+            # like a safe default and was not — a dispatch after N unreleased commits
+            # released only the last one, and the commits it skipped are unrecoverable: no
+            # change file is ever written for them, so the version and the changelog lose
+            # them for good. Failing is recoverable; under-releasing is not.
+            - "name": "Derive change files from this push"
+              "shell": "bash"
               "env":
-                  "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
-                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
-                  "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
-                  "GIT_AUTHOR_NAME": "github-actions-shell"
-                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
-                  "GIT_COMMITTER_NAME": "github-actions-shell"
-                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
-              "run": "pnpm exec multi-semantic-release"
+                  "BASE": "${{ inputs.base }}"
+                  "BEFORE": "${{ github.event.before }}"
+              "run": |
+                  set -euo pipefail
 
-            # The release bumps every package.json, but @semantic-release/git stages only
-            # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile
-            # fails `--frozen-lockfile`, blocking every later push to the branch.
+                  if [ -n "${BASE:-}" ]; then
+                      ref="${BASE}"
+                      origin="the 'base' input"
+                  else
+                      ref="${BEFORE:-}"
+                      origin="github.event.before"
+                  fi
+
+                  from=""
+
+                  if [ -n "${ref}" ]; then
+                      from="$(git rev-parse --verify --quiet "${ref}^{commit}" || true)"
+                  fi
+
+                  if [ -z "${from}" ]; then
+                      echo "::error::No release baseline: ${origin} is '${ref:-unset}', which this checkout cannot resolve to a commit. Re-run this workflow from the Actions tab with 'base' set to the last released commit-ish on this branch (git describe --tags --abbrev=0). Refusing to guess one: a guessed baseline drops every earlier unreleased commit from the version and the changelog, and nothing recovers them."
+                      exit 1
+                  fi
+
+                  echo "Releasing ${from}..HEAD (baseline from ${origin})."
+
+                  pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
+
+                  # `vis release ci release` refuses to run on a dirty tree, and the change
+                  # file it just wrote is untracked. Commit it so the release step sees a
+                  # clean tree; the version step deletes it again in the release commit.
+                  if [ -n "$(git status --porcelain -- .vis/release)" ]; then
+                      git -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          add -- .vis/release
+                      git -c "user.name=github-actions-shell" \
+                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
+                          commit --message "chore(release): record pending change file [skip ci]"
+                  else
+                      echo "No change file written — nothing to release."
+                  fi
+
+            # Versions, writes changelogs, commits, tags, publishes and pushes — the whole
+            # wave. Exits 0 with "Nothing to release" when the push carried no releasable
+            # commit, so it is safe on every push to a release branch.
+            - "name": "Release"
+              "env":
+                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
+                  "VIS_GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+              "run": "pnpm exec vis release ci release --auto-publish"
+
+            # The release bumps every package.json, but the release commit stages only the
+            # per-package files it wrote — the root pnpm-lock.yaml drifts, and a drifted
+            # lockfile fails `--frozen-lockfile`, blocking every later push to the branch.
             #
             # Retried against a re-fetched tip because the branch moves underneath the job:
             # a release takes ~15 minutes, and a PR merged in that window makes a single
