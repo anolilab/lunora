@@ -229,6 +229,7 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,
@@ -238,6 +239,8 @@ export type {
     WorkflowStatusResult,
 } from "./types";
 export { anyApi } from "./types";
+export type { RegisteredWhisperAuthorizer, WhisperAuthorizeHandler } from "./whisper";
+export { onWhisper } from "./whisper";
 // `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and
 // re-exported here so handlers can throw it without a second dependency. The
 // third argument is `LunoraErrorOptions` (`{ cause, data, status, … }`) — there

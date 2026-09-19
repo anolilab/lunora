@@ -84,6 +84,6 @@ describe("emitShard — runReactor override", () => {
     it("exposes the reactor manifest through lifecycleHookPaths", () => {
         expect.assertions(1);
 
-        expect(shard()).toContain('lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor")');
+        expect(shard()).toContain('lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper")');
     });
 });

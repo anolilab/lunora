@@ -980,6 +980,7 @@ interface OutboxSink {
 ```ts
 interface PersistedMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId?: string;
     functionPath: string;
     id: string;
@@ -1053,6 +1054,7 @@ interface QueryCacheAdapter {
 ```ts
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
+    readonly baselineSeq?: number;
     clientId?: string;
     readonly functionPath: string;
     id?: string;

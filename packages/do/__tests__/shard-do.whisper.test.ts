@@ -236,3 +236,214 @@ describe("shardDO token-expiry", () => {
         expect(ws.closes).toHaveLength(0);
     });
 });
+
+/** One `onWhisper` dispatch, as recorded by {@link AuthorizedShard}. */
+interface AuthorizeCall {
+    event: Record<string, unknown>;
+    functionPath: string;
+}
+
+/**
+ * A shard with `onWhisper` authorizers wired in — the generated subclass's
+ * `lifecycleHookPaths("whisper")` manifest plus the `handleRpc` that resolves
+ * each path to a verdict, both faked here so the base class's gate is what the
+ * assertions exercise.
+ */
+class AuthorizedShard extends ShardDO {
+    public readonly calls: AuthorizeCall[] = [];
+
+    public constructor(
+        state: ShardDOState,
+        private readonly paths: string[],
+        private readonly verdicts: Record<string, (event: Record<string, unknown>) => unknown>,
+    ) {
+        super(state, {});
+    }
+
+    public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        this.calls.push({ event: args, functionPath });
+
+        return Promise.resolve(this.verdicts[functionPath]?.(args));
+    }
+
+    protected override lifecycleHookPaths(event: string): ReadonlyArray<string> {
+        return event === "whisper" ? this.paths : [];
+    }
+}
+
+const makeAuthorizedShard = (
+    sockets: FakeSocket[],
+    paths: string[],
+    verdicts: Record<string, (event: Record<string, unknown>) => unknown>,
+): AuthorizedShard => {
+    const state = {
+        acceptWebSocket() {},
+        getWebSockets: () => sockets,
+        storage: { sql: {} },
+    } as unknown as ShardDOState;
+
+    return new AuthorizedShard(state, paths, verdicts);
+};
+
+const sendTo = async (shard: AuthorizedShard, ws: FakeSocket, envelope: Record<string, unknown>): Promise<void> => {
+    await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
+};
+
+describe("shardDO whisper authorization", () => {
+    it("passes the topic, action and verified identity to the authorizer", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ connectionId: "conn-1", context: { roomId: "r1" }, subs: {}, userId: "user-a" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        await sendTo(shard, a, { topic: "room:r1", type: "whisper_subscribe" });
+
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]).toEqual({
+            event: { action: "subscribe", connectionId: "conn-1", context: { roomId: "r1" }, shardKey: "__root__", topic: "room:r1", userId: "user-a" },
+            functionPath: "whisper:authorize",
+        });
+    });
+
+    it("denies a join the authorizer refuses, so the socket receives nothing on the topic", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const b = new FakeSocket({ subs: {}, userId: "outsider" });
+        // `a` is a member of the room; `b` is not.
+        const shard = makeAuthorizedShard([a, b], ["whisper:authorize"], {
+            "whisper:authorize": (event) => event.userId === "user-a",
+        });
+
+        await sendTo(shard, a, { topic: "room:r1", type: "whisper_subscribe" });
+        await sendTo(shard, b, { topic: "room:r1", type: "whisper_subscribe" });
+
+        await sendTo(shard, a, { data: { x: 1 }, topic: "room:r1", type: "whisper" });
+
+        expect(b.frames).toHaveLength(0);
+        // Denial is silent — no error frame to probe topic existence with.
+        expect(b.closes).toHaveLength(0);
+    });
+
+    it("denies a send the authorizer refuses without disturbing the joined membership", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "muted" });
+        const b = new FakeSocket({ subs: {}, userId: "user-b" });
+        // Read is open to everyone; only `muted` may not broadcast.
+        const shard = makeAuthorizedShard([a, b], ["whisper:authorize"], {
+            "whisper:authorize": (event) => event.action === "subscribe" || event.userId !== "muted",
+        });
+
+        await sendTo(shard, a, { topic: "t", type: "whisper_subscribe" });
+        await sendTo(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+        await sendTo(shard, a, { data: { x: 1 }, topic: "t", type: "whisper" });
+
+        expect(b.frames).toHaveLength(0);
+
+        // `a` is still joined, so `b`'s (permitted) whisper still reaches it.
+        await sendTo(shard, b, { data: { y: 2 }, topic: "t", type: "whisper" });
+
+        expect(a.frames).toEqual([{ data: { y: 2 }, from: "user-b", topic: "t", type: "whisper" }]);
+    });
+
+    it("fails closed when the authorizer throws or returns a non-true value", async () => {
+        expect.assertions(3);
+
+        const thrower = new FakeSocket({ subs: {} });
+        const truthy = new FakeSocket({ subs: {} });
+        const absent = new FakeSocket({ subs: {} });
+        const listener = new FakeSocket({ subs: {} });
+        const shard = makeAuthorizedShard([thrower, truthy, absent, listener], ["whisper:authorize"], {
+            "whisper:authorize": (event) => {
+                if (event.topic === "throws") {
+                    throw new Error("membership lookup failed");
+                }
+
+                // A truthy non-boolean (a row object) and an undefined return are
+                // both denials: only a literal `true` allows.
+                return event.topic === "truthy" ? { _id: "row" } : undefined;
+            },
+        });
+
+        for (const [ws, topic] of [
+            [thrower, "throws"],
+            [truthy, "truthy"],
+            [absent, "absent"],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames on one shard, mirroring a real socket's ordering
+            await sendTo(shard, ws, { topic, type: "whisper_subscribe" });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await sendTo(shard, listener, { topic, type: "whisper_subscribe" });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await sendTo(shard, ws, { data: 1, topic, type: "whisper" });
+        }
+
+        expect(listener.frames).toHaveLength(0);
+        expect(thrower.frames).toHaveLength(0);
+        expect(truthy.frames).toHaveLength(0);
+    });
+
+    it("requires every registered authorizer to allow", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {} });
+        const b = new FakeSocket({ subs: {} });
+        const shard = makeAuthorizedShard([a, b], ["whisper:one", "whisper:two"], {
+            "whisper:one": () => true,
+            "whisper:two": () => false,
+        });
+
+        await sendTo(shard, a, { topic: "t", type: "whisper_subscribe" });
+        await sendTo(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+        await sendTo(shard, a, { data: 1, topic: "t", type: "whisper" });
+
+        expect(b.frames).toHaveLength(0);
+    });
+
+    it("memoises the verdict per socket, action and topic so a cursor stream costs one query", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const b = new FakeSocket({ subs: {} });
+        const shard = makeAuthorizedShard([a, b], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        await sendTo(shard, a, { topic: "t", type: "whisper_subscribe" });
+        await sendTo(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+        for (let index = 0; index < 20; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- a burst on one socket, in order
+            await sendTo(shard, a, { data: index, topic: "t", type: "whisper" });
+        }
+
+        // Two joins + one first send. The other 19 sends reused the memoised verdict.
+        expect(shard.calls).toHaveLength(3);
+        expect(b.frames).toHaveLength(20);
+    });
+
+    it("never authorizes a leave, so a revoked member can still unsubscribe", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {} });
+        const b = new FakeSocket({ subs: {} });
+        let allow = true;
+        const shard = makeAuthorizedShard([a, b], ["whisper:authorize"], { "whisper:authorize": () => allow });
+
+        await sendTo(shard, a, { topic: "t", type: "whisper_subscribe" });
+        await sendTo(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+        // Access is revoked, then `b` leaves. The leave must not be gated on a
+        // permission `b` no longer has, or it would be stuck subscribed.
+        allow = false;
+        await sendTo(shard, b, { topic: "t", type: "whisper_unsubscribe" });
+
+        allow = true;
+        await sendTo(shard, a, { data: 1, topic: "t", type: "whisper" });
+
+        expect(b.frames).toHaveLength(0);
+        // The leave itself dispatched no authorizer.
+        expect(shard.calls.filter((call) => call.event.action === undefined)).toHaveLength(0);
+    });
+});
