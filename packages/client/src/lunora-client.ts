@@ -1866,12 +1866,17 @@ class LunoraClient {
      * (the default shard when omitted) — use the same shard you target with the
      * matching queries/mutations so members land on the same Durable Object.
      *
-     * Security: whisper topics are NOT access-controlled beyond the shard
-     * boundary — any client that can open a socket to the shard can join, read,
-     * and inject on any topic name. `from` is server-stamped and unforgeable, but
-     * do not put data on a whisper topic that some shard members shouldn't see,
-     * and don't trust a whisper's `data` as authorization. Use a query/mutation
-     * (with RLS) for anything privileged; whispers are for transient awareness.
+     * Security: a whisper topic is access-controlled only if the app declares an
+     * `onWhisper` authorizer server-side (`@lunora/server`). Without one, the
+     * topic's only boundary is the shard — any client that can open a socket to it
+     * can join, read, and inject on any topic name. `from` is server-stamped and
+     * unforgeable either way, but never trust a whisper's `data` as authorization,
+     * and remember that even an authorized topic is transient awareness with no
+     * durable trace: anything privileged belongs behind a query/mutation with RLS.
+     *
+     * A denied join is silent — whispers are never acked, so nothing distinguishes
+     * "denied" from "nobody is whispering". Gate the UI on a query you can read a
+     * verdict from, not on whether whispers arrive.
      *
      * Not available on a `crossTabSync` FOLLOWER tab — whisper frames are not
      * relayed over the cross-tab channel, so this throws `NOT_IMPLEMENTED`
@@ -1947,6 +1952,10 @@ class LunoraClient {
      * `crossTabSync` FOLLOWER tab has no socket and never will (see
      * {@link LunoraClientOptions.crossTabSync}), so every whisper from it would
      * be dropped forever — it throws `NOT_IMPLEMENTED` instead.
+     *
+     * A send the app's `onWhisper` authorizer denies is dropped the same silent
+     * way, for the same reason: there is no ack frame to report it on. See
+     * {@link whisperSubscribe} for the security model.
      */
     public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): void {
         this.assertLeaderOwnedSurface("whisper");
@@ -2488,6 +2497,7 @@ class LunoraClient {
         try {
             let commitCursor: number | undefined;
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
+                baselineSeq: this.baselineCursorFor(options.shardKey),
                 captureBookmark: true,
                 mutationId,
                 onCommitCursor: (cursor) => {
@@ -4609,6 +4619,10 @@ class LunoraClient {
                 // reaches them directly; the observer event carries
                 // `hadAwaiter: true`. Hydrated replays leave this unset.
                 liveAwaiter: true,
+                // The client's view of the shard AT ENQUEUE. Replayed verbatim so a
+                // `.dropStalePatches()` table judges this write against what its
+                // author could see, however long it waited.
+                baselineSeq: this.baselineCursorFor(shardKey),
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
@@ -5089,6 +5103,37 @@ class LunoraClient {
         return "offline";
     }
 
+    /**
+     * The CDC cursor this client's view of `shardKey` is at — the highest
+     * `serverCursor` any live subscription on that shard has advanced to.
+     *
+     * This is the baseline a `.dropStalePatches()` table judges a write against,
+     * and the "highest" is what makes it sound: a cursor the client has reached on
+     * ANY subscription means the shard's changelog up to that point has been
+     * delivered here, so anything later is by definition something this client had
+     * not seen when it composed the write.
+     *
+     * `undefined` when no subscription on the shard carries a cursor yet — a
+     * client that has only ever issued one-shot RPCs, or a server with CDC off.
+     * That is reported honestly rather than defaulted to `0`: a `0` baseline would
+     * claim the client had seen NOTHING, which makes every field look changed and
+     * would have the shard discard every patch it sends.
+     */
+    private baselineCursorFor(shardKey: string | undefined): number | undefined {
+        const key = connectionKey(shardKey);
+        let highest: number | undefined;
+
+        for (const state of this.subscriptions.all()) {
+            if (connectionKey(state.shardKey) !== key || state.serverCursor === undefined) {
+                continue;
+            }
+
+            highest = highest === undefined ? state.serverCursor : Math.max(highest, state.serverCursor);
+        }
+
+        return highest;
+    }
+
     /** Recompute the aggregate status and notify listeners if it changed. */
     private emitConnectionStatus(): void {
         const next = this.computeStatus();
@@ -5307,7 +5352,7 @@ class LunoraClient {
      * instead of running twice.
      */
     private rpcRequestHeaders(
-        flags: { attachBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string },
+        flags: { attachBookmark?: boolean; baselineSeq?: number; clientId?: string; clientSeq?: number; mutationId?: string },
         shardKey?: string,
     ): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
@@ -5349,6 +5394,16 @@ class LunoraClient {
             headers["x-lunora-client-seq"] = flags.clientSeq.toString();
         }
 
+        // The caller's CDC baseline for a `.dropStalePatches()` table — the cursor
+        // this write was composed against. Stamped at CALL time and replayed
+        // verbatim off the offline queue, which is the whole point: a write that
+        // waited out a disconnect must still be judged against what its author
+        // could see, not against whatever the shard has advanced to by the time it
+        // finally lands.
+        if (flags.baselineSeq !== undefined) {
+            headers["x-lunora-base-seq"] = flags.baselineSeq.toString();
+        }
+
         if (flags.attachBookmark) {
             const bookmark = this.bookmark.get();
 
@@ -5366,6 +5421,8 @@ class LunoraClient {
         shardKey: string | undefined,
         flags: {
             attachBookmark?: boolean;
+            /** CDC cursor this write was composed against; see `rpcRequestHeaders`. */
+            baselineSeq?: number;
             captureBookmark?: boolean;
             clientId?: string;
             clientSeq?: number;
@@ -7779,6 +7836,10 @@ class LunoraClient {
                 let commitCursor: number | undefined;
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
+                    // The cursor the write was COMPOSED at, carried through the
+                    // queue — never re-derived here, which would hand the shard the
+                    // newer state this write must be judged against.
+                    baselineSeq: item.baselineSeq,
                     captureBookmark: true,
                     // The id that queued the write, not the live session's — see the
                     // `clientId` stamp in `enqueueOfflineMutation`.

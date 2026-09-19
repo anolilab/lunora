@@ -41,6 +41,18 @@ const makeDb = (): ProbedDatabase => {
 
     const matches = (row: PaymentRow, where: Record<string, unknown>): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
 
+    // `ctx.db.patch` REJECTS a key whose value is explicitly `undefined` (shard-engine's
+    // `assertNoExplicitUndefined`), because the merge that builds the written row would silently
+    // drop it and delete the field. A double that merged `{ ...row, ...patch }` accepted such a key
+    // and went green over a store that throws on every second write of an optional column.
+    const assertNoExplicitUndefined = (patch: Record<string, unknown>): void => {
+        for (const field of Object.keys(patch)) {
+            if (patch[field] === undefined) {
+                throw new Error(`Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`);
+            }
+        }
+    };
+
     return {
         delete: async (id) => {
             for (const rows of tables.values()) {
@@ -79,6 +91,8 @@ const makeDb = (): ProbedDatabase => {
             return id;
         },
         patch: async (id, patch) => {
+            assertNoExplicitUndefined(patch);
+
             for (const rows of tables.values()) {
                 const row = rows.get(id);
 
@@ -183,6 +197,39 @@ describe("createDatabasePaymentStore", () => {
 
         expect(all).toHaveLength(1);
         expect(all[0]?.state).toBe("canceled");
+    });
+
+    it("re-upserts a row whose optional columns are absent (regression)", async () => {
+        expect.assertions(4);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        // The shape every non-Stripe adapter produces: no `priceIds`, and — on the subscription
+        // events Polar/Creem/Dodo/Autumn send without period bounds — no `currentPeriod*` either.
+        // `upsert` is insert-then-patch, so the FIRST write went in (insert tolerates an absent
+        // value) and every LATER one hit `patch`, which rejects a key set to `undefined`. A Polar
+        // `subscription.canceled` following its `subscription.active` therefore threw, the row
+        // stayed `active`, and `check`/`hasActivePrice` kept entitling a cancelled customer.
+        const sparse = { ...subscription, currentPeriodEnd: undefined, provider: "polar" as const };
+
+        await store.upsertSubscription(sparse);
+        await store.upsertSubscription({ ...sparse, state: "canceled" });
+
+        const stored = await store.getSubscription("polar", "sub_1");
+
+        expect(stored?.state).toBe("canceled");
+        expect(stored?.priceIds).toBeUndefined();
+
+        // Same shape on the customer codec: `email` is optional and a reference can be re-minted.
+        const anonymous: Customer = { createdAt: 1, id: "cus_2", provider: "polar", referenceId: "user_2" };
+
+        await store.upsertCustomer(anonymous);
+        await store.upsertCustomer({ ...anonymous, id: "cus_3" });
+
+        const reminted = await store.getCustomerByReference("polar", "user_2");
+
+        expect(reminted?.id).toBe("cus_3");
+        expect(reminted?.email).toBeUndefined();
     });
 
     it("round-trips the multi-item price set, and reads an absent column as undefined (regression)", async () => {

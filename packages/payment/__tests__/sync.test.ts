@@ -233,6 +233,163 @@ describe("applyWebhookAction", () => {
         expect(session?.refundedAmount.minorUnits).toBe(1000n);
     });
 
+    it("books a delta provider's refund once when two events restate the same refund id", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), amount: money(10_000, "USD"), provider: "polar" });
+
+        // Polar maps `refund.created` and `refund.updated` to the same delta `payment.refunded`,
+        // carrying the refund's own id both times. The two deliveries have distinct event ids, so
+        // the `markEventProcessed` dedupe lets both through, and a delta ADDS — so one $40 refund
+        // booked $80 and the over-refund guard then blocked every legitimate refund after it.
+        const refunded = (eventId: string): WebhookAction => {
+            return {
+                amount: money(4000, "USD"),
+                eventId,
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            };
+        };
+
+        await expect(applyWebhookAction(store, refunded("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
+
+        await applyWebhookAction(store, refunded("evt_3"));
+
+        const session = await store.getPaymentSession("polar", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(4000n);
+        expect(session?.state).toBe("partially_refunded");
+
+        // A genuinely SECOND refund carries its own id and must still accumulate.
+        await applyWebhookAction(store, { ...refunded("evt_4"), refundId: "ref_2" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(8000n);
+    });
+
+    it("releases the kept refund claim when the amount is rejected, so a corrected restatement books", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { amount: money(1000, "EUR"), eventId: "evt_1", provider: "polar", sessionId: "pi_1", type: "payment.captured" });
+
+        // A refund event whose currency disagrees with the row is rejected without writing anything
+        // (a payload that omitted `currency` falls back to "usd" in the adapter). The refund id is
+        // real, so the claim was taken — and it has to come back, or the provider's corrected
+        // restatement of the SAME refund is zeroed and the money never reaches the ledger.
+        const rejected = await applyWebhookAction(store, {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(rejected).toEqual({ applied: false, reason: "invalid_refund_amount" });
+
+        const corrected = await applyWebhookAction(store, {
+            amount: money(400, "EUR"),
+            eventId: "evt_3",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(corrected).toEqual({ applied: true, reason: "ok" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
+    it("still accumulates two same-amount refunds from a provider that reports no refund id", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
+
+        const refund = (eventId: string): WebhookAction => {
+            return { amount: money(400, "USD"), eventId, provider: "polar", sessionId: "pi_1", type: "payment.refunded" };
+        };
+
+        // With no refund id the marker key is only `(session, amount)`, which two genuinely distinct
+        // same-amount refunds SHARE. Keeping that claim the way a per-refund-id one is kept would
+        // silently swallow the second refund, so this case stays test-and-release.
+        await applyWebhookAction(store, refund("evt_2"));
+        await applyWebhookAction(store, refund("evt_3"));
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(800n);
+    });
+
+    it("releases the kept refund claim when the row write fails, so the retry still books it", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
+
+        let failNextUpsert = true;
+        const original = store.upsertPaymentSession.bind(store);
+
+        store.upsertPaymentSession = (session) => {
+            if (failNextUpsert) {
+                failNextUpsert = false;
+
+                return Promise.reject(new Error("store write failed"));
+            }
+
+            return original(session);
+        };
+
+        const refund: WebhookAction = {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        // The claim that makes a refund book once is taken BEFORE the row is written. A failed write
+        // must give it back, or the provider's retry sees this refund as already booked, zeroes the
+        // amount, and the money never reaches the ledger at all.
+        await expect(applyWebhookAction(store, refund)).rejects.toThrow("store write failed");
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
+    it("releases the kept refund claim on an out-of-order refund, so the redelivery books it", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { amount: money(1000, "USD"), eventId: "evt_1", provider: "polar", sessionId: "pi_1", type: "payment.authorized" });
+
+        const refund: WebhookAction = {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        // The refund lands on a row that exists but has not captured yet, so nothing is written and
+        // the event is released for ONE redelivery. The refund claim has to come back with it.
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "orphaned" });
+
+        await applyWebhookAction(store, { ...captureEvent("evt_3"), provider: "polar" });
+
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
     it("rejects an over-refund without mutating state and still applies a valid partial refund", async () => {
         expect.assertions(6);
 

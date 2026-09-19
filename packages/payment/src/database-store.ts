@@ -93,10 +93,19 @@ const readBigint = (row: PaymentRow, key: string): bigint => {
     return typeof value === "number" || typeof value === "string" ? BigInt(value) : 0n;
 };
 
+/**
+ * Every `*ToRow` codec OMITS an optional field it has no value for rather than writing the key with
+ * `undefined`.
+ *
+ * `upsert` below is insert-then-patch, and `ctx.db.patch` REJECTS a key whose value is explicitly
+ * `undefined` (shard-engine's `assertNoExplicitUndefined`) — the merge that builds the written row
+ * would silently drop the key, deleting the column instead of leaving it alone. So a row whose
+ * optional columns are absent inserts fine and then throws on every LATER write of the same row.
+ */
 const customerToRow = (customer: Customer): Record<string, unknown> => {
     return {
         createdAt: customer.createdAt,
-        email: customer.email,
+        ...(customer.email === undefined ? {} : { email: customer.email }),
         provider: customer.provider,
         providerCustomerId: customer.id,
         referenceId: customer.referenceId,
@@ -148,12 +157,12 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
     return {
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
         createdAt: subscription.createdAt,
-        currentPeriodEnd: subscription.currentPeriodEnd,
-        currentPeriodStart: subscription.currentPeriodStart,
+        ...(subscription.currentPeriodEnd === undefined ? {} : { currentPeriodEnd: subscription.currentPeriodEnd }),
+        ...(subscription.currentPeriodStart === undefined ? {} : { currentPeriodStart: subscription.currentPeriodStart }),
         priceId: subscription.priceId,
         // Left absent when the adapter reported no set, so the column stays unwritten for the
         // single-price providers and the round-trip below falls back to `[priceId]`.
-        priceIds: subscription.priceIds === undefined ? undefined : [...subscription.priceIds],
+        ...(subscription.priceIds === undefined ? {} : { priceIds: [...subscription.priceIds] }),
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
         quantity: subscription.quantity,

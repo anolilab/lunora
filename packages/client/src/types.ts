@@ -125,6 +125,22 @@ export interface PersistedMutation {
     args: Record<string, unknown>;
 
     /**
+     * The CDC cursor this write was composed against, persisted so a replay —
+     * including one after a reload, days later — is still judged against what its
+     * author could actually see. Consumed only by `.dropStalePatches()` tables.
+     *
+     * Persisting it is the entire point of the feature. Re-deriving a baseline at
+     * replay time would read the cursor the client has ADVANCED to while the write
+     * sat in the queue, which is the newer state the write must be compared
+     * against — so the stale write would always look fresh and always clobber.
+     *
+     * Absent on records written by older client versions, and on a client with no
+     * live subscription to take a cursor from; both replay with no baseline, which
+     * applies the write unchanged.
+     */
+    baselineSeq?: number;
+
+    /**
      * The client id that queued this write, persisted so a replay after a reload
      * lands in the SAME server-side dedup namespace it was issued under. The
      * standalone client's own `clientId` is minted per session, so replaying under

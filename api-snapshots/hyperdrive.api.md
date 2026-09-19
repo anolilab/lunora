@@ -38,7 +38,7 @@ interface HyperdriveLike {
 
 ```ts
 interface Mysql2Like {
-    execute(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<[
+    execute(this: void, text: string, params?: unknown): Promise<[
         unknown,
         unknown
     ]>;

@@ -102,3 +102,34 @@ async function loadMore() {
 Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
+
+## Total count ("42 of 1,203")
+
+A page knows how to fetch the next page, not how many rows exist — `paginate()`
+never counts the tail, which is what keeps it O(page) instead of O(table). Ask
+for the total with a separate query and subscribe to it like any other:
+
+```ts
+// lunora/messages.ts
+export const total = query.input({ channelId: v.id("channels") }).query(async (ctx, { channelId }) => ctx.db.messages.count({ channelId }));
+```
+
+```tsx
+const { results, status, loadMore } = usePaginatedQuery(api.messages.list, { channelId }, { initialNumItems: 50 });
+const total = useQuery(api.messages.total, { channelId });
+
+return (
+    <p>
+        Showing {results.length} of {total ?? "…"}
+    </p>
+);
+```
+
+It is a live query, so an insert or delete updates the count the same tick it
+updates the list — no invalidation to wire up. Pass the count query the **same
+filter args** as the list query, minus `paginationOpts`; a count over a different
+`where` is the classic way to print a total that disagrees with the rows on
+screen.
+
+`count()` scans the index, so on a large table prefer counting a filtered subset
+(an index-backed `where`) over the whole table on every keystroke.
