@@ -1,3 +1,17 @@
+## @lunora/codegen [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.190...@lunora/codegen@1.0.0-alpha.191) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.140
+* **@lunora/agent:** upgraded to 1.0.0-alpha.118
+* **@lunora/do:** upgraded to 1.0.0-alpha.147
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
 ## @lunora/codegen [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.189...@lunora/codegen@1.0.0-alpha.190) (2026-09-19)
 
 ### Features
