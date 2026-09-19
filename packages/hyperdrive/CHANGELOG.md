@@ -1,3 +1,26 @@
+## @lunora/hyperdrive [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.120...@lunora/hyperdrive@1.0.0-alpha.121) (2026-09-19)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `Mysql2Like.execute`'s second parameter is `unknown`. An
+implementor that reads the argument must narrow it first; the two doubles in this
+package now do.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **hyperdrive:** let Mysql2Like accept a real connection ([#754](https://github.com/anolilab/lunora/issues/754)) ([fadb269](https://github.com/anolilab/lunora/commit/fadb269f3e8af23559f131e5ece944b281caef61))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/hyperdrive [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.119...@lunora/hyperdrive@1.0.0-alpha.120) (2026-09-13)
 
 
