@@ -1199,7 +1199,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
-        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 

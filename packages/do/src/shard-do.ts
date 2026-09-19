@@ -2012,6 +2012,16 @@ abstract class ShardDO {
     private readonly whisperBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
 
     /**
+     * Memoised `onWhisper` verdicts for this socket, keyed `"<action>:<topic>"`
+     * (see {@link ShardDO.authorizeWhisper}). In-memory and deliberately so: a
+     * cursor stream whispers many times a second and the authorizer is a database
+     * query, so re-running it per frame would make the cheap primitive expensive.
+     * Resetting on hibernation is the fail-safe direction — the next frame after a
+     * wake re-checks.
+     */
+    private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, boolean>>();
+
+    /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
      * propagate a client unsubscribe (or a socket close) into the user
      * handler. In-memory only: a hibernation drops the controllers, which is
@@ -2607,7 +2617,8 @@ abstract class ShardDO {
     /**
      * The registered function paths to dispatch on a lifecycle moment —
      * `connect`/`disconnect` per socket, `init` once per Durable Object instance,
-     * `reactor` after each write flush.
+     * `reactor` after each write flush, `whisper` before a topic join or
+     * broadcast.
      * Base default is empty; the codegen subclass overrides it to return the
      * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
      * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
@@ -2615,7 +2626,7 @@ abstract class ShardDO {
      * base and can't be mis-wired by generated code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string> {
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
         return [];
     }
 
@@ -6373,6 +6384,13 @@ abstract class ShardDO {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
                 const join = envelope.type === "whisper_subscribe";
 
+                // Only a JOIN is authorized. Leaving a topic is always permitted —
+                // an app that revokes access mid-session must not also strand the
+                // client subscribed to something it can no longer leave.
+                if (join && !(await this.authorizeWhisper(ws, envelope.topic, "subscribe"))) {
+                    return;
+                }
+
                 this.setWhisperMembership(ws, envelope.topic, join);
 
                 // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
@@ -6386,7 +6404,7 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "whisper") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
                 await this.broadcastWhisper(ws, envelope.topic, envelope.data);
             }
 
@@ -12803,6 +12821,94 @@ abstract class ShardDO {
     }
 
     /**
+     * Decide whether this socket may join (`"subscribe"`) or broadcast to
+     * (`"send"`) a whisper `topic`, by running every registered `onWhisper`
+     * authorizer under the socket's own verified identity.
+     *
+     * **No registered authorizer allows everything.** That is the historical
+     * behaviour — a whisper topic's only boundary was the shard — and it is kept
+     * as the default so an app that never declared one is unaffected. Declaring
+     * one governs every topic on the shard; route on the topic name inside the
+     * handler if some namespaces should stay open.
+     *
+     * **It fails closed.** Every authorizer must return a literal `true`; the
+     * first that does not — or that throws — denies, and a throw is logged with
+     * the authorizer's path. A broken check must not open a topic.
+     *
+     * **The verdict is memoised per (socket, action, topic)** in
+     * {@link ShardDO.whisperVerdicts}, because the authorizer is a database query
+     * and a live-cursor stream would otherwise run one per frame. The ceiling: a
+     * membership revoked after the join does not evict the socket — it keeps
+     * receiving until the socket closes or the DO hibernates. Whispers carry
+     * transient awareness and leave no durable trace; anything that must stop the
+     * instant access is revoked belongs behind a query with RLS, not on a topic.
+     * @returns `true` when the socket may proceed
+     */
+    private async authorizeWhisper(ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
+        const paths = this.lifecycleHookPaths("whisper");
+
+        if (paths.length === 0) {
+            return true;
+        }
+
+        const memoKey = `${action}:${topic}`;
+        let memo = this.whisperVerdicts.get(ws);
+        const cached = memo?.get(memoKey);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+        const event = { ...info.event, action, topic };
+        let allowed = true;
+
+        for (const functionPath of paths) {
+            try {
+                // Same dispatch shape as `dispatchLifecycle`: the socket's verified
+                // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
+                // is RLS-scoped to them) under a trusted system dispatch (so the
+                // internal-visibility gate lets it through). The registration is a
+                // QUERY, so `handleRpc` runs it without a write span.
+                //
+                // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
+                const verdict = await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, event as unknown as Record<string, unknown>)),
+                );
+
+                if (verdict !== true) {
+                    allowed = false;
+
+                    break;
+                }
+            } catch (error: unknown) {
+                // Unlike a lifecycle hook — whose failure is logged and otherwise
+                // ignored — a failed authorizer is a DENIAL. There is no safe way to
+                // read "the check crashed" as permission.
+                this.logs.push({
+                    functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+
+                allowed = false;
+
+                break;
+            }
+        }
+
+        if (!memo) {
+            memo = new Map();
+            this.whisperVerdicts.set(ws, memo);
+        }
+
+        memo.set(memoKey, allowed);
+
+        return allowed;
+    }
+
+    /**
      * Join (`join = true`) or leave a whisper `topic` on this socket. Membership rides
      * the hibernation attachment, bounded by
      * {@link ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET}. Best-effort and silent:
@@ -12871,10 +12977,12 @@ abstract class ShardDO {
      * AnyCable "whisper" primitive: typing indicators, live cursors). The sender
      * is excluded; an over-limit or over-rate whisper is dropped.
      *
-     * Authorization note: whisper topics are NOT access-controlled beyond the
-     * shard boundary — any socket on this shard can join and read/inject on any
-     * topic name. That matches the AnyCable model (and `from` is unforgeable),
-     * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
+     * Authorization happened before this point, in
+     * {@link ShardDO.authorizeWhisper}: with no `onWhisper` authorizer declared a
+     * topic's only boundary is the shard (the AnyCable model — any socket here can
+     * join and inject on any topic name), and with one declared, both the join and
+     * this send were checked under the socket's verified identity. `from` is
+     * unforgeable either way.
      */
     private async broadcastWhisper(sender: ShardSocketLike, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)

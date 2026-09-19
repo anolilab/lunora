@@ -20,20 +20,31 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
 
 /**
  * Lifecycle factory names exported from `@lunora/server`, mapped to the moment
- * they fire on. A call to one of these registers an internal mutation tagged
+ * they fire on. A call to one of these registers an internal function tagged
  * with its `lifecycle` so emit collects it into the `LUNORA_LIFECYCLE_HOOKS`
  * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
- * Durable Object instance before any handler runs, and `reactor` after each
- * write flush whose tables the reactor's watched read touched.
+ * Durable Object instance before any handler runs, `reactor` after each write
+ * flush whose tables the reactor's watched read touched, and `whisper` before a
+ * socket joins or broadcasts to a whisper topic.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "whisper";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onConnect: "connect",
     onDisconnect: "disconnect",
     onQueryChange: "reactor",
     onShardInit: "init",
+    onWhisper: "whisper",
 };
+
+/**
+ * The registration kind a lifecycle moment dispatches as. All of them are
+ * mutations except the whisper authorizer, which is a QUERY — it reports a
+ * verdict the shard acts on and must not be able to write while deciding.
+ * Getting this wrong is not cosmetic: `handleRpc` transaction-wraps a `mutation`,
+ * so a misclassified authorizer would open a write span on every topic join.
+ */
+const lifecycleKind = (moment: LifecycleMoment): "mutation" | "query" => (moment === "whisper" ? "query" : "mutation");
 
 /**
  * Walk a builder chain leftward to the identifier it roots at, or `undefined`
@@ -103,9 +114,10 @@ interface ProcedureClassification {
     kind: string;
 
     /**
-     * Set when the call is a connection-lifecycle hook (`onConnect`/`onDisconnect`):
-     * the socket side it fires on. The classification is otherwise an internal
-     * mutation. Absent for ordinary procedures.
+     * Set when the call is a lifecycle hook (`onConnect`/`onDisconnect`/
+     * `onShardInit`/`onQueryChange`/`onWhisper`): the moment it fires on. The
+     * classification is otherwise an internal mutation — or an internal query for
+     * `whisper`. Absent for ordinary procedures.
      */
     lifecycle?: LifecycleMoment;
 
@@ -217,10 +229,10 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
     const lifecycle = LIFECYCLE_FACTORIES[exportedName];
 
     if (lifecycle) {
-        // A lifecycle hook is an internal mutation tagged with its socket side;
+        // A lifecycle hook is an internal registration tagged with its moment;
         // it lands in LUNORA_FUNCTIONS for path dispatch and in the lifecycle
         // manifest emit derives from the `lifecycle` tag.
-        return { kind: "mutation", lifecycle, visibility: "internal" };
+        return { kind: lifecycleKind(lifecycle), lifecycle, visibility: "internal" };
     }
 
     return undefined;

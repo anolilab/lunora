@@ -112,6 +112,66 @@ client asking **fresh** simply gets a new run: the dead one has no claim on its
 key. When you need a producer that survives eviction itself, the run belongs in a
 [workflow](/docs/packages/workflow).
 
+## Whispers (ephemeral peer messages)
+
+A whisper relays a payload between sockets on a shard without touching SQLite,
+the CDC log, or any query. Nothing is stored, nothing re-runs, and the sender
+never receives its own message — which is what makes it cheap enough for live
+cursors, typing indicators and presence pings.
+
+```ts
+const stop = client.whisperSubscribe("cursors", (data, from) => {
+    moveCursor(from, data as { x: number; y: number });
+});
+
+client.whisper("cursors", { x, y });
+```
+
+`from` is the sender's server-stamped user id (absent when anonymous) and is
+unforgeable. A send is fire-and-forget: it is dropped when the socket is down
+(whispers are never queued), when the payload exceeds the per-frame size cap, or
+when the sender is over its rate budget.
+
+### Authorizing topics
+
+By default a topic's only boundary is the shard: any client that can open a
+socket to it can join, read and inject on any topic name. Declare an `onWhisper`
+authorizer to change that — the shard runs it before a socket joins a topic and
+before it broadcasts to one:
+
+```ts
+// lunora/whisper.ts
+import { onWhisper } from "@lunora/server";
+
+export const authorize = onWhisper(async (ctx, event) => {
+    // event: { action: "subscribe" | "send", topic, connectionId, shardKey, userId, context? }
+    const [kind, roomId] = event.topic.split(":");
+
+    if (kind !== "room") {
+        return true; // presence:* and cursors stay open
+    }
+
+    return (await ctx.db.roomMembers.findFirst({ where: { roomId, userId: ctx.auth.userId } })) !== null;
+});
+```
+
+It is a **query**, so `ctx.db` is RLS-scoped to the connecting user and the check
+cannot write. Only a literal `true` allows: any other return value — or a throw —
+denies, and multiple exports are AND-ed. Declaring one governs every topic on the
+shard, so route on the topic name for the namespaces that should stay open.
+
+A denied frame is **dropped silently**. Neither `whisper_subscribe` nor `whisper`
+has an ack, so there is nothing to report a denial on, and adding an error frame
+would let a client probe which topics exist. Gate your UI on a query you can read
+a verdict from, not on whether whispers arrive.
+
+Two ceilings worth knowing. The verdict is memoised per socket and topic, so
+revoking access does not evict a member already joined — they keep receiving
+until the socket closes or the Durable Object hibernates. And a whisper leaves no
+durable trace, so it can neither be replayed nor audited. Anything that must stop
+the instant access is revoked, or that you need a record of, belongs behind a
+query or mutation with [RLS](/docs/concepts/rls) — not on a topic.
+
 ## Why no MQTT / Pub/Sub
 
 Real-time fan-out in Lunora is entirely Durable-Object-based: hibernated
