@@ -1,3 +1,15 @@
+## @lunora/server [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.129...@lunora/server@1.0.0-alpha.130) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+* **@lunora/observability:** upgraded to 1.0.0-alpha.82
+
 ## @lunora/server [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.128...@lunora/server@1.0.0-alpha.129) (2026-09-13)
 
 
