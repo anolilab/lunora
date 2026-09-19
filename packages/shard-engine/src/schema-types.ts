@@ -172,6 +172,13 @@ export interface SchemaLike {
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly commitOrderedMode?: boolean;
+
+    /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the
+     * caller's CDC baseline instead of clobbering the newer value. Opt-in per
+     * table; see `dropStalePatches` in `ctx-db.ts` for the rule and its limits.
+     */
+    readonly dropStalePatchesMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;

@@ -811,6 +811,8 @@ interface RequestScope {
      * `getInboundBookmark()` hand its `.global()` reads ANOTHER request's D1
      * session pin, which is read-your-writes reading someone else's.
      */
+    /** The caller's CDC baseline (`x-lunora-base-seq`); see {@link ShardDO.currentRequestBaselineSeq}. */
+    baselineSeq: number | undefined;
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
@@ -1694,6 +1696,19 @@ abstract class ShardDO {
      * the other per-request fields.
      */
     private currentRequestIp: string | undefined;
+
+    /**
+     * The caller's CDC baseline — the changelog cursor its view of the data was at
+     * when it composed this write — forwarded by the runtime as
+     * `x-lunora-base-seq`. Read only by `.dropStalePatches()` tables, which
+     * compare a patch's fields against the row as it stood at this cursor.
+     *
+     * In the request scope like `userId` and for the same reason: a queued
+     * mutation admitted after a sibling's prologue would otherwise be judged
+     * against ANOTHER caller's baseline, which is the exact clobber this exists to
+     * prevent, inverted.
+     */
+    private currentRequestBaselineSeq: number | undefined;
 
     /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
     private currentRequestTraceparent: string | undefined;
@@ -3149,6 +3164,31 @@ abstract class ShardDO {
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
+    }
+
+    /**
+     * The caller's CDC baseline for this dispatch, handed to `ctx.db` so
+     * `.dropStalePatches()` tables can judge a patch against the row as the caller
+     * last saw it. `undefined` when the client sent none.
+     */
+    protected getCurrentBaselineSeq(): number | undefined {
+        return this.currentRequestBaselineSeq;
+    }
+
+    /**
+     * Record a patch `.dropStalePatches()` discarded.
+     *
+     * The drop is invisible everywhere else by design — no row change, no CDC
+     * entry, no broadcast — and a silent data loss with no trace is the worst of
+     * both worlds. This is the trace: table, row and the fields the caller tried
+     * to write, on the request log the studio and `ctx.log` readers already show.
+     */
+    protected recordStalePatchDropped(event: { fields: string[]; id: string; table: string }): void {
+        this.logs.push({
+            level: "warn",
+            message: `dropStalePatches: discarded a stale patch on "${event.table}" row ${event.id} (fields: ${event.fields.join(", ")}) — those fields changed after the caller's baseline`,
+            timestamp: Date.now(),
+        });
     }
 
     /**
@@ -6918,6 +6958,7 @@ abstract class ShardDO {
      */
     private captureRequestScope(): RequestScope {
         return {
+            baselineSeq: this.currentRequestBaselineSeq,
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
@@ -6940,6 +6981,7 @@ abstract class ShardDO {
      * as this request's. The dispatch path re-pins its own afterwards.
      */
     private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestBaselineSeq = scope.baselineSeq;
         this.currentRequestBookmark = scope.bookmark;
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
@@ -8626,6 +8668,7 @@ abstract class ShardDO {
         this.currentRequestIdentity = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
         this.currentRequestIp = undefined;
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
@@ -11765,6 +11808,10 @@ abstract class ShardDO {
         // watermark path (the call falls back to the legacy idempotency dedup).
         this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
         this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Same parser as the client sequence — both are positive integers, and a
+        // malformed one degrades to "absent" rather than throwing. An absent
+        // baseline makes `.dropStalePatches()` apply the write unchanged.
+        this.currentRequestBaselineSeq = parseClientSeqHeader(request.headers.get("x-lunora-base-seq"));
         // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
         // classification + flag for a mutation push so the writes, dedup row, and
         // watermark advance all commit atomically (see `commitMutationBookkeeping`).
@@ -11847,6 +11894,7 @@ abstract class ShardDO {
         this.currentRequestMutationId = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;

@@ -342,6 +342,12 @@ abstract class ShardDO {
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected getCurrentBaselineSeq(): number | undefined;
+    protected recordStalePatchDropped(event: {
+        fields: string[];
+        id: string;
+        table: string;
+    }): void;
     protected getCurrentTraceparent(): string | undefined;
     protected getCurrentTrace(): {
         rootSpanId: string;
