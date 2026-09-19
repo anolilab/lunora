@@ -129,14 +129,27 @@ export interface PostgresJsLike {
  * element as the rows.
  *
  * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
- * that is necessary and NOT sufficient, so the live-driver test still casts.
- * mysql2 types its second argument as a single `ExecuteValues`, a union of
- * scalars, `ExecuteValues[]` and `{ [key: string]: ExecuteValues }`. Neither
- * direction relates to `ReadonlyArray<unknown>`, so no variance rule can bridge
- * it: closing this needs a deliberate widening of the parameter type here (and
- * of what {@link SqlClient} promises), not a declaration-style change.
+ * that is necessary and NOT sufficient, which is why `params` is `unknown`.
+ *
+ * mysql2 types its second argument as a single `ExecuteValues`: a union of
+ * scalars, `ExecuteValues[]` and `{ [key: string]: ExecuteValues }`. Declared
+ * `params?: ReadonlyArray<unknown>` this projection could never accept the
+ * driver it projects — bivariance needs the two parameter types to relate in
+ * ONE direction and they relate in neither (`readonly unknown[] | undefined` is
+ * not an `ExecuteValues`, and a `string` is not an array).
+ *
+ * `unknown` is the narrowest supertype of `ExecuteValues` that does not restate
+ * mysql2's union here. Restating it would be the vacuous shim all over again —
+ * a local copy that drifts from the package it mirrors and makes the gate pass
+ * while a consumer fails.
+ *
+ * The looseness is confined to the INPUT position: this types the driver a
+ * caller hands to `fromMysql2`, not what anyone passes to
+ * {@link SqlClient.query}, which still declares `ReadonlyArray<unknown>`. Every
+ * call site in this package forwards an array, and the driver validates the
+ * values at runtime regardless.
  */
 export interface Mysql2Like {
-    execute(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<[unknown, unknown]>;
+    execute(this: void, text: string, params?: unknown): Promise<[unknown, unknown]>;
 }
 /* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */

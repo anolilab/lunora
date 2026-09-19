@@ -2340,6 +2340,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     commitOrdered: () => TableBuilder<Shape>;
+    dropStalePatches: () => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
     geoIndex: (name: string, options: {
         field: keyof Shape & string;
@@ -2382,6 +2383,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     commitOrderedMode?: boolean;
+    dropStalePatchesMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;

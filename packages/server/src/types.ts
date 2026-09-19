@@ -342,6 +342,13 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     commitOrderedMode?: boolean;
 
     /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the caller's
+     * CDC baseline rather than clobbering the newer value. See the builder method
+     * for the rule, the whole-patch granularity, and why it fails open.
+     */
+    dropStalePatchesMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
