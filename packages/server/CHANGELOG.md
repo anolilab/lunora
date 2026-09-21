@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.130...@lunora/server@1.0.0-alpha.131) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
 ## @lunora/server [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.129...@lunora/server@1.0.0-alpha.130) (2026-09-19)
 
 ### Features
