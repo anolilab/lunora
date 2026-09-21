@@ -601,25 +601,30 @@ const cdcTrimmedError = (floor: number, sinceSeq: number, scope: "global" | "sha
  *
  * That is not a cursor, it is proof: `seq` is monotonic and survives a trim
  * (`readCdcCursor` reads `sqlite_sequence`), so no consumer can legitimately
- * hold one this shard has not issued. The one thing that produces it is a
- * rollback of the log itself — in practice a native point-in-time restore, which
- * reverts the whole SQLite database and every durable record of the old timeline
- * inside it, `__cdc_meta`'s epoch included. The consumer's own cursor is then the
- * only surviving witness, which is why it is treated as one.
+ * hold one the log has not issued. The one thing that produces it is a rollback
+ * of the log itself — in practice a point-in-time restore, which reverts the
+ * whole SQLite database and every durable record of the old timeline inside it,
+ * `__cdc_meta`'s epoch included. The consumer's own cursor is then the only
+ * surviving witness, which is why it is treated as one.
  *
  * The alternative — echoing `sinceSeq` back with an empty page — tells that
  * consumer it is caught up, and it then never asks for the post-restore range:
- * the shard's writes climb back through seqs the consumer has already passed and
+ * the log's writes climb back through seqs the consumer has already passed and
  * are skipped one by one, silently and permanently. So this refuses, and carries
- * what a resynchronisation needs: the surviving `cursor`, and the `epoch` the
- * seal re-minted, which is what tells the consumer it is a different timeline
- * rather than the same one shortened.
+ * what a resynchronisation needs: the surviving `cursor`, and — on the shard
+ * plane — the `epoch` the seal re-minted, which is what tells the consumer it is
+ * a different timeline rather than the same one shortened.
+ *
+ * `scope` names which log, as it does on {@link cdcTrimmedError}. The
+ * `.global()` one carries no epoch: its changelog has none to re-mint, and no
+ * channel on which a re-minted one could reach a consumer, so the refusal is
+ * the whole of the signal there.
  */
-const cdcForkedError = (cursor: number, sinceSeq: number, epoch: string): LunoraError =>
+const cdcForkedError = (cursor: number, sinceSeq: number, scope: "global" | "shard", epoch?: string): LunoraError =>
     new LunoraError(
         "CDC_TIMELINE_FORKED",
-        `cdc cursor ${String(sinceSeq)} is above this shard's high-watermark ${String(cursor)}; the changelog rolled back (a point-in-time restore) and the changes you hold are on a timeline that no longer exists — resume from a snapshot at epoch ${epoch}`,
-        { data: { cursor, epoch }, status: 409 },
+        `${scope === "global" ? "global cdc" : "cdc"} cursor ${String(sinceSeq)} is above ${scope === "global" ? "the changelog's" : "this shard's"} high-watermark ${String(cursor)}; the changelog rolled back (a point-in-time restore) and the changes you hold are on a timeline that no longer exists — resume from a snapshot${epoch === undefined ? "" : ` at epoch ${epoch}`}`,
+        { data: { cursor, ...(epoch === undefined ? {} : { epoch }) }, status: 409 },
     );
 
 /**
