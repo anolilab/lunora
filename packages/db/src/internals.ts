@@ -9,6 +9,38 @@ import { NonRetriableError } from "@tanstack/offline-transactions";
 const OUTBOX_DRAIN_INTERVAL_MS = 1000;
 
 /**
+ * Fail at setup when the runtime has no WebCrypto, naming the polyfill.
+ *
+ * Every write on this tier gets a client-generated id from `@tanstack/db`'s
+ * `safeRandomUUID`, which needs `crypto.randomUUID` or, failing that,
+ * `crypto.getRandomValues`. Hermes (React Native / Expo) ships **neither**, so
+ * the first write throws `No secure random number generator available` — and it
+ * throws from inside an optimistic transaction, where it surfaces as an
+ * UNHANDLED promise rejection: no error reaches the UI, the row simply never
+ * appears, and nothing points at the cause.
+ *
+ * Checked here instead, at the one moment the app is still being wired, so the
+ * failure is loud, immediate, and names its own fix. `globalThis.crypto` is
+ * read through an optional chain rather than assumed: on Hermes the binding
+ * exists but is missing these members, and on older runtimes it is absent
+ * entirely.
+ */
+export const assertSecureRandom = (entryPoint: string): void => {
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is the WEB Crypto global, and the whole point of the check is a runtime that lacks it; the rule is matching Node's unrelated experimental global of the same name.
+    const webCrypto = globalThis.crypto as { getRandomValues?: unknown; randomUUID?: unknown } | undefined;
+
+    if (typeof webCrypto?.randomUUID === "function" || typeof webCrypto?.getRandomValues === "function") {
+        return;
+    }
+
+    throw new Error(
+        `${entryPoint}: this runtime has no WebCrypto (\`crypto.randomUUID\` / \`crypto.getRandomValues\`), which every optimistic write needs to mint its client-side id. ` +
+            "On React Native / Expo, install `expo-crypto` (or `react-native-get-random-values`) and import it ONCE at the top of your entry file, " +
+            "before anything that reaches `@lunora/db` or `@tanstack/db`.",
+    );
+};
+
+/**
  * Reserved `mutationFns` key the unified outbox routes raw `client.mutation`
  * offline writes through. `defineCollections` registers a handler under this
  * name that reads `transaction.metadata` (functionPath + args) and replays the
