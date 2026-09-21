@@ -48,7 +48,7 @@ export const Chat = (): ReactElement => {
     const myName = session?.user.name ?? session?.user.email ?? "me";
 
     const messages = useQuery(api.messages.list, {});
-    const { error: sendError, mutate: send, pending } = useMutation(api.messages.send);
+    const { error: sendError, mutate: send } = useMutation(api.messages.send);
     const status = useConnectionStatus();
 
     const [draft, setDraft] = useState("");
@@ -65,7 +65,13 @@ export const Chat = (): ReactElement => {
     const handleSend = (): void => {
         const text = draft.trim();
 
-        if (text === "" || pending) {
+        // Deliberately NOT gated on `pending`. A queued offline write stays
+        // pending until it replays on reconnect, so gating here let the user send
+        // exactly one message offline and then silently swallowed every tap —
+        // which is the opposite of what the offline queue is here to demonstrate.
+        // Double-submit is already covered: the composer clears below, so a second
+        // tap sees an empty draft and returns.
+        if (text === "") {
             return;
         }
 
