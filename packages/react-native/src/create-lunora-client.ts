@@ -54,11 +54,14 @@ const isNativeRuntime = (): boolean => typeof document === "undefined";
  * plugin overwrites the session cookie with the bearer rather than deferring to
  * it. Both are noted so the guarantee is not read wider than it is.
  *
- * Applied only on native — see {@link isNativeRuntime}. Under
+ * {@link createLunoraClient} applies it only on native — see
+ * {@link isNativeRuntime} — and only to the global `fetch`. Under
  * `react-native-web` the jar is the browser's, `Origin` IS sent, the CSRF guard
  * never fires, and a cookie session is a legitimate setup that this would
  * silently sign out (`getCurrentUser` deliberately sends `credentials:
- * "include"`).
+ * "include"`). A caller-supplied `fetch` is never wrapped either, so a
+ * cookie-forwarding SSR transport keeps its credentials; apply this yourself if
+ * you want it.
  */
 export const withoutAmbientCookies =
     (fetchImpl: typeof fetch): typeof fetch =>
@@ -159,8 +162,12 @@ export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraCl
     // that way), so gating this on the factory would have left the common setup
     // carrying the jar's cookie into every RPC. It IS gated on the runtime,
     // though — under `react-native-web` a cookie session is legitimate.
-    const globalFetch = rest.fetch === undefined && typeof fetch === "function" ? fetch.bind(globalThis) : rest.fetch;
-    const baseFetch = globalFetch && isNativeRuntime() ? withoutAmbientCookies(globalFetch) : globalFetch;
+    // Only ever the GLOBAL fetch, never a caller-supplied one: an explicit `fetch`
+    // is the documented way to opt out of everything derived here, and a
+    // cookie-forwarding SSR transport passed in deliberately must not have
+    // `credentials: "omit"` slapped on it.
+    const derivedFetch = rest.fetch === undefined && typeof fetch === "function" ? fetch.bind(globalThis) : undefined;
+    const baseFetch = rest.fetch ?? (derivedFetch && isNativeRuntime() ? withoutAmbientCookies(derivedFetch) : derivedFetch);
 
     // Layered over whichever base survived above, including a caller-supplied
     // `fetch`. Previously the factory was ignored entirely when the caller passed

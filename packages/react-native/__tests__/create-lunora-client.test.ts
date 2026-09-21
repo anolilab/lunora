@@ -39,6 +39,22 @@ describe("withoutAmbientCookies", () => {
     // CSRF guard never fires — so a cookie session is a legitimate setup that
     // omitting credentials would silently sign out (`getCurrentUser` deliberately
     // sends `credentials: "include"`).
+    // An explicit `fetch` is the documented opt-out from everything derived here.
+    // A cookie-forwarding SSR transport passed in deliberately must keep its
+    // credentials — and on Node `document` is absent, so the native gate alone
+    // would not have spared it.
+    it("never wraps a caller-supplied `fetch`, even on a native-looking runtime", async () => {
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+        const client = createLunoraClient({ fetch: spy, url: "https://api.example.com" });
+
+        await client.getCurrentUser().catch(() => undefined);
+
+        // `getCurrentUser`'s own `credentials: "include"` reaches the caller's fetch.
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("include");
+    });
+
     it("leaves credentials alone in a browser runtime (react-native-web)", async () => {
         expect.assertions(1);
 

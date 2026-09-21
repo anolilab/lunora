@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext, singleHopInitializer } from "../argument-taint";
+import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
@@ -122,23 +122,92 @@ const isArgsProperty = (node: TsNode, field: string): boolean => {
 };
 
 /**
+ * The initializer of an IMMUTABLE local alias for `node`, or `undefined`.
+ *
+ * Deliberately stricter than the shared `singleHopInitializer` in
+ * `argument-taint.ts`, which is
+ * built for taint detection and is right to be loose there: over-resolving makes
+ * that predicate report MORE, which fails open. Here the same looseness fails the
+ * other way — this hop is what SILENCES a finding — so it has to be exact.
+ *
+ * That helper takes the nearest preceding same-named declaration
+ * regardless of `const`/`let`/`var` and never looks at assignments, so
+ * `let userId = args.userId; userId = args.targetUserId` still resolves through
+ * the stale initializer. That is an act-as-any-user IDOR being waved through.
+ * Requiring `const`, and rejecting any binding the function reassigns, closes it.
+ */
+const constAliasInitializer = (node: TsNode): TsNode | undefined => {
+    if (!Node.isIdentifier(node)) {
+        return undefined;
+    }
+
+    const name = node.getText();
+    const enclosingFunction = node.getFirstAncestor(
+        (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
+    );
+
+    if (enclosingFunction === undefined) {
+        return undefined;
+    }
+
+    // Any write to this name anywhere in the function disqualifies the alias. A
+    // `const` cannot be reassigned, so this only ever rejects a `let`/`var` that
+    // the declaration check below would already have caught — belt and braces,
+    // because the cost of being wrong here is a suppressed IDOR.
+    for (const assignment of enclosingFunction.getDescendantsOfKind(SyntaxKind.BinaryExpression)) {
+        const left = assignment.getLeft();
+
+        if (Node.isIdentifier(left) && left.getText() === name && assignment.getOperatorToken().getText().endsWith("=")) {
+            return undefined;
+        }
+    }
+
+    const usePosition = node.getStart();
+    let nearest: TsNode | undefined;
+    let nearestPosition = -1;
+
+    for (const variable of enclosingFunction.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+        if (variable.getName() !== name) {
+            continue;
+        }
+
+        const list = variable.getParent();
+
+        if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) {
+            continue;
+        }
+
+        const initializer = variable.getInitializer();
+        const declarationPosition = variable.getStart();
+
+        if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
+            nearest = initializer;
+            nearestPosition = declarationPosition;
+        }
+    }
+
+    return nearest;
+};
+
+/**
  * Whether `value` resolves to the mutator's own `args[owner]` — directly, or
- * through the one local `const` hop the rest of this feeder already follows.
+ * through one immutable local `const` alias.
  *
  * The column NAME matching the declared `owner` is not enough.
  * `applyOwnerScope` overwrites exactly `args[ownerField]` with the verified
  * identity, so only that one argument is laundered: a mutator declaring
  * `owner: "userId"` whose impl writes `{ userId: args.targetUserId }` is a
  * genuine act-as-any-user IDOR, and matching on the name alone would suppress it.
- * Anything this cannot resolve (a destructured binding, a computed key) falls
- * through as NOT owner-scoped, which fails toward reporting.
+ * Anything this cannot resolve — a destructured binding, a computed key, a
+ * reassignable alias — falls through as NOT owner-scoped, which fails toward
+ * reporting.
  */
 const resolvesToOwnerArgument = (value: TsNode, ownerField: string): boolean => {
     if (isArgsProperty(value, ownerField)) {
         return true;
     }
 
-    const hop = singleHopInitializer(value);
+    const hop = constAliasInitializer(value);
 
     return hop !== undefined && isArgsProperty(hop, ownerField);
 };

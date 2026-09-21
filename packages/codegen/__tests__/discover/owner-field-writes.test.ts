@@ -70,6 +70,41 @@ describe("discoverOwnerFieldWrites", () => {
         expect(found[0]?.ownerScoped).toBeUndefined();
     });
 
+    // The shared taint hop takes the nearest preceding same-named declaration
+    // regardless of `const`/`let` and never looks at assignments. Over-resolving
+    // makes the taint predicate report MORE, which is safe; here the same hop is
+    // what SILENCES a finding, so a reassignable alias must not qualify.
+    it("does not mark a `let` alias that is reassigned to a different arg", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; userId = args.targetUserId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
+    it("does not mark a `let` alias even when it is never reassigned", () => {
+        // Cheap to be strict: `const` is the only shape the docs show, and a
+        // mutable binding cannot be proven safe without real symbol resolution.
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
     it("marks the owner column reached through one local const hop", () => {
         expect.assertions(1);
 
