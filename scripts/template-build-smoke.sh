@@ -1418,11 +1418,20 @@ for t in "${TEMPLATES[@]}"; do
     printf "%-20s  %s\n" "$t" "$result"
 done
 echo ""
-# A skipped template is not scaffolded, installed, built or typechecked by this
-# run — and, for `expo`, by nothing else either (see SKIP_TEMPLATES). It never
-# enters the table above, so without this line a green summary reads as coverage
-# of every template in `templates/`, which it is not.
-echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+# A skipped template is not scaffolded, installed, built or typechecked by THIS
+# run. It never enters the table above, so without this line a green summary
+# reads as coverage of every template in `templates/`, which it is not.
+#
+# Two different reasons land here and they are not equally bad, so say which:
+# `SKIP_TEMPLATES` is a standing exclusion covered by nothing anywhere, while
+# `SMOKE_SKIP_TEMPLATES` is CI splitting the matrix into legs — that template
+# runs, just in another job. Printing one message for both is how "NOT COVERED"
+# would come to mean nothing.
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    echo "  OTHER LEG  : ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — skipped HERE via SMOKE_SKIP_TEMPLATES; covered by its own job"
+else
+    echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+fi
 echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 # A codegen+typecheck-only template is a weaker result than a built one — no
 # bundler ever ran — and the table above renders both as plain PASS. Printed
