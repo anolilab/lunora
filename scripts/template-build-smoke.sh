@@ -143,22 +143,23 @@ XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
 # Templates excluded from this worker-toolchain smoke matrix.
-# The Expo template is a React Native (Metro) app, not a Vite/workerd project:
-# its `pnpm install` pulls a different, largely-native toolchain (react-native,
-# expo) that isn't represented by the allowBuilds list below, and it has no
-# `pnpm run build` step.
 #
-# NOTHING ELSE COVERS IT. This comment used to claim a CLI init smoke test
-# validated it separately; there is no such test — `packages/cli/__tests__`
-# never mentions expo, `scripts/clean-machine-smoke.sh` scaffolds only
-# tanstack-start-react, and that script is in no workflow either. The template
-# declares `lint:types` (`lunora codegen && tsc --noEmit`) and nothing invokes
-# it, so a breaking `@lunora/*` change reaches templates/expo with every gate
-# green. Closing this means either an expo leg here (its `lint:types` is exactly
-# the no-build path below, once the native toolchain is affordable in CI) or a
-# workflow that runs `test:clean-machine` against it.
+# EMPTY, deliberately. `expo` used to sit here, and the note explaining why
+# ended "NOTHING ELSE COVERS IT": the template declares `lint:types`
+# (`lunora codegen && tsc --noEmit`) and no workflow invoked it, so a breaking
+# `@lunora/*` change reached the scaffold `lunora init` serves with every gate
+# green. It shipped two defects that way.
+#
+# The fear was its toolchain, but the cost never applied: the matrix only
+# TYPECHECKS a template with no `build` script (see the no-build path below,
+# which runs `pnpm run codegen` then the per-template checker) and typechecking
+# needs no native toolchain — no Xcode, no Android SDK, just the JS graph. The
+# react-native/expo postinstalls it does pull are named in `allowBuilds` below.
+#
+# So a template is excluded only if it cannot be scaffolded or installed at all.
+# Add one here with a reason, never as a way to dodge a failure.
 # ---------------------------------------------------------------------------
-SKIP_TEMPLATES=("expo")
+SKIP_TEMPLATES=()
 
 is_skipped() {
     local name="$1"
@@ -1323,11 +1324,12 @@ for tname in "${TEMPLATES[@]}"; do
         # templates": that floor is a whole-run tripwire, so widening it makes
         # every verdict depend on the full matrix, while this fires per template
         # exactly where the coverage is lost. It is unreachable for the templates
-        # on disk — `standalone` is the only one in this matrix that resolves no
-        # view, and it ships no `build` script, so it takes the codegen +
-        # typecheck path above (`expo` also resolves none, and is skipped before
-        # it ever gets here). That is what makes this a guard and not a behaviour
-        # change.
+        # on disk — `standalone` and `expo` are the only two in this matrix that
+        # resolve no view, and NEITHER ships a `build` script, so both take the
+        # codegen + typecheck path above. That is what makes this a guard and not
+        # a behaviour change. (It is the reachability of that path, not the old
+        # `SKIP_TEMPLATES` entry, that keeps expo out of here — un-skipping it
+        # changed nothing for this branch.)
         echo "  FAIL: $tname resolved no auth-ui view, so nothing typechecked its source"
         echo "        \`pnpm run build\` bundles only what a build entry reaches, and this run's only"
         echo "        typechecker is gated on that view — so $tname would have recorded PASS with no"
