@@ -1449,12 +1449,29 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             // migrator). For production run the migrate command ahead of deploy.
             // The migration instance takes the RAW binding: better-auth migrates
             // only through Kysely and rejects the adapter the request instance uses.
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter.
+            //
+            // Constructing first, because \`ensureMigrated\` finishes by calling
+            // better-auth's \`invalidateSchemaChecks(database)\` and that call is a
+            // NO-OP until something has registered a schema check for the binding:
+            // it reads a \`WeakMap\` entry that only \`createSchemaCheck\` writes, and
+            // returns silently when there is none. The adapter-backed instance is the
+            // only thing that registers one, so building it afterwards left the
+            // post-migration invalidation inert — a mismatch verdict observed against
+            // the pre-migration schema stayed cached for the life of the isolate even
+            // though the migration had just fixed it, and every \`/api/auth/*\` request
+            // kept failing on a schema the database already had.
+            //
+            // Assigning after, because \`auth\` must stay null until the schema exists,
+            // or a concurrent request serves \`/api/auth/*\` against tables the migrator
+            // has not created yet — \`no such table: rateLimit\`, from the isolate that
+            // was mid-migration.
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
-            // Assigned after the schema exists, never before. Assigning first is
-            // what let a concurrent request see a non-null \`auth\` and serve
-            // \`/api/auth/*\` against tables the migrator had not created yet —
-            // \`no such table: rateLimit\`, from the isolate that was mid-migration.
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
+            auth = requestAuth;
         };
 
         // Single-flighted on the PROMISE, not on \`auth\`. Every \`fetch\` awaits this

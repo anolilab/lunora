@@ -190,9 +190,28 @@ describe("emitApp — auth cold start", () => {
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
         const migration = output.indexOf("await ensureMigrated(createAuth(");
-        const assignment = output.indexOf("auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+        const assignment = output.indexOf("auth = requestAuth;");
 
         expect(migration).toBeLessThan(assignment);
+    });
+
+    // The other half of the same window, and the opposite ordering constraint:
+    // `ensureMigrated` ends with better-auth's `invalidateSchemaChecks(database)`,
+    // which reads a `WeakMap` entry only `createSchemaCheck` writes and returns
+    // silently when there is none. The adapter-backed request instance is the only
+    // thing that registers one, so constructing it AFTER the migration left that
+    // invalidation inert and a pre-migration mismatch verdict cached for the life
+    // of the isolate. Constructing it first — while still assigning it after —
+    // makes the invalidation land.
+    it("constructs the request instance before the migration, so the schema-check invalidation lands", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+        const construction = output.indexOf("const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+        const migration = output.indexOf("await ensureMigrated(createAuth(");
+
+        expect(construction).toBeGreaterThan(-1);
+        expect(construction).toBeLessThan(migration);
     });
 
     it("single-flights init on the promise, so concurrent cold requests run one migration", () => {
