@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.192...@lunora/codegen@1.0.0-alpha.193) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.142
+* **@lunora/do:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/codegen [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.191...@lunora/codegen@1.0.0-alpha.192) (2026-09-21)
 
 
