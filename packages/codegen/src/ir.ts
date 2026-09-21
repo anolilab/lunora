@@ -465,6 +465,18 @@ export interface MutatorIR {
     /** Path relative to `<projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
 
+    /** 1-based line of the `defineMutator(...)` call, for diagnostics and advisor findings. */
+    line: number;
+
+    /**
+     * The ownership column the declaration scopes the write to
+     * (`defineMutator({ owner: "userId" })`), or `undefined` when it declares
+     * none — which is also what the `mutator_without_owner_scope` lint reports,
+     * since an unowned mutator is a public write endpoint. Only a string-literal
+     * `owner` is lifted; a computed one reads as `undefined` rather than guessed.
+     */
+    owner?: string;
+
     /**
      * Serialized TS source for the authoritative `server` impl's return type,
      * `Promise<T>` unwrapped. `"unknown"` when ts-morph can't resolve it — same

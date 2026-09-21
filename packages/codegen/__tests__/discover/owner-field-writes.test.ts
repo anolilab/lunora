@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { discoverMutators } from "../../src/discover/mutators";
 import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 
 let workdir: string;
@@ -42,7 +43,9 @@ describe("discoverOwnerFieldWrites", () => {
             `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
         );
 
-        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(0);
+        const lunoraDirectory = join(workdir, "lunora");
+
+        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toHaveLength(0);
     });
 
     it("still flags a DIFFERENT identity column in an owner-scoped mutator", () => {
@@ -55,7 +58,8 @@ describe("discoverOwnerFieldWrites", () => {
             `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { tenantId: args.tenantId, userId: args.userId }); } });`,
         );
 
-        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ field: "tenantId" });
@@ -69,7 +73,9 @@ describe("discoverOwnerFieldWrites", () => {
             `export const createPost = defineMutator({ server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
         );
 
-        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(1);
+        const lunoraDirectory = join(workdir, "lunora");
+
+        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toHaveLength(1);
     });
 
     it("flags an insert whose doc sets userId from args", () => {

@@ -184,6 +184,7 @@ Storage, AI, containers & payments:
 | `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                             |
 | `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                     |
 | `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                 |
+| `mutator_without_owner_scope`                | `WARN`  | A `defineMutator` with no `owner`; a client-callable write endpoint that ties no write to its caller           |
 | `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                        |
 | `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                       |
 | `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                    |
