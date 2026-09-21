@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "1.0.0-alpha.262",
+    "version": "1.0.0-alpha.263",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -162,15 +162,15 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.260",
-        "@lunora/client": "1.0.0-alpha.113",
-        "@lunora/do": "1.0.0-alpha.148",
+        "@lunora/cli": "1.0.0-alpha.261",
+        "@lunora/client": "1.0.0-alpha.114",
+        "@lunora/do": "1.0.0-alpha.149",
         "@lunora/errors": "1.0.0-alpha.39",
         "@lunora/flags": "1.0.0-alpha.53",
         "@lunora/observability": "1.0.0-alpha.83",
         "@lunora/platform": "1.0.0-alpha.32",
         "@lunora/ratelimit": "1.0.0-alpha.66",
-        "@lunora/runtime": "1.0.0-alpha.127",
+        "@lunora/runtime": "1.0.0-alpha.128",
         "@lunora/server": "1.0.0-alpha.132",
         "@lunora/values": "1.0.0-alpha.49"
     },
