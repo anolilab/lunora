@@ -60,6 +60,19 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * Mirrors the two `.dropStalePatches()` seams the generated `databaseOptions`
+     * wires into `createShardCtxDb`: the per-dispatch baseline getter, and the
+     * callback the shard logs a dropped patch through. Both are `protected` for
+     * exactly this — the drop record used to want the private log ring, which is
+     * the mistake this whole file exists to catch.
+     */
+    protected ctxDbStaleSeams(): number | undefined {
+        this.recordStalePatchDropped({ fields: ["title"], id: "doc_1", table: "documents" });
+
+        return this.getCurrentBaselineSeq();
+    }
+
+    /**
      * Mirrors the generated `scheduleOutboxScheduler` override — the seam the
      * deferred-schedule outbox retries through. The generated body answers
      * `config.scheduler?.(env)`, so the base's return type has to admit

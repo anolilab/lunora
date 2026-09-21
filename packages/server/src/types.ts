@@ -342,6 +342,13 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     commitOrderedMode?: boolean;
 
     /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the caller's
+     * CDC baseline rather than clobbering the newer value. See the builder method
+     * for the rule, the whole-patch granularity, and why it fails open.
+     */
+    dropStalePatchesMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
@@ -703,9 +710,40 @@ interface RunAction {
  * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
  * `init` is per-INSTANCE and fires once per cold start, before any handler runs
  * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
- * a watched read's result changed — see `onQueryChange`.
+ * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
+ * and decides whether a socket may join or broadcast to one — see `onWhisper`
+ * and {@link WhisperEvent}; unlike the other four it is a query, and its return
+ * value is the verdict.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+
+/**
+ * The event a whisper authorizer (`onWhisper`) receives as its second argument.
+ *
+ * Everything on it is either server-stamped from the socket's attachment
+ * (`connectionId`, `shardKey`, `userId`, `context`) or the client-supplied
+ * `topic` the verdict is about. The verified caller identity is also on
+ * `ctx.auth` — the authorizer runs under the socket's own identity.
+ */
+interface WhisperEvent {
+    /**
+     * Which side of the channel is being authorized: `"subscribe"` when the
+     * socket asks to JOIN the topic (and so to receive every message on it),
+     * `"send"` when it asks to BROADCAST to it. Checked separately because they
+     * are separate powers — a read-only observer is a coherent thing to allow.
+     */
+    readonly action: "send" | "subscribe";
+    /** Stable per-socket id, the same one `onConnect` saw. */
+    readonly connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope (e.g. `{ roomId }`). */
+    readonly context?: Record<string, unknown>;
+    /** The shard this socket is bound to — the outer boundary the topic lives inside. */
+    readonly shardKey: string;
+    /** The topic name the client asked for. Client-supplied: validate it, never trust its shape. */
+    readonly topic: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    readonly userId: string | null;
+}
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -2833,6 +2871,7 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,

@@ -125,6 +125,22 @@ export interface PersistedMutation {
     args: Record<string, unknown>;
 
     /**
+     * The CDC cursor this write was composed against, persisted so a replay —
+     * including one after a reload, days later — is still judged against what its
+     * author could actually see. Consumed only by `.dropStalePatches()` tables.
+     *
+     * Persisting it is the entire point of the feature. Re-deriving a baseline at
+     * replay time would read the cursor the client has ADVANCED to while the write
+     * sat in the queue, which is the newer state the write must be compared
+     * against — so the stale write would always look fresh and always clobber.
+     *
+     * Absent on records written by older client versions, and on a client with no
+     * live subscription to take a cursor from; both replay with no baseline, which
+     * applies the write unchanged.
+     */
+    baselineSeq?: number;
+
+    /**
      * The client id that queued this write, persisted so a replay after a reload
      * lands in the SAME server-side dedup namespace it was issued under. The
      * standalone client's own `clientId` is minted per session, so replaying under
@@ -420,6 +436,7 @@ export interface LunoraClientOptions {
      * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
+
     fetch?: typeof fetch;
 
     /**
@@ -485,6 +502,32 @@ export interface LunoraClientOptions {
      * breaking deploy you're protecting against — not purely speculatively.
      */
     persistenceVersion?: string;
+
+    /**
+     * HTTP polling fallback for live queries on a network that refuses WebSocket
+     * upgrades (a corporate proxy, a captive portal).
+     *
+     * One-shot `query`/`mutation`/`action` calls already ride HTTP POST, so such a
+     * network does not break them — it breaks reactivity, and only that. After a
+     * run of connect attempts that never reach `open`, the client re-runs each
+     * subscribed query over the batch-RPC endpoint on an interval and reports
+     * `"polling"` from the client's `connectionStatus()`.
+     *
+     * It is a degradation, not a second transport: shapes (`@lunora/db`
+     * collections), durable streams and whispers have no request/response form to
+     * re-run and stay unavailable until a socket opens. Freshness is bounded by
+     * the interval, and each tick costs a full re-run of every subscribed query.
+     *
+     * Defaults to polling every 5s after 3 consecutive failed opens. Set
+     * `intervalMs: 0` to disable it and keep the historical behaviour (live
+     * queries simply stop moving).
+     */
+    pollingFallback?: {
+        /** Consecutive connect attempts that must fail to reach `open` first. Default 3; `0` disables. */
+        afterFailedAttempts?: number;
+        /** Poll cadence in ms. Default 5000; `0` disables. */
+        intervalMs?: number;
+    };
 
     /**
      * Durable store for the read cache (Pillar 2). When active, query results

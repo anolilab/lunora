@@ -1,3 +1,27 @@
+## @lunora/client [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.111...@lunora/client@1.0.0-alpha.112) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.147
+
+## @lunora/client [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.110...@lunora/client@1.0.0-alpha.111) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.146
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.126
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/client [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.109...@lunora/client@1.0.0-alpha.110) (2026-09-13)
 
 

@@ -414,6 +414,11 @@ are ignored by the client parser.
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 
+`whisper_subscribe` and `whisper` are authorized per topic when the app declares
+an `onWhisper` authorizer; with none declared the topic's only boundary is the
+shard. A denied frame is **dropped silently** — neither has an ack frame, and
+adding an error frame for a denial would let a client probe which topics exist.
+
 `stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
 to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
 client already holds for this run. A run is identified by `(functionPath, args)`,

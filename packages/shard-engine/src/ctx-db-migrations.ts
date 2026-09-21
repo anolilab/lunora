@@ -446,7 +446,10 @@ export const runShardMigrations = (
     }
 
     if (options.cdc) {
-        migrateCdcLog(sql);
+        // The row-history index is only worth its storage when a table actually
+        // seeks one row's changelog — i.e. when some table opted into
+        // `.dropStalePatches()`.
+        migrateCdcLog(sql, { rowHistoryIndex: Object.values(schema.tables).some((table) => table.dropStalePatchesMode === true) });
         // The epoch row lives next to the log so a reconnecting subscriber can
         // prove timeline continuity; created upfront (the row itself is minted
         // lazily by `readCdcEpoch` on first frame).

@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.72...@lunora/shard-engine@1.0.0-alpha.73) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
 ## @lunora/shard-engine [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.71...@lunora/shard-engine@1.0.0-alpha.72) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

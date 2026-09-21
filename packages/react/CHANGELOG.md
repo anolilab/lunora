@@ -1,3 +1,23 @@
+## @lunora/react [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.116...@lunora/react@1.0.0-alpha.117) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.65
+
+## @lunora/react [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.115...@lunora/react@1.0.0-alpha.116) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.64
+
 ## @lunora/react [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.114...@lunora/react@1.0.0-alpha.115) (2026-09-13)
 
 

@@ -1,3 +1,21 @@
+## @lunora/payment [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.132...@lunora/payment@1.0.0-alpha.133) (2026-09-19)
+
+### Bug Fixes
+
+* **payment:** three defects on the money path ([#759](https://github.com/anolilab/lunora/issues/759)) ([cfd776d](https://github.com/anolilab/lunora/commit/cfd776dbf7953e62c3ed93cc1715a89addbdb6bb))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/payment [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.131...@lunora/payment@1.0.0-alpha.132) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
 ## @lunora/payment [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.130...@lunora/payment@1.0.0-alpha.131) (2026-09-13)
 
 

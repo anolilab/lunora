@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const DOCS_DIRECTORY = join(import.meta.dirname, "..", "docs");
+const REPOSITORY_ROOT = join(import.meta.dirname, "..", "..", "..");
 
 /**
  * A webhook route must return `webhookResponse(...)`. Only the JSON payload crosses the `runAction`
@@ -65,5 +66,27 @@ describe("payment docs", () => {
             .join("\n");
 
         expect(methods.filter((name) => !rows.includes(`\`${name}(`))).toStrictEqual([]);
+    });
+
+    /**
+     * The `payment` thunk passed to `createShardDO` receives `env` and nothing else, so an
+     * `authorize` written in terms of `ctx` cannot work: `tsc` rejects it with TS2304, and in plain
+     * JS the authorizer throws — which `ensureAuthorized` treats as a deny, so EVERY payment call
+     * 403s. The registry item shipped it live, for a rule the default authorizer already applies;
+     * the overview and two provider guides shipped the same shape commented out for an org key.
+     */
+    it("never writes an authorizer in terms of `ctx` (the payment thunk only gets `env`)", () => {
+        expect.hasAssertions();
+
+        const sources = [
+            ...readdirSync(DOCS_DIRECTORY)
+                .filter((name) => name.endsWith(".mdx"))
+                .map((name) => [`docs/${name}`, readFileSync(join(DOCS_DIRECTORY, name), "utf8")] as const),
+            ...["registry/payment/README.md", "registry/payment/registry.json"].map(
+                (name) => [name, readFileSync(join(REPOSITORY_ROOT, name), "utf8")] as const,
+            ),
+        ];
+
+        expect(sources.filter(([, source]) => /authorize:[^\n]*\bctx\./u.test(source)).map(([name]) => name)).toStrictEqual([]);
     });
 });
