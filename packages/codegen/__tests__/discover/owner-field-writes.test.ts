@@ -29,6 +29,49 @@ describe("discoverOwnerFieldWrites", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
+    // `defineMutator({ owner: "userId" })` makes `args.userId` the server-verified
+    // identity before the `server` impl runs: `applyOwnerScope` rejects a call with
+    // no identity, rejects a client-supplied value that disagrees, and overwrites
+    // the column with the verified one. Writing it back out is the documented
+    // shape, and flagging it at ERROR is a false positive on Lunora's own docs.
+    it("does not flag a mutator writing the very column its `owner` declares", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
+        );
+
+        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("still flags a DIFFERENT identity column in an owner-scoped mutator", () => {
+        // `owner: "userId"` launders `userId` and nothing else — a `tenantId` taken
+        // from `args` in the same impl is still caller-controlled.
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { tenantId: args.tenantId, userId: args.userId }); } });`,
+        );
+
+        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ field: "tenantId" });
+    });
+
+    it("still flags an owner-column write in a mutator that declares no `owner`", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
+        );
+
+        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags an insert whose doc sets userId from args", () => {
         expect.assertions(2);
 

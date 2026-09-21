@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, OwnerFieldWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { isDefineMutatorCallee } from "./mutators";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -144,6 +145,57 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string): Own
     );
 };
 
+/**
+ * Export name → the ownership column its `defineMutator({ owner: "…" })`
+ * declares, for every exported mutator in one source file.
+ *
+ * An `owner`-scoped mutator's `args[owner]` **is** the server-trusted identity by
+ * the time the `server` impl runs: `applyOwnerScope` rejects the call outright
+ * when no identity resolved, rejects a client-supplied value that disagrees with
+ * the verified one, and then overwrites the column with the verified value
+ * regardless. So `ctx.db.insert("posts", { userId: args.userId })` inside one is
+ * the *documented* shape, not an IDOR — the taint walk just cannot see that the
+ * declaration already laundered the field.
+ *
+ * Only a string-literal `owner` is read. A computed one cannot be resolved here,
+ * and guessing would suppress a real finding, so it falls through and is flagged.
+ */
+const mutatorOwnerFields = (sourceFile: SourceFile): Map<string, string> => {
+    const owners = new Map<string, string>();
+
+    for (const declaration of sourceFile.getVariableDeclarations()) {
+        if (!declaration.isExported()) {
+            continue;
+        }
+
+        const initializer = declaration.getInitializer();
+
+        if (initializer === undefined || !Node.isCallExpression(initializer) || !isDefineMutatorCallee(initializer.getExpression())) {
+            continue;
+        }
+
+        const argument = initializer.getArguments()[0];
+
+        if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
+            continue;
+        }
+
+        const property = argument.getProperty("owner");
+
+        if (property === undefined || !Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const value = property.getInitializer();
+
+        if (value !== undefined && Node.isStringLiteral(value)) {
+            owners.set(declaration.getName(), value.getLiteralValue());
+        }
+    }
+
+    return owners;
+};
+
 /** Identity columns written from `args` across one source file's `ctx.db` writes. */
 const ownerFieldWritesInSourceFile = (
     sourceFile: SourceFile,
@@ -151,9 +203,18 @@ const ownerFieldWritesInSourceFile = (
     visibilityOf: (exportName: string) => "internal" | "public" | undefined,
 ): OwnerFieldWriteIR[] => {
     const found: OwnerFieldWriteIR[] = [];
+    const ownerFields = mutatorOwnerFields(sourceFile);
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         for (const write of ownerFieldWritesInCall(call, relativePath)) {
+            // The enclosing mutator declared this very column as its `owner`, so
+            // the runtime has already verified and overwritten it — see
+            // `mutatorOwnerFields`. Recording it would flag the shape the docs
+            // prescribe as an IDOR.
+            if (ownerFields.get(write.exportName) === write.field) {
+                continue;
+            }
+
             const visibility = visibilityOf(write.exportName);
 
             found.push(visibility === undefined ? write : { ...write, visibility });
