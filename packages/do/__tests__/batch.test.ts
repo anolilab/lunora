@@ -78,7 +78,7 @@ describe(buildBatchEntryRequest, () => {
     });
 });
 
-describe("parseBaselineSeqHeader", () => {
+describe(parseBaselineSeqHeader, () => {
     // Separate from the client-sequence parser on purpose: a mutation sequence
     // starts at 1, but `0` is a valid BASELINE ("had seen nothing") and is what
     // `readCdcCursor` reports for an empty changelog. Flooring it to `undefined`
@@ -101,7 +101,6 @@ describe("parseBaselineSeqHeader", () => {
     it("rejects an absent header", () => {
         expect.assertions(1);
 
-         
         expect(parseBaselineSeqHeader(null)).toBeUndefined();
     });
 });
