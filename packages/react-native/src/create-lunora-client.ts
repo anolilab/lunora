@@ -8,6 +8,40 @@ import type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 type WebSocketWithOptions = new (url: string | URL, protocols?: string | string[], options?: unknown) => WebSocket;
 
 /**
+ * Wrap a `fetch` so no request carries an ambient cookie credential.
+ *
+ * React Native **does** have a cookie jar — its `fetch` is backed by the
+ * platform HTTP stack (`NSURLSession` / `OkHttp`), which owns a shared,
+ * persistent cookie store — so a `Set-Cookie` from a better-auth sign-in is kept
+ * and re-attached to later requests automatically. The package's own docs used
+ * to assert the opposite, and the bearer design leaned on it: "there is no jar,
+ * therefore no `Cookie` header, therefore the runtime's CSRF guard never sees
+ * one".
+ *
+ * It does see one. The guard rejects an unsafe, cookie-bearing request whose
+ * `Origin` is missing or untrusted, and a native request sends no `Origin` — so
+ * every state-changing RPC 403s with `FORBIDDEN_ORIGIN` for as long as the jar
+ * holds that cookie. `security.csrf.trustedOrigins` cannot fix it: the trust list
+ * is only consulted for an `Origin` that was actually received, and a missing one
+ * is rejected outright. It is also intermittent — it depends on whether the jar
+ * happens to hold the session cookie that launch — which is what let it hide.
+ *
+ * `credentials: "omit"` is the fix, and it costs nothing here: on this platform
+ * the session is a bearer (`setAuthToken` / `setWsToken`), so the cookie was
+ * never the credential — only an accident of transport riding along. Wrapped
+ * INNERMOST, so it runs after every other layer and also overrides the
+ * `credentials: "include"` `@lunora/client` sends on its `get-session` probe.
+ *
+ * Callers who genuinely want the ambient cookie (a `react-native-web` build
+ * fronted by a cookie session) pass their own `fetch` to `createLunoraClient`,
+ * which takes precedence over everything derived here.
+ */
+export const withoutAmbientCookies =
+    (fetchImpl: typeof fetch): typeof fetch =>
+    (input, init) =>
+        fetchImpl(input, { ...init, credentials: "omit" });
+
+/**
  * Wrap a `fetch` so every request also carries the headers from the auth-headers
  * factory. The factory's headers are layered FIRST so the caller's own
  * per-request headers (e.g. `LunoraClient`'s `Authorization` bearer and
@@ -69,9 +103,11 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
  * after a restart while the socket reconnects — mirroring the browser's
  * IndexedDB-backed default.
  *
- * Third, credentialed requests: pass `getAuthHeaders` and the returned headers
- * ride both the HTTP RPC path and the WebSocket upgrade, since React Native has
- * no cookie jar to attach a session implicitly.
+ * Third, credentialed requests: the session is a bearer on this platform, so the
+ * returned `fetch` is wrapped in {@link withoutAmbientCookies} (React Native's
+ * cookie jar is real, and a stray session cookie 403s every state-changing RPC —
+ * see there), and passing `getAuthHeaders` additionally rides its headers on both
+ * the HTTP RPC path and the WebSocket upgrade.
  *
  * Everything on `LunoraClientOptions` is still accepted and passed through; an
  * explicit `persistence`, `queryCache`, `fetch`, or `WebSocket` takes precedence
@@ -84,15 +120,21 @@ export const withAuthWebSocket = (WebSocketImpl: typeof WebSocket, getAuthHeader
 export const createLunoraClient = (options: CreateLunoraClientOptions): LunoraClient => {
     const { getAuthHeaders, storage, ...rest } = options;
 
-    // Only touch `fetch`/`WebSocket` when there's an auth-headers factory to
-    // inject AND the caller hasn't supplied its own transport (an explicit
-    // `fetch`/`WebSocket` takes precedence). Otherwise leave them unset so
-    // `LunoraClient` does its own global resolution — crucially, it binds `fetch`
-    // to `globalThis`, and on the web target (`react-native-web`) an *unbound*
-    // `fetch` throws `TypeError: Illegal invocation`. When we do wrap the global,
-    // bind it the same way so the wrapped transport is safe on web too.
-    const authedFetch =
-        getAuthHeaders && rest.fetch === undefined && typeof fetch === "function" ? withAuthHeaders(fetch.bind(globalThis), getAuthHeaders) : rest.fetch;
+    // Only touch `fetch`/`WebSocket` when the caller hasn't supplied its own
+    // transport (an explicit `fetch`/`WebSocket` takes precedence). Otherwise leave
+    // them unset so `LunoraClient` does its own global resolution — crucially, it
+    // binds `fetch` to `globalThis`, and on the web target (`react-native-web`) an
+    // *unbound* `fetch` throws `TypeError: Illegal invocation`. When we do wrap the
+    // global, bind it the same way so the wrapped transport is safe on web too.
+    //
+    // `withoutAmbientCookies` goes on regardless of `getAuthHeaders`, unlike the
+    // `WebSocket` wrapper below: the session usually arrives through
+    // `setAuthToken`, not through `getAuthHeaders` (both bundled Expo apps wire it
+    // that way), so gating this on the factory would have left the common setup
+    // carrying the jar's cookie into every RPC.
+    const baseFetch = rest.fetch === undefined && typeof fetch === "function" ? withoutAmbientCookies(fetch.bind(globalThis)) : rest.fetch;
+
+    const authedFetch = getAuthHeaders && baseFetch ? withAuthHeaders(baseFetch, getAuthHeaders) : baseFetch;
 
     const authedWebSocket =
         getAuthHeaders && rest.WebSocket === undefined && typeof WebSocket === "function" ? withAuthWebSocket(WebSocket, getAuthHeaders) : rest.WebSocket;

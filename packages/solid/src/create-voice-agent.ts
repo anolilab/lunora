@@ -359,7 +359,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
             // raw `globalThis.WebSocket`) — on React Native the client wraps this
             // constructor to inject the auth-headers factory's credential onto the
             // upgrade request, which a bare global reference would silently bypass,
-            // leaving the voice socket uncredentialed on the cookie-jar-less runtime
+            // leaving the voice socket uncredentialed on the native runtime
             // the auth design exists for.
             const openSocket: CreateSocket =
                 createSocket ??

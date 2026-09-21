@@ -12,7 +12,8 @@ import { LUNORA_URL } from "./auth-client";
  *   better-auth Expo session into `setAuthToken` (HTTP RPC) + `setWsToken` (the
  *   live socket) via `expoBearerToken`, re-synced on sign-in/out. A bearer avoids
  *   the `Cookie` header the runtime's CSRF guard rejects on `Origin`-less native
- *   requests.
+ *   requests — `createLunoraClient` also sends `credentials: "omit"` so the
+ *   platform cookie jar cannot re-attach one behind the bearer's back.
  */
 export const lunoraClient = createLunoraClient({
     storage: AsyncStorage,
