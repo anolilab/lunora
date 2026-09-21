@@ -1,3 +1,15 @@
+## @lunora/client [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.113...@lunora/client@1.0.0-alpha.114) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.149
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.128
+
 ## @lunora/client [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.112...@lunora/client@1.0.0-alpha.113) (2026-09-21)
 
 ### Features
