@@ -1,3 +1,14 @@
+## @lunora/solid [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.116...@lunora/solid@1.0.0-alpha.117) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/solid [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.115...@lunora/solid@1.0.0-alpha.116) (2026-09-21)
 
 
