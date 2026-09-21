@@ -843,6 +843,9 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
+    replayBaseline?: {
+        seq: number | undefined;
+    };
     shardKey?: string;
 }
 ```
@@ -960,6 +963,7 @@ type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => 
 ```ts
 interface OutboxMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;

@@ -36,6 +36,22 @@ export interface WriteProvenance extends Record<string, unknown> {
 /** The metadata an outbox-routed transaction carries so its replay can call `client.mutation`. */
 export interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
+
+    /**
+     * The CDC cursor the write was composed against, persisted with the
+     * transaction so the replay can hand it straight back to `client.mutation`.
+     *
+     * Persisting it is the whole point: the replay runs after a reconnect (or a
+     * reload, days later), by which time this client has advanced to a NEWER
+     * cursor — exactly the state a `.dropStalePatches()` table must judge the
+     * write against. Letting `client.mutation` re-derive one there makes every
+     * stale write look fresh and clobber the newer value.
+     *
+     * Absent on transactions persisted by older versions, and on a client with no
+     * live subscription to take a cursor from; both replay unchanged.
+     */
+    baselineSeq?: number;
+
     clientId: string;
     functionPath: string;
     /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
@@ -200,6 +216,8 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 
             const metadata: OutboxMutationMetadata = {
                 args: mutation.args,
+                // Carried through, never re-derived at replay — see the field docs.
+                baselineSeq: mutation.baselineSeq,
                 clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
                 // Persist the stable replay key so a committed-but-unacked retry

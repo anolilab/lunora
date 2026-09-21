@@ -53,6 +53,15 @@ const buildBatchEntryRequest = (batchRequest: Request, entry: BatchEntry): Reque
         headers.set("x-lunora-client-seq", String(entry.clientSeq));
     }
 
+    // Per entry, for the same reason `clientSeq` is: the batch's writes were
+    // composed at different cursors, so a `.dropStalePatches()` table has to judge
+    // each against its own. Omitting it is what let a batched replay of a stale
+    // write apply unchanged while the single-call replay of the same write was
+    // correctly discarded.
+    if (entry.baselineSeq !== undefined) {
+        headers.set("x-lunora-base-seq", String(entry.baselineSeq));
+    }
+
     return new Request("https://shard.internal/rpc", {
         body: JSON.stringify({ args: entry.args ?? {}, functionPath: entry.functionPath }),
         headers,

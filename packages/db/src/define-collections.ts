@@ -385,7 +385,18 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // committed-but-unacked write that the executor retries is deduped by the
             // server instead of applied twice.
             await runOutboxMutation(() =>
-                client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
+                client.mutation({ __lunoraRef: meta.functionPath }, meta.args, {
+                    mutationId: meta.idempotencyKey,
+                    // Hand the enqueue-time cursor back verbatim. Letting
+                    // `client.mutation` sample its own would read the cursor this
+                    // client advanced to while the write sat in the executor —
+                    // the newer state the write must be judged against — so a
+                    // `.dropStalePatches()` table would accept every stale replay.
+                    // Wrapped so a write queued with no baseline pins that too,
+                    // rather than falling back to sampling.
+                    replayBaseline: { seq: meta.baselineSeq },
+                    shardKey: meta.shardKey,
+                }),
             );
 
             // Committed: the predicted value it painted is now the server's, so

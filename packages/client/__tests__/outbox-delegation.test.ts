@@ -191,6 +191,10 @@ describe("lunoraClient outbox delegation", () => {
         expect(enqueued).toHaveLength(2);
         expect(enqueued[0]).toStrictEqual({
             args: { text: "first" },
+            // Handed to the sink so it can replay the write under the cursor it
+            // was composed at. `undefined` here: this client holds no live
+            // subscription to take one from.
+            baselineSeq: undefined,
             clientId: "client-fixed",
             functionPath: "messages:send",
             idempotencyKey: "client-fixed:1",

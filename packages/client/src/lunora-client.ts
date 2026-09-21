@@ -457,6 +457,25 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * deleted by another client while this tab was offline).
      */
     precondition?: () => boolean;
+
+    /**
+     * Pin this call's `.dropStalePatches()` baseline instead of sampling the
+     * client's current view — the durable-replay counterpart to
+     * {@link MutationCallOptions.mutationId}. A replay must hand back the cursor
+     * the write was COMPOSED at; by the time it runs, this client has advanced to
+     * a newer one, which is precisely the state the write has to be judged
+     * against.
+     *
+     * Wrapped in an object rather than a bare `baselineSeq?: number` so a replay
+     * can pin "composed with NO baseline" as `{ seq: undefined }`. A bare
+     * optional number cannot express that: absent and
+     * `undefined` are the same value, and the absent case has to mean "sample
+     * now", so every write queued without a live subscription would silently
+     * re-derive — the clobber this exists to prevent.
+     *
+     * Omit for normal calls.
+     */
+    replayBaseline?: { seq: number | undefined };
     shardKey?: string;
 }
 
@@ -2459,6 +2478,16 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
+        // Read BEFORE the first `await` below, and reused by every path out of
+        // this call. The baseline answers "what had the caller seen when they
+        // composed this write", so it has to be sampled at the call, not after a
+        // wait: `await replaying` can sit here for the length of a queue flush,
+        // and subscription frames landing during it advance `serverCursor`. A
+        // baseline read afterwards would claim the caller had seen changes that
+        // arrived after their write was composed, and a `.dropStalePatches()`
+        // table would then accept fields it should have discarded.
+        const composedBaselineSeq = options.replayBaseline ? options.replayBaseline.seq : this.baselineCursorFor(options.shardKey);
+
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
         // `optimistic` transform patches the matching (fn, args, shard)
@@ -2522,6 +2551,7 @@ class LunoraClient {
                 function_,
                 argsRecord,
                 options.shardKey,
+                composedBaselineSeq,
                 mutationId,
                 optimisticRollbacks,
                 optimisticConfirms,
@@ -2532,7 +2562,7 @@ class LunoraClient {
         try {
             let commitCursor: number | undefined;
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
-                baselineSeq: this.baselineCursorFor(options.shardKey),
+                baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
                 mutationId,
                 onCommitCursor: (cursor) => {
@@ -4597,6 +4627,7 @@ class LunoraClient {
         function_: F,
         argsRecord: Record<string, unknown>,
         shardKey: string | undefined,
+        baselineSeq: number | undefined,
         mutationId: string,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
@@ -4613,6 +4644,13 @@ class LunoraClient {
             try {
                 await this.outbox.enqueue({
                     args: argsRecord,
+                    // Same contract as the built-in queue's record below: the view
+                    // the caller composed against, handed over so the sink can
+                    // replay it verbatim. A sink that re-derives one at replay time
+                    // reads the cursor this client has ADVANCED to while the write
+                    // waited — the newer state the write must be judged against —
+                    // so the stale write looks fresh and clobbers.
+                    baselineSeq,
                     clientId: this.clientId,
                     functionPath: function_.__lunoraRef,
                     idempotencyKey: `${this.clientId}:${String(outboxMutationId)}`,
@@ -4656,10 +4694,11 @@ class LunoraClient {
                 // reaches them directly; the observer event carries
                 // `hadAwaiter: true`. Hydrated replays leave this unset.
                 liveAwaiter: true,
-                // The client's view of the shard AT ENQUEUE. Replayed verbatim so a
+                // The client's view of the shard AT THE CALL — sampled by `mutation`
+                // before it awaited anything. Replayed verbatim so a
                 // `.dropStalePatches()` table judges this write against what its
                 // author could see, however long it waited.
-                baselineSeq: this.baselineCursorFor(shardKey),
+                baselineSeq,
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
@@ -8038,6 +8077,14 @@ class LunoraClient {
             calls: items.map((item, index) => {
                 return {
                     args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
+                    // The cursor the write was COMPOSED at, carried through the
+                    // queue exactly as the single-call replay carries it. Per entry
+                    // (not an outer header): this batch's writes were composed at
+                    // different cursors. Without it a `.dropStalePatches()` table
+                    // saw no baseline and applied every replayed write unchanged —
+                    // so protection depended on how many writes happened to be
+                    // queued alongside it.
+                    baselineSeq: item.baselineSeq,
                     functionPath: item.functionPath,
                     id: index,
                     // Stable per-write key so the DO dedups a write it already

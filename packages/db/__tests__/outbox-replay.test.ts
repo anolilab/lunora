@@ -195,11 +195,63 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // The replay targets the persisted function path and resends the ORIGINAL
         // idempotency key (not a fresh id), so a committed-but-unacked retry is
         // deduped server-side; the shard routing survives the round-trip too.
-        expect(mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { text: "hello" }, { mutationId: "c1:1", shardKey: "room-7" });
+        expect(mutation).toHaveBeenCalledWith(
+            { __lunoraRef: "messages:send" },
+            { text: "hello" },
+            { mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: "room-7" },
+        );
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+    });
+
+    // The write's CDC baseline has to survive the executor round-trip. By the time
+    // a replay runs, this client has advanced to a newer cursor — precisely the
+    // state a `.dropStalePatches()` table must judge the write against — so
+    // letting `client.mutation` sample its own baseline there makes every stale
+    // write look fresh and clobber.
+    it("replays under the baseline the write was composed at, not one sampled at replay time", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ baselineSeq: 10, shardKey: "room-7" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation).toHaveBeenCalledWith(
+            { __lunoraRef: "messages:send" },
+            { text: "hello" },
+            { mutationId: "c1:1", replayBaseline: { seq: 10 }, shardKey: "room-7" },
+        );
+    });
+
+    // `{ seq: undefined }` is not the same as omitting the option: omitting it
+    // tells `client.mutation` to sample the current cursor, which is the clobber.
+    // A write queued with no live subscription has to pin "no baseline" instead.
+    it("pins `no baseline` for a write composed without one, rather than letting the replay sample", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ shardKey: "room-7" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        const options = mutation.mock.calls[0]?.[2] as { replayBaseline?: { seq: number | undefined } };
+
+        expect(options.replayBaseline).toStrictEqual({ seq: undefined });
     });
 
     it("drops a queued write whose captured identity no longer matches the signed-in user", async () => {
@@ -313,9 +365,11 @@ describe("durable outbox lifecycle (unified outbox)", () => {
             { interval: 100, timeout: 8000 },
         );
 
-        // Both attempts replayed under the SAME idempotency key.
-        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
-        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
+        // Both attempts replayed under the SAME idempotency key — and the same
+        // pinned baseline, so a retry that lands minutes later is still judged
+        // against what the write's author could see.
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: undefined });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: undefined });
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
