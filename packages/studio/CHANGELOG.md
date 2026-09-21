@@ -1,3 +1,18 @@
+## @lunora/studio [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.189...@lunora/studio@1.0.0-alpha.190) (2026-09-21)
+
+### Features
+
+* **client:** poll live queries over HTTP when the socket will not open ([#760](https://github.com/anolilab/lunora/issues/760)) ([69c1469](https://github.com/anolilab/lunora/commit/69c1469e2e0aee906556f7743e84b42057d628d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.141
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/react:** upgraded to 1.0.0-alpha.118
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/studio [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.188...@lunora/studio@1.0.0-alpha.189) (2026-09-19)
 
 
