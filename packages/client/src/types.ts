@@ -216,6 +216,23 @@ export interface PersistenceAdapter {
  */
 export interface OutboxMutation {
     args: Record<string, unknown>;
+
+    /**
+     * The CDC cursor this write was composed against — see
+     * {@link PersistedMutation.baselineSeq}, whose contract this mirrors.
+     *
+     * A sink MUST persist it and hand it back unchanged on replay. This is the
+     * canonical statement of that rule for the durable path; every other site
+     * that carries the field points here. Re-deriving one at replay time reads
+     * the cursor the client has since advanced to — the newer state the write is
+     * supposed to be judged against — so a stale write always looks fresh and
+     * always clobbers.
+     *
+     * `undefined` when the client has no live subscription to take a cursor from,
+     * which replays the write unchanged.
+     */
+    baselineSeq?: number;
+
     /** Stable per-client id; pairs with {@link OutboxMutation.mutationId} as `idempotencyKey`. */
     clientId: string;
     functionPath: string;

@@ -21,7 +21,44 @@ describe("groupBatchCallsByShard", () => {
             [0, "docs:x"],
             [2, "docs:z"],
         ]);
-        expect(groups.get("t1")?.[1]).toStrictEqual({ args: {}, clientId: "c", clientSeq: 3, functionPath: "docs:z", id: 2, mutationId: "m" });
+        expect(groups.get("t1")?.[1]).toStrictEqual({
+            args: {},
+            baselineSeq: undefined,
+            clientId: "c",
+            clientSeq: 3,
+            functionPath: "docs:z",
+            id: 2,
+            mutationId: "m",
+        });
+    });
+
+    // Each entry carries its OWN `.dropStalePatches()` baseline: a batch holds
+    // writes composed at different cursors, so one outer header cannot speak for
+    // all of them. Dropping it here would strand every batched replay with no
+    // baseline, which applies the write unchanged.
+    it("preserves each entry's own baselineSeq", () => {
+        expect.assertions(1);
+
+        const groups = groupBatchCallsByShard(
+            [
+                { baselineSeq: 10, functionPath: "docs:x", id: 0 },
+                { baselineSeq: 42, functionPath: "docs:y", id: 1 },
+                { functionPath: "docs:z", id: 2 },
+            ],
+            "__root__",
+        );
+
+        expect(groups.get("__root__")?.map((entry) => entry.baselineSeq)).toStrictEqual([10, 42, undefined]);
+    });
+
+    it("drops a non-numeric baselineSeq instead of rejecting the batch", () => {
+        // Narrowed like `clientSeq`: an older or malformed client still batches,
+        // it just gets no stale-patch protection on those entries.
+        expect.assertions(1);
+
+        const groups = groupBatchCallsByShard([{ baselineSeq: "10", functionPath: "docs:x", id: 0 }], "__root__");
+
+        expect(groups.get("__root__")?.[0]?.baselineSeq).toBeUndefined();
     });
 
     it("falls back id to the array index when a call omits it", () => {

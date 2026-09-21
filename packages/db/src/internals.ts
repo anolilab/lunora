@@ -61,6 +61,22 @@ export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
  * already, and only one of them had the identity guard.
  */
 export interface WriteProvenance extends Record<string, unknown> {
+    /**
+     * The CDC cursor the write was composed against, persisted so the replay can
+     * hand it straight back to `client.mutation`.
+     *
+     * Persisting it is the whole point: the replay runs after a reconnect (or a
+     * reload, days later), by which time this client has advanced to a NEWER
+     * cursor — exactly the state a `.dropStalePatches()` table must judge the
+     * write against. Letting `client.mutation` sample its own there makes every
+     * stale write look fresh and clobber. Lives on the SHARED provenance type
+     * because both replay paths need it, and they have drifted apart once before.
+     *
+     * Absent on transactions persisted by older versions, and on a client with no
+     * live subscription to take a cursor from; both replay unchanged.
+     */
+    baselineSeq?: number;
+
     /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
     identity: string | null;
     /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
@@ -234,6 +250,7 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 
             const metadata: OutboxMutationMetadata = {
                 args: mutation.args,
+                baselineSeq: mutation.baselineSeq,
                 clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
                 // Persist the stable replay key so a committed-but-unacked retry

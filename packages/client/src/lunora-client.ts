@@ -457,6 +457,23 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * deleted by another client while this tab was offline).
      */
     precondition?: () => boolean;
+
+    /**
+     * Pin this call's `.dropStalePatches()` baseline instead of sampling the
+     * client's current view — the durable-replay counterpart to
+     * {@link MutationCallOptions.mutationId}. See
+     * {@link import("./types").OutboxMutation.baselineSeq} for why a replay must
+     * hand back the cursor it was composed at.
+     *
+     * Tri-state, the same shape (and for the same reason) as the `identity` stamp
+     * a queued write carries: `undefined` samples the current cursor, `null` pins
+     * "composed with no baseline", and a number pins that cursor. A plain
+     * `number | undefined` could not express the middle case, so every write
+     * queued without a live subscription would have re-derived.
+     *
+     * Omit for normal calls.
+     */
+    replayBaseline?: null | number;
     shardKey?: string;
 }
 
@@ -1541,6 +1558,24 @@ class LunoraClient {
     }
 
     /**
+     * This client's current CDC baseline for `shardKey` — the cursor its live
+     * queries have reached, which is what a write composed right now should be
+     * judged against.
+     *
+     * Exposed for the same reason {@link currentIdentity} is: a durable
+     * {@link OutboxSink} owns its own at-least-once replay outside the built-in
+     * `OfflineQueue`, so it has to capture this at COMPOSE time and hand it back
+     * through {@link MutationCallOptions.replayBaseline}. Sampling it inside the
+     * replay instead reads the cursor this client has advanced to in the
+     * meantime, which is the newer state the write must be judged against.
+     *
+     * `undefined` when no subscription on the shard carries a cursor yet.
+     */
+    public currentBaseline(shardKey?: string): number | undefined {
+        return this.baselineCursorFor(shardKey);
+    }
+
+    /**
      * Verdict on whether a durable write stamped with `stamped` may be replayed
      * now. The comparison a replay handler must NOT hand-roll.
      *
@@ -2459,6 +2494,13 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
+        // Read BEFORE the first `await` below, and reused by every path out of this
+        // call. `await replaying` can sit here for the length of a queue flush, and
+        // frames landing during it advance `serverCursor` — so a baseline sampled
+        // after the wait would claim the caller had seen changes that arrived after
+        // their write was composed. See `OutboxMutation.baselineSeq`.
+        const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
+
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
         // `optimistic` transform patches the matching (fn, args, shard)
@@ -2522,6 +2564,7 @@ class LunoraClient {
                 function_,
                 argsRecord,
                 options.shardKey,
+                composedBaselineSeq,
                 mutationId,
                 optimisticRollbacks,
                 optimisticConfirms,
@@ -2532,7 +2575,7 @@ class LunoraClient {
         try {
             let commitCursor: number | undefined;
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
-                baselineSeq: this.baselineCursorFor(options.shardKey),
+                baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
                 mutationId,
                 onCommitCursor: (cursor) => {
@@ -4597,6 +4640,7 @@ class LunoraClient {
         function_: F,
         argsRecord: Record<string, unknown>,
         shardKey: string | undefined,
+        baselineSeq: number | undefined,
         mutationId: string,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
@@ -4613,6 +4657,9 @@ class LunoraClient {
             try {
                 await this.outbox.enqueue({
                     args: argsRecord,
+                    // The view the caller composed against, handed over so the sink
+                    // can replay it verbatim — see `OutboxMutation.baselineSeq`.
+                    baselineSeq,
                     clientId: this.clientId,
                     functionPath: function_.__lunoraRef,
                     idempotencyKey: `${this.clientId}:${String(outboxMutationId)}`,
@@ -4656,10 +4703,9 @@ class LunoraClient {
                 // reaches them directly; the observer event carries
                 // `hadAwaiter: true`. Hydrated replays leave this unset.
                 liveAwaiter: true,
-                // The client's view of the shard AT ENQUEUE. Replayed verbatim so a
-                // `.dropStalePatches()` table judges this write against what its
-                // author could see, however long it waited.
-                baselineSeq: this.baselineCursorFor(shardKey),
+                // Sampled by `mutation` before it awaited anything, and replayed
+                // verbatim — see `OutboxMutation.baselineSeq`.
+                baselineSeq,
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
@@ -8038,6 +8084,10 @@ class LunoraClient {
             calls: items.map((item, index) => {
                 return {
                     args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
+                    // Per entry, not an outer header: this batch's writes were
+                    // composed at different cursors, so one value cannot speak for
+                    // all of them. See `OutboxMutation.baselineSeq`.
+                    baselineSeq: item.baselineSeq,
                     functionPath: item.functionPath,
                     id: index,
                     // Stable per-write key so the DO dedups a write it already
