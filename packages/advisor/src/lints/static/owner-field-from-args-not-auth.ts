@@ -32,7 +32,16 @@ const ownerFieldFromArgsNotAuth: Lint = {
             return [];
         }
 
-        return context.ownerFieldWrites.map((write) => {
+        return context.ownerFieldWrites.flatMap((write) => {
+            // The runtime already verified and stamped this column before the impl
+            // ran — see `AdvisorOwnerFieldWrite.ownerScoped`. Reporting it would
+            // flag the shape the docs prescribe as an IDOR. Nothing at INFO either,
+            // unlike the `internal` case below: there is no forwarding caller to
+            // chase, the guarantee is enforced at the declaration.
+            if (write.ownerScoped) {
+                return [];
+            }
+
             const where = `\`${write.method}\` in \`${write.exportName}\` (${write.file}:${write.line.toString()})`;
             const metadata = {
                 exportName: write.exportName,
@@ -54,20 +63,24 @@ const ownerFieldFromArgsNotAuth: Lint = {
             // dropped, because the public procedure that forwards raw `args` into
             // one is a real vector and this is the breadcrumb to it.
             if (write.visibility === "internal") {
-                return emit(ownerFieldFromArgsNotAuth, {
-                    cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
-                    detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. This is expected for an \`internal\` procedure — no caller can reach it directly, and the trusted caller passes the subject along. Audit the PUBLIC procedures that dispatch to it: if one forwards \`args.${write.field}\` straight through, the IDOR is there.`,
-                    facing: "INTERNAL",
-                    level: "INFO",
-                    metadata,
-                });
+                return [
+                    emit(ownerFieldFromArgsNotAuth, {
+                        cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. This is expected for an \`internal\` procedure — no caller can reach it directly, and the trusted caller passes the subject along. Audit the PUBLIC procedures that dispatch to it: if one forwards \`args.${write.field}\` straight through, the IDOR is there.`,
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata,
+                    }),
+                ];
             }
 
-            return emit(ownerFieldFromArgsNotAuth, {
-                cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
-                detail: `${where} sets the ownership field \`${write.field}\` from \`args\` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp \`${write.field}\` from \`ctx.auth\`/\`ctx.identity\`, never from request input.`,
-                metadata,
-            });
+            return [
+                emit(ownerFieldFromArgsNotAuth, {
+                    cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                    detail: `${where} sets the ownership field \`${write.field}\` from \`args\` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp \`${write.field}\` from \`ctx.auth\`/\`ctx.identity\`, never from request input.`,
+                    metadata,
+                }),
+            ];
         });
     },
     source: "static",

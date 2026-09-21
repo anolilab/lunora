@@ -26,6 +26,7 @@ import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMaskStrategy } from "./mask-strategies";
+import type { AdvisorMutatorDeclaration } from "./mutator-declarations";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
@@ -405,6 +406,16 @@ export interface LintContext {
      * nothing.
      */
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+
+    /**
+     * Exported `defineMutator({ … })` declarations in `lunora/mutators.ts` — the
+     * `mutator_without_owner_scope` input. A mutator is a client-callable write
+     * endpoint, and `owner` is the declarative scope that ties each write to its
+     * caller's verified identity; one declaring none authorizes nothing by itself.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
 
     /**
      * Whole-row `ctx.db.replace(id, document)` writes lifted from custom

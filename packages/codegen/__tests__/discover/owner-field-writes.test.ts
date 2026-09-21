@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { discoverMutators } from "../../src/discover/mutators";
 import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 
 let workdir: string;
@@ -27,6 +28,128 @@ describe("discoverOwnerFieldWrites", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    // `defineMutator({ owner: "userId" })` makes `args.userId` the server-verified
+    // identity before the `server` impl runs: `applyOwnerScope` rejects a call with
+    // no identity, rejects a client-supplied value that disagrees, and overwrites
+    // the column with the verified one. Writing it back out is the documented
+    // shape, and flagging it at ERROR is a false positive on Lunora's own docs.
+    it("marks a mutator writing the very column its `owner` declares as owner-scoped", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        // Recorded, not dropped — the lint declines to report it. Discovery
+        // describes the code; judging it is the lint's job.
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ field: "userId", ownerScoped: true });
+    });
+
+    // `applyOwnerScope` overwrites exactly `args[owner]` with the verified
+    // identity, so ONLY that argument is laundered. Matching on the column name
+    // alone would suppress a genuine act-as-any-user IDOR.
+    it("does not mark a write of the owner COLUMN sourced from a different arg", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.targetUserId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
+    // The shared taint hop takes the nearest preceding same-named declaration
+    // regardless of `const`/`let` and never looks at assignments. Over-resolving
+    // makes the taint predicate report MORE, which is safe; here the same hop is
+    // what SILENCES a finding, so a reassignable alias must not qualify.
+    it("does not mark a `let` alias that is reassigned to a different arg", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; userId = args.targetUserId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
+    it("does not mark a `let` alias even when it is never reassigned", () => {
+        // Cheap to be strict: `const` is the only shape the docs show, and a
+        // mutable binding cannot be proven safe without real symbol resolution.
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
+    it("marks the owner column reached through one local const hop", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { const userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found[0]).toMatchObject({ ownerScoped: true });
+    });
+
+    it("still flags a DIFFERENT identity column in an owner-scoped mutator", () => {
+        // `owner: "userId"` launders `userId` and nothing else — a `tenantId` taken
+        // from `args` in the same impl is still caller-controlled.
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { tenantId: args.tenantId, userId: args.userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+        const tenant = found.find((entry) => entry.field === "tenantId");
+
+        expect(tenant).toBeDefined();
+        expect(tenant?.ownerScoped).toBeUndefined();
+    });
+
+    it("still flags an owner-column write in a mutator that declares no `owner`", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
     });
 
     it("flags an insert whose doc sets userId from args", () => {

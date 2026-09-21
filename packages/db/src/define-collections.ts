@@ -8,6 +8,7 @@ import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-trans
 import { lunoraCollectionOptions } from "./collection-options";
 import type { OutboxMutationMetadata, Row, WriteProvenance } from "./internals";
 import {
+    assertSecureRandom,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
     OUTBOX_MUTATION_FN_NAME,
@@ -285,6 +286,8 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
  * "One source of truth per table").
  */
 export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
+    assertSecureRandom("defineCollections");
+
     const collections: Record<string, Collection<Row, string>> = {};
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};

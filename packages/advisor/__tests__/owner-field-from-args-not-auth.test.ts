@@ -9,6 +9,32 @@ import type { AdvisorOwnerFieldWrite } from "../src/owner-field-writes";
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 describe("owner_field_from_args_not_auth", () => {
+    // The declaration already enforces it: `applyOwnerScope` requires a verified
+    // identity, rejects a disagreeing client value, and stamps the column before
+    // `server` runs. Not even INFO — unlike the `internal` case, there is no
+    // forwarding caller to chase.
+    it("reports nothing for an owner-scoped write", () => {
+        expect.assertions(1);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            { exportName: "createPost", field: "userId", file: "mutators", line: 4, method: "insert", ownerScoped: true, visibility: "public" },
+        ];
+
+        expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
+    });
+
+    it("still reports a public write that is not owner-scoped", () => {
+        expect.assertions(2);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            { exportName: "createPost", field: "userId", file: "mutators", line: 4, method: "insert", visibility: "public" },
+        ];
+        const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.level).toBe("ERROR");
+    });
+
     it("flags one ERROR finding per evidence row with the right cacheKey and detail", () => {
         expect.assertions(4);
 

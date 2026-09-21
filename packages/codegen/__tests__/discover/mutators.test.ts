@@ -41,9 +41,43 @@ describe("discover/mutators", () => {
         `);
 
         expect(discoverMutators(newProject(), workdir)).toEqual([
-            { args: {}, exportName: "editMessage", filePath: "mutators", returnType: "void" },
-            { args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" },
+            { args: {}, exportName: "editMessage", filePath: "mutators", line: 5, owner: undefined, returnType: "void" },
+            { args: {}, exportName: "sendMessage", filePath: "mutators", line: 4, owner: undefined, returnType: "void" },
         ]);
+    });
+
+    // Feeds `mutator_without_owner_scope` (and suppresses the
+    // `owner_field_from_args_not_auth` false positive on the owned column).
+    it("lifts a string-literal `owner` and leaves a mutator that declares none undefined", () => {
+        expect.assertions(2);
+
+        writeMutators(`
+            import { defineMutator } from "@lunora/server";
+
+            export const createPost = defineMutator({ owner: "userId", server: async () => {} });
+            export const publicPing = defineMutator({ server: async () => {} });
+        `);
+
+        const found = discoverMutators(newProject(), workdir);
+
+        expect(found[0]).toMatchObject({ exportName: "createPost", owner: "userId" });
+        expect(found[1]).toMatchObject({ exportName: "publicPing", owner: undefined });
+    });
+
+    it("leaves a computed `owner` undefined rather than guessing it", () => {
+        // A non-literal cannot be resolved here, and guessing both fakes a clean
+        // owner scope and suppresses a real `owner_field_from_args_not_auth`.
+        expect.assertions(1);
+
+        writeMutators(`
+            import { defineMutator } from "@lunora/server";
+
+            const column = "userId";
+
+            export const createPost = defineMutator({ owner: column, server: async () => {} });
+        `);
+
+        expect(discoverMutators(newProject(), workdir)[0]).toMatchObject({ owner: undefined });
     });
 
     it("resolves an aliased defineMutator import from the umbrella subpath", () => {
@@ -55,7 +89,9 @@ describe("discover/mutators", () => {
             export const sendMessage = mut({ server: async () => {} });
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            { args: {}, exportName: "sendMessage", filePath: "mutators", line: 4, owner: undefined, returnType: "void" },
+        ]);
     });
 
     it("discovers a namespace-imported defineMutator (server.defineMutator)", () => {
@@ -67,7 +103,9 @@ describe("discover/mutators", () => {
             export const sendMessage = server.defineMutator({ server: async () => {} });
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            { args: {}, exportName: "sendMessage", filePath: "mutators", line: 4, owner: undefined, returnType: "void" },
+        ]);
     });
 
     it("discovers a mutator exported via a separate export statement", () => {
@@ -80,7 +118,9 @@ describe("discover/mutators", () => {
             export { sendMessage };
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            { args: {}, exportName: "sendMessage", filePath: "mutators", line: 4, owner: undefined, returnType: "void" },
+        ]);
     });
 
     it("discovers a defineMutator imported from the generated _generated/server re-export", () => {
@@ -96,7 +136,9 @@ describe("discover/mutators", () => {
             export const sendMessage = defineMutator({ server: async () => {} });
         `);
 
-        expect(discoverMutators(newProject(), workdir)).toEqual([{ args: {}, exportName: "sendMessage", filePath: "mutators", returnType: "void" }]);
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            { args: {}, exportName: "sendMessage", filePath: "mutators", line: 4, owner: undefined, returnType: "void" },
+        ]);
     });
 
     it("lifts the args validator map and the server impl's return type", () => {
@@ -123,6 +165,8 @@ describe("discover/mutators", () => {
                 },
                 exportName: "send",
                 filePath: "mutators",
+                line: 4,
+                owner: undefined,
                 returnType: "{ ok: boolean; }",
             },
         ]);
