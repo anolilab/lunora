@@ -1489,6 +1489,7 @@ const MESSAGE_IDS: readonly [
     "Connect to Lunora Studio",
     "Connected",
     "Connecting…",
+    "Polling",
     "Enter your admin token to access the studio.",
     "From your worker's LUNORA_ADMIN_TOKEN — your project's .dev.vars in dev, or a deployment secret in production.",
     "Local",
