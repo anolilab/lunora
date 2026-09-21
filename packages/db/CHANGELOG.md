@@ -1,3 +1,15 @@
+## @lunora/db [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.116...@lunora/db@1.0.0-alpha.117) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/db [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.115...@lunora/db@1.0.0-alpha.116) (2026-09-21)
 
 
