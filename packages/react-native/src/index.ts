@@ -1,4 +1,8 @@
-export { createLunoraClient } from "./create-lunora-client";
+// `withoutAmbientCookies` is public because the docs point callers at it: an
+// explicit `fetch` takes precedence over everything `createLunoraClient` derives,
+// so anyone supplying one has to re-apply the cookie suppression themselves or
+// inherit the CSRF 403 it exists to prevent.
+export { createLunoraClient, withoutAmbientCookies } from "./create-lunora-client";
 export type { AuthHeadersFactory, CreateLunoraClientOptions } from "./types";
 
 // `@lunora/react-native` is the React Native / Expo entry to Lunora. The hooks,

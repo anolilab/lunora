@@ -405,6 +405,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
@@ -505,6 +506,8 @@ interface MutatorIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    line: number;
+    owner?: string;
     returnType: string;
 }
 ```
