@@ -1,3 +1,28 @@
+## @lunora/workflow [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.55...@lunora/workflow@1.0.0-alpha.56) (2026-09-21)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** `RunFunctionOptions` gains `dedupId` and `createRunStep`'s deps
+gain `instanceId`. A caller-supplied `dedupId` wins over the pin — the escape
+hatch for a non-deterministic body, and for a bare `ctx.run` inside a raw
+`ctx.step.do(...)` callback, which the positional pin cannot see is being
+retried. The docs state that gap rather than implying exactly-once, along with
+the 24-hour dedup retention window and the weaker guarantee actions get.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **workflow:** pin replay-dedup ids on ctx.run ([#757](https://github.com/anolilab/lunora/issues/757)) ([5eaf098](https://github.com/anolilab/lunora/commit/5eaf098a1e2dab805e98a3f97ecfc577140e80ca))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
 ## @lunora/workflow [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.54...@lunora/workflow@1.0.0-alpha.55) (2026-09-13)
 
 
