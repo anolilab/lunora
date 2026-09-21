@@ -35,8 +35,8 @@ describe("discoverOwnerFieldWrites", () => {
     // no identity, rejects a client-supplied value that disagrees, and overwrites
     // the column with the verified one. Writing it back out is the documented
     // shape, and flagging it at ERROR is a false positive on Lunora's own docs.
-    it("does not flag a mutator writing the very column its `owner` declares", () => {
-        expect.assertions(1);
+    it("marks a mutator writing the very column its `owner` declares as owner-scoped", () => {
+        expect.assertions(2);
 
         write(
             "mutators.ts",
@@ -44,8 +44,44 @@ describe("discoverOwnerFieldWrites", () => {
         );
 
         const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
 
-        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toHaveLength(0);
+        // Recorded, not dropped — the lint declines to report it. Discovery
+        // describes the code; judging it is the lint's job.
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ field: "userId", ownerScoped: true });
+    });
+
+    // `applyOwnerScope` overwrites exactly `args[owner]` with the verified
+    // identity, so ONLY that argument is laundered. Matching on the column name
+    // alone would suppress a genuine act-as-any-user IDOR.
+    it("does not mark a write of the owner COLUMN sourced from a different arg", () => {
+        expect.assertions(2);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.targetUserId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
+    });
+
+    it("marks the owner column reached through one local const hop", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { const userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        expect(found[0]).toMatchObject({ ownerScoped: true });
     });
 
     it("still flags a DIFFERENT identity column in an owner-scoped mutator", () => {
@@ -60,13 +96,14 @@ describe("discoverOwnerFieldWrites", () => {
 
         const lunoraDirectory = join(workdir, "lunora");
         const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+        const tenant = found.find((entry) => entry.field === "tenantId");
 
-        expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ field: "tenantId" });
+        expect(tenant).toBeDefined();
+        expect(tenant?.ownerScoped).toBeUndefined();
     });
 
     it("still flags an owner-column write in a mutator that declares no `owner`", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         write(
             "mutators.ts",
@@ -74,8 +111,10 @@ describe("discoverOwnerFieldWrites", () => {
         );
 
         const lunoraDirectory = join(workdir, "lunora");
+        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
 
-        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toHaveLength(1);
+        expect(found).toHaveLength(1);
+        expect(found[0]?.ownerScoped).toBeUndefined();
     });
 
     it("flags an insert whose doc sets userId from args", () => {

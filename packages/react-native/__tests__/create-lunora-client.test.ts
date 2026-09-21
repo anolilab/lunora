@@ -35,6 +35,33 @@ describe("withoutAmbientCookies", () => {
         expect(spy.mock.calls[0]![1]!.method).toBe("GET");
     });
 
+    // Under `react-native-web` the jar is the browser's, `Origin` IS sent, and the
+    // CSRF guard never fires — so a cookie session is a legitimate setup that
+    // omitting credentials would silently sign out (`getCurrentUser` deliberately
+    // sends `credentials: "include"`).
+    it("leaves credentials alone in a browser runtime (react-native-web)", async () => {
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+        const originalFetch = globalThis.fetch;
+
+        globalThis.fetch = spy;
+        // A `document` is what tells this bundle it is not on native.
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            await client.getCurrentUser().catch(() => undefined);
+        } finally {
+            globalThis.fetch = originalFetch;
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // `getCurrentUser`'s own `credentials: "include"` survives untouched.
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("include");
+    });
+
     it("is wired onto the global `fetch` by `createLunoraClient` with no auth-headers factory", async () => {
         // The bundled Expo apps pass no `getAuthHeaders` — the bearer rides through
         // `setAuthToken` instead — so gating the wrapper on that factory would leave

@@ -20,7 +20,9 @@ const OUTBOX_DRAIN_INTERVAL_MS = 1000;
  * appears, and nothing points at the cause.
  *
  * Checked here instead, at the one moment the app is still being wired, so the
- * failure is loud, immediate, and names its own fix. `globalThis.crypto` is
+ * failure is loud, immediate, and names its own fix. That deliberately trips a
+ * read-only app too: the polyfill is a prerequisite of the tier, not of any one
+ * call, and an app that discovers it on its first write has already shipped. `globalThis.crypto` is
  * read through an optional chain rather than assumed: on Hermes the binding
  * exists but is missing these members, and on older runtimes it is absent
  * entirely.

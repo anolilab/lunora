@@ -1414,6 +1414,31 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
  * it can import the add-on packages the app installed (`@lunora/auth`,
  * `@lunora/storage`, …) directly.
  */
+
+/**
+ * Why the auth request instance is constructed before `ensureMigrated` (the
+ * emitted comment is deliberately short — it ships into every user's generated
+ * tree, where a description of another package's internals would rot unnoticed).
+ *
+ * `ensureMigrated` finishes by calling better-auth's
+ * `invalidateSchemaChecks(database)`. That call is a NO-OP until something has
+ * registered a schema check for the binding: it reads a `WeakMap` entry only
+ * `createSchemaCheck` writes, and returns silently when there is none.
+ *
+ * The adapter-backed request instance is the only thing that registers one
+ * (`@lunora/auth`'s `withAuthSchemaCheck`, keyed on the raw D1 binding — the same
+ * object `ensureMigrated` invalidates). Building it AFTER the migration therefore
+ * left that invalidation inert: a mismatch verdict observed against the
+ * pre-migration schema stayed cached for the life of the isolate even though the
+ * migration had just fixed it.
+ *
+ * The cost of the reorder is one pre-migration introspection sweep, and the
+ * `console.error` better-auth's eager check logs on a first boot against an
+ * unmigrated database. That is noise on a healthy cold start, not a fault.
+ *
+ * Verified against better-auth 1.7.3; `@better-auth/core/db/internal` is an
+ * internal subpath, so re-check on a minor bump.
+ */
 const emitApp = (rawOptions: EmitAppOptions): string => {
     // `hasVectors` arrives as the platform gate's VERDICT and is consumed (via
     // `LONG_TAIL`'s `options[flag]` lookup) as "emit `.vectors()`" — the AND with
@@ -1450,23 +1475,16 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             // The migration instance takes the RAW binding: better-auth migrates
             // only through Kysely and rejects the adapter the request instance uses.
             //
-            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter.
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives \`ensureMigrated\`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving \`/api/auth/*\` against tables the
+            // migrator has not created yet. See \`emit-app.ts\` in @lunora/codegen for
+            // the full reasoning.
             //
-            // Constructing first, because \`ensureMigrated\` finishes by calling
-            // better-auth's \`invalidateSchemaChecks(database)\` and that call is a
-            // NO-OP until something has registered a schema check for the binding:
-            // it reads a \`WeakMap\` entry that only \`createSchemaCheck\` writes, and
-            // returns silently when there is none. The adapter-backed instance is the
-            // only thing that registers one, so building it afterwards left the
-            // post-migration invalidation inert — a mismatch verdict observed against
-            // the pre-migration schema stayed cached for the life of the isolate even
-            // though the migration had just fixed it, and every \`/api/auth/*\` request
-            // kept failing on a schema the database already had.
-            //
-            // Assigning after, because \`auth\` must stay null until the schema exists,
-            // or a concurrent request serves \`/api/auth/*\` against tables the migrator
-            // has not created yet — \`no such table: rateLimit\`, from the isolate that
-            // was mid-migration.
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));

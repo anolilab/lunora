@@ -1364,6 +1364,24 @@ export interface OwnerFieldWriteIR {
     method: string;
 
     /**
+     * The enclosing `defineMutator` declared this very column as its `owner`, AND
+     * the value written resolves to that same `args[owner]`.
+     *
+     * `applyOwnerScope` requires a verified identity, rejects a client-supplied
+     * value that disagrees with it, and overwrites the column with the verified
+     * one before `server` runs — so on this exact shape `args[owner]` IS the
+     * server identity, and it is what the docs prescribe. Recorded rather than
+     * dropped at discovery: the write did happen, and the feeder is otherwise the
+     * only place that knows. `owner_field_from_args_not_auth` is what declines to
+     * report it.
+     *
+     * Deliberately NOT set when only the column NAME matches: `owner: "userId"`
+     * launders `args.userId` and nothing else, so `{ userId: args.targetUserId }`
+     * is a real IDOR and stays reportable.
+     */
+    ownerScoped?: true;
+
+    /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the lint's premise ("any caller can write rows
      * owned by another user") does not hold there — see

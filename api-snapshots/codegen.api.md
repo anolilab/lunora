@@ -2183,6 +2183,7 @@ interface OwnerFieldWriteIR {
     file: string;
     line: number;
     method: string;
+    ownerScoped?: true;
     visibility?: "internal" | "public";
 }
 ```

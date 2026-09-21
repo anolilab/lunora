@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { enclosingExportName, isArgumentDerived, isScopedByContext, singleHopInitializer } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
@@ -89,12 +89,67 @@ const documentObjectLiterals = (documentArgument: TsNode, method: string): Objec
     return objectLiterals;
 };
 
+/** What discovery knows about the exported procedure or mutator a write sits inside. */
+interface EnclosingDeclaration {
+    /** The ownership column a `defineMutator({ owner })` declares, when it is one. */
+    owner?: string;
+    /** Procedure visibility, when the write sits in a registered procedure. */
+    visibility?: "internal" | "public";
+}
+
+/** True when `node` is `args.<field>` or `args["<field>"]` — that exact property, nothing else. */
+const isArgsProperty = (node: TsNode, field: string): boolean => {
+    if (Node.isPropertyAccessExpression(node)) {
+        const object = node.getExpression();
+
+        return Node.isIdentifier(object) && object.getText() === "args" && node.getName() === field;
+    }
+
+    if (Node.isElementAccessExpression(node)) {
+        const object = node.getExpression();
+        const argument = node.getArgumentExpression();
+
+        return (
+            Node.isIdentifier(object) &&
+            object.getText() === "args" &&
+            argument !== undefined &&
+            Node.isStringLiteral(argument) &&
+            argument.getLiteralValue() === field
+        );
+    }
+
+    return false;
+};
+
+/**
+ * Whether `value` resolves to the mutator's own `args[owner]` — directly, or
+ * through the one local `const` hop the rest of this feeder already follows.
+ *
+ * The column NAME matching the declared `owner` is not enough.
+ * `applyOwnerScope` overwrites exactly `args[ownerField]` with the verified
+ * identity, so only that one argument is laundered: a mutator declaring
+ * `owner: "userId"` whose impl writes `{ userId: args.targetUserId }` is a
+ * genuine act-as-any-user IDOR, and matching on the name alone would suppress it.
+ * Anything this cannot resolve (a destructured binding, a computed key) falls
+ * through as NOT owner-scoped, which fails toward reporting.
+ */
+const resolvesToOwnerArgument = (value: TsNode, ownerField: string): boolean => {
+    if (isArgsProperty(value, ownerField)) {
+        return true;
+    }
+
+    const hop = singleHopInitializer(value);
+
+    return hop !== undefined && isArgsProperty(hop, ownerField);
+};
+
 /** Identity columns in one object literal that are written from `args` and not from `ctx`. */
 const identityWritesInObjectLiteral = (
     objectLiteral: ObjectLiteralExpression,
     method: string,
     call: CallExpression,
     relativePath: string,
+    ownerFieldOf: (exportName: string) => string | undefined,
 ): OwnerFieldWriteIR[] => {
     const rows: OwnerFieldWriteIR[] = [];
 
@@ -118,7 +173,21 @@ const identityWritesInObjectLiteral = (
         // A value that references `ctx` is server-scoped even when it also embeds
         // `args`, so it is not flagged — mirrors the shared taint convention.
         if (isArgumentDerived(value) && !isScopedByContext(value)) {
-            rows.push({ exportName: enclosingExportName(call), field: name, file: relativePath, line: call.getStartLineNumber(), method });
+            const exportName = enclosingExportName(call);
+            // Recorded either way — the lint decides what to do with it. Dropping it
+            // here would make the feeder the only place that knows the write
+            // happened, and the sibling `visibility` stamp two lines down is the
+            // precedent for annotating rather than discarding.
+            const ownerScoped = ownerFieldOf(exportName) === name && resolvesToOwnerArgument(value, name);
+
+            rows.push({
+                exportName,
+                field: name,
+                file: relativePath,
+                line: call.getStartLineNumber(),
+                method,
+                ...(ownerScoped && { ownerScoped: true }),
+            });
         }
     }
 
@@ -126,7 +195,7 @@ const identityWritesInObjectLiteral = (
 };
 
 /** Identity columns written from `args` by a single `ctx.db` write call. */
-const ownerFieldWritesInCall = (call: CallExpression, relativePath: string): OwnerFieldWriteIR[] => {
+const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, ownerFieldOf: (exportName: string) => string | undefined): OwnerFieldWriteIR[] => {
     const method = contextDatabaseWriteMethod(call.getExpression());
 
     if (method === undefined) {
@@ -140,7 +209,7 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string): Own
     }
 
     return documentObjectLiterals(documentArgument, method).flatMap((objectLiteral) =>
-        identityWritesInObjectLiteral(objectLiteral, method, call, relativePath),
+        identityWritesInObjectLiteral(objectLiteral, method, call, relativePath, ownerFieldOf),
     );
 };
 
@@ -148,25 +217,13 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string): Own
 const ownerFieldWritesInSourceFile = (
     sourceFile: SourceFile,
     relativePath: string,
-    visibilityOf: (exportName: string) => "internal" | "public" | undefined,
-    ownerFieldOf: (exportName: string) => string | undefined,
+    declarationOf: (exportName: string) => EnclosingDeclaration,
 ): OwnerFieldWriteIR[] => {
     const found: OwnerFieldWriteIR[] = [];
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        for (const write of ownerFieldWritesInCall(call, relativePath)) {
-            // The enclosing mutator declared this very column as its `owner`, so by
-            // the time `server` runs the runtime has verified it and overwritten it
-            // with the trusted identity — `args[owner]` IS the server identity
-            // there. Recording it would flag the shape the docs prescribe as an
-            // IDOR. Nothing else is laundered: another identity column in the same
-            // impl, or the same column in a mutator that declares no `owner`, still
-            // reaches the lint.
-            if (ownerFieldOf(write.exportName) === write.field) {
-                continue;
-            }
-
-            const visibility = visibilityOf(write.exportName);
+        for (const write of ownerFieldWritesInCall(call, relativePath, (exportName) => declarationOf(exportName).owner)) {
+            const { visibility } = declarationOf(write.exportName);
 
             found.push(visibility === undefined ? write : { ...write, visibility });
         }
@@ -193,25 +250,28 @@ const discoverOwnerFieldWrites = (
     mutators: ReadonlyArray<MutatorIR> = [],
 ): OwnerFieldWriteIR[] => {
     const writes: OwnerFieldWriteIR[] = [];
-    // Keyed on file + export because two modules may export the same name.
-    const visibilityByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.visibility]));
-    const ownerFieldByKey = new Map(
-        mutators.filter((entry) => entry.owner !== undefined).map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.owner]),
-    );
+    // ONE map, keyed on file + export because two modules may export the same
+    // name. Two parallel maps threaded as two same-shaped positional callbacks is
+    // a silent-transposition hazard: `"internal" | "public" | undefined` is
+    // assignable to `string | undefined`, so swapping them type-checks.
+    const declarations = new Map<string, EnclosingDeclaration>();
+
+    for (const entry of functions) {
+        declarations.set(`${entry.filePath}:${entry.exportName}`, { visibility: entry.visibility });
+    }
+
+    for (const entry of mutators) {
+        const key = `${entry.filePath}:${entry.exportName}`;
+
+        declarations.set(key, { ...declarations.get(key), owner: entry.owner });
+    }
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        writes.push(
-            ...ownerFieldWritesInSourceFile(
-                sourceFile,
-                relativePath,
-                (exportName) => visibilityByKey.get(`${relativePath}:${exportName}`),
-                (exportName) => ownerFieldByKey.get(`${relativePath}:${exportName}`),
-            ),
-        );
+        writes.push(...ownerFieldWritesInSourceFile(sourceFile, relativePath, (exportName) => declarations.get(`${relativePath}:${exportName}`) ?? {}));
     }
 
     return writes;
