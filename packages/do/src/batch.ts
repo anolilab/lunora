@@ -55,9 +55,8 @@ const buildBatchEntryRequest = (batchRequest: Request, entry: BatchEntry): Reque
 
     // Per entry, for the same reason `clientSeq` is: the batch's writes were
     // composed at different cursors, so a `.dropStalePatches()` table has to judge
-    // each against its own. Omitting it is what let a batched replay of a stale
-    // write apply unchanged while the single-call replay of the same write was
-    // correctly discarded.
+    // each against its own. `!== undefined`, not truthiness — `0` is a valid
+    // baseline ("had seen nothing").
     if (entry.baselineSeq !== undefined) {
         headers.set("x-lunora-base-seq", String(entry.baselineSeq));
     }

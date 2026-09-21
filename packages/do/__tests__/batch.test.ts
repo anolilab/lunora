@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { parseBaselineSeqHeader } from "../src/admin-rpc-args";
 import { buildBatchEntryRequest, SHARED_BATCH_HEADERS } from "../src/batch";
 
 const batchRequest = (headers: Record<string, string> = {}): Request => new Request("https://shard.internal/rpc-batch", { headers, method: "POST" });
@@ -42,6 +43,11 @@ describe(buildBatchEntryRequest, () => {
         // `0` is a real cursor — "the client had seen nothing" — and is exactly the
         // baseline that should make every field look changed. A truthiness check
         // here would silently drop it and apply the write unchanged instead.
+        //
+        // The DO parses this header with `parseBaselineSeqHeader`, which admits
+        // `0`; the client-sequence parser next to it floors at `> 0`, because a
+        // mutation sequence starts at 1. Using that one here was what discarded a
+        // zero baseline one hop past this assertion.
         expect.assertions(1);
 
         const request = buildBatchEntryRequest(batchRequest(), { baselineSeq: 0, functionPath: "docs:rename", id: 0 });
@@ -69,5 +75,33 @@ describe(buildBatchEntryRequest, () => {
         expect.assertions(1);
 
         expect([...SHARED_BATCH_HEADERS]).not.toContain("x-lunora-base-seq");
+    });
+});
+
+describe("parseBaselineSeqHeader", () => {
+    // Separate from the client-sequence parser on purpose: a mutation sequence
+    // starts at 1, but `0` is a valid BASELINE ("had seen nothing") and is what
+    // `readCdcCursor` reports for an empty changelog. Flooring it to `undefined`
+    // makes `.dropStalePatches()` apply the write unchanged — the opposite verdict.
+    it.each([
+        ["0", 0],
+        ["10", 10],
+    ])("admits %s as a baseline", (raw, expected) => {
+        expect.assertions(1);
+
+        expect(parseBaselineSeqHeader(raw)).toBe(expected);
+    });
+
+    it.each([["-1"], ["1.5"], ["abc"], [""]])("rejects %s", (raw) => {
+        expect.assertions(1);
+
+        expect(parseBaselineSeqHeader(raw)).toBeUndefined();
+    });
+
+    it("rejects an absent header", () => {
+        expect.assertions(1);
+
+         
+        expect(parseBaselineSeqHeader(null)).toBeUndefined();
     });
 });

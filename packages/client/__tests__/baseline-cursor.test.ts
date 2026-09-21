@@ -123,6 +123,33 @@ const batchBaselinesOf = (fetchMock: ReturnType<typeof vi.fn>, index: number): (
 const batchCallIndexes = (fetchMock: ReturnType<typeof vi.fn>): number[] =>
     fetchMock.mock.calls.flatMap((call, index) => (urlOf(call[0] as RequestInfo | URL).endsWith("/_lunora/rpc-batch") ? [index] : []));
 
+/**
+ * The `x-lunora-base-seq` of the single-call `/rpc` request that carried the
+ * write titled `title`.
+ *
+ * Found by BODY, not by array position: nothing ties `mock.calls.at(-1)` to a
+ * particular write, so a future retry/poll/bookmark refresh landing in the same
+ * window would silently move the index and the assertion would read the wrong
+ * request.
+ */
+const baseSeqOfWrite = (fetchMock: ReturnType<typeof vi.fn>, title: string): string | undefined => {
+    for (const [index, call] of fetchMock.mock.calls.entries()) {
+        const init = call[1] as RequestInit | undefined;
+
+        if (typeof init?.body !== "string") {
+            continue;
+        }
+
+        const body = JSON.parse(init.body) as { args?: { title?: string } };
+
+        if (body.args?.title === title) {
+            return baseSeqOf(fetchMock, index);
+        }
+    }
+
+    throw new Error(`no /rpc call carried a write titled "${title}"`);
+};
+
 /** The subscribe frame's id, so a test can push a cursor-stamped data frame back. */
 const subscribeId = (socket: MockSocket): string => {
     for (const raw of socket.sent) {
@@ -239,6 +266,47 @@ describe("lunoraClient CDC baseline", () => {
         client.close();
     });
 
+    // `0` is a real cursor — "this client had seen nothing" — and is exactly the
+    // baseline that should make every field look changed. The DO layer pins the
+    // same case; this guards the client hop, where a truthiness check would drop
+    // it and send no header at all, which the shard reads as "apply unchanged".
+    it("sends a zero baseline rather than treating it as absent", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+        await client.mutation(fnRef("documents:rename"), { title: "zero" }, { replayBaseline: 0 });
+
+        expect(baseSeqOfWrite(fetchMock, "zero")).toBe("0");
+
+        client.close();
+    });
+
+    // `null` pins "composed with no baseline"; omitting the option samples the
+    // current cursor instead. Collapsing the two is the clobber this guards.
+    it("pins `no baseline` on null, and samples on undefined", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+        client.subscribe(fnRef("documents:list"), {}, () => {});
+
+        const socket = sockets[0];
+
+        socket?.open();
+        socket?.receive({ cursor: 42, data: [], id: subscribeId(socket), type: "data" });
+
+        await client.mutation(fnRef("documents:rename"), { title: "pinned" }, { replayBaseline: null });
+        await client.mutation(fnRef("documents:rename"), { title: "sampled" });
+
+        expect(baseSeqOfWrite(fetchMock, "pinned")).toBeUndefined();
+        expect(baseSeqOfWrite(fetchMock, "sampled")).toBe("42");
+
+        client.close();
+    });
+
     // The replay path is chosen by COUNT: one queued write rides the single-call
     // path, two or more coalesce into `/_lunora/rpc-batch`. The batch entries
     // carried no baseline at all, so the protection a multi-edit offline session
@@ -312,7 +380,7 @@ describe("lunoraClient CDC baseline", () => {
     // to DURING it, so the write claims its author saw changes that landed after
     // they composed it.
     it("samples the baseline at the call, not after the in-flight-flush barrier", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         // Only the FIRST request parks — that is the in-flight flush the next
         // call has to wait behind. Everything after it answers immediately, or
@@ -381,10 +449,7 @@ describe("lunoraClient CDC baseline", () => {
         await settle();
         await Promise.allSettled([queued, behindBarrier]);
 
-        const direct = fetchMock.mock.calls.length - 1;
-
-        expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-        expect(baseSeqOf(fetchMock, direct)).toBe("10");
+        expect(baseSeqOfWrite(fetchMock, "behind")).toBe("10");
 
         client.close();
     });

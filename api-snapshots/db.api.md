@@ -288,7 +288,6 @@ interface OutboxExecutor {
 ```ts
 interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
-    baselineSeq?: number;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;
@@ -645,6 +644,7 @@ interface ShapeSource {
 
 ```ts
 interface WriteProvenance extends Record<string, unknown> {
+    baselineSeq?: number;
     identity: string | null;
     shardKey?: string;
 }

@@ -406,6 +406,7 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    currentBaseline(shardKey?: string): number | undefined;
     replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
@@ -843,9 +844,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
-    replayBaseline?: {
-        seq: number | undefined;
-    };
+    replayBaseline?: null | number;
     shardKey?: string;
 }
 ```

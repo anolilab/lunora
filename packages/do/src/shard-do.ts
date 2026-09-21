@@ -293,6 +293,7 @@ import {
     extractBearerToken,
     parseApplyCdcArgs,
     parseAssigneeArgument,
+    parseBaselineSeqHeader,
     parseBulkDeleteArgs,
     parseBulkPatchArgs,
     parseCdcSyncArgs,
@@ -11826,10 +11827,10 @@ abstract class ShardDO {
         // watermark path (the call falls back to the legacy idempotency dedup).
         this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
         this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
-        // Same parser as the client sequence — both are positive integers, and a
-        // malformed one degrades to "absent" rather than throwing. An absent
-        // baseline makes `.dropStalePatches()` apply the write unchanged.
-        this.currentRequestBaselineSeq = parseClientSeqHeader(request.headers.get("x-lunora-base-seq"));
+        // Its OWN parser, not the client-sequence one: a baseline of `0` is valid
+        // ("had seen nothing") where a mutation sequence starts at 1. An absent or
+        // malformed baseline degrades to "absent", which applies the write unchanged.
+        this.currentRequestBaselineSeq = parseBaselineSeqHeader(request.headers.get("x-lunora-base-seq"));
         // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
         // classification + flag for a mutation push so the writes, dedup row, and
         // watermark advance all commit atomically (see `commitMutationBookkeeping`).

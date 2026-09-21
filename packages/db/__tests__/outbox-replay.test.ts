@@ -104,7 +104,7 @@ const memoryWebLocks = (): { request: (name: string, options: unknown, callback?
 };
 
 /** A mock `LunoraClient` carrying the identity + mutation surface the outbox replay path uses. */
-const makeClient = (options?: { identity?: string | null; mutation?: () => Promise<unknown> }) => {
+const makeClient = (options?: { baseline?: number; identity?: string | null; mutation?: () => Promise<unknown> }) => {
     const mutation = vi.fn<(reference: { __lunoraRef: string }, args: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>>(
         options?.mutation ?? (async () => "ok"),
     );
@@ -113,9 +113,14 @@ const makeClient = (options?: { identity?: string | null; mutation?: () => Promi
     // durable replay starts before the app has resolved its session, and the
     // identity arrives afterwards.
     let identity: null | string = options?.identity === undefined ? "user-a" : options.identity;
+    // The cursor the client's live queries have reached. Mutable so a test can
+    // advance it BETWEEN composing a write and its replay — the window that makes
+    // re-sampling the baseline wrong.
+    let baseline: number | undefined = options?.baseline;
 
     const client = {
         confirmedMutationWatermark: () => 0,
+        currentBaseline: () => baseline,
         currentIdentity: () => identity,
         mutation,
         // Mirrors `LunoraClient.replayIdentityVerdict`: nobody signed in yet is
@@ -130,9 +135,14 @@ const makeClient = (options?: { identity?: string | null; mutation?: () => Promi
         subscribe: vi.fn<() => () => void>(() => () => undefined),
     };
 
+    const setBaseline = (next: number | undefined): void => {
+        baseline = next;
+    };
+
     return {
         client: client as never,
         mutation,
+        setBaseline,
         signIn: (next: null | string) => {
             identity = next;
         },
@@ -198,7 +208,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: null, shardKey: "room-7" },
         );
 
         await vi.waitFor(() => {
@@ -228,7 +238,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: { seq: 10 }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: 10, shardKey: "room-7" },
         );
     });
 
@@ -249,9 +259,11 @@ describe("durable outbox lifecycle (unified outbox)", () => {
             expect(mutation).toHaveBeenCalledTimes(1);
         });
 
-        const options = mutation.mock.calls[0]?.[2] as { replayBaseline?: { seq: number | undefined } };
+        const options = mutation.mock.calls[0]?.[2] as { replayBaseline?: null | number };
 
-        expect(options.replayBaseline).toStrictEqual({ seq: undefined });
+        // `null`, not absent: absent tells `client.mutation` to sample the current
+        // cursor, which is the clobber this exists to prevent.
+        expect(options.replayBaseline).toBeNull();
     });
 
     it("drops a queued write whose captured identity no longer matches the signed-in user", async () => {
@@ -368,8 +380,8 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // Both attempts replayed under the SAME idempotency key — and the same
         // pinned baseline, so a retry that lands minutes later is still judged
         // against what the write's author could see.
-        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: undefined });
-        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: { seq: undefined }, shardKey: undefined });
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
@@ -506,9 +518,10 @@ describe("durable outbox lifecycle (unified outbox)", () => {
      * or (with an `identity`) the session that queued the write ending.
      * @returns The optimistic id the queued write carried.
      */
-    const strandWrite = async (identity?: string): Promise<string> => {
+    const strandWrite = async (identity?: string, baseline?: number): Promise<string> => {
         const { client: oldClient } = makeClient({
             ...(identity === undefined ? {} : { identity }),
+            ...(baseline === undefined ? {} : { baseline }),
             mutation: () =>
                 new Promise(() => {
                     /* in-flight forever — the write stays persisted */
@@ -574,6 +587,30 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(event.collection).toBe("temp");
         expect(event.error.message).toContain("identity changed");
         expect(event.row?._id).toBe(id);
+    });
+
+    // `db.actions.*` is a THIRD replay path, alongside the reserved
+    // `__lunora_outbox__` handler and the built-in offline queue. It composes its
+    // own `WriteProvenance`, so it has to capture the baseline there too —
+    // otherwise the replay samples whatever cursor the client has reached by then,
+    // which is the newer state the write is supposed to be judged against.
+    it("replays a collection write under the cursor it was composed at, not the reload's", { timeout: 10_000 }, async () => {
+        // Composed at cursor 10, stranded, then the app reloads already caught up
+        // to 99 — the exact window that makes re-sampling wrong.
+        await strandWrite("alice", 10);
+
+        const { client, mutation } = makeClient({ baseline: 99, identity: "alice" });
+
+        buildWritableReload(client);
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayBaseline: 10 });
     });
 
     it("replays a queued collection write when the same identity is still signed in", { timeout: 10_000 }, async () => {
