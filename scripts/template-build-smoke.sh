@@ -158,8 +158,21 @@ XFAIL_BUILD=()
 #
 # So a template is excluded only if it cannot be scaffolded or installed at all.
 # Add one here with a reason, never as a way to dodge a failure.
+#
+# `SMOKE_SKIP_TEMPLATES` (space- or comma-separated) adds to this list for one
+# run. That is a SCHEDULING knob, not an exemption: CI uses it to split the
+# matrix into legs with different path filters, so a template whose install is
+# expensive only runs when something that could break it changed. Every template
+# still runs somewhere — see `.github/workflows/test.yml`.
 # ---------------------------------------------------------------------------
 SKIP_TEMPLATES=()
+
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    # Split on commas and whitespace alike, so both spellings work from YAML.
+    read -r -a _extra_skips <<< "${SMOKE_SKIP_TEMPLATES//,/ }"
+    SKIP_TEMPLATES+=("${_extra_skips[@]+"${_extra_skips[@]}"}")
+    echo "==> SMOKE_SKIP_TEMPLATES: also skipping ${_extra_skips[*]+"${_extra_skips[*]}"}"
+fi
 
 is_skipped() {
     local name="$1"
@@ -1433,7 +1446,14 @@ echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
 # read if the detector broke for a reason that is the same for all of them (a
 # moved `semver`, a renamed dependency, a typo in the mirror of
 # `detectAuthUiItem`). A green summary must not be able to mean that.
-if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
+#
+# Scoped to a FULL matrix run. The floor asks "did the detector break for
+# everyone", which only has an answer when everyone ran. A single-template run
+# (`$0 <name>`, which CI uses for the split legs) can legitimately resolve no
+# view at all — `expo` and `standalone` ship none, and the per-template guard
+# above is what covers the templates where a missing view IS the bug — so
+# applying it there would fail every such leg by construction.
+if [[ -z "$ONLY_TEMPLATE" && ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     echo ""
     echo "FAILED — no template resolved an auth-ui view, so 'lunora add auth-ui', the payload"
     echo "         assertions, the per-template typecheck and its canary ran for none of them."
@@ -1441,7 +1461,10 @@ if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]}"
+# `${arr[@]+...}` guard, as everywhere else in this script: a single-template leg
+# can legitimately resolve none (see the floor above), and `set -u` rejects `[*]`
+# on an empty array — which would abort the run AFTER the summary printed PASS.
+echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]+"${AUTHUI_RESOLVED[*]}"}"
 
 if [[ ${#FAIL[@]} -gt 0 ]]; then
     echo ""
