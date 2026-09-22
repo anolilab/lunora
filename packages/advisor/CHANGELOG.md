@@ -1,3 +1,30 @@
+## @lunora/advisor [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.141...@lunora/advisor@1.0.0-alpha.142) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+## @lunora/advisor [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.140...@lunora/advisor@1.0.0-alpha.141) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/advisor [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.139...@lunora/advisor@1.0.0-alpha.140) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/advisor [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.138...@lunora/advisor@1.0.0-alpha.139) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
 ## @lunora/advisor [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.137...@lunora/advisor@1.0.0-alpha.138) (2026-09-13)
 
 

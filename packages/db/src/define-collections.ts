@@ -8,6 +8,7 @@ import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-trans
 import { lunoraCollectionOptions } from "./collection-options";
 import type { OutboxMutationMetadata, Row, WriteProvenance } from "./internals";
 import {
+    assertSecureRandom,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
     OUTBOX_MUTATION_FN_NAME,
@@ -285,6 +286,8 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
  * "One source of truth per table").
  */
 export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
+    assertSecureRandom("defineCollections");
+
     const collections: Record<string, Collection<Row, string>> = {};
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};
@@ -345,7 +348,15 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                             // subscription reads. The server derives no shard from args, so
                             // omitting it lands a `.shardBy()`'d collection's writes in the
                             // default shard — committed, ack'd, and invisible to the reader.
-                            client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey: meta.shardKey }),
+                            client.mutation(insert.mutation, insert.toArgs(row), {
+                                mutationId,
+                                // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
+                                // `null` pins "composed with no baseline"; omitting the
+                                // option entirely would sample the current cursor instead.
+                                // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
+                                replayBaseline: meta.baselineSeq ?? null,
+                                shardKey: meta.shardKey,
+                            }),
                         );
                     } catch (error) {
                         // A permanent (coded) rejection: the executor will roll the
@@ -385,7 +396,13 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // committed-but-unacked write that the executor retries is deduped by the
             // server instead of applied twice.
             await runOutboxMutation(() =>
-                client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
+                client.mutation({ __lunoraRef: meta.functionPath }, meta.args, {
+                    mutationId: meta.idempotencyKey,
+                    // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
+                    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
+                    replayBaseline: meta.baselineSeq ?? null,
+                    shardKey: meta.shardKey,
+                }),
             );
 
             // Committed: the predicted value it painted is now the server's, so
@@ -471,7 +488,13 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // shard have to be captured HERE, while the issuing session is still
             // the current one. Both are persisted with the transaction and
             // restored with it, so a replay after a reload still knows them.
-            const metadata: WriteProvenance = { identity: client.currentIdentity(), shardKey: definition.shardKey };
+            // Captured HERE, with identity and shard, because this is the composing
+            // moment — see `WriteProvenance.baselineSeq`.
+            const metadata: WriteProvenance = {
+                baselineSeq: client.currentBaseline(definition.shardKey),
+                identity: client.currentIdentity(),
+                shardKey: definition.shardKey,
+            };
             const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });
             const transaction = offline.mutate(() => {
                 collection.insert(insert.optimistic(input, id));

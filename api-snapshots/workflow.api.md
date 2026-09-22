@@ -87,6 +87,7 @@ class NonRetryableError extends Error {
 
 ```ts
 interface RunFunctionOptions {
+    dedupId?: string;
     shardKey?: string;
 }
 ```
@@ -739,6 +740,7 @@ interface RunContextOptions<Params> {
 ```ts
 interface RunStepDeps {
     env: Record<string, unknown>;
+    instanceId: string;
     log: WorkflowLogger;
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
     run: WorkflowRunFunction;

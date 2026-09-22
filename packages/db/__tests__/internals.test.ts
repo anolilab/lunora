@@ -54,6 +54,9 @@ describe(createExecutorOutboxSink, () => {
         expect(outbox).toHaveLength(1);
         expect(committed[0]).toStrictEqual({
             args: { text: "m1" },
+            // Persisted with the transaction, so the replay hands the composing
+            // cursor back instead of sampling a newer one.
+            baselineSeq: undefined,
             clientId: "c1",
             functionPath: "messages:send",
             idempotencyKey: "c1:1",
@@ -61,6 +64,18 @@ describe(createExecutorOutboxSink, () => {
             mutationId: 1,
             shardKey: "room-7",
         });
+    });
+
+    // The baseline is the one field a replay cannot re-derive: by the time it
+    // runs, the client has advanced to a newer cursor, which is exactly the state
+    // a `.dropStalePatches()` table must judge the write against.
+    it("persists the write's CDC baseline alongside it", async () => {
+        const { committed, executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        await sink.enqueue({ ...outboxMutation(1), baselineSeq: 10 });
+
+        expect(committed[0]).toMatchObject({ baselineSeq: 10 });
     });
 
     it("rejects with OFFLINE_QUEUE_OVERFLOW at capacity instead of evicting", async () => {

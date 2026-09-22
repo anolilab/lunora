@@ -383,6 +383,17 @@ interface AdvisorMaskStrategy {
 }
 ```
 
+### `AdvisorMutatorDeclaration` (interface)
+
+```ts
+interface AdvisorMutatorDeclaration {
+    exportName: string;
+    file: string;
+    line: number;
+    owner?: string;
+}
+```
+
 ### `AdvisorMutatorWrite` (interface)
 
 ```ts
@@ -451,6 +462,7 @@ interface AdvisorOwnerFieldWrite {
     file: string;
     line: number;
     method: string;
+    ownerScoped?: true;
     visibility?: "internal" | "public";
 }
 ```
@@ -955,6 +967,7 @@ interface LintContext {
     mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
@@ -1466,6 +1479,12 @@ const maskedRelationLeakViaWith: Lint;
 
 ```ts
 const mutatorFullRowReplace: Lint;
+```
+
+### `mutatorWithoutOwnerScope` (const)
+
+```ts
+const mutatorWithoutOwnerScope: Lint;
 ```
 
 ### `nondeterministicQueryMutation` (const)

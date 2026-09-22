@@ -1,3 +1,37 @@
+## @lunora/runtime [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.127...@lunora/runtime@1.0.0-alpha.128) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.149
+
+## @lunora/runtime [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.126...@lunora/runtime@1.0.0-alpha.127) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.83
+* **@lunora/do:** upgraded to 1.0.0-alpha.148
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.56
+
+## @lunora/runtime [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.125...@lunora/runtime@1.0.0-alpha.126) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.82
+* **@lunora/do:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/runtime [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.124...@lunora/runtime@1.0.0-alpha.125) (2026-09-13)
 
 

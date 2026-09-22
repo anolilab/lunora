@@ -6,7 +6,7 @@ import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
 import { getShardCheckpoints, hasCheckpointsAttached, syncShardCheckpointIdentity } from "./collection-options";
-import { runOutboxMutation } from "./internals";
+import { assertSecureRandom, runOutboxMutation } from "./internals";
 
 /**
  * TanStack DB's "direct transaction" marker.
@@ -261,6 +261,8 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     context: BindMutatorsContext<TCollections>,
     mutators: M,
 ): BoundMutators<M> => {
+    assertSecureRandom("bindMutators");
+
     // Backstop bound on the reissue loop: the watermark is finite and each retry
     // strictly raises the sequence toward it, so this only trips on a pathological
     // server (or a same-clientId tab racing the watermark forever) — surfaced as a

@@ -27,6 +27,14 @@ const Root = (): ReactElement => {
     // Bridge the better-auth Expo session into the Lunora client as a bearer
     // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
     // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
+    //
+    // The user id goes with it as the STABLE subject. Without it the offline
+    // queue keys identity on the token bytes, so a routine session-token refresh
+    // reads as a different user: the queued writes this app exists to survive
+    // offline are discarded with `OFFLINE_IDENTITY_CHANGED`, and the AsyncStorage
+    // read cache is cleared with them. `null` on sign-out, which is what releases
+    // the subject so the next user cannot inherit it.
+    //
     // `expoBearerToken` is async since better-auth 1.7.1, and an async function is
     // not a valid effect cleanup return — so kick off a promise instead. The
     // `cancelled` flag is load-bearing, not ceremony: two session changes in quick
@@ -46,7 +54,7 @@ const Root = (): ReactElement => {
                 return;
             }
 
-            lunoraClient.setAuthToken(token);
+            lunoraClient.setAuthToken(token, session?.user.id ?? null);
             lunoraClient.setWsToken(token ?? undefined);
         })();
 

@@ -1,3 +1,65 @@
+## @lunora/do [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.148...@lunora/do@1.0.0-alpha.149) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+
+## @lunora/do [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.147...@lunora/do@1.0.0-alpha.148) (2026-09-21)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** `cdcForkedError(cursor, sinceSeq, epoch)` is now
+`cdcForkedError(cursor, sinceSeq, scope, epoch?)`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(sql-store,d1): cover the unique-index and cdc-rewind guards
+
+Node-side, over the real `node:sqlite` harness: both producers of a UNIQUE index
+refused over duplicates, a duplicate-free schema still provisioned, an unrelated
+DDL failure left as its own error on a table that does hold duplicates, and the
+three changelog-watermark cases — a rewound log refused, a caught-up consumer
+served at the boundary, and a log swept empty not accusing anyone.
+
+Real-D1 side, under the `workerd` project, for the two things `node:sqlite`
+cannot settle. Whether D1's `D1_ERROR` envelope around the engine's refusal is
+one `sqliteDialect.isUniqueViolation` recognises — the guard only fires when it
+is, so an unmatched wrapper would disable it silently. And whether
+`sqlite_sequence` outlives a `DELETE` of every row on workerd's SQLite build,
+which is the whole of the rewind witness.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **sql-store:** guard the global unique-index and cdc-rewind paths ([#756](https://github.com/anolilab/lunora/issues/756)) ([56d5d7b](https://github.com/anolilab/lunora/commit/56d5d7b4ab48089a7f9ee7c860af3bfc15cffe18))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.83
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+
+## @lunora/do [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.146...@lunora/do@1.0.0-alpha.147) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
+## @lunora/do [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.145...@lunora/do@1.0.0-alpha.146) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/do [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.144...@lunora/do@1.0.0-alpha.145) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

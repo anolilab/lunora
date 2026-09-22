@@ -143,22 +143,36 @@ XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
 # Templates excluded from this worker-toolchain smoke matrix.
-# The Expo template is a React Native (Metro) app, not a Vite/workerd project:
-# its `pnpm install` pulls a different, largely-native toolchain (react-native,
-# expo) that isn't represented by the allowBuilds list below, and it has no
-# `pnpm run build` step.
 #
-# NOTHING ELSE COVERS IT. This comment used to claim a CLI init smoke test
-# validated it separately; there is no such test — `packages/cli/__tests__`
-# never mentions expo, `scripts/clean-machine-smoke.sh` scaffolds only
-# tanstack-start-react, and that script is in no workflow either. The template
-# declares `lint:types` (`lunora codegen && tsc --noEmit`) and nothing invokes
-# it, so a breaking `@lunora/*` change reaches templates/expo with every gate
-# green. Closing this means either an expo leg here (its `lint:types` is exactly
-# the no-build path below, once the native toolchain is affordable in CI) or a
-# workflow that runs `test:clean-machine` against it.
+# EMPTY, deliberately. `expo` used to sit here, and the note explaining why
+# ended "NOTHING ELSE COVERS IT": the template declares `lint:types`
+# (`lunora codegen && tsc --noEmit`) and no workflow invoked it, so a breaking
+# `@lunora/*` change reached the scaffold `lunora init` serves with every gate
+# green. It shipped two defects that way.
+#
+# The fear was its toolchain, but the cost never applied: the matrix only
+# TYPECHECKS a template with no `build` script (see the no-build path below,
+# which runs `pnpm run codegen` then the per-template checker) and typechecking
+# needs no native toolchain — no Xcode, no Android SDK, just the JS graph. The
+# react-native/expo postinstalls it does pull are named in `allowBuilds` below.
+#
+# So a template is excluded only if it cannot be scaffolded or installed at all.
+# Add one here with a reason, never as a way to dodge a failure.
+#
+# `SMOKE_SKIP_TEMPLATES` (space- or comma-separated) adds to this list for one
+# run. That is a SCHEDULING knob, not an exemption: CI uses it to split the
+# matrix into legs with different path filters, so a template whose install is
+# expensive only runs when something that could break it changed. Every template
+# still runs somewhere — see `.github/workflows/test.yml`.
 # ---------------------------------------------------------------------------
-SKIP_TEMPLATES=("expo")
+SKIP_TEMPLATES=()
+
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    # Split on commas and whitespace alike, so both spellings work from YAML.
+    read -r -a _extra_skips <<< "${SMOKE_SKIP_TEMPLATES//,/ }"
+    SKIP_TEMPLATES+=("${_extra_skips[@]+"${_extra_skips[@]}"}")
+    echo "==> SMOKE_SKIP_TEMPLATES: also skipping ${_extra_skips[*]+"${_extra_skips[*]}"}"
+fi
 
 is_skipped() {
     local name="$1"
@@ -1323,11 +1337,12 @@ for tname in "${TEMPLATES[@]}"; do
         # templates": that floor is a whole-run tripwire, so widening it makes
         # every verdict depend on the full matrix, while this fires per template
         # exactly where the coverage is lost. It is unreachable for the templates
-        # on disk — `standalone` is the only one in this matrix that resolves no
-        # view, and it ships no `build` script, so it takes the codegen +
-        # typecheck path above (`expo` also resolves none, and is skipped before
-        # it ever gets here). That is what makes this a guard and not a behaviour
-        # change.
+        # on disk — `standalone` and `expo` are the only two in this matrix that
+        # resolve no view, and NEITHER ships a `build` script, so both take the
+        # codegen + typecheck path above. That is what makes this a guard and not
+        # a behaviour change. (It is the reachability of that path, not the old
+        # `SKIP_TEMPLATES` entry, that keeps expo out of here — un-skipping it
+        # changed nothing for this branch.)
         echo "  FAIL: $tname resolved no auth-ui view, so nothing typechecked its source"
         echo "        \`pnpm run build\` bundles only what a build entry reaches, and this run's only"
         echo "        typechecker is gated on that view — so $tname would have recorded PASS with no"
@@ -1403,11 +1418,20 @@ for t in "${TEMPLATES[@]}"; do
     printf "%-20s  %s\n" "$t" "$result"
 done
 echo ""
-# A skipped template is not scaffolded, installed, built or typechecked by this
-# run — and, for `expo`, by nothing else either (see SKIP_TEMPLATES). It never
-# enters the table above, so without this line a green summary reads as coverage
-# of every template in `templates/`, which it is not.
-echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+# A skipped template is not scaffolded, installed, built or typechecked by THIS
+# run. It never enters the table above, so without this line a green summary
+# reads as coverage of every template in `templates/`, which it is not.
+#
+# Two different reasons land here and they are not equally bad, so say which:
+# `SKIP_TEMPLATES` is a standing exclusion covered by nothing anywhere, while
+# `SMOKE_SKIP_TEMPLATES` is CI splitting the matrix into legs — that template
+# runs, just in another job. Printing one message for both is how "NOT COVERED"
+# would come to mean nothing.
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    echo "  OTHER LEG  : ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — skipped HERE via SMOKE_SKIP_TEMPLATES; covered by its own job"
+else
+    echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+fi
 echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 # A codegen+typecheck-only template is a weaker result than a built one — no
 # bundler ever ran — and the table above renders both as plain PASS. Printed
@@ -1431,7 +1455,14 @@ echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
 # read if the detector broke for a reason that is the same for all of them (a
 # moved `semver`, a renamed dependency, a typo in the mirror of
 # `detectAuthUiItem`). A green summary must not be able to mean that.
-if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
+#
+# Scoped to a FULL matrix run. The floor asks "did the detector break for
+# everyone", which only has an answer when everyone ran. A single-template run
+# (`$0 <name>`, which CI uses for the split legs) can legitimately resolve no
+# view at all — `expo` and `standalone` ship none, and the per-template guard
+# above is what covers the templates where a missing view IS the bug — so
+# applying it there would fail every such leg by construction.
+if [[ -z "$ONLY_TEMPLATE" && ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     echo ""
     echo "FAILED — no template resolved an auth-ui view, so 'lunora add auth-ui', the payload"
     echo "         assertions, the per-template typecheck and its canary ran for none of them."
@@ -1439,7 +1470,10 @@ if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]}"
+# `${arr[@]+...}` guard, as everywhere else in this script: a single-template leg
+# can legitimately resolve none (see the floor above), and `set -u` rejects `[*]`
+# on an empty array — which would abort the run AFTER the summary printed PASS.
+echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]+"${AUTHUI_RESOLVED[*]}"}"
 
 if [[ ${#FAIL[@]} -gt 0 ]]; then
     echo ""

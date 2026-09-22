@@ -227,6 +227,14 @@ Unlike a shape's `owner: true`, a mutator names the column: a shape is bound to
 one `table`, so its `.ownedBy(field)` is unambiguous, while one mutator may write
 several tables.
 
+A shape with nothing scoping it **refuses at registration** — it would replicate
+the whole table. A mutator cannot refuse the same way: writing rows nobody owns
+(a counter, an append-only log) and authorizing by hand inside `server` are both
+legitimate. So the write-side half of that symmetry is a warning, not a throw —
+the [`mutator_without_owner_scope`](/docs/packages/advisor) advisor lint flags
+every `defineMutator` that declares no `owner`, since it is a client-callable
+write endpoint that ties no write to its caller.
+
 ### Write only the columns you change
 
 The blessed pattern for a mutator's `server` impl is to write **just the columns

@@ -1,3 +1,38 @@
+## @lunora/vue [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.148...@lunora/vue@1.0.0-alpha.149) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
+## @lunora/vue [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.147...@lunora/vue@1.0.0-alpha.148) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.66
+
+## @lunora/vue [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.146...@lunora/vue@1.0.0-alpha.147) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.65
+
+## @lunora/vue [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.145...@lunora/vue@1.0.0-alpha.146) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.64
+
 ## @lunora/vue [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.144...@lunora/vue@1.0.0-alpha.145) (2026-09-13)
 
 

@@ -61,6 +61,7 @@ import {
     buildSeekWhere,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
+    cdcForkedError,
     cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
@@ -1087,6 +1088,45 @@ const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<n
     return Number.isFinite(floor) ? floor : undefined;
 };
 
+/**
+ * High-watermark of the `.global()` changelog — the largest `seq` ever
+ * ALLOCATED, which is what makes it a witness rather than a reading. `0` when
+ * nothing has been written, `undefined` on an engine that cannot answer.
+ *
+ * SQLite reads it from `sqlite_sequence`, the AUTOINCREMENT bookkeeping row,
+ * which a `DELETE` does not touch — so it survives the retention sweep clearing
+ * the row that carries the current maximum, and `MAX(seq)` does not (it reports
+ * NULL for a fully swept log). That difference is the whole point: a watermark
+ * that a trim can lower would accuse every healthy consumer of holding a rewound
+ * cursor.
+ *
+ * `undefined` on Postgres and MySQL, so the guard below simply does not run
+ * there. Both DO have a sequence, but reading it means dialect-specific
+ * catalogue SQL against engines this package has no suite for, and MySQL's
+ * `information_schema` AUTO_INCREMENT is a cached estimate rather than a fact —
+ * a wrong watermark here refuses a consumer that is perfectly in sync. The one
+ * engine `.global()` runs on for D1 is SQLite, which is where the restore
+ * semantics this guards against (Time Travel) live; `dropIndexIfShapeChanged` in
+ * `ctx-db-migrations.ts` is scoped the same way for the same reason.
+ */
+const readSqlCdcWatermark = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    if (dialect.name !== "sqlite") {
+        return undefined;
+    }
+
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("seq")} AS ${sql.identifier("seq")} FROM ${sql.identifier("sqlite_sequence")} WHERE ${sql.identifier("name")} = ${CDC_LOG_TABLE}`,
+    );
+    const head = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    // No bookkeeping row means no row was ever inserted, so the true watermark is
+    // `0` — the same answer the shard plane's `readCdcCursor` gives for an empty
+    // log, and the one `cdcForkedError` is written against.
+    return Number.isFinite(head) ? head : 0;
+};
+
 /** Serialize a changelog post-image, tagging the leaves JSON cannot carry. Identity for a pure-JSON document. */
 const encodeCdcDocJson = (doc: Record<string, unknown>): string => JSON.stringify(needsWireEncoding(doc) ? encodeWire(doc) : doc);
 
@@ -1147,7 +1187,43 @@ const readSqlCdcChanges = async (
     // disarm the guard for a deployment that swept and then turned retention
     // back off — one round trip per export page is not worth trading a silent
     // gap for.
+    //
+    // Read BEFORE the watermark below, though its verdict comes second: this is
+    // the probe that touches `__cdc_log` itself, so a caller pointed at a
+    // database where the changelog was never created still gets an error naming
+    // `__cdc_log` rather than one naming `sqlite_sequence`, which SQLite has not
+    // created either.
     const floor = await readSqlCdcFloor(exec, dialect);
+
+    // Rollback guard, ahead of the retention guard because it is the only one
+    // that says the cursor itself is meaningless rather than merely out of range.
+    //
+    // No consumer can legitimately hold a `seq` above the high-watermark: `seq`
+    // is allocated monotonically and the watermark outlives a sweep (see
+    // {@link readSqlCdcWatermark}), and the only cursor this module ever hands
+    // out is the `seq` of a row it actually returned. A cursor above it is
+    // therefore proof that the log rolled back underneath the consumer — on D1,
+    // a Time Travel restore, which rewinds the entire database and every durable
+    // record of the pre-restore timeline inside it.
+    //
+    // The consumer's own cursor is the only surviving witness, and unlike the
+    // shard plane there is no second one: the `.global()` changelog has no
+    // archive, and no epoch row (which a restore would rewind anyway — the
+    // shard's exists to be RE-MINTED once a witness has proved the fork, and
+    // there is no channel here to carry a re-minted epoch to a consumer; see the
+    // PR description). So this witness is acted on where it is presented.
+    //
+    // Serving the empty page this read would otherwise produce tells the consumer
+    // it is caught up. The store's post-restore writes then climb back through
+    // seqs it has already passed and are skipped one by one, silently and
+    // permanently — a warehouse table missing everything written after the
+    // restore, reported nowhere. So refuse, and carry the surviving watermark so
+    // a resynchronisation knows where the timeline it is on actually starts.
+    const watermark = await readSqlCdcWatermark(exec, dialect);
+
+    if (watermark !== undefined && sinceSeq > watermark) {
+        throw cdcForkedError(watermark, sinceSeq, "global");
+    }
 
     if (floor !== undefined && cursorBelowRetainedFloor(floor, sinceSeq)) {
         throw cdcTrimmedError(floor, sinceSeq, "global");

@@ -2028,6 +2028,12 @@ const resolveForwardContext = async (
     // so a forged value can only reorder a caller's own mutator stream.
     const clientId = request.headers.get("x-lunora-client-id");
     const clientSeq = request.headers.get("x-lunora-client-seq");
+    // The caller's CDC baseline — the changelog cursor its view of the data was at
+    // when it composed this write. Forwarded verbatim, and safe to: a
+    // `.dropStalePatches()` table only ever uses it to DISCARD the caller's own
+    // write, so the worst a forged value buys is losing your own edit (or, at the
+    // other extreme, the behaviour every table already has without the flag).
+    const baseSeq = request.headers.get("x-lunora-base-seq");
 
     if (authorization) {
         headers["authorization"] = authorization;
@@ -2051,6 +2057,10 @@ const resolveForwardContext = async (
 
     if (clientSeq) {
         headers["x-lunora-client-seq"] = clientSeq;
+    }
+
+    if (baseSeq) {
+        headers["x-lunora-base-seq"] = baseSeq;
     }
 
     // Forward the caller's IP, but only where one can be believed: ON Cloudflare

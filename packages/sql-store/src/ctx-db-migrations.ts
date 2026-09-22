@@ -198,6 +198,106 @@ const indexSortKeys = (dialect: SqlDialect): SQL | undefined => {
 };
 
 /**
+ * Are the rows already on disk duplicates under `spec`, so a UNIQUE index over
+ * them cannot exist? Throws a diagnostic naming the table and the remedy when
+ * they are; returns silently when they are not.
+ *
+ * Restricted to rows where EVERY indexed column is non-NULL, because the two
+ * sides disagree about NULL: `GROUP BY` treats NULLs as equal, a UNIQUE index
+ * treats them as distinct. Without the filter, an optional `.unique()` field
+ * with two unset rows reads as a duplicate and a `CREATE UNIQUE INDEX` that
+ * would have SUCCEEDED is refused instead.
+ *
+ * `spec.refs` are the index's columns UNJOINED — the joined `spec.columns`
+ * cannot be taken apart into the one predicate per column this filter needs.
+ * They are also never key-PREFIXED (`col(191)`), which would not be legal in a
+ * `GROUP BY`: every unique index that reaches here indexes its columns in full,
+ * because a single-column one is in {@link fullValueIndexedFields} and a
+ * composite one on a prefixing engine is already refused by
+ * {@link assertIndexableUniqueIndexes}.
+ */
+const assertNoDuplicatesUnder = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    spec: { columns: SQL; name: string; refs: SQL[]; table: string },
+    situation: string,
+): Promise<void> => {
+    const nonNull = sql.join(
+        spec.refs.map((reference) => sql`${reference} IS NOT NULL`),
+        sql` AND `,
+    );
+    const duplicates = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} WHERE ${nonNull} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
+    );
+
+    if (duplicates.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `unique index "${spec.name}" on "${spec.table}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first.`,
+        );
+    }
+};
+
+/**
+ * Create one index, turning the engine's bare duplicate-key error into a
+ * diagnostic that names the table and the remedy.
+ *
+ * A `CREATE UNIQUE INDEX` over rows that already violate it raises
+ * `UNIQUE constraint failed: <table>.<column>` — a bare engine `Error` with no
+ * indication of which of the schema's indexes produced it or what to do about
+ * it. It raises it from inside `ensureMigrated`, which every read and write on
+ * the `.global()` store awaits first, and the table loop that calls this bails
+ * at the first throw: so one unmigratable index takes down the whole global
+ * plane, and every table declared after the offending one is never provisioned
+ * at all. The provisioning promise is not cached on rejection, so each request
+ * retries cleanly — and re-fails identically, because nothing about the rows
+ * changed.
+ *
+ * Both producers of a unique index — a declared `unique: true` index and a
+ * `.unique()` column — go through here, so neither reaches `CREATE UNIQUE INDEX`
+ * unexplained.
+ *
+ * The probe runs only AFTER the create has actually failed, and only when the
+ * dialect recognises the failure as a unique violation — unlike the DO twin's
+ * `createIndexGuarded`, which asks the catalog whether the index is already held
+ * and probes before creating. Both work; this way round costs nothing on the
+ * path that succeeds, which matters more here than there: `ensureMigrated` runs
+ * once per ctx-db and a host builds one of those per request, where a shard runs
+ * its migration pass once per wake. It also needs no per-engine "does this index
+ * exist" query, so the guard covers Postgres and MySQL rather than only the
+ * SQLite `dropIndexIfShapeChanged` is limited to.
+ *
+ * The original error is always what propagates. A DDL failure the dialect does
+ * not call a unique violation (a name colliding with an existing table, say) is
+ * therefore never relabelled — not even on a table that does hold duplicates,
+ * where a probe run unconditionally would have found them and blamed the wrong
+ * thing.
+ */
+const createIndexGuarded = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    spec: { columns: SQL; name: string; refs: SQL[]; table: string; unique: boolean },
+): Promise<void> => {
+    if (!spec.unique) {
+        await createIndexIfNotExists(exec, dialect, spec);
+
+        return;
+    }
+
+    try {
+        await createIndexIfNotExists(exec, dialect, spec);
+    } catch (error) {
+        if (dialect.isUniqueViolation(error)) {
+            await assertNoDuplicatesUnder(exec, dialect, spec, "cannot be created");
+        }
+
+        throw error;
+    }
+};
+
+/**
  * Drop `name` when the engine already holds an index by that name built from a
  * DIFFERENT column list.
  *
@@ -259,28 +359,7 @@ const dropIndexIfShapeChanged = async (
     // fields actually changed, and losing the race costs a failed migration
     // rather than a silently unprotected table.
     if (spec.unique) {
-        // Restricted to rows where EVERY indexed column is non-NULL, because the
-        // two sides disagree about NULL: `GROUP BY` treats NULLs as equal, a
-        // SQLite UNIQUE index treats them as distinct. Without the filter, an
-        // optional `.unique()` field with two unset rows reads as a duplicate,
-        // this throws, and a `CREATE UNIQUE INDEX` that would have SUCCEEDED is
-        // refused — on every wake, since the migration re-runs and re-fails.
-        const nonNull = sql.join(
-            spec.refs.map((reference) => sql`${reference} IS NOT NULL`),
-            sql` AND `,
-        );
-        const duplicates = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} WHERE ${nonNull} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
-        );
-
-        if (duplicates.length > 0) {
-            throw new LunoraError(
-                "INTERNAL",
-                `unique index "${spec.name}" on "${spec.table}" cannot be re-created with its new column list: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
-            );
-        }
+        await assertNoDuplicatesUnder(exec, dialect, spec, "cannot be re-created with its new column list; the previous index is left in place");
     }
 
     await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
@@ -321,7 +400,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
             columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
             name: `${tableName}_${index.name}`,
             // The columns UNJOINED, for the NULL filter on the duplicate probe in
-            // `dropIndexIfShapeChanged` — it needs one predicate per column, which
+            // `assertNoDuplicatesUnder` — it needs one predicate per column, which
             // the joined list cannot be taken apart into.
             refs,
             table: tableName,
@@ -331,7 +410,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await dropIndexIfShapeChanged(exec, dialect, spec);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, spec);
+        await createIndexGuarded(exec, dialect, spec);
     }
 
     // The DEFAULT total order, for the reads that name no index at all — a bare
@@ -351,8 +430,16 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
             continue;
         }
 
+        const reference = indexRef(field);
+
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, { columns: indexRef(field), name: `${tableName}_unique_${field}`, table: tableName, unique: true });
+        await createIndexGuarded(exec, dialect, {
+            columns: reference,
+            name: `${tableName}_unique_${field}`,
+            refs: [reference],
+            table: tableName,
+            unique: true,
+        });
     }
 };
 

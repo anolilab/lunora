@@ -52,15 +52,15 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session as a **bearer** token — React Native has
- * no cookie jar, so the client sends the session in the `Authorization` header
+ * `resolveIdentity` reads the session as a **bearer** token: the client sends the
+ * session in the `Authorization` header
  * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
  * headers on a WS handshake). We fold that `?token=` into an `Authorization`
  * header — only on a request carrying `Upgrade: websocket`, so a URL-borne
  * credential never authenticates a plain HTTP call — so better-auth's `bearer`
- * plugin resolves both via `getSession`. A
- * bearer avoids the `Cookie` header the runtime's CSRF guard rejects on an
- * `Origin`-less native request.
+ * plugin resolves both via `getSession`. A cookie credential cannot work here:
+ * the CSRF guard rejects a cookie-bearing state-changing request with no trusted
+ * `Origin`, and a native request sends none.
  *
  * `ensureMigrated` creates the better-auth tables once, on the first request —
  * fine for a demo; for production prefer `compileMigrationsSql` +

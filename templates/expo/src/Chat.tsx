@@ -48,7 +48,7 @@ export const Chat = (): ReactElement => {
     const myName = session?.user.name ?? session?.user.email ?? "me";
 
     const messages = useQuery(api.messages.list, {});
-    const { error: sendError, mutate: send, pending } = useMutation(api.messages.send);
+    const { error: sendError, mutate: send } = useMutation(api.messages.send);
     const status = useConnectionStatus();
 
     const [draft, setDraft] = useState("");
@@ -65,7 +65,13 @@ export const Chat = (): ReactElement => {
     const handleSend = (): void => {
         const text = draft.trim();
 
-        if (text === "" || pending) {
+        // Deliberately NOT gated on `pending`. A queued offline write stays
+        // pending until it replays on reconnect, so gating here let the user send
+        // exactly one message offline and then silently swallowed every tap —
+        // which is the opposite of what the offline queue is here to demonstrate.
+        // Double-submit is already covered: the composer clears below, so a second
+        // tap sees an empty draft and returns.
+        if (text === "") {
             return;
         }
 
@@ -85,9 +91,15 @@ export const Chat = (): ReactElement => {
             <View style={styles.header}>
                 <Text style={styles.title}>Chat</Text>
                 <View style={styles.headerRight}>
-                    <View style={[styles.dot, { backgroundColor: badge.color }]} />
-                    <Text style={styles.status}>{badge.label}</Text>
+                    {/* Colour alone conveys the status, so the dot is decorative — the
+                        adjacent label is the accessible version of the same fact. */}
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.dot, { backgroundColor: badge.color }]} />
+                    <Text accessibilityLabel={`Connection: ${badge.label}`} accessibilityLiveRegion="polite" style={styles.status}>
+                        {badge.label}
+                    </Text>
                     <Pressable
+                        accessibilityLabel="Sign out"
+                        accessibilityRole="button"
                         onPress={() => {
                             void authClient.signOut();
                         }}
@@ -114,11 +126,28 @@ export const Chat = (): ReactElement => {
                 }}
             />
 
-            {sendError ? <Text style={styles.error}>{sendError.message}</Text> : null}
+            {sendError ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                    {sendError.message}
+                </Text>
+            ) : null}
 
             <View style={styles.composer}>
-                <TextInput onChangeText={setDraft} onSubmitEditing={handleSend} placeholder="Message" returnKeyType="send" style={styles.input} value={draft} />
-                <Pressable onPress={handleSend} style={({ pressed }) => [styles.sendButton, pressed && styles.pressed]}>
+                <TextInput
+                    accessibilityLabel="Message"
+                    onChangeText={setDraft}
+                    onSubmitEditing={handleSend}
+                    placeholder="Message"
+                    returnKeyType="send"
+                    style={styles.input}
+                    value={draft}
+                />
+                <Pressable
+                    accessibilityLabel="Send message"
+                    accessibilityRole="button"
+                    onPress={handleSend}
+                    style={({ pressed }) => [styles.sendButton, pressed && styles.pressed]}
+                >
                     <Text style={styles.sendText}>Send</Text>
                 </Pressable>
             </View>

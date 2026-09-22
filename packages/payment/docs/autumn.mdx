@@ -183,8 +183,10 @@ export const ShardDO = createShardDO({
             client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
             webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
         }),
-        // Override the default "caller owns the referenceId" rule for org/workspace keys.
-        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
+        // receives `env` only — there is no `ctx` in scope — so an org rule resolves membership from
+        // the reference itself, through a lookup you own.
+        // authorize: async (referenceId) => isMemberOfOrg(referenceId),
         // No `entitlements` map: Autumn is authoritative for check/listBalances.
         observability: (event) => console.log("[payment]", event.type, event),
     }),

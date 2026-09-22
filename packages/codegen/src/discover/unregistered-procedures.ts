@@ -57,6 +57,16 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
     ["RegisteredReactor", { call: "onQueryChange(select, handler)", note: "A dropped reactor has no caller to fail — it silently never runs." }],
     ["RegisteredShape", { call: "defineShape({ … })", file: "shapes" }],
     ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
+    [
+        "RegisteredWhisperAuthorizer",
+        {
+            call: "onWhisper(handler)",
+            // The one entry here whose silent failure is a SECURITY failure rather
+            // than a dead feature: an undiscovered authorizer leaves the manifest
+            // empty, and an empty manifest means allow-all.
+            note: "A dropped authorizer has no caller to fail — the whisper topics it was meant to gate silently stay open to every socket on the shard.",
+        },
+    ],
     ["WorkflowDefinition", { call: "defineWorkflow({ … })", file: "workflows" }],
 ]);
 
