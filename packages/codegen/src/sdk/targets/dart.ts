@@ -357,8 +357,8 @@ const renderCall = (method: SdkMethod): string => {
  *
  * Two of them, and the second is the reason this target exists at all: `watchX`
  * hands back a `Stream`, which is what a Flutter `StreamBuilder` consumes, so a
- * live query binds to a widget with no adapter and no lifecycle to manage — the
- * stream subscribes on first listen and unsubscribes when the widget is
+ * live query binds to a widget with no adapter and no lifecycle to manage — each
+ * listener opens its own subscription and unsubscribes when the widget is
  * disposed. `subscribeX` is the callback form every sibling port has, for a
  * value whose lifetime is not a widget's.
  */

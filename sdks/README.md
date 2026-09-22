@@ -275,9 +275,16 @@ optionality — disappeared with the rest.
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`
 and the generated `watchX(args)` return a `Stream`, which a Flutter
-`StreamBuilder` consumes with no adapter. The stream subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing a widget disposes
-the subscription and there is no `dispose()` override to forget. The
+`StreamBuilder` consumes with no adapter. **Each listener opens its OWN
+subscription**, which starts when it listens and is torn down when it cancels, so
+disposing a widget disposes exactly its own subscription and there is no
+`dispose()` override to forget. The cost is the other half of that: two
+`StreamBuilder`s on one `watch()` stream are two server subscriptions and two
+re-executions per write, so a widget tree that wants one should share the value
+it builds rather than the stream. `Stream.multi` and not a broadcast controller
+because a broadcast stream's late listener — a builder that rebuilds after
+cancelling — would sit empty until the next poke, where a fresh subscription is
+served a snapshot. The
 callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
 value whose lifetime is not a widget's.
 
