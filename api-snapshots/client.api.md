@@ -1739,10 +1739,21 @@ const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectRes
 
 ## `@lunora/client/auth`
 
+### `AUTH_STATUSES` (const)
+
+```ts
+const AUTH_STATUSES: readonly [
+    "authenticated",
+    "loading",
+    "unauthenticated",
+    "unreachable"
+];
+```
+
 ### `AuthStatus` (type)
 
 ```ts
-type AuthStatus = "authenticated" | "loading" | "unauthenticated" | "unreachable";
+type AuthStatus = (typeof AUTH_STATUSES)[number];
 ```
 
 ### `IdentityStore` (interface)

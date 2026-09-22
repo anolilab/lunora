@@ -190,20 +190,32 @@ In React, [`@lunora/react`](/docs/packages/react)'s `useAuth` wraps this:
 import { useAuth } from "@lunora/react";
 
 function Account() {
-    const { user, token, setToken } = useAuth();
+    const { setToken, status, user } = useAuth();
 
-    if (!user) return <SignInForm onToken={setToken} />;
+    if (status === "loading") return <Spinner />;
+    if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
     return (
         <div>
-            <span>{user.email}</span>
+            <span>{user?.email}</span>
             <button onClick={() => setToken(null)}>Sign out</button>
         </div>
     );
 }
 ```
 
-`setToken(jwt)` makes every later query/mutation/subscription authenticate as
-that user; `setToken(null)` signs out. `user` is resolved from better-auth's
+**Branch on `status`, not on whether `user` is null.** `user` is null both when
+there is no session and when a credential is held whose identity has not
+resolved — a reload while offline, or the window while a cookie session
+resolves. Gating on `user` renders the sign-in form to a signed-in user in both
+cases. The four states and what each one means are tabulated in the
+[`@lunora/client` reference](/docs/packages/client); `unreachable` is the one
+worth knowing about, and it gates as **authenticated**.
+
+`setToken(jwt)` stamps the bearer on every later **query, mutation and action**;
+`setToken(null)` signs out. It does **not** re-authenticate an open
+subscription: the WebSocket credential is fixed at upgrade time and lives in the
+URL, so rotating it is `client.setWsToken(token)`, which closes the shard
+sockets to force a reconnect. `user` is resolved from better-auth's
 `get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are

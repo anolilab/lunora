@@ -274,6 +274,26 @@ fires whenever the bearer changes. The `@lunora/client/auth` subpath wraps
 these into a shared per-client identity store (single in-flight fetch, fan-out
 to every mounted hook) that the framework adapters consume.
 
+### Auth status
+
+The store resolves to one of four states, exposed as `status` by every adapter's
+auth primitive (`useAuth`, `createAuth`, `auth`). **Branch on `status`, never on
+whether `user` is null** — `user` is null both when signed out and when a held
+credential's identity has not resolved (or could not be reached), and gating on
+it renders a sign-in form to a signed-in user.
+
+| Status            | Meaning                                                             | Gate          |
+| ----------------- | ------------------------------------------------------------------- | ------------- |
+| `loading`         | the first identity resolve is in flight                             | loading       |
+| `authenticated`   | the server returned a user                                          | authenticated |
+| `unauthenticated` | the server answered that there is no session                        | signed out    |
+| `unreachable`     | a credential is held but the identity endpoint could not be reached | authenticated |
+
+`unreachable` counts as authenticated because the **credential** is what
+authorizes requests; a failed identity round-trip is a fact about the network,
+not about the session. A cookie session carries no bearer token at all, so the
+first resolve always asks the server — a null token is not an answer.
+
 ## SSR preloading
 
 `@lunora/client/ssr` runs a query once on the server and captures the result in

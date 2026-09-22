@@ -112,8 +112,25 @@ without a separate `useState`.
 
 ## `useAuth()`
 
-Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
-sign-in flow; subsequent RPC calls carry the token automatically.
+Returns `{ status, user, token, setToken(next) }`. Call `setToken(jwt)` after a
+sign-in flow; subsequent RPC calls carry the token automatically. It does not
+re-authenticate an open subscription — the WebSocket credential is fixed at
+upgrade time; `client.setWsToken(token)` rotates that.
+
+`status` is the gate: `"loading"`, `"authenticated"`, `"unauthenticated"` or
+`"unreachable"` (a credential is held but the identity endpoint could not be
+reached — gates as authenticated). Branch on it, never on whether `user` is
+null: `user` is null both when signed out and when a held credential's identity
+has not resolved, so a `user` gate renders the sign-in form to a signed-in user.
+See the [`@lunora/client` reference](/docs/packages/client) for the full table.
+
+```tsx
+const { setToken, status, user } = useAuth();
+
+if (status === "loading") return <Spinner />;
+if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
+return <Dashboard email={user?.email} />;
+```
 
 Resolving the session also keys the client's offline-queue identity on the
 user id rather than the token bytes, so rotating the JWT for the same user

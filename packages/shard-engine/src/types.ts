@@ -35,9 +35,15 @@ export interface SubscriptionQuery {
     sinceSeq?: number;
 
     /**
-     * Table name the legacy raw-delta fan-out path matches against. Kept for
-     * `broadcastDelta`; the server re-execution path keys off
-     * `functionPath` instead.
+     * Table name the legacy raw-delta fan-out matches against: `broadcastDelta`
+     * compares it to `delta.table` verbatim, with no table-dependency analysis
+     * behind it. Server re-execution keys off `functionPath` instead, and that
+     * is what every generated app uses.
+     *
+     * A client with no table name to give sends its `functionPath` here —
+     * `@lunora/client` always does, since a function reference carries only its
+     * `namespace:fn` id — so such a subscription only ever matches a delta
+     * stamped with that same path. Don't read a table name out of this field.
      */
     table?: string;
 }
