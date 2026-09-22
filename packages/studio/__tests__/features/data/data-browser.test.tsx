@@ -3118,7 +3118,7 @@ describe("destructive labels while the COUNT is still pending", () => {
 
         fireEvent.click(clear);
 
-        expect(screen.getByTestId("db-clear-table-confirm").textContent).toBe("Clear every row and everything that cascades?");
+        expect(screen.getByTestId("db-clear-table-confirm").textContent).toBe("Permanently clear every row and everything that cascades?");
     });
 
     it("never quotes the page size on 'Delete N matching'", async () => {
@@ -3134,7 +3134,7 @@ describe("destructive labels while the COUNT is still pending", () => {
 
         fireEvent.click(bulk);
 
-        expect(screen.getByTestId("db-bulk-delete-confirm").textContent).toBe("Delete all matching rows and everything that cascades?");
+        expect(screen.getByTestId("db-bulk-delete-confirm").textContent).toBe("Permanently delete all matching rows and everything that cascades?");
     });
 
     it("keeps the pager's Next reachable on a full page", async () => {
