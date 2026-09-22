@@ -6497,11 +6497,6 @@ class LunoraClient {
             return;
         }
 
-        // `table` keeps the legacy raw-delta fan-out working; `functionPath`
-        // drives server-side re-execution. They're the same ref unless codegen
-        // surfaced a distinct `__lunoraTable`.
-        const table = (state.fn as FunctionReference & { __lunoraTable?: string }).__lunoraTable ?? state.fn.__lunoraRef;
-
         // A resume position is only replayable with the VALUE it describes behind
         // it: the server answers a still-current `sinceSeq` with a bare `resume`
         // frame carrying no data, so asking to resume with nothing cached leaves
@@ -6527,7 +6522,16 @@ class LunoraClient {
                 // into a throw that kills the whole resubscribe sequence.
                 args: state.wireArgs,
                 functionPath: state.fn.__lunoraRef,
-                table,
+                // `functionPath` drives server-side re-execution, which is how
+                // every generated app delivers updates. `table` addresses the
+                // legacy raw-delta fan-out (`ShardDO.broadcastDelta`), whose
+                // `matchesSubscription` compares it to `delta.table` verbatim —
+                // and this client has no table name to give it: a function
+                // reference carries only `__lunoraRef`. So it sends the function
+                // path, and only a shard that broadcasts deltas stamped with
+                // that same path reaches these subscriptions. Non-JS SDKs take a
+                // real table name here; see `protocol/README.md` §5.1.
+                table: state.fn.__lunoraRef,
                 ...(resumable ? { sinceSeq: state.serverCursor } : {}),
                 ...(resumable && state.serverEpoch !== undefined ? { sinceEpoch: state.serverEpoch } : {}),
             },

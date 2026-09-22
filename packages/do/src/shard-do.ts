@@ -4637,6 +4637,14 @@ abstract class ShardDO {
      * shallow-equality predicate over `query.args` against `delta.row`. A
      * subscription with no `args` matches every row in the table.
      *
+     * `query.table` is whatever the CLIENT registered, compared verbatim — no
+     * table-dependency analysis stands behind it. `@lunora/client` has no table
+     * name to give (a function reference carries only its `namespace:fn` id) and
+     * registers the function path there, so a shard that broadcasts real table
+     * names reaches none of its subscriptions. That is not a gap to close here:
+     * re-execution (`recordChangedTable` → `refreshSubscriptions`) is the routing
+     * every generated app uses, and it keys off read tables properly.
+     *
      * Subclasses can override this to implement range queries, joins, or
      * full-text matching — anything more elaborate than equality. When
      * `delta.row` is undefined (delete events without row data) we fall back

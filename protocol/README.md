@@ -409,8 +409,13 @@ are ignored by the client parser.
 | `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
 | `whisper`                                   | `{ type, topic, data? }`                                                            |
 
-`subscribe.query.args` is `encodeWire(args)`. `table` defaults to
-`functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
+`subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
+the server re-executes; `table` addresses the legacy raw-delta fan-out
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+that has no table name to give sends the function path there — `@lunora/client`
+always does, because a function reference carries only its `namespace:fn` id — so
+those subscriptions are fed by re-execution alone. The non-JS SDKs take the table
+as an optional subscribe argument and fall back to `functionPath`. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 

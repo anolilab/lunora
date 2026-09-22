@@ -11,7 +11,7 @@ related:
 Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
 in React opens a multiplexed WebSocket to your Worker, registers the query
 with the resolving Durable Object, and re-renders the component whenever a
-matching mutation broadcasts a delta.
+mutation writes to a table the query reads.
 
 ```tsx
 import { api } from "@/lunora/_generated/api";
@@ -37,17 +37,42 @@ export const Chat = ({ channelId }: { channelId: string }) => {
 Subscriptions are stored on the WebSocket via `state.serializeAttachment(...)`.
 When the Durable Object hibernates (no traffic for ~10s) the WebSocket is
 suspended without losing the subscription registry; the next message wakes
-it up and re-routes deltas exactly where they were going.
+it up and resumes pushing updates exactly where they were going.
 
 This is why your DO bill drops to near-zero between bursts: idle subscribers
 pay for storage, not compute.
 
-## Delta routing
+## How an update reaches a subscriber
 
-A mutation that writes to `messages` calls `this.broadcastDelta({ table: "messages", ... })`.
-Each socket carries a `SocketAttachment` mapping `subId → SubscriptionQuery`.
-Only sockets with a registered subscription whose `query.table` matches
-receive the delta, scoped further by index predicate.
+A subscription is registered by **function path**, not by table, and updates
+arrive by **re-running the query**.
+
+Each socket carries a `SocketAttachment` mapping `subId → SubscriptionQuery`,
+which survives hibernation. When a mutation writes through `ctx.db`, the write
+hook records the tables it touched (`recordChangedTable`). Once it commits, the
+shard re-executes every subscription that read one of those tables — under that
+subscriber's own identity, never the writer's — and pushes the new result as a
+`data` frame when it differs from the last one that socket saw.
+
+Two consequences worth knowing:
+
+- **Row-level filtering is the query's job, not the router's.** A write to
+  `messages` refreshes every subscription that reads `messages`; each one then
+  returns only what its own handler (and its RLS policies) selects for that
+  subscriber. Nothing tries to match a mutation's row against a subscription's
+  args.
+- **Re-execution is not free.** A query that reads a hot table re-runs on every
+  write to it. The shard's opt-in reactive cache memoizes results by
+  `(functionPath, args, identity)` so identical subscribers don't each pay for
+  the handler, and a reconnecting client's `sinceSeq` skips the re-snapshot
+  entirely when nothing it reads has changed.
+
+There is also a lower-level `delta` frame — `ShardDO.broadcastDelta(delta)`
+fanned out to sockets whose subscription registered a matching `table` string.
+It predates re-execution and is there for hand-written `ShardDO` subclasses that
+don't override `executeSubscription`. Generated shards don't use it, and a
+`@lunora/client` subscription registers its function path as the `table`, so
+nothing addressed by a real table name reaches one.
 
 ## Reconnect
 

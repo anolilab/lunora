@@ -269,6 +269,14 @@ describe("lunoraClient (workerd integration)", () => {
             // Trigger a broadcast from inside the DO. The DO must call
             // `broadcastDelta` from its own context — calling it from outside
             // via a stub method won't see the runtime's WS attachments.
+            //
+            // `table` is the FUNCTION PATH, not a table name, and deliberately
+            // so: `matchesSubscription` compares `delta.table` to whatever the
+            // client registered, and `@lunora/client` has no table name to give
+            // (a function reference carries only its `namespace:fn` id). Broadcast
+            // `{ table: "messages" }` here and this subscription matches nothing —
+            // which is exactly why generated shards route their ctx-db hook to
+            // `recordChangedTable` and get re-execution instead.
             await runInDurableObject(rootStub(), async (instance) => {
                 instance.broadcast({ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" });
             });
