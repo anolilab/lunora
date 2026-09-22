@@ -414,8 +414,12 @@ the server re-executes; `table` addresses the legacy raw-delta fan-out
 (`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
 that has no table name to give sends the function path there — `@lunora/client`
 always does, because a function reference carries only its `namespace:fn` id — so
-those subscriptions are fed by re-execution alone. The non-JS SDKs take the table
-as an optional subscribe argument and fall back to `functionPath`. `sinceSeq` /
+those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
+`buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
+`subscribe` in any of the eight takes it, and every one of them passes that
+default. So `broadcastDelta` is not addressable from any client in this tree —
+only by a consumer that builds the frame itself. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 
