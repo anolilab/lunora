@@ -1,3 +1,26 @@
+## @lunora/do [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.151...@lunora/do@1.0.0-alpha.152) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardRunner.runInTransaction` takes an optional second
+argument, and `ctx.vectors.upsert` no longer writes before the mutation commits.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** order post-commit write hooks by commit, and defer ctx.vectors.upsert ([#778](https://github.com/anolilab/lunora/issues/778)) ([b8b02ab](https://github.com/anolilab/lunora/commit/b8b02ab27d2d3266708dcff294230db26c811c3a))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.85
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/do [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.150...@lunora/do@1.0.0-alpha.151) (2026-09-22)
 
 ### Features
