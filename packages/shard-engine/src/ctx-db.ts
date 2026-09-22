@@ -52,12 +52,13 @@ import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import { decodeWire } from "../../../shared/wire-codec";
+import { stableWireKey } from "../../../shared/wire-key";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
 import { backfillSearchIndexesForTable, searchIndexCoversTable } from "./ctx-db-backfill";
 import type { CdcChange } from "./ctx-db-cdc";
-import { appendCdcChange } from "./ctx-db-cdc";
+import { appendCdcChange, readCdcDocAtOrBefore } from "./ctx-db-cdc";
 import { allocateCommitSeq, COMMIT_SEQ_FIELD } from "./ctx-db-commit-seq";
 import { createCompanionSync } from "./ctx-db-companions";
 import { isMemoryTable } from "./ctx-db-memory";
@@ -242,6 +243,18 @@ interface CtxDbOptions {
      * columns stamp the anonymous slice (`userId: null`).
      */
     auth?: ServerDefaultContextLike["auth"];
+
+    /**
+     * The caller's CDC baseline — the changelog cursor its view of the data was at
+     * when this write was composed. Read at call time (not captured), because the
+     * generated `shard.ts` resolves it from the per-request header the client
+     * stamps and replays verbatim off its offline queue.
+     *
+     * Only `.dropStalePatches()` tables consult it; everything else ignores it.
+     * Absent means "no baseline", which is what an unsubscribed or older client
+     * sends, and it makes the stale check answer "not stale".
+     */
+    baselineSeq?: () => number | undefined;
     broadcast?: BroadcastDelta;
 
     /**
@@ -265,6 +278,7 @@ interface CtxDbOptions {
      * replay-PITR. Leave undefined for zero-cost legacy behaviour.
      */
     cdc?: boolean;
+
     clock?: Clock;
 
     /**
@@ -334,6 +348,7 @@ interface CtxDbOptions {
      * it for trusted large-fan-in relations; lower it to tighten the guard.
      */
     maxRelationKeys?: number;
+
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
 
@@ -343,6 +358,14 @@ interface CtxDbOptions {
      * pre-range behaviour, and still correct, just less selective.
      */
     onReadRange?: (range: KeyRange) => void;
+
+    /**
+     * Notified when `.dropStalePatches()` discards a write. The drop is otherwise
+     * invisible by design — no row change, no CDC entry, no broadcast — and a
+     * silent data loss with no trace is the worst of both worlds, so the shard
+     * logs it through this seam.
+     */
+    onStalePatchDropped?: (event: { fields: string[]; id: string; table: string }) => void;
     onWrite?: WriteHook;
 
     /**
@@ -2242,6 +2265,7 @@ const countRankBefore = (
 // CDC (the __cdc_log changelog + __cdc_meta epoch + replay) lives in ./ctx-db-cdc; the __idempotency table in ./ctx-db-idempotency. Both re-exported below so existing import sites resolve unchanged.
 
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
+    const { baselineSeq, onStalePatchDropped } = options;
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
@@ -2539,6 +2563,68 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         if (cdcEnabled && !isMemoryTable(schema.tables[table])) {
             appendCdcChange(sql, clock(), table, id, op, doc);
         }
+    };
+
+    /**
+     * `.dropStalePatches()` — is this patch writing over a field that MOVED since
+     * the caller last saw the row?
+     *
+     * The problem it answers is the one every offline-capable app hits. Two
+     * clients edit the same row; one of them is offline, so its write replays
+     * later and wins on arrival order rather than on authorship. The newer edit
+     * is gone, with nothing to show it ever existed.
+     *
+     * The baseline is the caller's CDC cursor — "everything the client had seen
+     * when it composed this write" — which the client stamps at call time and
+     * replays verbatim from its offline queue. Against that baseline the rule is:
+     *
+     * read the row's post-image as of the baseline out of `__cdc_log`; for each
+     * field the patch writes, compare that image to what is on disk NOW; and if ANY
+     * of them differs, someone else changed it after the caller looked, so the
+     * whole patch is stale and is dropped.
+     *
+     * **Whole patch, not the individual field.** This is the load-bearing choice.
+     * Applying the fresh half of a patch and dropping the stale half produces a row
+     * no mutation ever wrote — `status: "shipped"` landing while `shippedAt` is
+     * discarded — and a handler's invariants are expressed across the fields of one
+     * `patch` call. Dropping at that granularity keeps the invariant intact while
+     * still letting two clients editing DIFFERENT fields of one row both win, which
+     * is the whole point of the feature.
+     *
+     * **Comparison is value equality on the decoded documents**, so a field written
+     * back to the value the caller already saw is not a conflict — a client that
+     * re-sends an unchanged field does not lose its other edits over it.
+     *
+     * **It fails open, on purpose.** No baseline (an unsubscribed client, an older
+     * client that sends none), no changelog entry at or below it (trimmed, or the
+     * row is newer than the cursor), or CDC off entirely all answer "not stale" and
+     * the write applies exactly as it did before this existed. The alternative —
+     * discarding writes because retention ran — trades a rare lost edit for a
+     * common one.
+     * @returns `true` when the patch must be dropped
+     */
+    const isStalePatch = (tableName: string, id: string, patch: Record<string, unknown>, current: Record<string, unknown>): boolean => {
+        if (schema.tables[tableName]?.dropStalePatchesMode !== true || !cdcEnabled) {
+            return false;
+        }
+
+        const baseline = baselineSeq?.();
+
+        if (baseline === undefined) {
+            return false;
+        }
+
+        const seen = readCdcDocAtOrBefore(sql, tableName, id, baseline);
+
+        if (seen === undefined) {
+            return false;
+        }
+
+        // `stableWireKey`, not `stableStringify`: a stored document can hold a
+        // `bigint`/`Date`/bytes, and the plain stringifier throws on the first of
+        // those rather than comparing it. Sorted-key encoding also means two
+        // structurally identical objects compare equal regardless of key order.
+        return Object.keys(stripReservedPatchFields(patch)).some((field) => stableWireKey(seen[field]) !== stableWireKey(current[field]));
     };
 
     /** True when `tableName` is declared `.global()` (i.e. lives in D1, not this DO). */
@@ -4260,6 +4346,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Reject explicit `undefined` values: the merge + JSON.stringify below
             // would silently strip them, deleting the field instead of updating it.
             assertNoExplicitUndefined("patch", patch);
+
+            // `.dropStalePatches()`: a write composed against a view of this row
+            // that someone else has since changed is dropped whole rather than
+            // clobbering the newer value. A no-op — no write, no CDC entry, no
+            // broadcast, no triggers — so nothing downstream can tell it apart
+            // from a patch that was never issued, which is the intent.
+            if (isStalePatch(tableName, id, patch, existing)) {
+                onStalePatchDropped?.({ fields: Object.keys(stripReservedPatchFields(patch)), id, table: tableName });
+
+                return;
+            }
 
             const merged = { ...existing, ...stripReservedPatchFields(patch), ...commitSeqFields(tableName), _id: id };
 

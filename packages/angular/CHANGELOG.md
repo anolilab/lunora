@@ -1,3 +1,38 @@
+## @lunora/angular [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.95...@lunora/angular@1.0.0-alpha.96) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
+## @lunora/angular [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.94...@lunora/angular@1.0.0-alpha.95) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.66
+
+## @lunora/angular [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.93...@lunora/angular@1.0.0-alpha.94) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.65
+
+## @lunora/angular [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.92...@lunora/angular@1.0.0-alpha.93) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.64
+
 ## @lunora/angular [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.91...@lunora/angular@1.0.0-alpha.92) (2026-09-13)
 
 

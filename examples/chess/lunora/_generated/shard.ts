@@ -1445,7 +1445,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
-        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
@@ -1915,6 +1915,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
+                // Read at call time, not captured: the baseline belongs to the
+                // dispatch in flight, and a queued mutation admitted after a
+                // sibling's prologue must be judged against ITS caller's cursor.
+                baselineSeq: () => this.getCurrentBaselineSeq(),
                 cdc: config.cdc ?? false,
                 // A dispatch with NO caller identity runs system-trusted: RLS scopes
                 // rows to a user, and these have no user to scope to. This is the tier
@@ -1931,6 +1935,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // each of its writes allocates its own.
                 inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
+                onStalePatchDropped: (event) => {
+                    this.recordStalePatchDropped(event);
+                },
                 // Bound to THIS dispatch's reactive-cache read scope (`handleRpc`
                 // threads it in), so two concurrent queries never stamp each
                 // other's dep sets. `executeSubscription` overrides both with its

@@ -1,3 +1,41 @@
+## @lunora/shard-engine [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.73...@lunora/shard-engine@1.0.0-alpha.74) (2026-09-21)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** `cdcForkedError(cursor, sinceSeq, epoch)` is now
+`cdcForkedError(cursor, sinceSeq, scope, epoch?)`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(sql-store,d1): cover the unique-index and cdc-rewind guards
+
+Node-side, over the real `node:sqlite` harness: both producers of a UNIQUE index
+refused over duplicates, a duplicate-free schema still provisioned, an unrelated
+DDL failure left as its own error on a table that does hold duplicates, and the
+three changelog-watermark cases — a rewound log refused, a caught-up consumer
+served at the boundary, and a log swept empty not accusing anyone.
+
+Real-D1 side, under the `workerd` project, for the two things `node:sqlite`
+cannot settle. Whether D1's `D1_ERROR` envelope around the engine's refusal is
+one `sqliteDialect.isUniqueViolation` recognises — the guard only fires when it
+is, so an unmatched wrapper would disable it silently. And whether
+`sqlite_sequence` outlives a `DELETE` of every row on workerd's SQLite build,
+which is the whole of the rewind witness.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **sql-store:** guard the global unique-index and cdc-rewind paths ([#756](https://github.com/anolilab/lunora/issues/756)) ([56d5d7b](https://github.com/anolilab/lunora/commit/56d5d7b4ab48089a7f9ee7c860af3bfc15cffe18))
+
+## @lunora/shard-engine [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.72...@lunora/shard-engine@1.0.0-alpha.73) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
 ## @lunora/shard-engine [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.71...@lunora/shard-engine@1.0.0-alpha.72) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

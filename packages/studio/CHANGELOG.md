@@ -1,3 +1,48 @@
+## @lunora/studio [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.190...@lunora/studio@1.0.0-alpha.191) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.142
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+* **@lunora/react:** upgraded to 1.0.0-alpha.119
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.128
+
+## @lunora/studio [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.189...@lunora/studio@1.0.0-alpha.190) (2026-09-21)
+
+### Features
+
+* **client:** poll live queries over HTTP when the socket will not open ([#760](https://github.com/anolilab/lunora/issues/760)) ([69c1469](https://github.com/anolilab/lunora/commit/69c1469e2e0aee906556f7743e84b42057d628d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.141
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/react:** upgraded to 1.0.0-alpha.118
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+
+## @lunora/studio [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.188...@lunora/studio@1.0.0-alpha.189) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.140
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/react:** upgraded to 1.0.0-alpha.117
+
+## @lunora/studio [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.187...@lunora/studio@1.0.0-alpha.188) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.139
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/react:** upgraded to 1.0.0-alpha.116
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.126
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/studio [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.186...@lunora/studio@1.0.0-alpha.187) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES

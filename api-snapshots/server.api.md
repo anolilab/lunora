@@ -1004,7 +1004,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1796,6 +1796,14 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 }
 ```
 
+### `RegisteredWhisperAuthorizer` (type)
+
+```ts
+type RegisteredWhisperAuthorizer = RegisteredFunction<Record<string, never>, boolean, "query"> & {
+    readonly lifecycle: "whisper";
+};
+```
+
 ### `RelatedDirection` (type)
 
 ```ts
@@ -2332,6 +2340,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     commitOrdered: () => TableBuilder<Shape>;
+    dropStalePatches: () => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
     geoIndex: (name: string, options: {
         field: keyof Shape & string;
@@ -2374,6 +2383,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     commitOrderedMode?: boolean;
+    dropStalePatchesMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
@@ -2821,6 +2831,25 @@ interface WhereInput {
 }
 ```
 
+### `WhisperAuthorizeHandler` (type)
+
+```ts
+type WhisperAuthorizeHandler = (context: QueryCtx, event: WhisperEvent) => boolean | Promise<boolean>;
+```
+
+### `WhisperEvent` (interface)
+
+```ts
+interface WhisperEvent {
+    readonly action: "send" | "subscribe";
+    readonly connectionId: string;
+    readonly context?: Record<string, unknown>;
+    readonly shardKey: string;
+    readonly topic: string;
+    readonly userId: string | null;
+}
+```
+
 ### `WorkflowCreateOptions` (interface)
 
 ```ts
@@ -3264,6 +3293,12 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 
 ```ts
 const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
+```
+
+### `onWhisper` (const)
+
+```ts
+const onWhisper: (handler: WhisperAuthorizeHandler) => RegisteredWhisperAuthorizer;
 ```
 
 ### `presenceExtension` (const)
@@ -5190,6 +5225,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `VectorUpsertInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `WhisperEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

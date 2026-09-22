@@ -1328,6 +1328,29 @@ const parseIdentityHeader = (raw: string | null): Record<string, unknown> | unde
  * malformed value disables the watermark path for that call rather than
  * throwing — the call then rides the legacy idempotency dedup.
  */
+
+/**
+ * Parse the `x-lunora-base-seq` header into a CDC baseline cursor, or
+ * `undefined` when absent / non-numeric / negative.
+ *
+ * Deliberately NOT {@link parseClientSeqHeader}: a client mutation sequence
+ * starts at 1, so that parser floors at `> 0` — but `0` is a valid **baseline**.
+ * It means "this client had seen nothing", which is what `readCdcCursor` reports
+ * for an empty changelog and what a brand-new subscription carries. Flooring it
+ * to `undefined` makes `.dropStalePatches()` apply the write unchanged, which is
+ * the opposite verdict: a caller that had seen nothing should have its patch
+ * judged against everything that has happened since, not waved through.
+ */
+const parseBaselineSeqHeader = (raw: string | null): number | undefined => {
+    if (!raw) {
+        return undefined;
+    }
+
+    const seq = Number(raw);
+
+    return Number.isInteger(seq) && seq >= 0 ? seq : undefined;
+};
+
 const parseClientSeqHeader = (raw: string | null): number | undefined => {
     if (!raw) {
         return undefined;
@@ -1447,6 +1470,7 @@ export {
     isIssueStatus,
     parseApplyCdcArgs,
     parseAssigneeArgument,
+    parseBaselineSeqHeader,
     parseBulkDeleteArgs,
     parseBulkPatchArgs,
     parseCdcSyncArgs,

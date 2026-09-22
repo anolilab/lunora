@@ -525,6 +525,7 @@ interface CrossShardReadArgs {
 ```ts
 interface CtxDbOptions {
     auth?: ServerDefaultContextLike["auth"];
+    baselineSeq?: () => number | undefined;
     broadcast?: BroadcastDelta;
     cache?: ReactiveCache;
     cdc?: boolean;
@@ -538,6 +539,11 @@ interface CtxDbOptions {
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
     onReadRange?: (range: KeyRange) => void;
+    onStalePatchDropped?: (event: {
+        fields: string[];
+        id: string;
+        table: string;
+    }) => void;
     onWrite?: WriteHook;
     relationExistsPushDown?: "always" | "auto" | "never";
     scheduler?: SchedulerLike;
@@ -3095,6 +3101,7 @@ interface TableColumnsResult {
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly commitOrderedMode?: boolean;
+    readonly dropStalePatchesMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
@@ -3624,7 +3631,7 @@ const cdcCanVouchFor: (sql: SqlExec, deps: ReadonlySet<string>) => boolean;
 ### `cdcForkedError` (const)
 
 ```ts
-const cdcForkedError: (cursor: number, sinceSeq: number, epoch: string) => LunoraError;
+const cdcForkedError: (cursor: number, sinceSeq: number, scope: "global" | "shard", epoch?: string) => LunoraError;
 ```
 
 ### `cdcSeqLeavingRows` (const)
@@ -4232,7 +4239,9 @@ const mergeWhere: (left: undefined | WhereInput, right: undefined | WhereInput) 
 ### `migrateCdcLog` (const)
 
 ```ts
-const migrateCdcLog: (sql: SqlExec) => void;
+const migrateCdcLog: (sql: SqlExec, options?: {
+    rowHistoryIndex?: boolean;
+}) => void;
 ```
 
 ### `migrateCdcMeta` (const)

@@ -26,6 +26,7 @@
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
             "templates": "${{ steps.changes.outputs.templates }}"
+            "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
         "steps":
@@ -446,14 +447,70 @@
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
+            # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
+            # pulls the react-native/expo graph that no other template shares, and
+            # editing `templates/next` cannot break it.
             - "name": "Run the template scaffold matrix"
               "run": "pnpm run test:templates"
+              "env":
+                  "SMOKE_SKIP_TEMPLATES": "expo"
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
                   "name": "template-smoke-logs"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # The Expo leg of the same matrix, split out by cost. Its `pnpm install` pulls the
+    # react-native/expo graph and no other template shares it, so it runs on
+    # `templates_expo` — its own tree, the packages it consumes, `shared/`, the harness
+    # and the lockfiles — and not on an edit to a sibling template that cannot reach it.
+    #
+    # Same script, scoped with its positional arg. The matrix job above skips `expo` via
+    # `SMOKE_SKIP_TEMPLATES`, so the two legs partition the templates rather than
+    # overlapping, and `templates/expo` is covered by exactly one of them.
+    "templates-expo":
+        "name": "Template scaffold matrix (expo)"
+        "if": "needs.files-changed.outputs.templates_expo == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "templates-expo"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Same prerequisite as the matrix job: the harness packs `packages/*/dist`
+            # into tarballs, and the production build is what users install.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the expo scaffold leg"
+              "run": "pnpm run test:templates expo"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs-expo"
                   "path": ".template-smoke-logs"
                   "retention-days": 7
                   "if-no-files-found": "ignore"
@@ -752,7 +809,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "worker-size", "sdk-conformance"]
+        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

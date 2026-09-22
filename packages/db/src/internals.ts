@@ -9,6 +9,40 @@ import { NonRetriableError } from "@tanstack/offline-transactions";
 const OUTBOX_DRAIN_INTERVAL_MS = 1000;
 
 /**
+ * Fail at setup when the runtime has no WebCrypto, naming the polyfill.
+ *
+ * Every write on this tier gets a client-generated id from `@tanstack/db`'s
+ * `safeRandomUUID`, which needs `crypto.randomUUID` or, failing that,
+ * `crypto.getRandomValues`. Hermes (React Native / Expo) ships **neither**, so
+ * the first write throws `No secure random number generator available` — and it
+ * throws from inside an optimistic transaction, where it surfaces as an
+ * UNHANDLED promise rejection: no error reaches the UI, the row simply never
+ * appears, and nothing points at the cause.
+ *
+ * Checked here instead, at the one moment the app is still being wired, so the
+ * failure is loud, immediate, and names its own fix. That deliberately trips a
+ * read-only app too: the polyfill is a prerequisite of the tier, not of any one
+ * call, and an app that discovers it on its first write has already shipped. `globalThis.crypto` is
+ * read through an optional chain rather than assumed: on Hermes the binding
+ * exists but is missing these members, and on older runtimes it is absent
+ * entirely.
+ */
+export const assertSecureRandom = (entryPoint: string): void => {
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is the WEB Crypto global, and the whole point of the check is a runtime that lacks it; the rule is matching Node's unrelated experimental global of the same name.
+    const webCrypto = globalThis.crypto as { getRandomValues?: unknown; randomUUID?: unknown } | undefined;
+
+    if (typeof webCrypto?.randomUUID === "function" || typeof webCrypto?.getRandomValues === "function") {
+        return;
+    }
+
+    throw new Error(
+        `${entryPoint}: this runtime has no WebCrypto (\`crypto.randomUUID\` / \`crypto.getRandomValues\`), which every optimistic write needs to mint its client-side id. ` +
+            "On React Native / Expo, install `expo-crypto` (or `react-native-get-random-values`) and import it ONCE at the top of your entry file, " +
+            "before anything that reaches `@lunora/db` or `@tanstack/db`.",
+    );
+};
+
+/**
  * Reserved `mutationFns` key the unified outbox routes raw `client.mutation`
  * offline writes through. `defineCollections` registers a handler under this
  * name that reads `transaction.metadata` (functionPath + args) and replays the
@@ -27,6 +61,22 @@ export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
  * already, and only one of them had the identity guard.
  */
 export interface WriteProvenance extends Record<string, unknown> {
+    /**
+     * The CDC cursor the write was composed against, persisted so the replay can
+     * hand it straight back to `client.mutation`.
+     *
+     * Persisting it is the whole point: the replay runs after a reconnect (or a
+     * reload, days later), by which time this client has advanced to a NEWER
+     * cursor — exactly the state a `.dropStalePatches()` table must judge the
+     * write against. Letting `client.mutation` sample its own there makes every
+     * stale write look fresh and clobber. Lives on the SHARED provenance type
+     * because both replay paths need it, and they have drifted apart once before.
+     *
+     * Absent on transactions persisted by older versions, and on a client with no
+     * live subscription to take a cursor from; both replay unchanged.
+     */
+    baselineSeq?: number;
+
     /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
     identity: string | null;
     /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
@@ -200,6 +250,7 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 
             const metadata: OutboxMutationMetadata = {
                 args: mutation.args,
+                baselineSeq: mutation.baselineSeq,
                 clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
                 // Persist the stable replay key so a committed-but-unacked retry

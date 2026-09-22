@@ -17,9 +17,11 @@ const APP_SCHEME = "expoexample";
  *   runs against `/api/auth/*` works.
  * - `bearer()` lets `getSession` authenticate from an `Authorization: Bearer`
  *   header, not just a cookie. The native client sends its session as a bearer
- *   token (React Native has no cookie jar, and a `Cookie` header would be
- *   rejected by the runtime's CSRF guard on an `Origin`-less native request) —
- *   see `src/lunora.ts` / `src/server/index.ts`.
+ *   token — see `src/lunora.ts` / `src/server/index.ts`. A cookie credential
+ *   cannot work here: the runtime's CSRF guard rejects a cookie-bearing
+ *   state-changing request that carries no trusted `Origin`, and a native request
+ *   sends none. (React Native's cookie jar is real, so the client explicitly
+ *   sends `credentials: "omit"` to keep a stray session cookie off the wire.)
  *
  * `trustedOrigins` lists the scheme explicitly.
  *

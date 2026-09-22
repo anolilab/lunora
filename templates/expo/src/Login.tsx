@@ -62,9 +62,12 @@ export const Login = (): ReactElement => {
         <View style={styles.container}>
             <Text style={styles.title}>{mode === "signin" ? "Sign in" : "Create account"}</Text>
 
-            {mode === "signup" ? <TextInput autoCapitalize="words" onChangeText={setName} placeholder="Name" style={styles.input} value={name} /> : null}
+            {mode === "signup" ? (
+                <TextInput accessibilityLabel="Name" autoCapitalize="words" onChangeText={setName} placeholder="Name" style={styles.input} value={name} />
+            ) : null}
 
             <TextInput
+                accessibilityLabel="Email"
                 autoCapitalize="none"
                 autoComplete="email"
                 keyboardType="email-address"
@@ -74,9 +77,21 @@ export const Login = (): ReactElement => {
                 value={email}
             />
 
-            <TextInput onChangeText={setPassword} placeholder="Password (min 8 chars)" secureTextEntry style={styles.input} value={password} />
+            <TextInput
+                accessibilityLabel="Password, minimum 8 characters"
+                onChangeText={setPassword}
+                placeholder="Password (min 8 chars)"
+                secureTextEntry
+                style={styles.input}
+                value={password}
+            />
 
             <Pressable
+                accessibilityLabel={mode === "signin" ? "Sign in" : "Sign up"}
+                accessibilityRole="button"
+                // `disabled` is invisible to a screen reader without this, and the
+                // spinner that replaces the label is not announced at all.
+                accessibilityState={{ busy: pending, disabled: pending }}
                 disabled={pending}
                 onPress={() => {
                     void submit();
@@ -87,6 +102,7 @@ export const Login = (): ReactElement => {
             </Pressable>
 
             <Pressable
+                accessibilityRole="button"
                 onPress={() => {
                     setMode(mode === "signin" ? "signup" : "signin");
                     setError(null);
@@ -95,7 +111,11 @@ export const Login = (): ReactElement => {
                 <Text style={styles.switch}>{mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}</Text>
             </Pressable>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                    {error}
+                </Text>
+            ) : null}
         </View>
     );
 };

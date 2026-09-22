@@ -144,6 +144,51 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     commitOrdered: () => TableBuilder<Shape>;
 
     /**
+     * Drop a `patch` whose fields have MOVED since the caller last saw the row,
+     * instead of letting it clobber the newer value.
+     *
+     * The case this exists for is the one every offline-capable app hits. Two
+     * clients edit the same row; one is offline, so its write replays later and
+     * wins on arrival order rather than on authorship. The newer edit is gone with
+     * nothing to show it existed.
+     *
+     * With this flag the shard compares the fields a patch writes against the row
+     * as the caller last saw it — its CDC baseline, stamped by the client at call
+     * time and replayed verbatim from its offline queue. If any of those fields
+     * changed in between, the whole patch is dropped.
+     *
+     * ```ts
+     * documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
+     * ```
+     *
+     * Two clients editing DIFFERENT fields of one row both win, which is the point.
+     * Two editing the SAME field means the later-composed write survives and the
+     * stale one is discarded.
+     *
+     * **The whole patch is dropped, never part of it.** Applying the fresh half and
+     * discarding the stale half would produce a row no mutation ever wrote —
+     * `status: "shipped"` landing while `shippedAt` is thrown away — and a
+     * handler's invariants live across the fields of one `patch` call.
+     *
+     * **A drop is silent to the caller.** No row change, no CDC entry, no
+     * broadcast, no triggers: indistinguishable from a patch that was never
+     * issued. The shard logs each one (table, row, fields) so it is traceable, but
+     * the mutation still resolves successfully. Do not use this where the caller
+     * must be told its write did not land — throw from the handler after comparing
+     * yourself instead.
+     *
+     * **Requires CDC** (the changelog is where the baseline comes from) and it
+     * fails OPEN: no baseline, no changelog entry at or below it (retention
+     * trimmed it, or the row is newer than the caller's cursor), or CDC off, and
+     * the write applies exactly as it would without this flag. Discarding writes
+     * because retention ran would trade a rare lost edit for a common one.
+     *
+     * Shard-local only — a `.global()` table has no per-shard changelog to
+     * establish a baseline from.
+     */
+    dropStalePatches: () => TableBuilder<Shape>;
+
+    /**
      * Mark this table as written outside Lunora's discoverable insert path —
      * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
      * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
@@ -385,6 +430,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
     let isCommitOrdered = false;
+    let dropsStalePatches = false;
     let isExternallyManaged = false;
     let isMemory = false;
     let isPublic = false;
@@ -454,6 +500,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get commitOrderedMode() {
             return isCommitOrdered;
+        },
+        dropStalePatches() {
+            dropsStalePatches = true;
+
+            return builder;
+        },
+        get dropStalePatchesMode() {
+            return dropsStalePatches;
         },
         externallyManaged() {
             isExternallyManaged = true;
@@ -1321,6 +1375,23 @@ const validateGlobalBigint = (tables: Record<string, TableDefinition>): void => 
     }
 };
 
+/**
+ * `.dropStalePatches()` needs a per-shard changelog to read the caller's baseline
+ * out of, and a `.global()` table has none — its rows live in D1, outside any
+ * shard's `__cdc_log`. The flag would be silently inert there, which is exactly
+ * the failure this rejects: a table that looks protected and is not.
+ */
+const validateDropStalePatches = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.dropStalePatchesMode === true && table.shardMode.kind === "global") {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .global() and .dropStalePatches(). The stale check reads the caller's baseline out of the shard's \`__cdc_log\`, which a global (D1/Hyperdrive) table has no entries in — so every patch would read as "no baseline" and apply unchanged. Drop one of the two.`,
+            );
+        }
+    }
+};
+
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         if (table.commitOrderedMode) {
@@ -1361,6 +1432,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
     validateCommitOrdered(tables);
+    validateDropStalePatches(tables);
     validateGlobalBigint(tables);
     validateMemoryTables(tables);
     validateIndexFields(tables);

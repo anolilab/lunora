@@ -293,6 +293,7 @@ import {
     extractBearerToken,
     parseApplyCdcArgs,
     parseAssigneeArgument,
+    parseBaselineSeqHeader,
     parseBulkDeleteArgs,
     parseBulkPatchArgs,
     parseCdcSyncArgs,
@@ -811,6 +812,8 @@ interface RequestScope {
      * `getInboundBookmark()` hand its `.global()` reads ANOTHER request's D1
      * session pin, which is read-your-writes reading someone else's.
      */
+    /** The caller's CDC baseline (`x-lunora-base-seq`); see {@link ShardDO.currentRequestBaselineSeq}. */
+    baselineSeq: number | undefined;
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
@@ -1695,6 +1698,19 @@ abstract class ShardDO {
      */
     private currentRequestIp: string | undefined;
 
+    /**
+     * The caller's CDC baseline — the changelog cursor its view of the data was at
+     * when it composed this write — forwarded by the runtime as
+     * `x-lunora-base-seq`. Read only by `.dropStalePatches()` tables, which
+     * compare a patch's fields against the row as it stood at this cursor.
+     *
+     * In the request scope like `userId` and for the same reason: a queued
+     * mutation admitted after a sibling's prologue would otherwise be judged
+     * against ANOTHER caller's baseline, which is the exact clobber this exists to
+     * prevent, inverted.
+     */
+    private currentRequestBaselineSeq: number | undefined;
+
     /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
     private currentRequestTraceparent: string | undefined;
 
@@ -1995,6 +2011,16 @@ abstract class ShardDO {
 
     /** Per-socket whisper-rate token bucket (see {@link ShardDO.WHISPER_RATE_BURST}). In-memory; resets on hibernation. */
     private readonly whisperBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
+
+    /**
+     * Memoised `onWhisper` verdicts for this socket, keyed `"<action>:<topic>"`
+     * (see {@link ShardDO.authorizeWhisper}). In-memory and deliberately so: a
+     * cursor stream whispers many times a second and the authorizer is a database
+     * query, so re-running it per frame would make the cheap primitive expensive.
+     * Resetting on hibernation is the fail-safe direction — the next frame after a
+     * wake re-checks.
+     */
+    private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, boolean>>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -2592,7 +2618,8 @@ abstract class ShardDO {
     /**
      * The registered function paths to dispatch on a lifecycle moment —
      * `connect`/`disconnect` per socket, `init` once per Durable Object instance,
-     * `reactor` after each write flush.
+     * `reactor` after each write flush, `whisper` before a topic join or
+     * broadcast.
      * Base default is empty; the codegen subclass overrides it to return the
      * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
      * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
@@ -2600,7 +2627,7 @@ abstract class ShardDO {
      * base and can't be mis-wired by generated code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string> {
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
         return [];
     }
 
@@ -3152,6 +3179,31 @@ abstract class ShardDO {
     }
 
     /**
+     * The caller's CDC baseline for this dispatch, handed to `ctx.db` so
+     * `.dropStalePatches()` tables can judge a patch against the row as the caller
+     * last saw it. `undefined` when the client sent none.
+     */
+    protected getCurrentBaselineSeq(): number | undefined {
+        return this.currentRequestBaselineSeq;
+    }
+
+    /**
+     * Record a patch `.dropStalePatches()` discarded.
+     *
+     * The drop is invisible everywhere else by design — no row change, no CDC
+     * entry, no broadcast — and a silent data loss with no trace is the worst of
+     * both worlds. This is the trace: table, row and the fields the caller tried
+     * to write, on the request log the studio and `ctx.log` readers already show.
+     */
+    protected recordStalePatchDropped(event: { fields: string[]; id: string; table: string }): void {
+        this.logs.push({
+            level: "warn",
+            message: `dropStalePatches: discarded a stale patch on "${event.table}" row ${event.id} (fields: ${event.fields.join(", ")}) — those fields changed after the caller's baseline`,
+            timestamp: Date.now(),
+        });
+    }
+
+    /**
      * W3C `traceparent` of the inbound RPC (forwarded by the runtime), or
      * `undefined`. `buildCtx` passes it to `createContainerContext` so outbound
      * container fetches carry it and the container's spans join the same trace.
@@ -3663,7 +3715,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
 
         if (args.sinceSeq > cursor) {
-            throw cdcForkedError(cursor, args.sinceSeq, this.sealForkedTimeline());
+            throw cdcForkedError(cursor, args.sinceSeq, "shard", this.sealForkedTimeline());
         }
 
         // Retention-gap guard, and it comes first of the two retention levels
@@ -6333,6 +6385,13 @@ abstract class ShardDO {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
                 const join = envelope.type === "whisper_subscribe";
 
+                // Only a JOIN is authorized. Leaving a topic is always permitted —
+                // an app that revokes access mid-session must not also strand the
+                // client subscribed to something it can no longer leave.
+                if (join && !(await this.authorizeWhisper(ws, envelope.topic, "subscribe"))) {
+                    return;
+                }
+
                 this.setWhisperMembership(ws, envelope.topic, join);
 
                 // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
@@ -6346,7 +6405,7 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "whisper") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
                 await this.broadcastWhisper(ws, envelope.topic, envelope.data);
             }
 
@@ -6918,6 +6977,7 @@ abstract class ShardDO {
      */
     private captureRequestScope(): RequestScope {
         return {
+            baselineSeq: this.currentRequestBaselineSeq,
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
@@ -6940,6 +7000,7 @@ abstract class ShardDO {
      * as this request's. The dispatch path re-pins its own afterwards.
      */
     private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestBaselineSeq = scope.baselineSeq;
         this.currentRequestBookmark = scope.bookmark;
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
@@ -8626,6 +8687,7 @@ abstract class ShardDO {
         this.currentRequestIdentity = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
         this.currentRequestIp = undefined;
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
@@ -11765,6 +11827,10 @@ abstract class ShardDO {
         // watermark path (the call falls back to the legacy idempotency dedup).
         this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
         this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Its OWN parser, not the client-sequence one: a baseline of `0` is valid
+        // ("had seen nothing") where a mutation sequence starts at 1. An absent or
+        // malformed baseline degrades to "absent", which applies the write unchanged.
+        this.currentRequestBaselineSeq = parseBaselineSeqHeader(request.headers.get("x-lunora-base-seq"));
         // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
         // classification + flag for a mutation push so the writes, dedup row, and
         // watermark advance all commit atomically (see `commitMutationBookkeeping`).
@@ -11847,6 +11913,7 @@ abstract class ShardDO {
         this.currentRequestMutationId = undefined;
         this.currentRequestClientId = undefined;
         this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;
@@ -12755,6 +12822,94 @@ abstract class ShardDO {
     }
 
     /**
+     * Decide whether this socket may join (`"subscribe"`) or broadcast to
+     * (`"send"`) a whisper `topic`, by running every registered `onWhisper`
+     * authorizer under the socket's own verified identity.
+     *
+     * **No registered authorizer allows everything.** That is the historical
+     * behaviour — a whisper topic's only boundary was the shard — and it is kept
+     * as the default so an app that never declared one is unaffected. Declaring
+     * one governs every topic on the shard; route on the topic name inside the
+     * handler if some namespaces should stay open.
+     *
+     * **It fails closed.** Every authorizer must return a literal `true`; the
+     * first that does not — or that throws — denies, and a throw is logged with
+     * the authorizer's path. A broken check must not open a topic.
+     *
+     * **The verdict is memoised per (socket, action, topic)** in
+     * {@link ShardDO.whisperVerdicts}, because the authorizer is a database query
+     * and a live-cursor stream would otherwise run one per frame. The ceiling: a
+     * membership revoked after the join does not evict the socket — it keeps
+     * receiving until the socket closes or the DO hibernates. Whispers carry
+     * transient awareness and leave no durable trace; anything that must stop the
+     * instant access is revoked belongs behind a query with RLS, not on a topic.
+     * @returns `true` when the socket may proceed
+     */
+    private async authorizeWhisper(ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
+        const paths = this.lifecycleHookPaths("whisper");
+
+        if (paths.length === 0) {
+            return true;
+        }
+
+        const memoKey = `${action}:${topic}`;
+        let memo = this.whisperVerdicts.get(ws);
+        const cached = memo?.get(memoKey);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+        const event = { ...info.event, action, topic };
+        let allowed = true;
+
+        for (const functionPath of paths) {
+            try {
+                // Same dispatch shape as `dispatchLifecycle`: the socket's verified
+                // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
+                // is RLS-scoped to them) under a trusted system dispatch (so the
+                // internal-visibility gate lets it through). The registration is a
+                // QUERY, so `handleRpc` runs it without a write span.
+                //
+                // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
+                const verdict = await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, event as unknown as Record<string, unknown>)),
+                );
+
+                if (verdict !== true) {
+                    allowed = false;
+
+                    break;
+                }
+            } catch (error: unknown) {
+                // Unlike a lifecycle hook — whose failure is logged and otherwise
+                // ignored — a failed authorizer is a DENIAL. There is no safe way to
+                // read "the check crashed" as permission.
+                this.logs.push({
+                    functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+
+                allowed = false;
+
+                break;
+            }
+        }
+
+        if (!memo) {
+            memo = new Map();
+            this.whisperVerdicts.set(ws, memo);
+        }
+
+        memo.set(memoKey, allowed);
+
+        return allowed;
+    }
+
+    /**
      * Join (`join = true`) or leave a whisper `topic` on this socket. Membership rides
      * the hibernation attachment, bounded by
      * {@link ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET}. Best-effort and silent:
@@ -12823,10 +12978,12 @@ abstract class ShardDO {
      * AnyCable "whisper" primitive: typing indicators, live cursors). The sender
      * is excluded; an over-limit or over-rate whisper is dropped.
      *
-     * Authorization note: whisper topics are NOT access-controlled beyond the
-     * shard boundary — any socket on this shard can join and read/inject on any
-     * topic name. That matches the AnyCable model (and `from` is unforgeable),
-     * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
+     * Authorization happened before this point, in
+     * {@link ShardDO.authorizeWhisper}: with no `onWhisper` authorizer declared a
+     * topic's only boundary is the shard (the AnyCable model — any socket here can
+     * join and inject on any topic name), and with one declared, both the join and
+     * this send were checked under the socket's verified identity. `from` is
+     * unforgeable either way.
      */
     private async broadcastWhisper(sender: ShardSocketLike, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)
