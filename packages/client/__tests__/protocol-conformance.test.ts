@@ -16,6 +16,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import { LunoraClient } from "../src/lunora-client";
 import { OfflineQueue } from "../src/offline-queue";
+import { isTransientReplayFailure } from "../src/replay";
 import type { FunctionReference } from "../src/types";
 
 const readFixture = (name: string): unknown => {
@@ -258,10 +259,18 @@ interface RpcErrorCase {
     response: unknown;
 }
 
+interface RpcTransportErrorCase {
+    code: string;
+    name: string;
+    response: unknown;
+    status: number;
+}
+
 interface RpcFixture {
     request: { cases: RpcRequestCase[] };
     responseError: RpcErrorCase[];
     responseOk: { name: string; response: { result: unknown } }[];
+    responseTransportError: RpcTransportErrorCase[];
 }
 
 describe("rpc fixtures", () => {
@@ -318,6 +327,30 @@ describe("rpc fixtures", () => {
 
         expect(thrown.code).toBe(testCase.code);
         expect(thrown.message).toBe(testCase.message);
+    });
+
+    // §4.2: a non-2xx carrying no readable `error` envelope is an INTERNAL
+    // transport error — the server reached no verdict, so a durable write on it
+    // is re-queued. The eight ports are held to this same section of the same
+    // file (`non_2xx_without_error_envelope_fails`); the reference that defines
+    // the contract was the one not checking it.
+    it.each(
+        table(
+            "responseTransportError",
+            rpc.responseTransportError.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("classifies an unreadable error envelope %s", async (_name, testCase) => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(testCase.response, { status: testCase.status }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        const thrown = (await client.query(fnRef("docs:get"), {}).catch((error: unknown) => error)) as Error & { code?: string };
+
+        expect(thrown.code).toBe(testCase.code);
+        // The half that decides a queued write's fate: coded but NOT a
+        // verdict, so the outbox keeps the write instead of dropping it.
+        expect(isTransientReplayFailure(thrown)).toBe(true);
     });
 
     const errorsWithData = rpc.responseError.filter((testCase) => testCase.dataWire !== undefined);
