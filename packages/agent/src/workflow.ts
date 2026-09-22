@@ -103,14 +103,13 @@ const compileAgentWorkflow = (
                 instanceId: context.event.instanceId,
                 params: context.params,
                 paths: options?.paths ?? DEFAULT_AGENT_FUNCTION_PATHS,
-                // The loop reads its own owner-gated thread back through
-                // `agents:*` queries. The default `context.run` forwards no
-                // identity, so on an OWNED thread those reads would come back
-                // empty and the model would answer blind. `resolveAgentRun`
-                // dispatches an owner-scoped run under that verified identity so
-                // the owner gate admits the loop's reads (ownerless runs keep the
-                // identity-free `context.run`). See `resolve-run.ts`.
-                run: resolveAgentRun(context.run, context.params.owner, context.env),
+                // Deliberately NOT `context.run`: it forwards no identity (so an
+                // owner-gated thread read would come back empty and the model
+                // would answer blind), and it numbers its calls as replay-dedup
+                // ids, which a body like this one — most of its dispatches sit
+                // inside memoized `step.do` callbacks — renumbers on every
+                // replay. See `resolve-run.ts`.
+                run: resolveAgentRun(context.params.owner, context.env),
                 step: context.step,
                 // The streaming seam is wired and ready, but stays dormant until a
                 // live token sink is threaded onto the run (a follow-up wires
