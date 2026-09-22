@@ -11,13 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { decodeWire } from "../../../shared/wire-codec";
 import resolveAgentRun from "../src/resolve-run";
-import type { AgentFunctionReference, AgentRunFunction } from "../src/types";
+import type { AgentFunctionReference } from "../src/types";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_ORIGIN_URL: "https://app.example" };
 const REF: AgentFunctionReference = { __lunoraRef: "agents:agentAppendMessage" };
-
-/** Never reached — the owner branch always builds a fresh dispatcher. */
-const contextRun: AgentRunFunction = async () => undefined;
 
 /** Dispatch `args` through the owner-scoped agent runner and hand back what the shard's single decode gives the handler. */
 const handlerArgs = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -29,7 +26,7 @@ const handlerArgs = async (args: Record<string, unknown>): Promise<Record<string
         return new Response(null, { status: 200 });
     });
 
-    await resolveAgentRun(contextRun, "user-a", ENV)(REF, args);
+    await resolveAgentRun("user-a", ENV)(REF, args);
 
     return decodeWire((JSON.parse(body) as { args?: unknown }).args ?? {}) as Record<string, unknown>;
 };

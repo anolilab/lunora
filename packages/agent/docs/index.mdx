@@ -793,6 +793,15 @@ and internal-only visibility on every write.
 - **Messages persist idempotently.** Every write is keyed
   `INSTANCE:ROLE:POSITION` and deduped by a unique index, so replays never
   duplicate the thread.
+- **The loop's own dispatches are at-least-once.** They carry no replay-dedup
+  id: most of them are made from inside a memoized `step.do` callback, so any
+  id numbered by call order is re-issued to a _different_ call on the next
+  activation — and the shard's dedup table, keyed `(identity, mutationId)` with
+  no function path in it, would answer that call with the first one's cached
+  result. What makes a redelivery harmless instead is that every `agents:*`
+  function the loop calls is idempotent on its own key: keyed appends,
+  get-or-create threads, an instance-ownership guard on completion, and
+  absolute (never additive) status/usage/state writes.
 
 ## Memory (RAG)
 
