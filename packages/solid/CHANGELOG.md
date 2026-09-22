@@ -1,3 +1,15 @@
+## @lunora/solid [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.120...@lunora/solid@1.0.0-alpha.121) (2026-09-22)
+
+### Bug Fixes
+
+* **client:** drop the phantom subscription table override, and gate the auth docs on status ([#773](https://github.com/anolilab/lunora/issues/773)) ([d720130](https://github.com/anolilab/lunora/commit/d720130b33db4fbe31c5161c546fb291dcd952f4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.67
+
 ## @lunora/solid [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.119...@lunora/solid@1.0.0-alpha.120) (2026-09-22)
 
 ### ⚠ BREAKING CHANGES
