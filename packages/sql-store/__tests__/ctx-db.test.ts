@@ -1338,6 +1338,66 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
     });
 
+    /**
+     * The residual gap the watermark guard does NOT close, pinned so it is not
+     * mistaken for one that is.
+     *
+     * The guard fires on `sinceSeq > watermark`, and a rewound log re-issues the
+     * seqs it lost. So the proof expires: once post-restore writes have climbed
+     * the AUTOINCREMENT back past a consumer's cursor, that cursor is in range
+     * again and the consumer is served — a page of the NEW timeline, whose
+     * earlier entries are already behind its cursor and unreachable for good.
+     *
+     * Closing it needs a witness that outlives the seq space — an epoch paired
+     * with the cursor, the way the shard plane's subscription frames carry one.
+     * This path has no such channel, and neither does the shard plane's twin of
+     * it: `runShardCdcSync` returns `{ changes, cursor }` and stamps its epoch
+     * only on the refusal. Whether to add one is a wire decision; until it is
+     * made, this is the shape of what gets through.
+     */
+    it("serves a rewound timeline once post-restore writes climb back over the cursor", async () => {
+        expect.assertions(4);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Timeline A: five committed writes, all drained by the consumer.
+        for (const slug of ["a", "b", "c", "d", "e"]) {
+            // eslint-disable-next-line no-await-in-loop -- the seqs have to be allocated in order; that ordering is the subject
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(5);
+
+        // Restore to the moment only two writes existed. Timeline A's seqs 3..5
+        // are gone, and so is the watermark that named them.
+        await restoreLogTo(2);
+
+        // Timeline B keeps taking writes while the consumer is between polls,
+        // re-issuing seqs 3..5 for different rows and carrying on past them.
+        for (const slug of ["f", "g", "h", "i", "j", "k"]) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const watermark = await harness.exec.all(`SELECT seq FROM sqlite_sequence WHERE name = '__cdc_log'`, []);
+
+        expect(Number(watermark[0]?.["seq"])).toBe(8);
+
+        // 5 <= 8, so the rollback guard does not fire and the page is served.
+        const page = await readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect);
+
+        expect(page.changes.map((change) => change.doc?.["slug"])).toStrictEqual(["i", "j", "k"]);
+
+        // "f", "g", "h" were committed on the timeline the consumer is now
+        // reading, at seqs its cursor is already past. Nothing will deliver them.
+        const retained = await harness.exec.all(`SELECT doc FROM "__cdc_log" ORDER BY seq`, []);
+
+        expect(retained.map((row) => JSON.parse(String(row["doc"]))["slug"])).toStrictEqual(["a", "b", "f", "g", "h", "i", "j", "k"]);
+    });
+
     it("treats a changelog that was never written as a watermark of zero", async () => {
         expect.assertions(2);
 

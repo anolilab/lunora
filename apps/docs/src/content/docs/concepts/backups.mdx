@@ -82,6 +82,26 @@ omit it for the root shard. Because PITR is per shard, a
     to the current state if the target moment turns out to be wrong.
 </Callout>
 
+### Anything reading the change feed must be re-seeded, not resumed
+
+A restore rewinds the changelog along with the data, and the changelog then
+re-issues the sequence numbers it lost to different rows. A warehouse connector
+holding a cursor from before the restore is therefore holding a position in a
+sequence that no longer means what it meant — and its mirror still contains rows
+the restore removed, for which no delete will ever be emitted.
+
+The read paths refuse such a cursor **while they can still recognise it**: a
+cursor above the changelog's high-watermark is proof of the rewind, and the feed
+answers `CDC_TIMELINE_FORKED` (409) rather than an empty page. That proof
+expires. Once post-restore writes have pushed the sequence back past the cursor,
+it is in range again and the feed serves it — skipping everything the new
+timeline wrote below it, permanently and without an error.
+
+So treat re-seeding every change-feed consumer as part of the restore, in the
+same way you would clear the [R2 archive](#archiving-trimmed-entries-to-r2). Do
+not wait to be told: on a busy deployment the window in which you would be told
+is minutes wide.
+
 ## Snapshot backups
 
 `lunora backup create` exports every table to a timestamped NDJSON file under a
