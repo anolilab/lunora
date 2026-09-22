@@ -7,7 +7,7 @@ import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import { legacyWebPushId } from "../src/subscriptions/normalize";
 import type { NotifyDefinition, SubscriptionStore } from "../src/types";
-import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
+import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockFlakyPushProvider, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
     return {
@@ -1124,15 +1124,21 @@ describe("web-push send-time DNS-rebinding guard", () => {
 describe("mixed-kind push routing", () => {
     // `allowedPushOrigins` names the fixture origin so no DoH round-trip happens
     // and routing is the only behavior under test.
-    const origins = { allowedPushOrigins: ["https://push.example"] };
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    /** `1 + GROUP_RETRIES` in `providers.ts` — total attempts a partial's failed group gets. */
+    const GROUP_ATTEMPTS = 4;
 
     it("routes each target of a mixed `to` to its own provider", async () => {
         expect.hasAssertions();
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
 
@@ -1150,7 +1156,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         await router.send({ body: "b", to: [sub("one"), sub("two")] });
         await router.send({ body: "b", to: ["device-token-1", "device-token-2"] });
@@ -1166,7 +1172,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
 
@@ -1181,7 +1187,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         // No `fcm` channel: the FCM half is undeliverable from the start.
-        const router = routingPushProvider({ ...origins, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, webPush: webPush.provider });
 
         await expect(router.send({ body: "b", to: [sub("ok"), "device-token-1"] })).rejects.toThrow(/no `fcm` channel is configured/);
 
@@ -1196,7 +1202,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockThrowingPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("throw"), "device-token-1"] });
 
@@ -1211,7 +1217,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("fail"), "fail-token"] });
 
@@ -1224,12 +1230,52 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
-        // The web-push target succeeds; the FCM token fails (mock 503).
+        // The web-push target succeeds; the FCM token fails (mock 503) on every
+        // attempt the router gives it.
         const receipt = await router.send({ body: "b", to: [sub("ok"), "fail-token"] });
 
         expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(GROUP_ATTEMPTS);
+        expect(receipt.success).toBe(false);
+    });
+
+    it("retries only the failed group and reports success when it recovers", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        // The FCM group 503s once, then delivers.
+        const fcm = mockFlakyPushProvider(1);
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // The whole point of retrying INSIDE the router: the narrowed payload for
+        // the failed group still exists here, so the group that already delivered
+        // is never POSTed a second time.
+        expect(webPush.sends).toHaveLength(1);
+        expect(webPush.sends[0]?.to).toBe(sub("ok"));
+        expect(fcm.sends).toHaveLength(2);
+        expect(fcm.sends.map((send) => send.to)).toStrictEqual(["device-token-1", "device-token-1"]);
+
+        // And the receipt describes what ACTUALLY happened: a success naming the
+        // delivery the SECOND FCM attempt produced, not the first one's failure.
+        expect(receipt.success).toBe(true);
+        expect((receipt.data as { messageId: string }).messageId).toBe("mock-1,flaky-2");
+    });
+
+    it("does not retry a failed group whose recipients are permanently gone", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
+
+        // `gone-token` answers FCM's real dead-token phrasing. Re-POSTing a device
+        // the facade is about to delete buys nothing but subrequests.
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "gone-token"] });
+
         expect(fcm.sends).toHaveLength(1);
         expect(receipt.success).toBe(false);
     });
@@ -1240,13 +1286,16 @@ describe("mixed-kind push routing under the resilience middleware", () => {
     // `send` with the WHOLE payload. These drive the real facade, the real router
     // and the real `attachResilience` (through `mockEngine`) because the
     // interaction between the three is the behaviour under test.
-    const origins = { allowedPushOrigins: ["https://push.example"] };
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
 
     const mixedSend = (to: ReadonlyArray<string>) => {
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const engine = mockEngine({ push: routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider }) });
+        const engine = mockEngine({ push: routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider }) });
         const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
 
         return { fcm, send: async () => notify.send({ push: { body: "b", to: [...to] } }), webPush };
@@ -1255,18 +1304,21 @@ describe("mixed-kind push routing under the resilience middleware", () => {
     it("does not re-send to the group that already delivered when the other fails", async () => {
         expect.hasAssertions();
 
-        // The web-push target is accepted; the FCM token answers a transient 503.
+        // The web-push target is accepted; the FCM token answers a transient 503
+        // on every attempt.
         const { fcm, send, webPush } = mixedSend([sub("ok"), "fail-token"]);
         const [receipt] = await send();
 
-        // One send each: retrying the router re-POSTs the accepted web-push
-        // target, delivering that notification to the device four times over.
+        // The failed group is re-attempted; the delivered one is not. Retrying at
+        // the ENGINE instead re-POSTs the accepted web-push target, delivering
+        // that notification to the device four times over.
         expect(webPush.sends).toHaveLength(1);
-        expect(fcm.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(4);
         expect(receipt?.successful).toBe(false);
 
-        // The caller is told the send was partial and which group still needs it
-        // — the same "re-send the narrower set" contract `runRetryIds` offers.
+        // Retries exhausted, so this is still a partial, and the caller is told
+        // which group still needs it — the same "re-send the narrower set"
+        // contract `runRetryIds` offers.
         const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
 
         expect(errors).toContain("partially delivered");
@@ -1291,7 +1343,10 @@ describe("push circuit-breaker scope", () => {
     // FCM, or mixed — arrives at the breaker under the same provider id. These
     // drive the real facade, router and `attachResilience` because the breaker's
     // key is only observable through all three.
-    const origins = { allowedPushOrigins: ["https://push.example"] };
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
 
     /** `CIRCUIT_THRESHOLD` in `providers.ts` — consecutive failures that open a circuit. */
@@ -1300,7 +1355,7 @@ describe("push circuit-breaker scope", () => {
     const harness = () => {
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const engine = mockEngine({ push: routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider }) });
+        const engine = mockEngine({ push: routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider }) });
         const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
 
         return { fcm, notify, webPush };

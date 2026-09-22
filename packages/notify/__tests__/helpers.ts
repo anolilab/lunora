@@ -65,6 +65,38 @@ const mockPushProvider = (): { provider: Provider<unknown, PushPayload>; sends: 
 };
 
 /**
+ * A mock push `Provider` that fails its first `failures` sends with a transient
+ * 503 and succeeds from then on — the "the transport hiccuped and came back"
+ * shape the router's in-router group retry exists for. Records every send.
+ *
+ * Counts SENDS, not targets, because the router re-attempts a whole narrowed
+ * group: the number the tests read is how many times that group was POSTed at
+ * all. Its message ids are numbered per send (`flaky-2` is the second attempt),
+ * so a receipt can be checked against the attempt that actually delivered.
+ */
+const mockFlakyPushProvider = (failures: number): { provider: Provider<unknown, PushPayload>; sends: PushPayload[] } => {
+    const sends: PushPayload[] = [];
+
+    const provider: Provider<unknown, PushPayload> = {
+        channel: "push",
+        id: "mock-flaky-push",
+        initialize: () => undefined,
+        isAvailable: () => true,
+        send: (payload) => {
+            sends.push(payload);
+
+            if (sends.length <= failures) {
+                return { error: new Error("503 transient upstream error"), success: false };
+            }
+
+            return { data: { messageId: `flaky-${sends.length.toString()}`, sent: true, timestamp: new Date() }, success: true };
+        },
+    };
+
+    return { provider, sends };
+};
+
+/**
  * A mock push `Provider` that THROWS synchronously for any target containing
  * `throw` (and succeeds otherwise) — the transient-provider-error path a broadcast
  * must tolerate without aborting the whole fan-out. Records every attempted send.
@@ -368,4 +400,4 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
     return { prepare: prepared };
 };
 
-export { compareById, fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider };
+export { compareById, fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockFlakyPushProvider, mockPushProvider, mockThrowingPushProvider };
