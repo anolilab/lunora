@@ -851,5 +851,43 @@ describe("delta-sync read path", () => {
             // turned into an error by the guard above.
             expect(shard.syncCdc(1)).toStrictEqual({ changes: [], cursor: 1 });
         });
+
+        it("serves a rewound page once post-restore writes climb back past the cursor", async () => {
+            expect.assertions(4);
+
+            const shard = buildShard();
+
+            for (const id of ["m1", "m2", "m3", "m4", "m5"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes build the changelog range the consumer checkpoints against
+                await shard.seed(id, "c1");
+            }
+
+            expect(shard.syncCdc(0).cursor).toBe(5);
+
+            restoreSqliteTo(2);
+
+            // The refusal above is the consumer's cursor standing ABOVE the
+            // watermark, and the watermark climbs. Six post-restore writes re-issue
+            // seqs 3..8, so by the time this consumer polls again its cursor of 5
+            // is back inside the range and nothing refuses it.
+            for (const id of ["p1", "p2", "p3", "p4", "p5", "p6"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes carry the AUTOINCREMENT back past the consumer's cursor
+                await shard.seed(id, "c1");
+            }
+
+            const page = shard.syncCdc(5);
+
+            // Served — and served changes belonging to the timeline that replaced
+            // the one this consumer checkpointed against.
+            expect(page.changes.map((change) => change.id)).toStrictEqual(["p4", "p5", "p6"]);
+
+            // `p1`..`p3` were committed at the re-issued seqs 3..5, below this
+            // consumer's cursor. Nobody can reach them: the consumer will never ask
+            // below 5, and the page it IS served carries no witness — the epoch a
+            // seal re-mints has no field on this result — that the seq space it is
+            // reading is not the one it checkpointed against.
+            expect(Object.keys(page)).toStrictEqual(["changes", "cursor"]);
+            expect(harness.sql.exec(`SELECT id FROM messages WHERE id IN ('p1', 'p2', 'p3')`).toArray()).toHaveLength(3);
+        });
     });
 });
