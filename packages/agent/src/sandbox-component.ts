@@ -183,9 +183,17 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
             // retries a step that throws — and `exec` throws on outcomes that
             // happen *after* the command has already run (the runner 500s while
             // serialising, the output overruns the cap). Rethrowing would
-            // re-execute an approved `pnpm publish`. A string keeps the step
-            // exactly-once and still tells the model the command did not report
-            // a result, which is the whole point of the contract.
+            // re-execute an approved `pnpm publish`. A string removes that retry
+            // trigger and still tells the model the command did not report a
+            // result, which is the whole point of the contract.
+            //
+            // It is NOT exactly-once, and nothing here can make it so: the tool
+            // reaches this action as a DISPATCH, so a reply lost after the
+            // command ran fails the tool's step and the retry execs again. This
+            // action takes no `idempotencyKey` (unlike a `functionTool` target,
+            // which can declare one and check it) — an action ctx has nowhere to
+            // record one — so a command that cannot afford to run twice must be
+            // idempotent itself, or mark its own completion inside the container.
             return `exec failed: ${error instanceof Error ? error.message : String(error)}`;
         }
     }

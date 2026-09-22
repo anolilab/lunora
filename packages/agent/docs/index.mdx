@@ -425,8 +425,14 @@ export const operator = defineAgent({
   unattended, so scope the container's read routes accordingly. Pass
   `opts.needsApproval` (a boolean or a predicate over the input) to widen or
   disable the gate. An `exec` that fails to run at all is returned to the model
-  as text rather than thrown, so an approved command is never re-executed by a
-  step retry.
+  as text rather than thrown, so a command whose _result_ was lost is not
+  re-executed by its own throw. That is not exactly-once: the tool call reaches
+  the container as a dispatch, and a dispatch whose reply is lost after the
+  command ran fails the tool's durable step, whose retry execs again. The
+  sandbox action takes no `idempotencyKey` — there is nothing on an action ctx
+  to dedupe one against, and the approval decision is memoized in its own step,
+  so the gate does not re-ask either. Make a command that cannot afford to run
+  twice idempotent, or have it mark its own completion inside the container.
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.
@@ -793,6 +799,15 @@ and internal-only visibility on every write.
 - **Messages persist idempotently.** Every write is keyed
   `INSTANCE:ROLE:POSITION` and deduped by a unique index, so replays never
   duplicate the thread.
+- **The loop's own dispatches are at-least-once.** They carry no replay-dedup
+  id: most of them are made from inside a memoized `step.do` callback, so any
+  id numbered by call order is re-issued to a _different_ call on the next
+  activation — and the shard's dedup table, keyed `(identity, mutationId)` with
+  no function path in it, would answer that call with the first one's cached
+  result. What makes a redelivery harmless instead is that every `agents:*`
+  function the loop calls is idempotent on its own key: keyed appends,
+  get-or-create threads, an instance-ownership guard on completion, and
+  absolute (never additive) status/usage/state writes.
 
 ## Memory (RAG)
 

@@ -1,3 +1,9 @@
+## @lunora/workflow [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.56...@lunora/workflow@1.0.0-alpha.57) (2026-09-22)
+
+### Bug Fixes
+
+* **agent:** dispatch the loop's calls without an order-numbered dedup id ([#770](https://github.com/anolilab/lunora/issues/770)) ([589e3db](https://github.com/anolilab/lunora/commit/589e3db835c2d196790595438a5efd88863e4fe3))
+
 ## @lunora/workflow [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.55...@lunora/workflow@1.0.0-alpha.56) (2026-09-21)
 
 ### ⚠ BREAKING CHANGES

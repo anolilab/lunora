@@ -137,19 +137,19 @@ describe(compileAgentWorkflow, () => {
             expect(received.paths).toBe(paths);
         });
 
-        it("keeps the identity-free context.run for an ownerless run and wraps it for an owned run", async () => {
-            const ownerless = await compileAndRun(minimalAgent());
+        it("never hands the loop the workflow body's context.run", async () => {
+            const dispatchEnv = { LUNORA_ADMIN_TOKEN: "admin", LUNORA_ORIGIN_URL: "https://app.example/" };
 
-            expect(ownerless.run).toBe(sentinelRun);
+            const ownerless = await compileAndRun(minimalAgent(), dispatchEnv);
+            const owned = await compileAndRun(minimalAgent(), dispatchEnv, { params: { owner: "user-a" } });
 
-            const owned = await compileAndRun(
-                minimalAgent(),
-                { LUNORA_ADMIN_TOKEN: "admin", LUNORA_ORIGIN_URL: "https://app.example/" },
-                { params: { owner: "user-a" } },
-            );
-
-            // `resolveAgentRun` must dispatch under the owner's identity — NOT the
-            // raw workflow dispatcher — or owner-gated thread reads come back empty.
+            // `resolveAgentRun` builds the loop's dispatcher itself on BOTH
+            // branches. `context.run` forwards no identity (so an owner-gated
+            // thread read comes back empty) AND numbers its calls as replay-dedup
+            // ids — numbering this body cannot keep stable across a replay,
+            // because most of its dispatches sit inside memoized `step.do`
+            // callbacks that a replay does not re-invoke. See `resolve-run.ts`.
+            expect(ownerless.run).not.toBe(sentinelRun);
             expect(owned.run).not.toBe(sentinelRun);
         });
 

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.193",
+    "version": "1.0.0-alpha.195",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -62,14 +62,14 @@
     },
     "dependencies": {
         "@lunora/advisor": "1.0.0-alpha.142",
-        "@lunora/agent": "1.0.0-alpha.119",
+        "@lunora/agent": "1.0.0-alpha.121",
         "@lunora/container": "1.0.0-alpha.52",
         "@lunora/errors": "1.0.0-alpha.39",
         "@lunora/platform": "1.0.0-alpha.32",
         "@lunora/queue": "1.0.0-alpha.59",
         "@lunora/scheduler": "1.0.0-alpha.76",
         "@lunora/values": "1.0.0-alpha.49",
-        "@lunora/workflow": "1.0.0-alpha.56",
+        "@lunora/workflow": "1.0.0-alpha.57",
         "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"
