@@ -175,9 +175,16 @@ const PARTIAL_DELIVERY_CODE = "PUSH_PARTIALLY_DELIVERED";
 
 /**
  * Whether a failure is the "one group delivered, the other did not" verdict
- * {@link mergeGroupResults} returns — the one failure that must NOT be retried,
- * because the retry re-sends the whole payload and the delivered group would get
- * the notification again on every attempt.
+ * {@link mergeGroupResults} returns — the one failure that must NOT be retried
+ * by the engine's middleware, because that retry re-sends the whole payload and
+ * the delivered group would get the notification again on every attempt.
+ *
+ * Still true now that the router retries the failed group itself: the two are
+ * the same rule from opposite ends. The router retries the group because it
+ * still holds that group's narrowed payload; the middleware must not, because it
+ * only has the whole one. A partial that reaches here has already spent its
+ * group's retry budget (see {@link GROUP_RETRIES}), so re-running the provider
+ * would buy a duplicate and nothing else.
  */
 const isPartialDelivery = (error: unknown): boolean => isLunoraError(error) && error.code === PARTIAL_DELIVERY_CODE;
 
@@ -211,15 +218,21 @@ const partialFailedTransport = (error: unknown): PushTransport | undefined => {
  * A mixed outcome reports it as a PARTIAL failure, distinct from the
  * both-groups-failed one, because retrying the two is not the same operation.
  * The router is one provider to the engine, so the retry middleware re-runs
- * `send` with the whole payload: retrying a partial re-POSTs the group that
- * already delivered, three extra notifications per device for a failure that was
- * never theirs. Two failures carry no delivery to duplicate and stay retryable.
+ * `send` with the whole payload: retrying a partial there re-POSTs the group
+ * that already delivered, three extra notifications per device for a failure
+ * that was never theirs. Two failures carry no delivery to duplicate and stay
+ * retryable by the middleware.
  *
- * This is the shape `runRetryIds` already keeps one layer up: a run that
- * delivered to SOME recipients resolves and names the ones still outstanding, so
- * the caller re-sends the strictly narrower set instead of the whole message.
- * Targets are deliberately not named in the message — a web-push target is the
- * stringified subscription, keys included, and this text is logged.
+ * The failed group is NOT left to the caller, though: by the time a partial is
+ * folded here the router has already re-attempted that group on its own, where
+ * the narrowed payload still exists and the delivered group is out of reach (see
+ * {@link GROUP_RETRIES}). A partial therefore means "and it still failed".
+ *
+ * What is left for the caller is the shape `runRetryIds` already keeps one layer
+ * up: a run that delivered to SOME recipients resolves and names the ones still
+ * outstanding, so the caller re-sends the strictly narrower set instead of the
+ * whole message. Targets are deliberately not named in the message — a web-push
+ * target is the stringified subscription, keys included, and this text is logged.
  */
 const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
     if (!webPush.success || !fcm.success) {
@@ -230,7 +243,7 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
             return {
                 error: new LunoraError(
                     PARTIAL_DELIVERY_CODE,
-                    `@lunora/notify: push partially delivered — the ${delivered} group was accepted, the ${failed} group failed (${failureText(cause) ?? "unknown error"}). Not retried: a retry would re-send to the ${delivered} targets that already received it. Re-send to the ${failed} targets only.`,
+                    `@lunora/notify: push partially delivered — the ${delivered} group was accepted, the ${failed} group failed and re-attempting it did not recover it (${failureText(cause) ?? "unknown error"}). The whole send is not retried: that would re-send to the ${delivered} targets that already received it. Re-send to the ${failed} targets only.`,
                     // `data` carries the failed transport verbatim for the breaker
                     // — see `partialFailedTransport`. It never reaches the wire.
                     { cause, data: failed },
@@ -427,6 +440,48 @@ const perTransportCircuitBreaker = (): Middleware => {
     };
 };
 
+/**
+ * Further attempts a partial delivery's FAILED group gets inside the router,
+ * beyond the one {@link retryMiddleware} itself makes.
+ *
+ * Two, so the group sees four attempts in total — the concurrent first one, the
+ * middleware's own, and these — which is exactly the budget the engine's retry
+ * gives a single-kind send of that same group. The point is parity, not a new
+ * policy: the failed half of a mixed send is retried like the whole send it
+ * would have been had the caller not put both kinds in one `to`.
+ *
+ * The retry is safe to run because a group result is only a FAILURE when EVERY
+ * target in it failed — both providers loop their targets and report success if
+ * any one was accepted — so re-attempting a failed group never re-POSTs a target
+ * the provider already delivered to. What it can duplicate is a target whose
+ * POST timed out after the push service accepted it; that exposure is identical
+ * on both transports (neither exposes a collapse/topic key here) and is the same
+ * one the engine's retry already accepts for every single-kind send.
+ *
+ * Total HTTP requests differ per transport and deliberately are not evened out:
+ * the FCM provider retries each POST itself (up to 3, same curve), the web-push
+ * provider does not. So four router attempts are up to sixteen POSTs on FCM and
+ * exactly four on web push — which is what an FCM-only send has always cost.
+ */
+const GROUP_RETRIES = 2;
+
+/**
+ * Send one narrowed group, reporting a thrown provider error as a failed
+ * `Result` rather than a rejection.
+ *
+ * Both callers need that. The two groups are sent concurrently, so a transport
+ * that throws SYNCHRONOUSLY (`Provider.send` returns `MaybePromise`) would
+ * otherwise take the sibling group's send down with it; and the retry below is
+ * middleware, which reads a `Result` and never sees a throw.
+ */
+const attemptGroup = async (channel: Provider<unknown, PushPayload>, group: PushPayload): Promise<Result<NotificationResult>> => {
+    try {
+        return await channel.send(group);
+    } catch (error) {
+        return { error, success: false };
+    }
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
     /**
@@ -435,6 +490,14 @@ export interface RoutingPushOptions {
      */
     allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
+
+    /**
+     * Backoff base for the in-router group retry, in ms (default 250 — the
+     * engine's own). Only a TEST double passes anything else, for the same
+     * reason {@link ResilienceOptions.retryBaseDelay} exists: a mock that fails
+     * on purpose would otherwise spend the real ~1 s of backoff per partial.
+     */
+    retryBaseDelay?: number;
     webPush?: Provider<unknown, PushPayload>;
 }
 
@@ -446,6 +509,47 @@ export interface RoutingPushOptions {
  * uniformly.
  */
 export const routingPushProvider = (options: RoutingPushOptions): Provider<unknown, PushPayload> => {
+    // The engine's own retry, re-used one level down. Same implementation, same
+    // backoff curve, same `shouldRetry` rule about permanently-gone recipients —
+    // the only difference is WHAT it re-runs: one group's narrowed send instead
+    // of the whole payload, which is the entire reason it can run at all.
+    const groupRetry = retryMiddleware({
+        baseDelay: options.retryBaseDelay,
+        retries: GROUP_RETRIES,
+        shouldRetry: (error) => !isPermanentFailure(error),
+    });
+
+    /**
+     * Re-attempt one failed group until it delivers or its budget runs out, and
+     * answer with whatever the LAST attempt said — so a group that came back on
+     * the second try folds into the receipt as the success it now is.
+     *
+     * The permanence check is HERE and not only in `shouldRetry` because
+     * `retryMiddleware` calls `next` once before consulting the predicate at all:
+     * a group whose recipients are provably gone would still spend one more POST
+     * on its way to the same answer, which is the cost `isPermanentFailure`
+     * exists to refuse. `failed` is that first attempt's verdict, returned
+     * unchanged when there is no point asking again.
+     *
+     * The `SendContext` handed to the middleware describes the narrowed send it
+     * is actually driving, not the mixed one the caller wrote. Nothing reads it
+     * (the middleware only passes it to `next`), but a context that claimed the
+     * whole payload would be a lie waiting for the first reader.
+     */
+    const retryGroup = async (
+        channel: Provider<unknown, PushPayload>,
+        group: PushPayload,
+        failed: Result<NotificationResult>,
+    ): Promise<Result<NotificationResult>> => {
+        if (isPermanentFailure(failed.error)) {
+            return failed;
+        }
+
+        return groupRetry({ channel: "push", payload: group, provider: PUSH_ROUTER_ID }, async (context) =>
+            attemptGroup(channel, context.payload as PushPayload),
+        );
+    };
+
     const pick = (endpoint: string | undefined): Provider<unknown, PushPayload> => {
         const provider = endpoint === undefined ? options.fcm : options.webPush;
 
@@ -525,19 +629,37 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             const webPushChannel = pick(sampleEndpoint);
             const fcmChannel = pick(undefined);
 
-            // `allSettled`, not two sequential awaits: one transport failing must
-            // not stop the other group from being attempted at all. The `async`
-            // wrapper matters — `Provider.send` returns `MaybePromise`, so a
-            // provider that throws SYNCHRONOUSLY would otherwise escape past
-            // `allSettled` (which only catches rejections) and take the sibling
-            // group's send down with it.
-            const attempt = async (channel: Provider<unknown, PushPayload>, group: typeof targets): Promise<Result<NotificationResult>> =>
-                channel.send(narrowed(group));
+            const webPushGroup = narrowed(webPushTargets);
+            const fcmGroup = narrowed(fcmTargets);
 
-            const settled = await Promise.allSettled([attempt(webPushChannel, webPushTargets), attempt(fcmChannel, fcmTargets)]);
-            const [webPushResult, fcmResult] = settled.map((entry): Result<NotificationResult> =>
-                entry.status === "fulfilled" ? entry.value : { error: entry.reason, success: false },
-            ) as [Result<NotificationResult>, Result<NotificationResult>];
+            // Concurrent, not two sequential awaits: one transport failing must
+            // not stop the other group from being attempted at all. Neither
+            // attempt rejects (see `attemptGroup`), so nothing escapes here.
+            const [webPushResult, fcmResult] = await Promise.all([attemptGroup(webPushChannel, webPushGroup), attemptGroup(fcmChannel, fcmGroup)]);
+
+            // Exactly one group failed. Retry THAT group, here, while its narrowed
+            // payload still exists — the engine cannot, because one layer up the
+            // router is a single provider and the only thing there to re-run is
+            // the whole payload, delivered half included.
+            //
+            // The delivered group's result is carried forward untouched: it is
+            // never re-sent, on this attempt or any other, which is the property
+            // the partial verdict was invented to protect.
+            //
+            // ponytail: the breaker is middleware ABOVE the router, so a group on
+            // a transport whose circuit is already open is still re-attempted —
+            // four POSTs where load-shedding wanted one. Bounded, backed off, and
+            // confined to the `notify.send()` mixed-`to` path (the broadcast
+            // fan-out sends one target per call and never gets here), so it is
+            // never multiplied by device count. Thread a breaker probe into the
+            // router if that ever shows up in the subrequest budget.
+            if (webPushResult.success && !fcmResult.success) {
+                return mergeGroupResults(webPushResult, await retryGroup(fcmChannel, fcmGroup, fcmResult));
+            }
+
+            if (fcmResult.success && !webPushResult.success) {
+                return mergeGroupResults(await retryGroup(webPushChannel, webPushGroup, webPushResult), fcmResult);
+            }
 
             // One receipt describes two sends — see `mergeGroupResults` for what
             // the fold must preserve.
@@ -589,7 +711,9 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
         // It also refuses a PARTIAL delivery (see `mergeGroupResults`): the retry
         // re-runs the provider with the whole payload, so retrying a send whose
         // other transport group already delivered notifies those devices again on
-        // every attempt.
+        // every attempt. That is a refusal to re-send, not a refusal to retry —
+        // the router has already retried the group that failed, narrowed to just
+        // that group, before reporting the partial.
         .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) && !isPartialDelivery(error) }))
         .use(perTransportCircuitBreaker());
 
