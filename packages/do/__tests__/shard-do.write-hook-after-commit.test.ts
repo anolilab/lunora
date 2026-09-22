@@ -17,9 +17,35 @@ const schema: SchemaLike = {
 
 let database: ReturnType<typeof createSqliteExec>;
 
-const makeState = (): ShardDOState =>
-    ({
+const makeState = (): ShardDOState => {
+    // The single-writer gate, for real. Without it nothing here can observe the
+    // window this suite cares about: the gate is what admits the NEXT mutation
+    // the moment this one commits, and post-commit work that runs loose of it is
+    // work two mutations can reorder against each other.
+    let gate: Promise<void> = Promise.resolve();
+
+    return {
         acceptWebSocket: () => undefined,
+        blockConcurrencyWhile: async <R>(callback: () => Promise<R>): Promise<R> => {
+            // Claim a slot synchronously (call order is admission order), wait
+            // for the previous one, then hold the next caller until this closure
+            // settles — pass or fail.
+            const previous = gate;
+
+            let release = (): void => undefined;
+
+            gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            await previous;
+
+            try {
+                return await callback();
+            } finally {
+                release();
+            }
+        },
         getWebSockets: () => [],
         id: { name: "shard-a" },
         storage: {
@@ -40,13 +66,21 @@ const makeState = (): ShardDOState =>
                 }
             },
         },
-    }) as unknown as ShardDOState;
+    } as unknown as ShardDOState;
+};
 
 class WriteHookShard extends ShardDO {
     public readonly events: WriteEvent[] = [];
 
     /** Makes the hook throw, standing in for Vectorize being unreachable after the commit. */
     public failHook = false;
+
+    /**
+     * Stalls a hook before it lands, standing in for the remote embed plus
+     * Vectorize upsert a real hook makes — hundreds of milliseconds, during
+     * which the gate has long since admitted the next mutation.
+     */
+    public beforeLand?: (event: WriteEvent) => Promise<void>;
 
     public constructor(state: ShardDOState) {
         super(state, {});
@@ -64,7 +98,9 @@ class WriteHookShard extends ShardDO {
             // Exactly how the emitter wires the vector-sync hook: held until the
             // transaction commits, run inline when none is open.
             onWrite: (event) =>
-                this.deferAfterCommit(() => {
+                this.deferAfterCommit(async () => {
+                    await this.beforeLand?.(event);
+
                     this.events.push(event);
 
                     if (this.failHook) {
@@ -170,6 +206,74 @@ describe("shardDO.runInTransaction — external write hooks", () => {
 
         expect(shard.events).toHaveLength(1);
         expect(shard.events[0]).toMatchObject({ id, op: "insert", table: "notes" });
+    });
+
+    it("lands post-commit hooks in commit order when a slow one overlaps the next commit", async () => {
+        expect.assertions(2);
+
+        const shard = new WriteHookShard(makeState());
+        const db = shard.writer();
+        const id = await shard.run(async () => db.insert("notes", { body: "v0" }));
+
+        shard.events.length = 0;
+
+        let release = (): void => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        shard.beforeLand = async (event) => {
+            if ((event.doc as undefined | { body?: string })?.body === "v1") {
+                await held;
+            }
+        };
+
+        // Both queue on the gate before either commits, so they commit in call
+        // order: `"v1"` first, with the slow hook, then `"v2"` with a fast one.
+        const first = shard.run(async () => db.patch(id, { body: "v1" }));
+        const second = shard.run(async () => db.patch(id, { body: "v2" }));
+
+        // Long enough for the second transaction to commit and, if nothing held
+        // it, to run its hook to completion while the first is still in flight.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        // Nothing may overtake the stalled hook: landing `"v2"` here would leave
+        // the row at `"v2"` and its vector at `"v1"` the moment the first hook
+        // finally lands — permanently, until the next write to that row.
+        expect(shard.events).toStrictEqual([]);
+
+        release();
+
+        await Promise.all([first, second]);
+
+        expect(shard.events.map((event) => (event.doc as { body: string }).body)).toStrictEqual(["v1", "v2"]);
+    });
+
+    it("keeps a later transaction's hooks running after an earlier one's failed", async () => {
+        expect.assertions(2);
+
+        const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const shard = new WriteHookShard(makeState());
+        const db = shard.writer();
+
+        shard.failHook = true;
+
+        await shard.run(async () => db.insert("notes", { body: "first" }));
+
+        shard.failHook = false;
+        shard.events.length = 0;
+
+        await shard.run(async () => db.insert("notes", { body: "second" }));
+
+        // A failure contained per hook, not latched onto the chain that orders
+        // them: a rejected chain would silently stop every later hook on this
+        // shard for the life of the instance.
+        expect(shard.events).toHaveLength(1);
+        expect(reported).toHaveBeenCalledTimes(1);
+
+        reported.mockRestore();
     });
 
     it("keeps the committed row when the post-commit hook fails, and reports it", async () => {

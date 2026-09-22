@@ -81,9 +81,26 @@ for the full shape.
 
 You never upsert vectors by hand for declared indexes. On every `insert`,
 `update`, or `delete` to a table that sources an index, the adapter embeds the
-source and upserts under the row's id (or removes it on delete). The sync runs
-inline within the mutation. Upserts and deletes are keyed by row id, so they're
-idempotent: to recover from a transient Vectorize failure, re-run the write.
+source and upserts under the row's id (or removes it on delete).
+
+The sync runs **after the mutation's transaction commits**, not inside it.
+Vectorize is outside the shard's storage and cannot be rolled back, so running it
+inline would leave a vector for a row a later throw took away. Two consequences
+worth knowing:
+
+- **A mutation that rolls back syncs nothing.** No vector is written for a row
+  that never existed, and no vector is removed for a delete that did not happen.
+- **A sync failure does not fail the mutation.** The rows are already committed,
+  so reporting the write as failed would push callers into retrying a
+  non-idempotent insert. The failure is logged server-side and the row is left
+  indexed in some indexes and not others. Upserts and deletes are keyed by row
+  id, so re-running the write converges — but nothing tells the caller to, and
+  nothing retries on its own. If a stale index is a problem for your app, re-run
+  the write from a scheduled job rather than expecting an error.
+
+Writes to the same row do **not** race each other: one mutation's sync completes
+before the next mutation's begins, so the last commit is the one the index ends
+up reflecting.
 
 <Callout type="warn">
     **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries
@@ -95,18 +112,27 @@ idempotent: to recover from a transient Vectorize failure, re-run the write.
 The function context exposes the bridged search surface. The read half is
 available everywhere; the mutating half is gated by context kind:
 
-| Method                    | `QueryCtx` | `MutationCtx` / `ActionCtx` | Use                         |
-| ------------------------- | :--------: | :-------------------------: | --------------------------- |
-| `query(index, input)`     |     ✓      |              ✓              | Similarity search.          |
-| `getByIds(index, ids)`    |     ✓      |              ✓              | Fetch stored vectors by id. |
-| `upsert(index, input)`    |     —      |              ✓              | Manually upsert one vector. |
-| `upsertNow(index, input)` |     —      |              ✓              | Synchronous upsert.         |
-| `deleteByIds(index, ids)` |     —      |              ✓              | Remove vectors by id.       |
+| Method                    | `QueryCtx` | `MutationCtx` / `ActionCtx` | Use                                            |
+| ------------------------- | :--------: | :-------------------------: | ---------------------------------------------- |
+| `query(index, input)`     |     ✓      |              ✓              | Similarity search.                             |
+| `getByIds(index, ids)`    |     ✓      |              ✓              | Fetch stored vectors by id.                    |
+| `upsert(index, input)`    |     —      |              ✓              | Upsert one vector, after the mutation commits. |
+| `upsertNow(index, input)` |     —      |              ✓              | Upsert one vector immediately.                 |
+| `deleteByIds(index, ids)` |     —      |              ✓              | Remove vectors by id.                          |
 
 A query gets a read-only `VectorSearchReader` (search + fetch); mutations and
 actions get the full `VectorSearch` (also upsert + delete). This matches the
 reactivity model: a query may not write, so search lives naturally in a
 reactive `query`.
+
+`upsert` follows the same rule as the automatic sync above — it is held until
+the mutation's transaction commits and dropped if the mutation throws, so a
+hand-written upsert cannot outlive the row it describes. `upsertNow` writes
+straight through; reach for it only when you need the vector visible before the
+mutation ends and you accept that a rollback will strand it. In an `action`
+there is no transaction to wait for, so the two behave identically.
+
+`deleteByIds` is **not** deferred: it writes immediately, in both contexts.
 
 ### Similarity search
 

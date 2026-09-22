@@ -121,9 +121,26 @@ export class ShardRunner {
      * gate could interleave with a concurrent handler, and the gate without a
      * transaction would not roll back. Composing them here means a host cannot
      * accidentally take one and not the other.
+     *
+     * `onCommitted` runs INSIDE the gate, once the commit has landed and before
+     * the next dispatch is admitted — the only point in this composition where
+     * "this transaction committed" and "no other transaction has committed
+     * since" are both true. A host uses it to order work that must follow the
+     * commit sequence (the after-commit side effects of `ShardDO`); it is
+     * deliberately synchronous, because awaiting remote I/O here would hold the
+     * single-writer gate for its duration and stall every other dispatch on the
+     * shard. Enqueue here, await outside.
+     * @param work the transactional body
+     * @param onCommitted called in commit order, inside the gate, after the commit
      */
-    public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
-        return this.shardHost.runSerialized(async () => this.shardHost.transaction(work));
+    public async runInTransaction<T>(work: () => Promise<T>, onCommitted?: () => void): Promise<T> {
+        return this.shardHost.runSerialized(async () => {
+            const result = await this.shardHost.transaction(work);
+
+            onCommitted?.();
+
+            return result;
+        });
     }
 
     /**

@@ -47,6 +47,56 @@ describe("createContextVectors", () => {
         expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: { t: 1 }, namespace: undefined, values: [5] }]);
     });
 
+    it("upsert defers through deferAfterCommit while upsertNow stays inline", async () => {
+        expect.assertions(4);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // A mutation that upserts and then throws must leave NOTHING in
+        // Vectorize — the row it describes is about to be rolled back.
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+
+        expect(index.upsert).not.toHaveBeenCalled();
+
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenCalledTimes(1);
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "b", metadata: undefined, namespace: undefined, values: [2] }]);
+
+        await queued[0]?.();
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
+    });
+
+    it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+            shardedIndexNames: ["docs"],
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // Thrown from inside the deferral this would surface after the commit,
+        // as a log line nobody is holding, instead of failing the handler.
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow("has no shard key");
+
+        expect(queued).toStrictEqual([]);
+    });
+
     it("query maps Vectorize matches to the server match shape", async () => {
         expect.assertions(1);
 
@@ -556,7 +606,7 @@ describe("createVectorSyncHook", () => {
         const vectors = fakeVectorSearch();
 
         // Second upsert (standalone) rejects after the first inline upsert.
-        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
             vectors.upserts.push([indexName, input]);
 
             if (indexName === "docs-fulltext") {
@@ -585,7 +635,7 @@ describe("createVectorSyncHook", () => {
         const original = new Error("embedder boom");
         const vectors = fakeVectorSearch();
 
-        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
             if (indexName === "docs-fulltext") {
                 throw original;
             }

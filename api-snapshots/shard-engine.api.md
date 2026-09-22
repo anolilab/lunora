@@ -2735,7 +2735,7 @@ class ShardRunner {
     socketFor(raw: unknown): ShardSocketLike;
     sockets(tag?: string): SocketHandle[];
     background(work: Promise<unknown>): boolean;
-    runInTransaction<T>(work: () => Promise<T>): Promise<T>;
+    runInTransaction<T>(work: () => Promise<T>, onCommitted?: () => void): Promise<T>;
     handleFetch(request: Request): Promise<Response>;
     handleAlarm(): Promise<void>;
 }
