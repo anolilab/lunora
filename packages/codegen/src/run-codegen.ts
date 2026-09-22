@@ -969,6 +969,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasR2sql: featureUsage.r2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
+        // The same schema signal `emitShard` gates the shard config's source-client
+        // field and the ingest poll on, so the builder method and the config field
+        // it writes to are emitted together or not at all.
+        hasSourcedTables: schema.tables.some((table) => table.externalSource !== undefined),
         hasStorage: studioFeatures.storage,
         // The gate's verdict, on the same convention `emitServer`/`emitShard`
         // take it: the emitter AND's it with the declaration itself. This call

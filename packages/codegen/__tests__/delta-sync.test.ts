@@ -36,8 +36,9 @@ import { readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import type { CodegenResult } from "../src/index";
 import { runCodegen } from "../src/index";
 import type { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
 import { GOLDEN_OUTPUTS, makeFixtureWorkdir } from "./golden-fixtures";
@@ -57,22 +58,27 @@ type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 type GlobalRequest = NonNullable<Parameters<NonNullable<ShardConfig["d1"]>>[1]>;
 
 let workdir: string;
+let generated: CodegenResult["generated"];
 
 describe("delta-sync fixture", () => {
-    beforeEach(() => {
+    // ONE codegen run for the whole file. Every assertion below reads the same
+    // emission from the same fixture, and a per-test run paid the full ts-morph
+    // cold start each time — enough, once the fixture grew, to blow the default
+    // 60s per-test timeout on the first case.
+    //
+    // `lint: false` matches `capture-expected.ts`: it keeps `LUNORA_ADVISORIES`
+    // empty so the golden stays decoupled from advisor behaviour.
+    beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-    });
+        generated = runCodegen({ lint: false, projectRoot: workdir }).generated;
+    }, 300_000);
 
-    afterEach(() => {
+    afterAll(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    // `lint: false` matches `capture-expected.ts`: it keeps `LUNORA_ADVISORIES`
-    // empty so the golden stays decoupled from advisor behaviour.
     it("output matches the committed lunora/_generated files (snapshot)", () => {
         expect.assertions(1);
-
-        const { generated } = runCodegen({ lint: false, projectRoot: workdir });
 
         // One assertion over a filename→content map rather than one per file, so
         // a drift report names every file that moved instead of stopping at the
@@ -86,7 +92,7 @@ describe("delta-sync fixture", () => {
     it("emits the shape overrides only a shapes-plus-global project reaches", () => {
         expect.assertions(4);
 
-        const { shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        const { shard } = generated;
 
         expect(shard).toContain("protected override resolveShape(");
         expect(shard).toContain("protected override async readGlobalShapeRows(");
@@ -100,7 +106,7 @@ describe("delta-sync fixture", () => {
     it("threads the shard's cdc flag into every global-writer build", () => {
         expect.assertions(5);
 
-        const { app, shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        const { app, shard } = generated;
 
         // All three shard-side builds of the global writer — the ctx-db one and
         // the two shape overrides. Miss any one and that path writes/reads a
@@ -117,6 +123,33 @@ describe("delta-sync fixture", () => {
         // composition path the templates use.
         expect(app).toContain("public cdc(enabled = true): this {");
         expect(app).toContain("cdc: this.cdcEnabled,");
+    });
+
+    it("gives a .source() table a route from the app builder to the ingest poll", () => {
+        expect.assertions(3);
+
+        const { app, shard } = generated;
+
+        // The shard end has always been there: the poll loop reads the resolver
+        // off its config and records an error when it comes back undefined.
+        expect(shard).toContain("client = config.sourceClient?.(env, source.binding);");
+        // The app end was not, and `createShardDO` is called from `app.ts` and
+        // nowhere else in a `defineApp()` project — which is every template. So
+        // the "no sourceClient resolved" branch fired on every tick forever, the
+        // table stayed empty, and codegen exited 0.
+        expect(app).toContain("public sourceClient(factory: (env: Env, binding: string) =>");
+        expect(app).toContain("...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),");
+    });
+
+    it("types the source-client resolver through the emitted config (compile-checked)", () => {
+        expect.assertions(1);
+
+        // Verified by `tsc` via `lint:types`: this stops compiling the moment the
+        // resolver leaves the emitted shard config, which is the field the app
+        // builder's `.sourceClient(...)` parameter type is derived from.
+        const resolver: NonNullable<ShardConfig["sourceClient"]> = (_env, _binding) => undefined;
+
+        expect(resolver({}, "CONTACTS_DB")).toBeUndefined();
     });
 
     it("types the cdc flag through the emitted config (compile-checked)", () => {

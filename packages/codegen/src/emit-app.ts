@@ -56,6 +56,20 @@ interface EmitAppOptions {
     hasR2sql: boolean;
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
+
+    /**
+     * Schema declares `.source(...)` tables → emit `.sourceClient()` (the resolver
+     * the shard's ingest poll turns a wrangler Hyperdrive binding into a SQL client
+     * with).
+     *
+     * Same shape as `cdc`: `ShardDOConfig` declares `sourceClient` and the emitted
+     * poll loop reads it, but nothing on the builder reached it — and
+     * `createShardDO` is called from this file and nowhere else in a `defineApp()`
+     * project. So every sourced table hit the "no sourceClient resolved for
+     * binding" branch on every tick forever, stayed empty, and codegen exited 0.
+     */
+    hasSourcedTables: boolean;
+
     /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
     hasStorage: boolean;
 
@@ -392,6 +406,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
     ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
     `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
+    ...(options.hasSourcedTables ? [`    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;`] : []),
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
 ];
 
@@ -565,6 +580,16 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 
         return this;
     }`,
+    ...(options.hasSourcedTables
+        ? [
+              `    /** Resolve the SQL client a \`.source(...)\` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with \`@lunora/hyperdrive\`'s \`createHyperdrive\` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
+    public sourceClient(factory: (env: Env, binding: string) => ReturnType<NonNullable<ShardConfig["sourceClient"]>>): this {
+        this.sourceClientFactory = factory as NonNullable<ShardConfig["sourceClient"]>;
+
+        return this;
+    }`,
+          ]
+        : []),
     ...(options.hasStorage
         ? [
               `    /** Wire R2 storage — backs \`ctx.storage\` (incl. multi-bucket) and the studio file browser, from one declaration. */
@@ -704,6 +729,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                 : {}),`,
               ]
             : []),
+        ...(options.hasSourcedTables ? [`            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),`] : []),
         ...(options.hasStorage
             ? [`            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>) => this.resolveStorage(rawEnv as Env) } : {}),`]
             : []),

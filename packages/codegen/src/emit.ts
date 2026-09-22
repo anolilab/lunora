@@ -5143,7 +5143,14 @@ ${vectorNamespaceField}
             // never what changed in them, so it costs one small read per poll tick
             // for the whole shard — and a tick whose answer omits a shape's table
             // skips that shape's membership drain entirely.
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and \`readGlobalShapeRows\`: \`bookmark\` is not declared
+            // on the narrower Hyperdrive thunk's \`request\` type, and an inline
+            // literal trips an excess-property error (TS2353) that makes the
+            // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
+            // a \`defineShape\`. The Hyperdrive factory simply never reads it.
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }
