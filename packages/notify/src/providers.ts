@@ -495,7 +495,7 @@ export interface RoutingPushOptions {
      * Backoff base for the in-router group retry, in ms (default 250 — the
      * engine's own). Only a TEST double passes anything else, for the same
      * reason {@link ResilienceOptions.retryBaseDelay} exists: a mock that fails
-     * on purpose would otherwise spend the real ~1.75 s of backoff per partial.
+     * on purpose would otherwise spend the real ~1 s of backoff per partial.
      */
     retryBaseDelay?: number;
     webPush?: Provider<unknown, PushPayload>;

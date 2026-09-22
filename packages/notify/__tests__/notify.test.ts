@@ -1125,7 +1125,7 @@ describe("mixed-kind push routing", () => {
     // `allowedPushOrigins` names the fixture origin so no DoH round-trip happens
     // and routing is the only behavior under test.
     // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
-    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
     // partial proving something the delay has no bearing on.
     const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
@@ -1315,7 +1315,7 @@ describe("mixed-kind push routing under the resilience middleware", () => {
     // and the real `attachResilience` (through `mockEngine`) because the
     // interaction between the three is the behaviour under test.
     // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
-    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
     // partial proving something the delay has no bearing on.
     const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
@@ -1372,7 +1372,7 @@ describe("push circuit-breaker scope", () => {
     // drive the real facade, router and `attachResilience` because the breaker's
     // key is only observable through all three.
     // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
-    // doubles fail on purpose, and the production backoff would spend ~1.75 s per
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
     // partial proving something the delay has no bearing on.
     const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
