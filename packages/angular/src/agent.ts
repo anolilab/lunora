@@ -24,8 +24,13 @@ type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "ru
  */
 interface AgentThreadRecord {
     createdAt?: number;
-    /** The failure message when `status === "error"`. */
-    error?: string;
+
+    /**
+     * The failure message when `status === "error"`, `null` once a later run
+     * cleared it, absent on a thread that has never failed. Read it for
+     * truthiness — `null` and absent both mean "no error".
+     */
+    error?: null | string;
     /** The workflow instance id of the in-flight run — the handle `cancel` targets. */
     instanceId?: string;
     messageCount?: number;
