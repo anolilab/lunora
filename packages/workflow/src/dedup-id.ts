@@ -44,6 +44,17 @@
  * assumes — the body issuing its calls in the same order. A body that branches
  * on `Date.now()` / `Math.random()` must pass its own `dedupId`, which always
  * wins over the pin.
+ *
+ * The quiet way to break that contract is a bare `ctx.run` inside a raw
+ * `ctx.step.do(...)` callback: a replay serves the completed step from the
+ * journal WITHOUT re-invoking the callback, so those calls vanish from the
+ * sequence and every later call shifts DOWN a number — onto an id the previous
+ * activation already committed to a different call. That is the collision case
+ * above, and it is silent: the shard answers with the earlier call's cached
+ * result (a history read comes back as an append's `{ seq }`) and never runs
+ * the handler. Such a body must pass its own `dedupId` per call — or, when it
+ * has no key that survives a replay, dispatch through its own runner and rely
+ * on the called functions being idempotent (what `@lunora/agent` does).
  */
 import type { ArgsOf, FunctionReference } from "../../../shared/function-reference";
 import type { RunFunctionOptions, WorkflowRunFunction } from "./types";

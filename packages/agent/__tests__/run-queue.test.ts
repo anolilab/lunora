@@ -172,6 +172,27 @@ describe("onConcurrentRun: queue", () => {
         expect(thread()?.["instanceId"]).toBe("wf-z");
     });
 
+    it("admits nothing behind a run that already completed — the empty-queue branch's invariant", async () => {
+        expect.assertions(4);
+
+        const { complete, queue, start, thread } = setup();
+
+        await start("wf-a");
+        await complete({ instanceId: "wf-a", key: "thread-1", status: "idle" });
+
+        // The empty-queue branch leaves `instanceId` naming wf-a, so wf-a's
+        // re-dispatched completion is STILL the owner and re-reads the queue.
+        // That it finds nothing is a property of the branch, not luck: parking
+        // requires a live status under a different instance, and the terminal
+        // status just written is not one — wf-b takes the thread outright and
+        // stamps its own id, which is what retires wf-a's ownership.
+        await expect(start("wf-b")).resolves.toStrictEqual({ outcome: "continued" });
+        expect(queue()).toHaveLength(0);
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+        expect(thread()).toMatchObject({ instanceId: "wf-b", status: "running" });
+    });
+
     it("never wakes a run parked behind a thread a NON-OWNING writer revived", async () => {
         expect.assertions(6);
 
