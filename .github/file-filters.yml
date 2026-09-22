@@ -296,6 +296,26 @@ templates:
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
+# The Expo leg of the scaffold matrix, split out because its `pnpm install` pulls
+# the react-native/expo graph and nothing else in the matrix shares it. Narrower
+# than `templates` ON PURPOSE: editing another template (say `templates/next`)
+# cannot break this one, so it should not pay for it.
+#
+# What CAN break it is still all here — the packages it consumes, the inlined
+# `shared/` sources, its own tree, the harness, and the lockfiles that decide
+# what its install resolves. Keep this in step with `templates` for everything
+# except `templates/**` and `registry/**`; a path that belongs in both and is
+# only in `templates` reopens the hole this leg exists to close.
+templates_expo:
+    - "templates/expo/**"
+    - "packages/**"
+    - "shared/**"
+    - "scripts/template-build-smoke.sh"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # The two batch caps — `MAX_BATCH_ENTRIES` (shared/batch-wire.ts) and `MAX_BATCH_BYTES`
 # (packages/client/src/replay.ts, derived from the worker's own body cap in
 # packages/runtime/src/body-readers.ts) — vs the literal every non-JS port,
