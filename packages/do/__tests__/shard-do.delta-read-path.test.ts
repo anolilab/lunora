@@ -103,13 +103,24 @@ class ProbeCountingShard extends ShardDO {
     }
 
     /** The changelog page a streaming-export / read-replica consumer pulls, exposed so a test can assert what it refuses. */
-    public syncCdc(sinceSeq: number): { changes: CdcChange[]; cursor: number } {
-        return this.runShardCdcSync({ sinceSeq });
+    public syncCdc(sinceSeq: number, sinceEpoch?: string): { changes: CdcChange[]; cursor: number; epoch?: string } {
+        return this.runShardCdcSync({ sinceEpoch, sinceSeq });
     }
 
     /** The same page as {@link ProbeCountingShard.syncCdc}, but through the admin dispatch's archive-backed path. */
-    public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number }> {
+    public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
         return this.cdcSyncPage({ sinceSeq });
+    }
+
+    /**
+     * Seal this shard's timeline the way an unattended witness does — the
+     * retention sweep finding an archived segment above the watermark, a
+     * subscriber presenting a rewound resume claim, another connector being
+     * refused. What matters to a `cdcSync` consumer is only that the epoch
+     * moved without it being present, which is the whole of what this models.
+     */
+    public seal(): string {
+        return this.sealForkedTimeline();
     }
 
     /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
@@ -849,11 +860,11 @@ describe("delta-sync read path", () => {
             // A quiet consumer sitting exactly at the high-watermark has nothing
             // to be told: an empty page is the correct answer and must not be
             // turned into an error by the guard above.
-            expect(shard.syncCdc(1)).toStrictEqual({ changes: [], cursor: 1 });
+            expect(shard.syncCdc(1)).toStrictEqual({ changes: [], cursor: 1, epoch: shard.cdcEpoch() });
         });
 
-        it("serves a rewound page once post-restore writes climb back past the cursor", async () => {
-            expect.assertions(4);
+        it("serves a rewound page once post-restore writes climb back past the cursor, naming the timeline it belongs to", async () => {
+            expect.assertions(5);
 
             const shard = buildShard();
 
@@ -882,12 +893,115 @@ describe("delta-sync read path", () => {
             expect(page.changes.map((change) => change.id)).toStrictEqual(["p4", "p5", "p6"]);
 
             // `p1`..`p3` were committed at the re-issued seqs 3..5, below this
-            // consumer's cursor. Nobody can reach them: the consumer will never ask
-            // below 5, and the page it IS served carries no witness — the epoch a
-            // seal re-mints has no field on this result — that the seq space it is
-            // reading is not the one it checkpointed against.
-            expect(Object.keys(page)).toStrictEqual(["changes", "cursor"]);
+            // consumer's cursor, and nothing here reaches them: the consumer will
+            // never ask below 5, and this watermark says so too.
             expect(harness.sql.exec(`SELECT id FROM messages WHERE id IN ('p1', 'p2', 'p3')`).toArray()).toHaveLength(3);
+
+            // What the page DOES carry now is the witness. #771 pinned these keys
+            // as exactly `["changes", "cursor"]` — the observation that a seal from
+            // any other witness on this shard changed nothing a `cdcSync` consumer
+            // could see, because the result had no field to carry the re-minted
+            // epoch through. That gap is what this change closes, so the assertion
+            // is kept and inverted rather than deleted: the shape it pinned is now
+            // the shape that would be wrong.
+            expect(Object.keys(page)).toStrictEqual(["changes", "cursor", "epoch"]);
+            expect(page.epoch).toBe(shard.cdcEpoch());
+        });
+
+        /**
+         * The fan-out the epoch exists for. A seal happens with this consumer
+         * absent — the retention sweep finding a rewound archive is the plane's
+         * unattended detector, and a subscriber or another connector seals the
+         * same way. Every consumer that carries an epoch inherits it; this one
+         * now can too.
+         */
+        describe("echoed epoch", () => {
+            /** Walk a consumer to the high-watermark and hand back the pair it would checkpoint. */
+            const drain = async (shard: ProbeCountingShard): Promise<{ cursor: number; epoch: string | undefined }> => {
+                for (const id of ["m1", "m2", "m3"]) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential writes build the range the consumer checkpoints against
+                    await shard.seed(id, "c1");
+                }
+
+                const page = shard.syncCdc(0);
+
+                return { cursor: page.cursor, epoch: page.epoch };
+            };
+
+            it("refuses a consumer echoing the epoch a seal replaced", async () => {
+                expect.assertions(4);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                // The seal: some other witness proved the fork while this consumer
+                // was between polls. Its cursor stays perfectly in range, so the
+                // high-watermark guard has nothing to say about it.
+                const sealed = shard.seal();
+
+                expect(sealed).not.toBe(checkpoint.epoch);
+
+                const refusal = (() => {
+                    try {
+                        shard.syncCdc(checkpoint.cursor, checkpoint.epoch);
+                    } catch (error) {
+                        return error as LunoraError;
+                    }
+
+                    return undefined;
+                })();
+
+                expect(refusal?.code).toBe("CDC_TIMELINE_FORKED");
+                // What to do about it, not merely that it happened: an incremental
+                // cursor cannot cross a fork, so re-seed.
+                expect(refusal?.message).toMatch(/cannot cross a fork — re-seed from a snapshot/u);
+                // The timeline to come back on, beside the cursor, so the consumer
+                // can checkpoint the new pair after its re-seed.
+                expect(refusal?.data).toStrictEqual({ cursor: checkpoint.cursor, epoch: sealed });
+            });
+
+            it("serves a consumer echoing the current epoch", async () => {
+                expect.assertions(2);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                await shard.seed("m4", "c1");
+
+                // Nothing forked, so echoing the pair must be an ordinary read —
+                // the guard is a fork detector, not a second authentication step.
+                const page = shard.syncCdc(checkpoint.cursor, checkpoint.epoch);
+
+                expect(page.changes.map((change) => change.id)).toStrictEqual(["m4"]);
+                expect(page.epoch).toBe(checkpoint.epoch);
+            });
+
+            /**
+             * The negative control, and it matters as much as the refusal: the
+             * repo owns no consumer of this surface, so every one is user-written
+             * and out of repo. A connector that never learns about the field has
+             * to keep working exactly as it did.
+             */
+            it("serves an epoch-less consumer across a seal, exactly as before", async () => {
+                expect.assertions(3);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                shard.seal();
+                await shard.seed("m4", "c1");
+
+                // No `sinceEpoch`, so nothing to compare and nothing to refuse:
+                // the high-watermark proof alone, which is the whole of the
+                // guarantee this consumer had before the field existed.
+                const page = shard.syncCdc(checkpoint.cursor);
+
+                expect(page.changes.map((change) => change.id)).toStrictEqual(["m4"]);
+                expect(page.cursor).toBe(checkpoint.cursor + 1);
+                // It is still TOLD the epoch — emitting is additive and
+                // unconditional. Only echoing is opt-in.
+                expect(page.epoch).toBe(shard.cdcEpoch());
+            });
         });
     });
 });

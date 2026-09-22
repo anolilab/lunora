@@ -1218,6 +1218,24 @@ const decodeIndexHitKey = (key: string): IndexHit | undefined => {
 /** Arguments accepted by the `__lunora_admin__:cdcSync` admin RPC. */
 interface RunShardCdcSyncArgs {
     limit?: number;
+
+    /**
+     * The CDC epoch this consumer last saw on a served page, echoed back so the
+     * shard can prove the cursor beside it still indexes the same timeline.
+     *
+     * Optional, and that is the contract rather than an oversight: absent means
+     * the consumer carries no epoch (it predates the field, or has never been
+     * served a page), and the read falls back to the high-watermark proof alone
+     * — exactly the guarantee it had before.
+     *
+     * Same spelling and same meaning as the `sinceEpoch` the subscribe/resume
+     * path already takes (`ShardDO.evaluateResume`), with one deliberate
+     * difference on ABSENCE: a resume treats a missing epoch as
+     * unprovable and falls back to a full snapshot, which costs a snapshot.
+     * Here the equivalent fallback is a refusal, and refusing every connector
+     * that has not been updated is not a cost this may impose.
+     */
+    sinceEpoch?: string;
     sinceSeq: number;
 }
 
@@ -1288,7 +1306,10 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
 /**
  * Validate the `__lunora_admin__:cdcSync` payload. `sinceSeq` is the caller's
  * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
- * page cap. Both are coerced to finite non-negative integers.
+ * page cap. Both are coerced to finite non-negative integers. `sinceEpoch` is
+ * the optional timeline token the caller echoes back; anything that is not a
+ * non-empty string reads as absent, so a malformed value degrades to the
+ * pre-epoch behaviour instead of refusing the caller on a parse artefact.
  */
 const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
     const toCount = (value: unknown): number | undefined => {
@@ -1297,7 +1318,13 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
         return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
     };
 
-    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
+    const { sinceEpoch } = args;
+
+    return {
+        limit: toCount(args["limit"]),
+        ...(typeof sinceEpoch === "string" && sinceEpoch.length > 0 ? { sinceEpoch } : {}),
+        sinceSeq: toCount(args["sinceSeq"]) ?? 0,
+    };
 };
 
 /**

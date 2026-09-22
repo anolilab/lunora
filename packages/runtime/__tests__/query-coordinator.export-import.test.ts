@@ -224,6 +224,53 @@ describe("orchestrateCdcSync", () => {
         expect(result.failed).toBe(1);
         expect(result.shards[0]?.cursor).toBe(42);
     });
+
+    it("forwards each shard's own sinceEpoch and reports the epoch it came back with", async () => {
+        expect.assertions(4);
+
+        const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) => json({ result: { changes: [], cursor: 1, epoch: `live-${shardKey}` } }));
+
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, {
+            cursors: { c1: 1 },
+            defaultShardKey: null,
+            // Only c1 holds one — a caller's epoch map is as partial as its
+            // cursor map, and c2 must still be read the pre-epoch way.
+            epochs: { c1: "held-c1" },
+            tables: ["messages"],
+        });
+
+        const argsFor = (shardKey: string): Record<string, unknown> | undefined => spy.calls.find((call) => call.shardKey === shardKey)?.body.args;
+
+        expect(argsFor("c1")?.["sinceEpoch"]).toBe("held-c1");
+        expect(argsFor("c2")?.["sinceEpoch"]).toBeUndefined();
+        expect(result.shards.find((shard) => shard.shardKey === "c1")?.epoch).toBe("live-c1");
+        expect(result.shards.find((shard) => shard.shardKey === "c2")?.epoch).toBe("live-c2");
+    });
+
+    it("echoes the prior epoch beside the prior cursor when a shard errors", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["c1"] });
+        const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry });
+
+        const spy = createShardSpy(() => Response.json({ error: { code: "CDC_TIMELINE_FORKED", message: "forked" } }, { status: 409 }));
+
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, {
+            cursors: { c1: 42 },
+            defaultShardKey: null,
+            epochs: { c1: "held-c1" },
+            tables: ["messages"],
+        });
+
+        // Both halves of the pair survive the error. Dropping the epoch would
+        // silently downgrade the caller to the watermark-only guarantee on its
+        // next poll — the exact degradation this field exists to prevent.
+        expect(result.shards[0]?.cursor).toBe(42);
+        expect(result.shards[0]?.epoch).toBe("held-c1");
+    });
 });
 
 describe("orchestrateApplyCdc", () => {

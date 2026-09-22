@@ -450,6 +450,16 @@ interface CdcSyncFanOutRequest {
 
     /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
     defaultShardKey: DefaultShardKey;
+
+    /**
+     * Per-shard CDC epoch the caller last saw, keyed the same way as `cursors`.
+     * Entirely optional, per shard: a shard with no entry is read with the
+     * high-watermark proof alone, which is what every caller got before the
+     * field existed. A shard whose entry no longer matches its current epoch
+     * refuses the page with `CDC_TIMELINE_FORKED`, surfacing as that shard's
+     * `error` with its prior cursor echoed.
+     */
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -460,6 +470,14 @@ interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     /** New per-shard cursor; on error it echoes the shard's prior cursor so a retry resumes cleanly. */
     cursor: number;
+
+    /**
+     * The CDC epoch this shard's `cursor` belongs to, to store beside it and
+     * echo back on the next call. Absent when the shard has no changelog at all
+     * (pre-CDC), and on error it echoes the caller's prior epoch so a retry
+     * resumes from the same pair rather than dropping the timeline half.
+     */
+    epoch?: string;
     error?: { message: string; timedOut: boolean };
     shardKey: string;
 }
@@ -963,17 +981,25 @@ const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
     return { failed, ok, shards };
 };
 
-/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor on error. */
-const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceSeq: number }>): CdcSyncFanOutResult => {
+/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor (and epoch) on error. */
+const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceEpoch?: string; sinceSeq: number }>): CdcSyncFanOutResult => {
     const shards: ShardCdcOutcome[] = [];
     let ok = 0;
     let failed = 0;
 
-    for (const { outcome, sinceSeq } of results) {
+    for (const { outcome, sinceEpoch, sinceSeq } of results) {
         if (outcome.kind === "err") {
             failed += 1;
-            // Echo the prior cursor so a retry re-reads from the same point.
-            shards.push({ cursor: sinceSeq, error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey });
+            // Echo the prior cursor — and the epoch it belongs to — so a retry
+            // re-reads from the same point, on the same timeline. Dropping the
+            // epoch half here would silently downgrade the caller to the
+            // watermark-only guarantee on its next poll.
+            shards.push({
+                cursor: sinceSeq,
+                error: { message: outcome.message, timedOut: outcome.timedOut },
+                shardKey: outcome.shardKey,
+                ...(sinceEpoch === undefined ? {} : { epoch: sinceEpoch }),
+            });
             continue;
         }
 
@@ -982,11 +1008,15 @@ const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceS
         // payload is an untrusted unwrapped RPC value cast to a shape; the cast
         // claims non-nullish but a malformed shard could return anything, so
         // guard both fields (the disable silences the cast-driven false alarm).
-        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number };
+        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number; epoch?: unknown };
         const changes = Array.isArray(payload?.changes) ? payload.changes : [];
         const cursor = typeof payload?.cursor === "number" ? payload.cursor : sinceSeq;
+        // A pre-CDC shard reports no epoch, and so does one whose response
+        // predates the field — both leave the caller on its prior pair rather
+        // than clearing it.
+        const epoch = typeof payload?.epoch === "string" && payload.epoch.length > 0 ? payload.epoch : sinceEpoch;
 
-        shards.push({ changes, cursor, shardKey: outcome.shardKey });
+        shards.push({ changes, cursor, shardKey: outcome.shardKey, ...(epoch === undefined ? {} : { epoch }) });
     }
 
     return { failed, ok, shards };
@@ -1599,22 +1629,27 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // same-args-to-all model; we drive a per-shard-args worker loop.
             const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables, request.defaultShardKey), request.defaultShardKey);
             const cursors = request.cursors ?? {};
+            const epochs = request.epochs ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
                 const sinceSeq = cursors[shardKey] ?? 0;
+                // Absent for a caller that holds no epoch for this shard, which
+                // is every caller that has not been updated — the shard then
+                // reads exactly as it did before the field existed.
+                const sinceEpoch = epochs[shardKey];
 
                 const outcome = await callOneShard(
                     namespace,
                     shardKey,
                     prepareShardRpc({
-                        args: { limit: request.limit, sinceSeq },
+                        args: { limit: request.limit, sinceEpoch, sinceSeq },
                         functionPath: "__lunora_admin__:cdcSync",
                         headers: request.headers,
                     }),
                     perShardTimeoutMs,
                 );
 
-                return { outcome, sinceSeq };
+                return { outcome, sinceEpoch, sinceSeq };
             });
 
             return rollUpCdcSync(results);

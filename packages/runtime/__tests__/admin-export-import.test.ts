@@ -1072,6 +1072,55 @@ describe("admin sync (CDC streaming export)", () => {
         expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ cursors: { c1: 4 } });
     });
 
+    it("forwards the per-shard epoch map and surfaces each shard's epoch", async () => {
+        expect.assertions(3);
+
+        const orchestrateCdcSync = vi.fn<
+            (
+                namespace: unknown,
+                request: { cursors?: Record<string, number>; epochs?: Record<string, string> },
+            ) => Promise<{ failed: number; ok: number; shards: { cursor: number; epoch?: string; shardKey: string }[] }>
+        >(async () => {
+            return { failed: 0, ok: 1, shards: [{ cursor: 5, epoch: "live-c1", shardKey: "c1" }] };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                body: JSON.stringify({ cursors: { c1: 4 }, epochs: { c1: "held-c1" }, tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ shards: { epoch?: string; shardKey: string }[] }>();
+
+        // The pair the consumer checkpoints: the cursor it already had, and the
+        // timeline that cursor indexes, which it can echo back next poll.
+        expect(body.shards[0]).toMatchObject({ epoch: "live-c1", shardKey: "c1" });
+        expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ epochs: { c1: "held-c1" } });
+    });
+
     it("omits the global page when syncGlobals is not configured", async () => {
         expect.assertions(2);
 
