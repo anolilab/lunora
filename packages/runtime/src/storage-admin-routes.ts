@@ -97,6 +97,40 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         return key;
     };
 
+    /**
+     * Read the optional `bucket` off the request URL, refusing a name the worker
+     * does not declare — the storage mirror of `kv-admin-routes`'
+     * `requireKnownNamespace`.
+     *
+     * Without this, an unresolvable name was indistinguishable from no name at
+     * all: the generated bucket picker falls back to the DEFAULT bucket for
+     * anything it cannot resolve, so a typo, a case difference, and a bucket the
+     * app declares but this environment never bound all silently retargeted the
+     * request — a `delete` included, and `lunora import --with-storage --bucket`
+     * forwards the operator's name verbatim.
+     *
+     * `storageBuckets` is the same set the picker is built from (codegen emits
+     * `Object.keys(buckets)` alongside the drivers), so this is the picker's own
+     * knowledge enforced one layer earlier, where it can still answer 404. When
+     * a worker declares no list there is nothing to call a name unknown against
+     * and the name rides through — the same posture `requireKnownNamespace`
+     * takes for an introspector that reports no namespaces.
+     */
+    const requireKnownBucket = (url: URL): string | undefined => {
+        const bucket = queryParameter(url, "bucket");
+        const declared = storage.storageBuckets;
+
+        if (bucket === undefined || declared === undefined || declared.length === 0) {
+            return bucket;
+        }
+
+        if (!declared.includes(bucket)) {
+            throw new LunoraError(`Unknown storage bucket \`${bucket}\``, { code: "NOT_FOUND", status: 404 });
+        }
+
+        return bucket;
+    };
+
     const handleStorageList = async (request: Request): Promise<Response> => {
         const storageList = requireAdminOption(request, storage.storageList, {
             code: "STORAGE_NOT_CONFIGURED",
@@ -105,7 +139,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const url = new URL(request.url);
         const result = await storageList(queryParameter(url, "prefix"), {
-            bucket: queryParameter(url, "bucket"),
+            bucket: requireKnownBucket(url),
             cursor: queryParameter(url, "cursor"),
             ...parsePaging(request),
         });
@@ -132,7 +166,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const url = new URL(request.url);
         const key = requireStorageKey(url);
 
-        await storageDelete(key, { bucket: queryParameter(url, "bucket") });
+        await storageDelete(key, { bucket: requireKnownBucket(url) });
 
         return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -145,6 +179,11 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const url = new URL(request.url);
         const key = requireStorageKey(url);
+        // Resolved before the body is read, not at the call below: a 404-able
+        // bucket name is knowable from the URL alone, and buffering up to 32 MiB
+        // to then refuse it wastes the isolate's memory budget on a request that
+        // was never going to land.
+        const bucket = requireKnownBucket(url);
         // The entry-point `Content-Length` guard already rejects an oversized
         // declared length for PUT; reading the buffer here is the authoritative
         // size check the runtime owns (R2 enforces its own ceilings downstream).
@@ -180,7 +219,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         // Hand the digest we just computed to storage so R2 records it. Without
         // that, a later `list()`/`head()` reports no checksum and every
         // downstream integrity check degrades to comparing sizes.
-        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType, sha256 });
+        const result = await storageUpload(key, body, { bucket, contentType, sha256 });
 
         // Echo the computed hash only when verification was requested — the
         // importer uses it to confirm the blob landed byte-identical.
@@ -229,7 +268,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const url = new URL(request.url);
         const key = requireStorageKey(url);
-        const object = await storageDownload(key, { bucket: queryParameter(url, "bucket") });
+        const object = await storageDownload(key, { bucket: requireKnownBucket(url) });
 
         if (!object?.body) {
             throw new LunoraError(`No object at key ${key}`, { code: "STORAGE_OBJECT_NOT_FOUND", status: 404 });
@@ -272,7 +311,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const method = methodRaw as "GET" | "PUT" | undefined;
         const contentType = queryParameter(url, "contentType");
-        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), contentType, expiresInSeconds, method });
+        const signedUrl = await storageSignedUrl(key, { bucket: requireKnownBucket(url), contentType, expiresInSeconds, method });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };
