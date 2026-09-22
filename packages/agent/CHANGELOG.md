@@ -1,3 +1,9 @@
+## @lunora/agent [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.120...@lunora/agent@1.0.0-alpha.121) (2026-09-22)
+
+### Bug Fixes
+
+* **agent:** keep a run's own outcome when only its completion reply is lost ([#772](https://github.com/anolilab/lunora/issues/772)) ([f460032](https://github.com/anolilab/lunora/commit/f4600328cf1250b70a10b1028fc45dfcfa06a97c))
+
 ## @lunora/agent [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.119...@lunora/agent@1.0.0-alpha.120) (2026-09-22)
 
 ### Bug Fixes
