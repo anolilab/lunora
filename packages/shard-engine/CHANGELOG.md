@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.74...@lunora/shard-engine@1.0.0-alpha.75) (2026-09-22)
+
+### Bug Fixes
+
+* **client:** drop the phantom subscription table override, and gate the auth docs on status ([#773](https://github.com/anolilab/lunora/issues/773)) ([d720130](https://github.com/anolilab/lunora/commit/d720130b33db4fbe31c5161c546fb291dcd952f4))
+
 ## @lunora/shard-engine [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.73...@lunora/shard-engine@1.0.0-alpha.74) (2026-09-21)
 
 ### ⚠ BREAKING CHANGES
