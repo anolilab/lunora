@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.149...@lunora/do@1.0.0-alpha.150) (2026-09-22)
+
+### Bug Fixes
+
+* **client:** drop the phantom subscription table override, and gate the auth docs on status ([#773](https://github.com/anolilab/lunora/issues/773)) ([d720130](https://github.com/anolilab/lunora/commit/d720130b33db4fbe31c5161c546fb291dcd952f4))
+
+### Tests
+
+* **do:** pin where the shard cdc rewind guard stops holding ([#771](https://github.com/anolilab/lunora/issues/771)) ([3973aef](https://github.com/anolilab/lunora/commit/3973aefc9505c479bf74d61c532ebe732cef8447))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+
 ## @lunora/do [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.148...@lunora/do@1.0.0-alpha.149) (2026-09-21)
 
 ### Bug Fixes
