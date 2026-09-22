@@ -91,7 +91,37 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
         [THREADS_BARE_TABLE]: defineTable({
             agent: v.string(),
             createdAt: v.number(),
-            error: v.optional(v.string()),
+
+            /**
+             * The failure message of the last run that ended in `status: "error"`.
+             *
+             * NULLABLE, not just optional, because a starting run has to CLEAR it —
+             * and `ctx.db.patch` has exactly one way to clear a column: write
+             * `null`. An explicit `undefined` is rejected outright
+             * (`assertNoExplicitUndefined`), since the patch merge would drop the
+             * key and silently delete the field.
+             *
+             * `null` and absent mean the same thing to every reader — "no error" —
+             * so read it for truthiness, never for presence. Absent is a thread
+             * that has never failed (or predates the column); `null` is one whose
+             * error a later run cleared.
+             */
+            error: v.optional(v.string().nullable()),
+
+            /**
+             * The workflow instance id of the last run whose completion found an
+             * empty queue — i.e. the run that ended this thread rather than
+             * handing it on.
+             *
+             * `agentCompleteRun` reads it to tell a first completion from a
+             * re-dispatch of one that already happened, which `instanceId` alone
+             * cannot: that branch leaves `instanceId` naming the finishing run, so
+             * a writer which marks the thread live again WITHOUT taking ownership
+             * (`agentEnsureThread` with no `instanceId` — a voice turn, an inbound
+             * dispatch) leaves the finished run still reading as the owner of a
+             * thread somebody else is holding. See `agentCompleteRun`.
+             */
+            completedInstanceId: v.optional(v.string()),
 
             /**
              * The workflow instance id of the run that currently owns this
@@ -283,9 +313,11 @@ const applyConcurrencyPolicy = async (
     // instance) so the next append is attributed to this run. The incoming
     // instance id may itself be absent (an id-less caller replacing a live run)
     // — omit the column rather than writing an explicit `undefined`, which the
-    // validators reject.
+    // store rejects. `error` IS being cleared, so it is written as `null`, the
+    // one value a patch can clear a column with.
     await database.patch(args.existingId as never, {
-        error: undefined,
+        // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected (shard-engine's `assertNoExplicitUndefined`)
+        error: null,
         status: "running",
         updatedAt: now,
         ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
@@ -421,8 +453,10 @@ export const agentComponent = (): AgentComponent => {
                 // thread: resetting status/error to "running" is idempotent and
                 // correct, since (re)starting means the run IS active again. The
                 // instance id is (re)stamped so cancel/replace can target it.
+                // `error` is cleared with `null` — see the column's doc comment.
                 await context.db.patch(existing["_id"] as never, {
-                    error: undefined,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected (shard-engine's `assertNoExplicitUndefined`)
+                    error: null,
                     status: "running",
                     updatedAt: now,
                     ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
@@ -628,16 +662,32 @@ export const agentComponent = (): AgentComponent => {
                 return {};
             }
 
+            // Owning the thread is not the same as still running on it. The
+            // no-queue branch below leaves `instanceId` naming this run, so a
+            // writer that marks the thread live again WITHOUT taking ownership —
+            // `agentEnsureThread` dispatched with no `instanceId`, which is what
+            // the voice turn and the inbound paths do — leaves a finished run
+            // reading as the owner of a thread someone else is holding. Anything
+            // parked since then is waiting for that holder, not for this run:
+            // waking it would put two writers on the shared `seq` counter, the one
+            // thing the queue exists to prevent. Re-applying the terminal status
+            // is still right (it is absolute, and the re-dispatch of a completion
+            // whose reply was lost has to converge), so only the DEQUEUE is
+            // withheld — the holder's own completion hands the thread on.
+            const alreadyCompleted = thread["completedInstanceId"] === args.instanceId;
             // `byThread` is `(threadKey, position)`, so an index read is already
             // position-ascending — the head of this list is the FIFO next.
-            const queued = await context.db
-                .query(RUN_QUEUE_TABLE)
-                .withIndex("byThread", (q) => q.eq("threadKey", args.key))
-                .collect();
+            const queued = alreadyCompleted
+                ? []
+                : await context.db
+                      .query(RUN_QUEUE_TABLE)
+                      .withIndex("byThread", (q) => q.eq("threadKey", args.key))
+                      .collect();
             const next = queued[0];
 
             if (!next) {
                 await context.db.patch(thread["_id"] as never, {
+                    completedInstanceId: args.instanceId,
                     status: args.status,
                     updatedAt: now,
                     ...(args.error === undefined ? {} : { error: args.error }),

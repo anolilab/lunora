@@ -172,6 +172,36 @@ describe("onConcurrentRun: queue", () => {
         expect(thread()?.["instanceId"]).toBe("wf-z");
     });
 
+    it("never wakes a run parked behind a thread a NON-OWNING writer revived", async () => {
+        expect.assertions(6);
+
+        const { complete, queue, start, thread } = setup();
+
+        await start("wf-a");
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+
+        // A voice turn (`voice-turn.ts` calls `agentEnsureThread` with NO
+        // `instanceId`, then patches the thread `"running"`). It marks the thread
+        // live and takes no ownership, so `instanceId` still names wf-a — which
+        // finished.
+        await expect(start()).resolves.toStrictEqual({ outcome: "continued" });
+        expect(thread()).toMatchObject({ instanceId: "wf-a", status: "running" });
+
+        // A durable run parks behind the voice turn.
+        await expect(start("wf-b")).resolves.toStrictEqual({ outcome: "queued", position: 0 });
+
+        // wf-a's completion re-dispatches — at-least-once, and its reply was lost.
+        // It STILL passes the ownership check, and without the completion marker
+        // it would re-read the queue and hand the thread to wf-b, which is waiting
+        // for the voice turn to end. Two writers on one `seq` counter is exactly
+        // what the queue exists to prevent, so the re-dispatch re-applies its
+        // terminal status and dequeues nobody. wf-b waits for the thread's actual
+        // holder, bounded by its own DEQUEUE_TIMEOUT.
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+        expect(queue().map((row) => row["instanceId"])).toStrictEqual(["wf-b"]);
+    });
+
     it("refuses to queue a dispatch that has no instance id to wake", async () => {
         expect.assertions(2);
 
