@@ -56,7 +56,7 @@ const stubFetch = (accept: (url: string, body: string) => boolean): StubbedReque
 };
 
 /** `retries: 0` so a test that counts SENDS is not reading the provider's own per-POST retry. */
-const fcmProvider = () => createFcmProvider({ accessToken: "token", projectId: "project", retries: 0, timeout: 2000 });
+const fcmProvider = () => createFcmProvider({ accessToken: "token", projectId: "project", retries: 0, timeout: 2000 }); // gitleaks:allow -- the literal string "token"; the provider never authenticates here, `fetch` is stubbed
 
 const webPushProvider = (keys: { vapidPrivateKey: string; vapidPublicKey: string }) =>
     createWebPushProvider({ ...keys, timeout: 2000, vapidSubject: "mailto:a@b.c" });
@@ -100,7 +100,7 @@ describe("shipped push providers", () => {
             const requests = stubFetch(() => false);
 
             // The provider default, which is what `buildEngine` wires: `retries: 3`.
-            await createFcmProvider({ accessToken: "token", projectId: "project", timeout: 2000 }).send({ body: "b", title: "t", to: ["bad"] });
+            await createFcmProvider({ accessToken: "token", projectId: "project", timeout: 2000 }).send({ body: "b", title: "t", to: ["bad"] }); // gitleaks:allow -- the literal string "token"; the provider never authenticates here, `fetch` is stubbed
 
             // One POST plus three retries. Four router attempts are therefore up
             // to sixteen POSTs on FCM — the arithmetic `GROUP_RETRIES` documents.
