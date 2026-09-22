@@ -1,3 +1,15 @@
+## @lunora/svelte [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.151...@lunora/svelte@1.0.0-alpha.152) (2026-09-22)
+
+### Bug Fixes
+
+* **client:** drop the phantom subscription table override, and gate the auth docs on status ([#773](https://github.com/anolilab/lunora/issues/773)) ([d720130](https://github.com/anolilab/lunora/commit/d720130b33db4fbe31c5161c546fb291dcd952f4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.67
+
 ## @lunora/svelte [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.150...@lunora/svelte@1.0.0-alpha.151) (2026-09-22)
 
 ### ⚠ BREAKING CHANGES
