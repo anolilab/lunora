@@ -1989,6 +1989,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ## `lunorash/client/auth`
 
+### `AUTH_STATUSES` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `AuthStatus` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

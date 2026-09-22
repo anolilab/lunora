@@ -52,11 +52,19 @@ import type { LunoraClient } from "../lunora-client";
 import type { User } from "../types";
 
 /**
+ * Every {@link AuthStatus}, as a value — the contract table in this module's
+ * header, and the `@lunora/client` docs table that restates it for consumers,
+ * are both asserted against this list (`auth-status-docs.test.ts`), so a new
+ * state cannot ship undocumented.
+ */
+const AUTH_STATUSES = ["authenticated", "loading", "unauthenticated", "unreachable"] as const;
+
+/**
  * Resolved authentication state. See the contract table in this module's header
  * — the states are not interchangeable, and `unreachable` is the one that exists
  * only so "the server said no session" and "we could not ask" stop colliding.
  */
-type AuthStatus = "authenticated" | "loading" | "unauthenticated" | "unreachable";
+type AuthStatus = (typeof AUTH_STATUSES)[number];
 
 /**
  * Whether a gate should render its authenticated branch.
@@ -228,4 +236,4 @@ const getIdentityStore = (client: LunoraClient): IdentityStore => {
 };
 
 export type { AuthStatus, IdentityStore };
-export { getIdentityStore, isAuthenticatedStatus, isLoadingStatus };
+export { AUTH_STATUSES, getIdentityStore, isAuthenticatedStatus, isLoadingStatus };
