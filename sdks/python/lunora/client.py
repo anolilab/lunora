@@ -546,9 +546,14 @@ class LunoraClient:
         A subscription error is raised into the loop rather than delivered as a
         value, which is what stops a caller from mistaking it for data.
 
-        Frames must be dispatched on the running loop (which :meth:`connect`
-        does): the buffer is an :class:`asyncio.Queue`, filled from
-        :meth:`handle_frame` without a hop.
+        Frames must be dispatched on the running loop, which
+        :meth:`connect_and_run` does — there is no ``connect``; its read loop is
+        the only caller of :meth:`handle_frame` this transport ships. The buffer
+        is an :class:`asyncio.Queue` filled from :meth:`handle_frame` without a
+        hop, so a frame dispatched from another thread would be enqueued off the
+        loop, which :class:`asyncio.Queue` does not support. The subscribe frame
+        this opens goes out as soon as it is produced; it does not wait on an
+        inbound one.
         """
 
         values: asyncio.Queue = asyncio.Queue()
@@ -825,6 +830,16 @@ class LunoraClient:
         """Open the live WS, announce ``connect``, resend subscriptions, and dispatch frames.
 
         Runs until the socket closes. Requires the ``websockets`` package.
+
+        Outbound frames are written WHEN THEY ARE PRODUCED, by a writer task
+        running alongside the read loop. Draining them only after each inbound
+        frame — which is what this did — starves a client whose server has
+        nothing to say: a ``subscribe`` issued once the socket was up sat in
+        memory until something unrelated arrived, and a server with no
+        subscriptions sends nothing, so it sat there forever. The quickstart
+        subscribes BEFORE connecting, which is the one order that hides it
+        (:meth:`resend_subscriptions` re-sends those on connect), and the
+        conformance suites inject a sender and never reach this method at all.
         """
 
         try:
@@ -834,29 +849,24 @@ class LunoraClient:
 
         token = await self.resolve_ws_token()
         async with websockets.connect(self.ws_url_for(shard_key, token)) as socket:  # pragma: no cover - live I/O
-            queue: list[dict] = []
+            loop = asyncio.get_running_loop()
+            outbox: asyncio.Queue = asyncio.Queue()
 
+            # One FIFO drained by one writer, so frames reach the socket in the
+            # order they were produced. The hand-off has to be thread-safe:
+            # `subscribe`, `unsubscribe` and `subscribe_shape` are plain
+            # synchronous methods a consumer calls from its own thread — that is
+            # why this client's lock is a `threading.Lock` — and
+            # `asyncio.Queue.put_nowait` off the loop is not safe.
+            # `call_soon_threadsafe` is, and it preserves call order.
             def send(frame: dict) -> None:
-                queue.append(frame)
+                loop.call_soon_threadsafe(outbox.put_nowait, frame)
 
-            self.attach_socket(send)
-            send(build_connect_frame(self.client_id, context))
-            self.resend_subscriptions()
+            async def write_outbound() -> None:
+                while True:
+                    await socket.send(json.dumps(await outbox.get()))
 
-            async def flush() -> None:
-                while queue:
-                    await socket.send(json.dumps(queue.pop(0)))
-
-            try:
-                await flush()
-                # The socket is back, so the backlog replays now — among itself in
-                # submission order. It is NOT ordered against concurrent writes:
-                # `attach_socket` above has already cleared the queue-it decision,
-                # so a `submit` racing this flush goes straight over HTTP and can
-                # land ahead of the backlog still replaying. The reference client
-                # has the same window; closing it needs a flushing flag in the
-                # queue-it decision, which is a protocol change, not a port fix.
-                await self.flush_offline_queue(shard_key)
+            async def read_inbound() -> None:
                 async for raw in socket:
                     if raw == "lunora-pong":
                         continue
@@ -872,10 +882,40 @@ class LunoraClient:
                     # subscription on the client.
                     with contextlib.suppress(Exception):
                         self.handle_frame(frame)
-                    await flush()
+
+            self.attach_socket(send)
+            send(build_connect_frame(self.client_id, context))
+            self.resend_subscriptions()
+
+            writer = loop.create_task(write_outbound())
+            reader = loop.create_task(read_inbound())
+
+            try:
+                # The socket is back, so the backlog replays now — among itself in
+                # submission order. It is NOT ordered against concurrent writes:
+                # `attach_socket` above has already cleared the queue-it decision,
+                # so a `submit` racing this flush goes straight over HTTP and can
+                # land ahead of the backlog still replaying. The reference client
+                # has the same window; closing it needs a flushing flag in the
+                # queue-it decision, which is a protocol change, not a port fix.
+                await self.flush_offline_queue(shard_key)
+
+                done, _ = await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
+
+                # Re-raise whichever finished first. A `socket.send` that fails
+                # has LOST that frame, so it must not leave a dead writer behind
+                # a read loop still running as though the client were connected:
+                # the caller sees the failure, reconnects, and
+                # `resend_subscriptions` puts the subscriptions back.
+                for task in done:
+                    task.result()
             finally:
-                # Writes submitted after this point queue instead of failing.
+                # Writes submitted after this point queue instead of failing, and
+                # the writer never outlives the socket it writes to.
                 self.detach_socket()
+                for task in (reader, writer):
+                    task.cancel()
+                await asyncio.gather(reader, writer, return_exceptions=True)
 
 
 def _percent(value: str) -> str:
