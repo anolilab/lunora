@@ -1315,12 +1315,26 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     };
 
     /**
+     * Whether this run already told the thread how it ended.
+     *
+     * `agentCompleteRun` is an at-least-once dispatch whose caller stays the
+     * thread's owner, so a completion that reaches the shard and loses its reply
+     * (a dispatch timeout is a retryable 503 even when the mutation committed) is
+     * re-appliable — but only with the SAME outcome. The run-level catch below
+     * reads this to tell a run that failed from one that already reported its
+     * outcome and then tripped on delivering it.
+     */
+    const completion = { dispatched: false };
+
+    /**
      * End the run: write the terminal status and, in the same mutation, hand the
      * thread to the next queued run. Only then is the dequeued run woken — it
      * already owns the thread by that point, so there is no window in which two
      * runs believe they may append.
      */
     const finishRun = async (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }): Promise<void> => {
+        completion.dispatched = true;
+
         const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
 
         if (outcome?.dequeued !== undefined) {
@@ -1480,7 +1494,17 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // then rethrow so the workflow records/retries per its policy. A failed
         // run still hands the thread on: the next queued run is waiting for THIS
         // one to end, not for it to succeed.
-        await finishFailedRun(finishRun, error, usageBox.value);
+        //
+        // Unless the run already dispatched its outcome. `agentCompleteRun` is an
+        // absolute write the completing run stays the owner of, so re-completing
+        // from here would overwrite the outcome the run REACHED with the failure
+        // of reporting it: a run that answered, delivered its reply and committed
+        // `idle` — and then lost the dispatch's reply — would land on the thread
+        // as `error`, blaming the run for its transport. The replay re-dispatches
+        // the same terminal write, which converges on the right one.
+        if (!completion.dispatched) {
+            await finishFailedRun(finishRun, error, usageBox.value);
+        }
 
         throw error;
     }

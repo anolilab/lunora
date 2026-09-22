@@ -189,6 +189,24 @@ describe(containerTool, () => {
         expect(calls[0]?.args).toStrictEqual({ kind: "container", name: "sandbox", op: "fetch", path: "/health" });
     });
 
+    it("forwards no idempotencyKey — the receiver declares none and has nothing to dedupe against", async () => {
+        const tool = containerTool("sandbox");
+        const { calls, context } = recordingContext();
+
+        await tool.execute({ command: "deploy", op: "exec" }, context);
+
+        // Deliberate, and the opposite of `functionTool`, which pins
+        // `context.idempotencyKey` onto the args for a target that can declare
+        // `idempotencyKey` in its own validator and check it. `sandbox:invoke`
+        // declares no such arg — an undeclared arg field is DROPPED by the
+        // validator, not rejected — and an action ctx has nowhere to record a
+        // key even if it read one. Forwarding it would advertise a dedupe that
+        // nothing performs; an exec that cannot afford to run twice has to be
+        // idempotent itself. See `sandbox-component.ts`.
+        expect(calls[0]?.args).toStrictEqual({ command: "deploy", kind: "container", name: "sandbox", op: "exec" });
+        expect(context.idempotencyKey).toBe("tool:x:call-1");
+    });
+
     it("pins name/kind LAST so a model cannot reroute to another container", async () => {
         const tool = containerTool("public");
         const { calls, context } = recordingContext();

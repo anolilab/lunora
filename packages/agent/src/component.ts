@@ -593,6 +593,21 @@ export const agentComponent = (): AgentComponent => {
      * Idempotent under a workflow replay of the FINISHING run: the caller must
      * still own the thread, so a second call (after ownership has already moved
      * on) is a no-op rather than a second dequeue that skips someone's turn.
+     *
+     * INVARIANT the empty-queue branch rests on. That branch writes the terminal
+     * status but leaves `instanceId` naming this run, so a re-dispatched
+     * completion (the loop's body re-runs on every workflow activation) passes
+     * the ownership check a second time and re-reads the queue. Re-writing the
+     * terminal status then is right — it is absolute and converges — and finding
+     * the queue still empty is not luck: a run can only park here while the
+     * thread is `"running"`/`"awaiting_input"` under a DIFFERENT instance (see
+     * `agentEnsureThread`), and this branch just moved it to a terminal status.
+     * The next run to take the thread stamps its own `instanceId`, which retires
+     * this one. What would break it is a writer that marks the thread live again
+     * WITHOUT taking ownership: the finished run would still read as the owner,
+     * and could hand the thread — and wake — a run parked behind whoever is
+     * actually holding it. Any new such writer needs a stored completion marker
+     * here, because none of the columns this reads would distinguish the two.
      */
     const agentCompleteRun = mutation
         .input({
