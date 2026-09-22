@@ -127,10 +127,11 @@ One thing only Dart gets, because a mobile client is disconnected routinely rath
 than exceptionally:
 
 - **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
-  hands back a `Stream` a Flutter `StreamBuilder` consumes directly. It subscribes
-  on first listen and unsubscribes when the last listener cancels, so disposing the
-  widget disposes the subscription. The callback-shaped `subscribeList(...)` every
-  other language has is there too.
+  hands back a `Stream` a Flutter `StreamBuilder` consumes directly. Each listener
+  opens its own subscription, torn down when it cancels, so disposing the widget
+  disposes exactly its own — and two `StreamBuilder`s on one stream cost two server
+  subscriptions. The callback-shaped `subscribeList(...)` every other language has
+  is there too.
 
 In Dart, that rides the generated mutation:
 

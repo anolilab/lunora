@@ -190,6 +190,20 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * gets back each shard's change page plus its new cursor, and the global
      * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
      * the cursors and re-posts them to resume, so the worker holds no offsets.
+     *
+     * Each shard's page also carries the CDC `epoch` its cursor belongs to, and
+     * the caller may post those back in a parallel `epochs` map. Both halves are
+     * optional and additive: a caller that ignores `epoch` and never sends
+     * `epochs` gets byte-for-byte the behaviour it had. One that stores the pair
+     * and echoes it is refused (that shard's `error`, its prior cursor echoed)
+     * when the shard's timeline forked after the page it last read — which the
+     * cursor alone stops being able to prove as soon as post-restore writes
+     * carry the high-watermark back over it.
+     *
+     * The global (D1) half deliberately has no counterpart. An epoch is the
+     * fan-out of a detection, and that plane has no detector to fan out — no
+     * `.global()` changelog archive, so nothing seals a fork with no consumer
+     * present. `globalCursor` stays a bare integer.
      */
     const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
@@ -205,6 +219,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
+        const epochs = typeof raw["epochs"] === "object" && raw["epochs"] !== null ? (raw["epochs"] as Record<string, string>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
         const requestedTables = stringTables(raw["tables"]);
@@ -217,6 +232,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors,
             defaultShardKey,
+            epochs,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
@@ -246,6 +262,20 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * delete with a monotonic per-source `seq`, so deletes ARE captured (a delete
      * surfaces as `{ op: "delete", doc: { _id } }`). A consumer maps the response
      * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
+     *
+     * **Why the cursor carries no per-shard CDC epoch, where {@link handleCdcSync}
+     * does.** Storing one would be free — the token is opaque, version-tagged,
+     * fail-soft-decoded, and already per-shard. What is not free is the refusal
+     * it would arm. `ConnectorSyncPage` is `{ changes, nextCursor, hasMore }`:
+     * it has no error channel, and this handler deliberately tolerates a failed
+     * shard by folding its (absent) changes and echoing its prior cursor. So a
+     * shard refusing a stale epoch would reach the consumer as an empty page
+     * with `hasMore: false` — "caught up" — which is strictly worse than the
+     * unguarded read it replaced, and exactly the silent degradation the epoch
+     * exists to prevent. Making it audible means giving this response an error
+     * channel, or failing the whole page on any one shard's error (which would
+     * also fail it on a single transient timeout it tolerates today). Either is
+     * a change to the published connector contract, and neither belongs here.
      */
     const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);

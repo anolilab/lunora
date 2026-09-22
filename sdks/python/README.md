@@ -63,6 +63,23 @@ asyncio.run(main())
 
 See [`examples/quickstart.py`](./examples/quickstart.py) for a runnable script.
 
+Subscribing before `connect_and_run` is convenient, not required: an outbound
+frame is written the moment it is produced, by a writer task running alongside
+the read loop, so a `subscribe` / `unsubscribe` / `subscribe_shape` issued from
+another coroutine — or another thread — goes out immediately whether or not the
+server has anything to say. `connect_and_run` returns when the socket closes and
+re-raises a failed write, so the caller reconnects; `resend_subscriptions` (which
+it calls for you) puts the subscriptions back with their resume cursors.
+
+**Keepalive is the `websockets` library's, not an application frame.** This
+transport never sends `lunora-ping`; `websockets` sends a protocol-level ping
+every 20 s and closes the connection when one goes unanswered for another 20 s,
+which keeps an idle path open through a NAT or proxy AND ends the read loop on a
+peer that has stopped answering — the two jobs the reference client's heartbeat
+does. Measured over a 50 s idle connection: two pings and two pongs each way, no
+application traffic, socket still open. The inbound `lunora-pong` a differently
+configured peer may send is ignored.
+
 ## Optimistic updates and offline writes
 
 `mutation` is the direct write path: one HTTP round-trip that raises when the

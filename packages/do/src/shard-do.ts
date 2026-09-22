@@ -3730,12 +3730,31 @@ abstract class ShardDO {
      * implements it directly (no codegen override needed). Returns an empty
      * page that leaves the cursor untouched when CDC was never enabled on this
      * shard, so the coordinator tolerates shards that predate CDC.
+     *
+     * Every served page carries the `epoch` the `cursor` beside it belongs to,
+     * and a consumer MAY echo it back as `args.sinceEpoch` on the next call.
+     * Both halves are additive: a consumer that ignores the field behaves
+     * exactly as it did before, and one that never echoes keeps exactly the
+     * guarantee it had (the high-watermark proof below, and nothing more).
+     *
+     * The field exists because the watermark proof is perishable and this plane
+     * has an unattended detector that outlives it. `cdcArchiveRewound` seals a
+     * fork during a retention sweep with no consumer present at all, and every
+     * other epoch-carrying consumer — subscriber frames, replica pulls —
+     * inherits that seal. This path had no field to inherit it through, so a
+     * connector sailed past a sealed fork the moment post-restore writes carried
+     * the AUTOINCREMENT back over its cursor. The epoch is the fan-out of that
+     * detection, never a detection of its own.
      */
-    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number } {
+    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number; epoch?: string } {
         const sql = this.sql as SqlExec;
         const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
 
         if (!present) {
+            // No changelog, so no timeline to name. The field is omitted rather
+            // than guessed, matching {@link ShardDO.currentCdcEpoch} — and a
+            // `sinceEpoch` cannot be judged against a shard that has never had
+            // one, so it is ignored here rather than refused.
             return { changes: [], cursor: args.sinceSeq };
         }
 
@@ -3761,6 +3780,35 @@ abstract class ShardDO {
         // not. The freshly minted epoch also re-prefixes the changelog archive,
         // so the rewound timeline stops writing segments over the old one's.
         const cursor = readCdcCursor(sql);
+        // Read once: it gates the echo guard below AND is stamped on the page
+        // this returns, so a served consumer never costs a second read.
+        const epoch = readCdcEpoch(sql);
+
+        // Echo guard, ahead of the watermark one because it answers a strictly
+        // longer-lived question. The watermark proof expires — a rewound log
+        // re-issues the seqs it lost, and once post-restore writes have carried
+        // it back past this consumer's cursor there is nothing left to refuse
+        // it with. A mismatched epoch does not expire: it says the shard sealed
+        // a fork at some point after the page this consumer last read, whoever
+        // presented the proof.
+        //
+        // So this one does NOT seal. An epoch mismatch is not evidence of a new
+        // fork — it is evidence of one already detected and already sealed, and
+        // re-minting on it would invalidate every other consumer's resume for a
+        // fork they have already been told about. Only the watermark proof
+        // below is a fresh detection, and only it seals.
+        //
+        // A consumer echoing the CURRENT epoch with a cursor above the
+        // watermark falls through to that guard and seals there — the same
+        // ordering, and the same verdict, `evaluateResume` already applies to
+        // the same pair of claims.
+        if (args.sinceEpoch !== undefined && args.sinceEpoch !== epoch) {
+            throw new LunoraError(
+                "CDC_TIMELINE_FORKED",
+                `cdc epoch ${args.sinceEpoch} is not this shard's current epoch ${epoch}; the changelog forked after the page you last read (a point-in-time restore, or a rolled-back archive) and an incremental cursor cannot cross a fork — re-seed from a snapshot and resume at epoch ${epoch}`,
+                { data: { cursor, epoch }, status: 409 },
+            );
+        }
 
         if (args.sinceSeq > cursor) {
             throw cdcForkedError(cursor, args.sinceSeq, "shard", this.sealForkedTimeline());
@@ -3808,7 +3856,7 @@ abstract class ShardDO {
             );
         }
 
-        return page;
+        return { ...page, epoch };
     }
 
     /**
@@ -3829,7 +3877,7 @@ abstract class ShardDO {
      * floor still pays a full bootstrap where a connector no longer does. It is
      * tracked as a follow-up, not absorbed silently here.
      */
-    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number }> {
+    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
         return this.cdcRetention.syncPage(() => this.runShardCdcSync(args), args);
     }
 

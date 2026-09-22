@@ -1,3 +1,13 @@
+## @lunora/do [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.150...@lunora/do@1.0.0-alpha.151) (2026-09-22)
+
+### Features
+
+* **do:** carry the shard cdc epoch to runShardCdcSync consumers ([#775](https://github.com/anolilab/lunora/issues/775)) ([8fc118a](https://github.com/anolilab/lunora/commit/8fc118a3ba117d4e62ebc107b377c357f4bbf2bf))
+
+### Documentation
+
+* correct two claims describing APIs that do not exist ([#776](https://github.com/anolilab/lunora/issues/776)) ([e6fe8f0](https://github.com/anolilab/lunora/commit/e6fe8f0f30cc8e08812853362de7cffc91cc8cc8))
+
 ## @lunora/do [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.149...@lunora/do@1.0.0-alpha.150) (2026-09-22)
 
 ### Bug Fixes

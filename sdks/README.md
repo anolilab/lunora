@@ -180,6 +180,29 @@ re-read the eighth — a matrix is only worth its accuracy in the direction it d
 not expect to be wrong. Injecting `http_post` still overrides the default
 everywhere it is passed.
 
+Two things about that loop, because it is the only one in this directory and
+nothing in `conformance-cases.json` can reach it — the suites inject a sender, so
+a socket-scheduling defect is invisible to all eight. `sdks/python/tests/test_connect_and_run.py`
+is where those guarantees are asserted instead.
+
+- **Outbound frames are written when produced.** A writer task drains one FIFO
+  alongside the read loop. Draining the outbox only after each INBOUND frame —
+  which is what this did — starves a client whose server is idle, and a server
+  with no subscriptions is idle by definition: a `subscribe` issued once the
+  socket was up sat in memory until something unrelated arrived. Measured
+  against a real `websockets` server: 0 subscribe frames after three idle
+  seconds, 1 the instant an unrelated frame landed. Subscribing BEFORE
+  connecting, which the quickstart does, is the one order that hid it.
+- **No `lunora-ping`, deliberately.** The reference client sends one every 30 s
+  and watchdogs `lastFrameAt`; this loop sends none. `websockets` already pings
+  at the protocol level every 20 s and closes the connection when a ping goes
+  unanswered for another 20 s, which is both halves of that job — measured over
+  a 50 s idle connection: two pings and two pongs each way, no application
+  traffic, socket open throughout. An app-level ping with no watchdog beside it
+  would be symmetry and nothing else. Revisit if a deployment's edge needs an
+  application frame to hold a path open, or if this port grows the reference's
+  force-close-on-silence semantics. Inbound `lunora-pong` is ignored either way.
+
 ⁵ **From the envelope only.** `protocol/README.md` §4.3 says a rate-limited
 retry SHOULD wait out `error.data.retryAfterMs` **or** the `Retry-After` header;
 these eight honour the first and none of them can see the second. Every port
@@ -275,9 +298,16 @@ optionality — disappeared with the rest.
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`
 and the generated `watchX(args)` return a `Stream`, which a Flutter
-`StreamBuilder` consumes with no adapter. The stream subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing a widget disposes
-the subscription and there is no `dispose()` override to forget. The
+`StreamBuilder` consumes with no adapter. **Each listener opens its OWN
+subscription**, which starts when it listens and is torn down when it cancels, so
+disposing a widget disposes exactly its own subscription and there is no
+`dispose()` override to forget. The cost is the other half of that: two
+`StreamBuilder`s on one `watch()` stream are two server subscriptions and two
+re-executions per write, so a widget tree that wants one should share the value
+it builds rather than the stream. `Stream.multi` and not a broadcast controller
+because a broadcast stream's late listener — a builder that rebuilds after
+cancelling — would sit empty until the next poke, where a fresh subscription is
+served a snapshot. The
 callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
 value whose lifetime is not a widget's.
 
