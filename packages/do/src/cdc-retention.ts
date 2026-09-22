@@ -382,9 +382,9 @@ class CdcRetentionRunner {
      * whether or not a bucket is configured.
      */
     public async syncPage(
-        readLive: () => { changes: CdcChange[]; cursor: number },
+        readLive: () => { changes: CdcChange[]; cursor: number; epoch?: string },
         args: { limit?: number; sinceSeq: number },
-    ): Promise<{ changes: CdcChange[]; cursor: number }> {
+    ): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
         try {
             return readLive();
         } catch (error) {
@@ -429,7 +429,11 @@ class CdcRetentionRunner {
                 throw error;
             }
 
-            return archived;
+            // Stamped with the same epoch the segments were read under, so a
+            // page recovered from the cold tier names its timeline exactly as
+            // the live read would. The archive is keyed BY the epoch, so these
+            // rows cannot belong to another one.
+            return { ...archived, epoch };
         }
     }
 

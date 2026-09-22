@@ -388,10 +388,12 @@ abstract class ShardDO {
     protected runShardCdcSync(args: RunShardCdcSyncArgs): {
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     };
     protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     }>;
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
@@ -861,6 +863,7 @@ interface ReactorRunOutcome {
 ```ts
 interface RunShardCdcSyncArgs {
     limit?: number;
+    sinceEpoch?: string;
     sinceSeq: number;
 }
 ```

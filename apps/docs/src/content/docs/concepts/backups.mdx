@@ -102,6 +102,31 @@ same way you would clear the [R2 archive](#archiving-trimmed-entries-to-r2). Do
 not wait to be told: on a busy deployment the window in which you would be told
 is minutes wide.
 
+#### Storing the epoch beside the cursor widens that window
+
+Every per-shard page from `/_lunora/admin/sync` carries an `epoch` next to its
+`cursor` — the identity of the timeline that cursor indexes. Store the pair, and
+post the epochs back in the next request's `epochs` map alongside `cursors`:
+
+```json
+{ "cursors": { "c1": 812 }, "epochs": { "c1": "6c95…" }, "tables": ["messages"] }
+```
+
+A shard whose timeline has since been sealed then refuses that shard's page with
+`CDC_TIMELINE_FORKED` **whatever the cursor says**, so you are told after the
+watermark proof has expired rather than only before it. The refusal carries the
+current epoch to resume against, and the remedy is unchanged: re-seed, because
+an incremental cursor cannot cross a fork.
+
+Both halves are optional. A connector that ignores `epoch` and never sends
+`epochs` behaves exactly as it did, with exactly the guarantee described above —
+so this widens the window for consumers that opt in, and does not replace the
+standing instruction to re-seed proactively. It also only fires once something on
+the shard has sealed the fork: a reconnecting subscriber, a refused consumer, or
+the retention sweep finding the [R2 archive](#archiving-trimmed-entries-to-r2)
+rewound. The `globalCursor` for `.global()` tables has no epoch, and for the same
+reason — that plane has no archive, so nothing there detects a fork unattended.
+
 ## Snapshot backups
 
 `lunora backup create` exports every table to a timestamped NDJSON file under a

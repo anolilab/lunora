@@ -2743,6 +2743,7 @@ type AuthTimestamp = null | number | string;
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
     defaultShardKey: DefaultShardKey;
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -3110,6 +3111,7 @@ interface SchedulerContext {
 interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     cursor: number;
+    epoch?: string;
     error?: {
         message: string;
         timedOut: boolean;
