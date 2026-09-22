@@ -1,4 +1,4 @@
-import type { Notification, Receipt } from "@visulima/notification";
+import type { Notification, Provider, PushPayload, Receipt } from "@visulima/notification";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
@@ -1263,6 +1263,34 @@ describe("mixed-kind push routing", () => {
         // delivery the SECOND FCM attempt produced, not the first one's failure.
         expect(receipt.success).toBe(true);
         expect((receipt.data as { messageId: string }).messageId).toBe("mock-1,flaky-2");
+    });
+
+    it("stops re-attempting the moment the failed group turns permanently gone", async () => {
+        expect.hasAssertions();
+
+        const sends: PushPayload[] = [];
+        // Transient first, then the device is unregistered between attempts —
+        // which is what makes `shouldRetry` load-bearing and not just a copy of
+        // the check made before the first re-attempt.
+        const fcm: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "mock-turns-gone",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: (group) => {
+                sends.push(group);
+
+                return { error: new Error(sends.length === 1 ? "503 transient upstream error" : FCM_DEAD_TOKEN_ERROR), success: false };
+            },
+        };
+        const router = routingPushProvider({ ...routerOptions, fcm, webPush: mockPushProvider().provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // Two attempts, not the full four: the second answered "gone", and the
+        // remaining budget would have been spent on a device already deleted.
+        expect(sends).toHaveLength(2);
+        expect(receipt.success).toBe(false);
     });
 
     it("does not retry a failed group whose recipients are permanently gone", async () => {
