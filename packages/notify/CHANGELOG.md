@@ -1,3 +1,9 @@
+## @lunora/notify [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.60...@lunora/notify@1.0.0-alpha.61) (2026-09-22)
+
+### Features
+
+* **notify:** retry a partial push's failed group ([#768](https://github.com/anolilab/lunora/issues/768)) ([73f0c7b](https://github.com/anolilab/lunora/commit/73f0c7b4a7afbd476d0da94cdc81e3c9da8480ee))
+
 ## @lunora/notify [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.59...@lunora/notify@1.0.0-alpha.60) (2026-09-13)
 
 
