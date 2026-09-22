@@ -87,9 +87,23 @@ void caseNon2xxWithoutErrorEnvelopeFails() {
   covers('non_2xx_without_error_envelope_fails');
 
   // protocol/README.md §4.2. Without the status check this returned a null
-  // result and threw nothing — the caller believes its mutation committed.
-  throws(
-    () => LunoraClient.parseRpcResponse(<String, Object?>{'message': 'bad gateway'}, status: 502),
-    'a non-2xx with no error envelope must fail',
-  );
+  // result and threw nothing — the caller believes its mutation committed. The
+  // fixture's non-object `error` slots are the other half: a slot holding a
+  // string, a null or an array is not an envelope either, and a port reading one
+  // without a type check throws its LANGUAGE's error rather than
+  // LunoraApiException — which is why this catches the SDK's own type rather
+  // than using `throws`, whose `on Object` would accept either.
+  for (final testCase in objectList(fixture('rpc.json')['responseTransportError'])) {
+    final response = testCase['response'] as Map<String, Object?>;
+
+    try {
+      LunoraClient.parseRpcResponse(response, status: testCase['status'] as int);
+      failures.add('${testCase['name']} — expected a LunoraApiException, got none');
+    } on LunoraApiException catch (error) {
+      equals(error.code, testCase['code'], 'error code for ${testCase['name']}');
+      // Nothing reached the shard, so a queued write must be replayed rather
+      // than dropped — the batch path already says so.
+      equals(error.transient, true, 'transient for ${testCase['name']}');
+    }
+  }
 }

@@ -611,20 +611,30 @@ public final class ConformanceTest {
         }
     }
 
-    private static void non2xxWithoutEnvelopeThrows() {
+    @SuppressWarnings("unchecked")
+    private static void non2xxWithoutEnvelopeThrows() throws IOException {
         covers("non_2xx_without_error_envelope_fails");
 
         // protocol/README.md §4.2. Without the status check this returned null
-        // and threw nothing — the caller believes its mutation committed.
-        Map<String, Object> body = new LinkedHashMap<>();
+        // and threw nothing — the caller believes its mutation committed. The
+        // fixture's non-object `error` slots are the other half: a slot holding
+        // a string, a null or an array is not an envelope either, and a port
+        // reading one without a type check throws its LANGUAGE's exception
+        // rather than ApiException, escaping every handler the caller wrote.
+        for (Object entry : (List<Object>) fixture("rpc.json").get("responseTransportError")) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            Map<String, Object> response = (Map<String, Object>) testCase.get("response");
+            int status = ((Number) testCase.get("status")).intValue();
 
-        body.put("message", "bad gateway");
-
-        try {
-            Client.parseRpcResponse(body, 502);
-            check(false, "a 502 without an error envelope must throw");
-        } catch (Client.ApiException error) {
-            check("INTERNAL".equals(error.code), "the transport error is INTERNAL");
+            try {
+                Client.parseRpcResponse(response, status);
+                check(false, "expected an ApiException for " + testCase.get("name"));
+            } catch (Client.ApiException error) {
+                check(error.code.equals(testCase.get("code")), "code for " + testCase.get("name"));
+                // Nothing reached the shard, so a queued write must be replayed
+                // rather than dropped — the batch path already says so.
+                check(error.transientFailure, "transient for " + testCase.get("name"));
+            }
         }
     }
 

@@ -193,11 +193,19 @@ class TestTransportErrors(unittest.TestCase):
         covers("non_2xx_without_error_envelope_fails")
 
         # protocol/README.md §4.2 — without the status check this returned None
-        # and raised nothing, so a caller believes its mutation committed.
-        with self.assertRaises(LunoraError) as caught:
-            parse_rpc_response({"message": "bad gateway"}, 502)
+        # and raised nothing, so a caller believes its mutation committed. The
+        # non-object `error` slots are the other half: read without a type check
+        # they raised `AttributeError`/`TypeError`, which is not a `LunoraError`
+        # and so escapes every handler the caller wrote.
+        for case in load("rpc.json")["responseTransportError"]:
+            with self.subTest(case=case["name"]):
+                with self.assertRaises(LunoraError) as caught:
+                    parse_rpc_response(case["response"], case["status"])
 
-        self.assertEqual(caught.exception.code, "INTERNAL")
+                self.assertEqual(caught.exception.code, case["code"])
+                # Nothing reached the shard, so a queued write must be replayed
+                # rather than dropped — the batch path already says so.
+                self.assertTrue(caught.exception.transient)
 
     def test_redirect_does_not_replay_the_bearer_token(self):
         """A 3xx must not hand the caller's credentials to the redirect target.

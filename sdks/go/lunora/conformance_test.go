@@ -521,21 +521,46 @@ func TestServerFrameConsumer(t *testing.T) {
 //
 // The manifest listed this case from the start; the Go port never had it, and
 // nothing noticed until the manifest became a gate.
+// The non-object `error` slots in the fixture are the other half of the same
+// rule: a slot holding a string, a null or an array is not an envelope either,
+// and reading it without a type check raises the LANGUAGE's error rather than
+// APIError — escaping every handler the caller wrote.
 func TestNon2xxWithoutErrorEnvelopeFails(t *testing.T) {
 	covers("non_2xx_without_error_envelope_fails")
 
-	value, err := ParseRPCResponse(502, []byte(`{"message":"bad gateway"}`))
-	if err == nil {
-		t.Fatalf("a 502 without an error envelope must fail, got value %#v", value)
+	cases, _ := loadFixture(t, "rpc.json")["responseTransportError"].([]any)
+	if len(cases) == 0 {
+		t.Fatal("rpc.json carries no responseTransportError cases")
 	}
 
-	apiError, ok := err.(APIError)
-	if !ok {
-		t.Fatalf("error = %T, want APIError", err)
-	}
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
 
-	if apiError.Code != "INTERNAL" {
-		t.Errorf("code = %q, want INTERNAL", apiError.Code)
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(testCase["response"])
+			status, _ := testCase["status"].(float64)
+
+			value, err := ParseRPCResponse(int(status), raw)
+			if err == nil {
+				t.Fatalf("a %d with no error envelope must fail, got value %#v", int(status), value)
+			}
+
+			apiError, ok := err.(APIError)
+			if !ok {
+				t.Fatalf("error = %T, want APIError", err)
+			}
+
+			if want, _ := testCase["code"].(string); apiError.Code != want {
+				t.Errorf("code = %q, want %q", apiError.Code, want)
+			}
+
+			// Nothing reached the shard, so a queued write must be replayed
+			// rather than dropped — the batch path already says so.
+			if !apiError.Transient {
+				t.Error("an envelope-less non-2xx reached no verdict and must be transient")
+			}
+		})
 	}
 }
 
