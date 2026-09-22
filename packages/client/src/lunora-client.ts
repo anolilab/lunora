@@ -7429,20 +7429,40 @@ class LunoraClient {
     }
 
     /**
-     * Release one {@link sessionProbesInFlight} hold and re-flush anything that
-     * was waiting on it.
+     * Release one {@link sessionProbesInFlight} hold and re-flush the writes
+     * that hold alone was holding.
      *
      * A resolve that names a user re-flushes through {@link setAuthToken} (the
      * identity changed). One that does not — signed out, or unreachable —
-     * changes no identity and so fires no listener, and the writes held for the
-     * duration of the probe would sit queued until the next reconnect. Same
-     * connected-only gate as `setAuthToken`'s, so this stays a re-flush of a
-     * live connection rather than a reason to replay an offline queue.
+     * changes no identity and so fires no listener, and a write held only
+     * because {@link identityUnresolved} said so would sit queued until the
+     * next reconnect. Same connected-only gate as `setAuthToken`'s, so this
+     * stays a re-flush of a live connection rather than a reason to replay an
+     * offline queue.
+     *
+     * Only for a `null` fingerprint, which is the ONLY hold this probe owns:
+     * {@link replayIdentityVerdict}'s unresolved-identity hold tests
+     * `current === null`, while its other hold — a sticky subject awaiting
+     * re-confirmation — requires an established subject and so a
+     * `subj:<id>` fingerprint. That one is already on the `noteHeldRetryDelay`
+     * backoff and must stay there.
+     *
+     * Re-flushing it from here instead was an unbounded loop, not a slow
+     * backoff: `drainOfflineQueue` answers a subject-awaiting hold by probing
+     * `getCurrentUser()` itself, whose release re-flushed, which drained, which
+     * probed again — hundreds of round trips without a millisecond passing,
+     * until the heap gave out. Narrowing to the `null` fingerprint makes the
+     * cycle unreachable rather than merely rare: the branch that starts a probe
+     * cannot be entered by a flush this guard lets through.
      */
     private releaseSessionProbe(): void {
         this.sessionProbesInFlight -= 1;
 
-        if (this.sessionProbesInFlight === 0 && !this.closed && this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
+        if (this.sessionProbesInFlight > 0 || this.identityFingerprint() !== null) {
+            return;
+        }
+
+        if (!this.closed && this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
             this.flushAllOfflineQueues();
         }
     }
