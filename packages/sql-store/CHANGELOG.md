@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.125...@lunora/sql-store@1.0.0-alpha.126) (2026-09-22)
+
+### Tests
+
+* **sql-store:** pin what the global cdc rollback guard does not catch ([#769](https://github.com/anolilab/lunora/issues/769)) ([f34a1c6](https://github.com/anolilab/lunora/commit/f34a1c6258aae5c17d76e6c601816a58708360e0))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.150
+
 ## @lunora/sql-store [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.124...@lunora/sql-store@1.0.0-alpha.125) (2026-09-21)
 
 ### ⚠ BREAKING CHANGES
