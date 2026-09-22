@@ -404,22 +404,31 @@ tickMs? }`.
 
 ### `auth(client?)` and `connectionStatus(client?)`
 
-`auth` returns `{ user, token, setToken }`: `user` and `token` are readable
-stores (`null` when signed out), and `setToken(jwt)` sets the token on the
-client after sign-in. `connectionStatus` returns a readable store of the
-aggregate live-socket state (`idle` → `connecting` → `connected` → `offline`),
-for driving a connection indicator.
+`auth` returns `{ status, user, token, setToken }`: `status`, `user` and `token`
+are readable stores, and `setToken(jwt)` sets the token on the client after
+sign-in. `connectionStatus` returns a readable store of the aggregate
+live-socket state (`idle` → `connecting` → `connected` → `offline`), for driving
+a connection indicator.
+
+`$status` is the auth gate — `"loading"`, `"authenticated"`, `"unauthenticated"`
+or `"unreachable"` (a credential is held but the identity endpoint could not be
+reached; gates as authenticated). Branch on it, not on `$user`: `$user` is null
+both when signed out and when a held credential's identity has not resolved, so
+a `$user` gate shows the sign-in prompt to a signed-in user on an offline
+reload. See the [`@lunora/client` reference](/docs/packages/client) for the
+table. `authGate()` returns `{ isAuthenticated, isLoading }` derived from the
+same `status`, when a boolean is all a template needs.
 
 ```svelte
 <script lang="ts">
     import { auth, connectionStatus } from "@lunora/svelte";
 
-    const { user, setToken } = auth();
-    const status = connectionStatus();
+    const { setToken, status: authStatus, user } = auth();
+    const connection = connectionStatus();
 </script>
 
-{#if $user}Signed in as {$user.name}{/if}
-<span data-status={$status}>{$status}</span>
+{#if $authStatus === "loading"}Checking…{:else if $authStatus === "unauthenticated"}Signed out{:else}Signed in as {$user?.name}{/if}
+<span data-status={$connection}>{$connection}</span>
 ```
 
 ## Agent tool events — `agentToolEvents(options)`

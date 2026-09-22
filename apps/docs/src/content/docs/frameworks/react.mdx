@@ -138,8 +138,22 @@ only the subscription registered under the **mutation's own** reference and args
 
 ## Auth
 
-`useAuth()` returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after
-a sign-in flow, and every subsequent RPC carries the token automatically.
+`useAuth()` returns `{ status, user, token, setToken(next) }`. Call
+`setToken(jwt)` after a sign-in flow, and every subsequent RPC carries the token
+automatically.
+
+Gate on `status` (`"loading"` / `"authenticated"` / `"unauthenticated"` /
+`"unreachable"`), not on whether `user` is null: `user` is null both when signed
+out and when a held credential's identity has not resolved yet, so a `user` gate
+shows the sign-in form to a signed-in user on an offline reload.
+
+```tsx
+const { setToken, status, user } = useAuth();
+
+if (status === "loading") return <Spinner />;
+if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
+return <Dashboard email={user?.email} />;
+```
 
 ## Reactive loaders
 

@@ -65,7 +65,7 @@ render(
 | `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
 | `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                            |
 | `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
-| `createAuth`                                        | primitive | Identity plumbing: `{ token, user }` signals + `setToken`.                                       |
+| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.             |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                       |
 | `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                 |
 | `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.            |
