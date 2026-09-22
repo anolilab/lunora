@@ -311,8 +311,13 @@ export interface CachedQuery {
     /**
      * Issuing identity fingerprint (same shape the offline queue stamps). A
      * cached value only hydrates when it matches the current identity, so a
-     * signed-out cache never leaks into a new session. `null` = cached while
-     * signed out.
+     * signed-out cache never leaks into a new session.
+     *
+     * `null` = cached by a client that had no subject to name — an app with no
+     * auth at all, or one the server answered "no session" to. It is never
+     * written while a session resolve is in flight, because a `null` written
+     * there belongs to a user the client was about to name, and every
+     * unidentified session would match it.
      */
     identity: string | null;
 

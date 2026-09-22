@@ -139,9 +139,11 @@ describe("auth gates (Solid)", () => {
         </>
     );
 
-    it("shows only the signed-out gate before a token arrives", async () => {
+    it("shows only the signed-out gate once the server answers there is no session", async () => {
+        // No seeded user: the server answers "no session". An absent bearer
+        // token is not that answer on its own — a cookie session holds none —
+        // so the gate is reached by asking rather than by assuming.
         const fake = createAuthFakeClient();
-        fake.setCurrentUser({ id: "u_1" });
 
         const rendered = render(() => gates(), {
             wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider>,

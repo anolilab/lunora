@@ -71,12 +71,10 @@ describe("useAuth", () => {
         expect(mock.setAuthToken).toHaveBeenLastCalledWith(null);
     });
 
-    it("user is null when no token is set", () => {
-        expect.assertions(2);
+    it("still asks the server who is signed in when no token is held", async () => {
+        expect.hasAssertions();
 
         const mock = createMockClient();
-
-        mock.setCurrentUser({ id: "u_1" });
 
         render(
             <LunoraProvider client={mock.asClient}>
@@ -84,9 +82,18 @@ describe("useAuth", () => {
             </LunoraProvider>,
         );
 
-        // No token ⇒ getCurrentUser is short-circuited, user stays anon.
+        // A cookie session carries no bearer token, so "no token" is not an
+        // answer about who is signed in — only the server has one. Skipping the
+        // round trip here is what left `identityFingerprint()` null for every
+        // user of every cookie app, and a fingerprint nobody differs on is what
+        // collapsed the identity gates into `null === null`.
+        await waitFor(() => {
+            expect(mock.getCurrentUser).toHaveBeenCalledTimes(1);
+        });
+
+        // The mock answers "no session", so the user settles anon — reached by
+        // asking, not by assuming.
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
-        expect(mock.getCurrentUser).not.toHaveBeenCalled();
     });
 
     it("populates user after a token is set and the session fetch resolves", async () => {

@@ -134,15 +134,22 @@ describe("auth store (Svelte)", () => {
 });
 
 describe("authGate store (Svelte)", () => {
-    it("is neither loading nor authenticated before a token is set (signed out)", () => {
+    it("loads with no token held, then settles signed out once the server answers", async () => {
         const fake = createAuthFakeClient();
         const { isAuthenticated, isLoading } = authGate(fake.client);
 
         const stopA = isAuthenticated.subscribe(() => {});
         const stopL = isLoading.subscribe(() => {});
 
+        // A cookie session holds no bearer token, so an absent token says
+        // nothing about who is signed in. The gate loads until the server does.
+        expect(get(isLoading)).toBe(true);
         expect(get(isAuthenticated)).toBe(false);
+
+        await flushAsync();
+
         expect(get(isLoading)).toBe(false);
+        expect(get(isAuthenticated)).toBe(false);
 
         stopA();
         stopL();
