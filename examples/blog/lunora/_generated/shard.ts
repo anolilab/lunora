@@ -1347,7 +1347,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 
-                vectors = createContextVectors(lunora);
+                vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });
                 onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;

@@ -72,6 +72,20 @@ interface VectorSearchLike {
 /** Options for {@link createContextVectors}. */
 interface CreateContextVectorsOptions {
     /**
+     * Hold `upsert`'s remote write until the caller's storage transaction has
+     * COMMITTED, running it at once when none is open. The shard host supplies
+     * `ShardDO.deferAfterCommit`; codegen wires it.
+     *
+     * This is what separates `upsert` from `upsertNow`. Vectorize is outside the
+     * shard's SQLite and cannot roll back, so an inline `ctx.vectors.upsert` in a
+     * mutation that later throws leaves a vector pointing at a row that does not
+     * exist — and a search surfaces it. Omitted, both methods write inline, which
+     * is correct for a caller that has no transaction to wait for (an action, a
+     * test, the `@lunora/ai` RAG helpers).
+     */
+    deferAfterCommit?: (work: () => Promise<void>) => Promise<void>;
+
+    /**
      * The DO's own shard/tenant key, applied as the default `namespace` for
      * an operation against an index in `shardedIndexNames` that doesn't pass
      * one explicitly. `undefined` means this instance HAS no shard key —
@@ -112,9 +126,16 @@ interface CreateContextVectorsOptions {
 
 /**
  * Bridge `LunoraVectors` (returns Vectorize mutation receipts) to the server's
- * `VectorSearch` contract (void mutations, server match/record shapes). Both
- * `upsert` and `upsertNow` write inline — this design has no post-commit queue,
- * so "now" and "deferred" collapse to the same synchronous call.
+ * `VectorSearch` contract (void mutations, server match/record shapes).
+ *
+ * `upsert` vs `upsertNow` — IMPORTANT: with `options.deferAfterCommit` supplied
+ * (codegen wires the shard host's), `upsert` holds the remote write until the
+ * caller's transaction has committed and `upsertNow` writes inline, which is
+ * what `MutationCtx`'s contract documents. Without it both write inline: a
+ * caller with no transaction open has nothing to wait for. The NAMESPACE is
+ * resolved eagerly either way — before the deferral, not inside it — so a
+ * misconfiguration (the root-instance throw below) still reaches the handler
+ * that made the call instead of a post-commit log line nobody is holding.
  *
  * Tenant isolation (read side) — IMPORTANT: an explicit `namespace` argument
  * on any call (`input.namespace` for `query`/`upsert`/`upsertNow`, the
@@ -177,15 +198,34 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
         );
     };
 
-    const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+    const deferAfterCommit = options?.deferAfterCommit;
+
+    const write = async (indexName: string, input: VectorUpsertInputLike, namespace: string | undefined): Promise<void> => {
         await lunora.upsert(indexName, {
             embed: input.embed,
             id: input.id,
             input: input.input,
             metadata: input.metadata,
-            namespace: resolveNamespace(indexName, input.namespace),
+            namespace,
         });
     };
+
+    const upsertNow = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+        await write(indexName, input, resolveNamespace(indexName, input.namespace));
+    };
+
+    const upsert =
+        deferAfterCommit === undefined
+            ? upsertNow
+            : async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+                  // Resolved HERE, not in the deferred closure: `resolveNamespace`
+                  // throws for a sharded index reached from the root instance, and
+                  // that error belongs to the handler that made the call — thrown
+                  // after the commit it is only a log line.
+                  const namespace = resolveNamespace(indexName, input.namespace);
+
+                  await deferAfterCommit(async () => write(indexName, input, namespace));
+              };
 
     // Shared by `getByIds` and `deleteByIds`: fetch the raw records and, when
     // `namespace` is resolved (non-undefined) for this call, keep only the
@@ -262,7 +302,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             };
         },
         upsert,
-        upsertNow: upsert,
+        upsertNow,
     };
 };
 
@@ -365,7 +405,7 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * Build a {@link WriteHook} that keeps Vectorize in sync with row writes. On
  * insert/update it embeds each matching index's source (Shape A `row[field]`,
  * Shape B `select(row)`) and upserts; on delete it removes the row's id from
- * every index sourced from the table. Runs inline within the write path.
+ * every index sourced from the table.
  *
  * Tenant isolation — IMPORTANT: Vectorize indexes are account-global and shared
  * by every shard DO. Without a `namespace`, a multi-tenant sharded app has NO
@@ -401,6 +441,11 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * shard host holds it — `ShardDO.deferAfterCommit`). That ordering is what stops
  * a rolled-back write from leaving a vector for a row that does not exist, and a
  * rolled-back delete from leaving a live row with its vector already purged.
+ *
+ * Two commits to the same row do not race: the shard host drains one
+ * transaction's held work entirely before the next transaction's, so the hooks
+ * apply in COMMIT order even though each may take hundreds of milliseconds. Fan
+ * out within a single hook is still unordered — the indexes are independent.
  *
  * What remains is the opposite divergence, and it is the one worth having: the
  * row is committed and this hook may still fail — fully, or partway through a
@@ -485,7 +530,10 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
                     warnSharedNamespace(entry.index.name);
                 }
 
-                await vectors.upsert(entry.index.name, {
+                // `upsertNow`, not `upsert`: the shard host already holds this
+                // whole hook until the commit lands, and deferring again from
+                // inside the drain would be a second hop to nowhere.
+                await vectors.upsertNow(entry.index.name, {
                     embed: entry.index.embed,
                     id: event.id,
                     input: entry.value as string,
@@ -498,7 +546,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
                     warnSharedNamespace(name);
                 }
 
-                await vectors.upsert(name, {
+                await vectors.upsertNow(name, {
                     embed: definition.embed,
                     id: event.id,
                     input: definition.select(row),
