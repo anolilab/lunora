@@ -283,10 +283,20 @@ costs the same as one hitting a single call site.
 
 Severity is the only input — a lint carries no per-lint weight of its own, so
 two rules at the same level cost the same. Those per-procedure scores roll into
-a weighted mean: **public** handlers count double, **internal**
-ones and **queries** count half. Findings that name no procedure (schema shape,
-`wrangler.jsonc` config) land in a **project** bucket weighted against the
-procedure population, so schema debt still moves the grade.
+a weighted mean over two factors:
+
+- **Shape.** **Public** handlers count double, **internal** ones and **queries**
+  count half. Kind wins over visibility, so a public `query` counts half, not
+  double.
+- **Sensitivity.** A procedure whose `classifySensitivity` says `high` then
+  **doubles again** — visibility says who can reach a handler, sensitivity says
+  what it touches. So a public sensitive mutation pulls 4×, while an internal
+  sensitive one — or a sensitive query — pulls 1× instead of the half its shape
+  alone would buy.
+
+Findings that name no procedure (schema shape, `wrangler.jsonc` config) land in
+a **project** bucket weighted against the procedure population, so schema debt
+still moves the grade.
 
 | Verdict   | Meaning                                        |
 | --------- | ---------------------------------------------- |
