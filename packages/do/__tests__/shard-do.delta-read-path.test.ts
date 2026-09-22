@@ -960,6 +960,44 @@ describe("delta-sync read path", () => {
                 expect(refusal?.data).toStrictEqual({ cursor: checkpoint.cursor, epoch: sealed });
             });
 
+            /**
+             * The echo guard refuses but never seals, and the ordering that
+             * makes that true: it runs ahead of the watermark guard, so a stale
+             * echo is answered before anything can take the cursor beside it for
+             * a fresh detection.
+             *
+             * Asserted on a SECOND shard instance over the same SQLite, because
+             * `sealForkedTimeline` latches per wake — within one wake a spurious
+             * seal is invisible, and across wakes it is the whole harm: every
+             * consumer still holding the stale epoch would re-fork the shard on
+             * every wake, invalidating the resume of everyone who had already
+             * adopted the sealed one.
+             */
+            it("refuses a stale echo on a later wake without sealing again", async () => {
+                expect.assertions(3);
+
+                const first = buildShard();
+                const checkpoint = await drain(first);
+                const sealed = first.seal();
+
+                // A fresh instance: new latch, same database.
+                const woken = buildShard();
+
+                expect(woken.cdcEpoch()).toBe(sealed);
+
+                // Out of range as well as out of date, so the watermark guard
+                // would ALSO fire — and would seal, because this wake has not.
+                // Only running the echo guard first keeps that from happening.
+                restoreSqliteTo(1);
+
+                expect(() => woken.syncCdc(checkpoint.cursor, checkpoint.epoch)).toThrow(/cannot cross a fork/u);
+
+                // Unchanged: the fork this consumer is being refused for was
+                // already detected and already sealed. Re-minting would tell
+                // every up-to-date consumer to re-seed for nothing.
+                expect(woken.cdcEpoch()).toBe(sealed);
+            });
+
             it("serves a consumer echoing the current epoch", async () => {
                 expect.assertions(2);
 
