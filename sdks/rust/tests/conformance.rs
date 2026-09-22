@@ -424,17 +424,28 @@ fn rpc_responses() {
 
 fn non_2xx_without_error_envelope_fails() {
     // protocol/README.md §4.2. Without the status check this returned a null
-    // result and no error — the caller believes its mutation committed.
-    let Err(ClientError::Api(error)) = parse_rpc_response(&json!({ "message": "bad gateway" }), 502) else {
-        panic!("a non-2xx with no error envelope must fail");
-    };
+    // result and no error — the caller believes its mutation committed. The
+    // fixture's non-object `error` slots are the other half: a slot holding a
+    // string, a null or an array is not an envelope either, and a port reading
+    // one without a type check raises its LANGUAGE's error rather than the
+    // SDK's, escaping every handler the caller wrote.
+    let document = fixture("rpc.json");
 
-    // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
-    // body never came from a Lunora function, so nothing reached the shard and a
-    // lone queued write must not be dropped for being alone.
-    assert_eq!(error.code, "INTERNAL");
-    assert!(error.transient, "an envelope-less non-2xx reached no verdict");
-    assert!(is_transient(&ClientError::Api(error)));
+    for case in document["responseTransportError"].as_array().expect("responseTransportError") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let status = case["status"].as_u64().expect("status") as u16;
+
+        let Err(ClientError::Api(error)) = parse_rpc_response(&case["response"], status) else {
+            panic!("{name}: a non-2xx with no error envelope must fail");
+        };
+
+        // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
+        // body never came from a Lunora function, so nothing reached the shard and a
+        // lone queued write must not be dropped for being alone.
+        assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
+        assert!(error.transient, "{name}: an envelope-less non-2xx reached no verdict");
+        assert!(is_transient(&ClientError::Api(error)));
+    }
 
     // A coded 5xx is likewise the shard failing UNDER the call, while the same
     // envelope at 4xx is the function's own answer and terminal.

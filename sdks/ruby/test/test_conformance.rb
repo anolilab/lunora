@@ -164,14 +164,23 @@ class TestRpc < Minitest::Test
   #
   # The manifest listed this case from the start; the Ruby port never had it, and
   # nothing noticed until the manifest became a gate.
+  #
+  # The non-object +error+ slots are the other half: read without a type check
+  # they raised NoMethodError/TypeError, which is not an ApiError and so escapes
+  # every handler the caller wrote.
   def test_non_2xx_without_error_envelope_fails
     ConformanceManifest.covers("non_2xx_without_error_envelope_fails")
 
-    error = assert_raises(Lunora::ApiError) do
-      Lunora.parse_rpc_response({ "message" => "bad gateway" }, 502)
-    end
+    fixture("rpc.json")["responseTransportError"].each do |entry|
+      error = assert_raises(Lunora::ApiError, entry["name"]) do
+        Lunora.parse_rpc_response(entry["response"], entry["status"])
+      end
 
-    assert_equal "INTERNAL", error.code
+      assert_equal entry["code"], error.code, entry["name"]
+      # Nothing reached the shard, so a queued write must be replayed rather
+      # than dropped — the batch path already says so.
+      assert error.transient, entry["name"]
+    end
   end
 end
 

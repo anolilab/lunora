@@ -111,11 +111,19 @@ def parse_rpc_response(body: dict, status: int) -> Any:
     surfaced as an ``INTERNAL`` transport error. Without the check, a 502 with
     body ``{"message": "bad gateway"}`` returns ``None`` and no exception — the
     caller believes its mutation committed.
+
+    An ``error`` slot that is not an OBJECT is not an envelope either — a proxy's
+    ``{"error": "bad gateway"}`` page is the common one — so it falls through to
+    the same ``INTERNAL``/transient verdict rather than being read as one. Read
+    unguarded it raised ``AttributeError``/``TypeError`` past every
+    :class:`LunoraError` handler the caller has, and classified the very response
+    ``lunora.submit``'s batch path already treats as transport.
     """
 
-    if "error" in body:
-        err = body["error"]
-        data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
+    err = body.get("error")
+
+    if isinstance(err, dict):
+        data = decode_wire(err["data"]) if err.get("data") is not None else None
         # A 5xx is the shard or the edge failing under the call, not a verdict on
         # it, so a queued write replayed under the same idempotency key is still
         # good. See `lunora.submit.is_transient`.

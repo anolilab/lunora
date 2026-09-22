@@ -142,9 +142,16 @@ module Lunora
   # §4.2 says a non-2xx whose body carries no +error+ envelope surfaces as an
   # INTERNAL transport error. Without it a 502 with body {"message":"..."}
   # returns nil and raises nothing — the caller believes its mutation committed.
+  #
+  # An +error+ slot that is not an OBJECT is not an envelope either — a proxy's
+  # {"error":"bad gateway"} page is the common one — so it falls through to the
+  # same INTERNAL/transient verdict rather than being read as one. Read
+  # unguarded it raised NoMethodError/TypeError past every ApiError handler the
+  # caller has.
   def parse_rpc_response(body, status)
-    if body.key?("error")
-      envelope = body["error"]
+    envelope = body["error"]
+
+    if envelope.is_a?(Hash)
       data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
       # A 5xx is the shard or the edge failing under the call, not a verdict on
       # it, so a queued write replayed under the same idempotency key is still

@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the HTTP RPC envelope (POST /_lunora/rpc). `request` cases assert build_rpc_body(functionPath, args, shardKey) == body (an omitted shardKey is dropped from the body). Typed args are supplied wire-encoded in `argsWire` and decoded to native before building. `responseOk` cases assert encode(parse_response(response)) == response.result (the decoded result re-encodes to the same wire). `responseError` cases assert the raised error carries the given code/message (and encode(error.data) == error.data wire when present).",
+    "$comment": "Golden fixtures for the HTTP RPC envelope (POST /_lunora/rpc). `request` cases assert build_rpc_body(functionPath, args, shardKey) == body (an omitted shardKey is dropped from the body). Typed args are supplied wire-encoded in `argsWire` and decoded to native before building. `responseOk` cases assert encode(parse_response(response)) == response.result (the decoded result re-encodes to the same wire). `responseError` cases assert the raised error carries the given code/message (and encode(error.data) == error.data wire when present). `responseTransportError` cases assert that parse_response(response, status) raises the SDK's own error type with the given code — protocol/README.md §4.2's INTERNAL transport error. They are all non-2xx bodies that carry no usable `error` envelope: the key is absent, or it holds something that is not an OBJECT, which a proxy's `{\"error\":\"bad gateway\"}` page is the everyday shape of. Reading such a slot without a type check raises the LANGUAGE's error rather than the SDK's, escaping every handler the caller wrote — which is what two ports did, while the same response was already classified as transport by the batch replay path beside them.",
     "request": {
         "path": "/_lunora/rpc",
         "method": "POST",
@@ -47,5 +47,12 @@
             "message": "slow down",
             "dataWire": { "retryAfterMs": 3000 }
         }
+    ],
+    "responseTransportError": [
+        { "name": "no-error-key", "status": 502, "response": { "message": "bad gateway" }, "code": "INTERNAL" },
+        { "name": "error-is-a-string", "status": 502, "response": { "error": "bad gateway" }, "code": "INTERNAL" },
+        { "name": "error-is-null", "status": 502, "response": { "error": null }, "code": "INTERNAL" },
+        { "name": "error-is-an-array", "status": 502, "response": { "error": ["bad gateway"] }, "code": "INTERNAL" },
+        { "name": "error-is-a-number", "status": 500, "response": { "error": 7 }, "code": "INTERNAL" }
     ]
 }

@@ -95,7 +95,7 @@ final class ConformanceTests: XCTestCase {
             case "empty_shard_key_is_omitted": try caseEmptyShardKeyIsOmitted()
             case "rpc_request_bodies": try caseRPCRequestBodies()
             case "rpc_responses": try caseRPCResponses()
-            case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
+            case "non_2xx_without_error_envelope_fails": try caseNon2xxWithoutErrorEnvelopeThrows()
             case "client_frame_builders": try caseClientFrameBuilders()
             case "server_frame_consumer": try caseServerFrameConsumer()
             case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
@@ -348,10 +348,28 @@ final class ConformanceTests: XCTestCase {
         XCTAssertNil(LunoraClient.parseCommitCursor([:]))
     }
 
-    func caseNon2xxWithoutErrorEnvelopeThrows() {
+    func caseNon2xxWithoutErrorEnvelopeThrows() throws {
         // protocol/README.md §4.2. Without the status check this returned a nil
         // result and threw nothing — the caller believes its mutation committed.
-        XCTAssertThrowsError(try LunoraClient.parseRPCResponse(["message": "bad gateway"], status: 502))
+        // The fixture's non-object `error` slots are the other half: a slot
+        // holding a string, a null or an array is not an envelope either, and a
+        // port reading one without a type check raises its LANGUAGE's error
+        // rather than the SDK's, escaping every handler the caller wrote.
+        let cases = try XCTUnwrap(try fixture("rpc.json")["responseTransportError"] as? [[String: Any]])
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let response = try XCTUnwrap(testCase["response"] as? [String: Any])
+            let status = try XCTUnwrap(testCase["status"] as? Int)
+
+            XCTAssertThrowsError(try LunoraClient.parseRPCResponse(response, status: status), name) { error in
+                guard let apiError = error as? LunoraAPIError else { return XCTFail("expected LunoraAPIError for \(name)") }
+                XCTAssertEqual(apiError.code, testCase["code"] as? String, name)
+                // Nothing reached the shard, so a queued write must be replayed
+                // rather than dropped — the batch path already says so.
+                XCTAssertTrue(apiError.transient, name)
+            }
+        }
     }
 
     // MARK: - WebSocket frames

@@ -386,12 +386,25 @@ private fun non2xxWithoutEnvelopeThrows() {
     covers("non_2xx_without_error_envelope_fails")
 
     // protocol/README.md §4.2. Without the status check this returned null and
-    // threw nothing — the caller believes its mutation committed.
-    try {
-        Client.parseRpcResponse(mapOf("message" to "bad gateway"), 502)
-        check(false, "a 502 without an error envelope must throw")
-    } catch (error: ApiException) {
-        check(error.code == "INTERNAL", "the transport error is INTERNAL")
+    // threw nothing — the caller believes its mutation committed. The fixture's
+    // non-object `error` slots are the other half: a slot holding a string, a
+    // null or an array is not an envelope either, and a port reading one without
+    // a type check throws its LANGUAGE's exception rather than ApiException,
+    // escaping every handler the caller wrote.
+    for (entry in fixture("rpc.json")["responseTransportError"] as List<*>) {
+        val testCase = entry as Map<*, *>
+        val response = testCase["response"] as Map<*, *>
+        val status = (testCase["status"] as Number).toInt()
+
+        try {
+            Client.parseRpcResponse(response, status)
+            check(false, "expected an ApiException for ${testCase["name"]}")
+        } catch (error: ApiException) {
+            check(error.code == testCase["code"], "code for ${testCase["name"]}")
+            // Nothing reached the shard, so a queued write must be replayed
+            // rather than dropped — the batch path already says so.
+            check(error.transient, "transient for ${testCase["name"]}")
+        }
     }
 }
 

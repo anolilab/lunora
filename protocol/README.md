@@ -283,9 +283,13 @@ Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
-`INTERNAL` transport error.
+`INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
+envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
+— and takes the same path, rather than being read as one: a client that indexes
+it unchecked raises its own language's error past every handler the caller
+wrote.
 
-Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`.
+Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`.
 
 ### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
 
