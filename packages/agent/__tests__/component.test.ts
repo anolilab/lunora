@@ -178,6 +178,20 @@ describe(agentComponent, () => {
         ]);
     });
 
+    it("declares the thread `error` column nullable — the only way a run can clear it", () => {
+        const { error } = (agentExtension.tables["threads"] as unknown as { shape: Record<string, { parse: (value: unknown) => unknown }> }).shape;
+
+        // `ctx.db.patch` clears a column by writing `null`; an explicit
+        // `undefined` is rejected outright. So the column a starting run has to
+        // clear MUST admit null, or the declared row type lies about what the
+        // store holds. Nothing else pins this: the engine tolerates a stored null
+        // on any optional column when patching, so reverting `.nullable()` keeps
+        // every other test green while the generated type says `string`.
+        expect(error?.parse(null)).toBeNull();
+        expect(error?.parse(undefined)).toBeUndefined();
+        expect(error?.parse("boom")).toBe("boom");
+    });
+
     it("marks the mutations internal and the queries public", () => {
         const { functions } = agentComponent();
 
