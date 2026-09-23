@@ -20,6 +20,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
@@ -4473,7 +4474,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // kept whole on both the worker and the shard.
         const outgoingHeaders: Record<string, string> = {
             ...forwardedHeaders,
-            "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
+            [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
         };
 
         injectTraceContext(trace, outgoingHeaders);
@@ -4786,7 +4787,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const outgoingHeaders: Record<string, string> = {
             ...forwardedHeaders,
             "content-type": "application/json",
-            "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
+            [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
         };
 
         injectTraceContext(trace, outgoingHeaders);

@@ -26,6 +26,22 @@
  * spans are governed here; metrics and application logs are never sampled.
  */
 
+/**
+ * The wire header the tail-bias toggle travels on, worker → shard → container.
+ *
+ * Here rather than spelled out at each tier because that is where it was
+ * heading: the runtime writes it, the shard reads it, the shard writes it again
+ * onto an outbound container request, and the container reads it — four sites in
+ * three packages for one wire name. The sampled bit needs no such constant; it
+ * rides `traceparent`, whose name the W3C owns.
+ *
+ * Absent and `"0"` are different answers. Absent means no verdict was
+ * propagated (an alarm, a subscription re-run, a non-Lunora caller) and each
+ * tier falls back to its own default; `"0"` is an operator who turned the tail
+ * bias off, and it must override that default.
+ */
+const SAMPLE_ERRORS_HEADER = "x-lunora-sample-errors";
+
 /** Default head-sampling rate: keep every trace. */
 const DEFAULT_TRACE_HEAD_RATE = 1;
 
@@ -133,4 +149,4 @@ const shouldExportTrace = (decision: TraceSamplingDecision, traceHasError: boole
 };
 
 export type { TraceSamplingConfig, TraceSamplingDecision };
-export { DEFAULT_TRACE_HEAD_RATE, isTraceHeadSampled, resolveTraceSampling, shouldExportTrace, traceIdToUnitInterval };
+export { DEFAULT_TRACE_HEAD_RATE, isTraceHeadSampled, resolveTraceSampling, SAMPLE_ERRORS_HEADER, shouldExportTrace, traceIdToUnitInterval };

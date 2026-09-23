@@ -44,6 +44,21 @@ class SamplingShard extends ShardDO {
     }
 }
 
+/**
+ * A shard that records what `buildCtx` would hand `createContainerContext` for
+ * the tail-bias toggle — the value read off the inbound request by the base
+ * class, captured inside the dispatch rather than after it.
+ */
+class ScopeProbeShard extends SamplingShard {
+    public seenSampleErrors: boolean | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.seenSampleErrors = this.getCurrentSampleErrors();
+
+        return super.handleRpc(functionPath);
+    }
+}
+
 const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
     return {
         acceptWebSocket() {},
@@ -183,6 +198,45 @@ describe("shardDO trace sampling", () => {
             await rescued.fetch(request("a:c", { keepErrors: true, sampled: false }));
 
             expect(rescued.exportedSpans.map((span) => span.sampled)).toStrictEqual([false]);
+        } finally {
+            database.close();
+        }
+    });
+
+    // `buildCtx` hands this to `createContainerContext`, which stamps it onto
+    // every outbound container fetch — the hop that lets the container export on
+    // the verdict THIS dispatch settled instead of its own environment. Absent
+    // and "0" have to stay distinguishable: absent leaves the container on its
+    // own configuration, "0" overrides it.
+    it("exposes the propagated tail-bias toggle for outbound container fetches", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new ScopeProbeShard(makeState(database), {});
+
+            shard.plan = async () => undefined;
+
+            await shard.fetch(request("a:b", { keepErrors: false, sampled: true }));
+
+            expect(shard.seenSampleErrors).toBe(false);
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: true }));
+
+            expect(shard.seenSampleErrors).toBe(true);
+
+            // No header at all — an alarm, a subscription re-run, a non-Lunora
+            // caller. Nothing to propagate, so nothing is forwarded.
+            await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "a:b" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            expect(shard.seenSampleErrors).toBeUndefined();
         } finally {
             database.close();
         }

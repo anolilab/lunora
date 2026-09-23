@@ -10,6 +10,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { readCapped } from "../../../shared/read-capped";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { containerBindingName } from "./define-container";
 import type { ContainerExecOptions, ContainerExecResult } from "./exec";
 import { execViaFetch } from "./exec";
@@ -356,17 +357,41 @@ const assertPathNotReserved = (input: Request | string, label: string): void => 
     }
 };
 
-const toRequest = (input: Request | string, init?: RequestInit, port?: number, traceparent?: string): Request => {
+/**
+ * The dispatch's telemetry context, carried onto every outbound container
+ * request. One object rather than two positionals threaded through six
+ * helpers — they always travel together, and a helper that forwarded one but
+ * not the other would be a silent hole (`.port()` re-binds, pools re-pick).
+ */
+interface OutboundTraceContext {
+    /**
+     * The runtime's tail-bias toggle. Absent means no verdict was propagated,
+     * and the header is then omitted so the container stays on its own
+     * configuration rather than being told "off".
+     */
+    sampleErrors?: boolean;
+    /** The dispatch's W3C `traceparent`. */
+    traceparent?: string;
+}
+
+const toRequest = (input: Request | string, init?: RequestInit, port?: number, trace?: OutboundTraceContext): Request => {
     const request = typeof input === "string" && input.startsWith("/") ? new Request(`http://container${input}`, init) : new Request(input, init);
 
     if (port !== undefined) {
         request.headers.set(TARGET_PORT_HEADER, String(port));
     }
 
-    if (traceparent !== undefined) {
+    if (trace?.traceparent !== undefined) {
         // Propagate the Worker RPC's W3C trace context so the container's own OTLP
         // spans (via `@lunora/container/otel`) stitch under the same trace.
-        request.headers.set("traceparent", traceparent);
+        request.headers.set("traceparent", trace.traceparent);
+    }
+
+    if (trace?.sampleErrors !== undefined) {
+        // The tail-bias half of the same verdict. Without it the container can
+        // only fall back to its own env and agree with the worker by
+        // coincidence; with it, all three tiers are told the same thing.
+        request.headers.set(SAMPLE_ERRORS_HEADER, trace.sampleErrors ? "1" : "0");
     }
 
     return request;
@@ -461,7 +486,7 @@ const coldStartRetryingHandle = (
     label: string,
     options: InstanceRetryOptions = {},
     port?: number,
-    traceparent?: string,
+    trace?: OutboundTraceContext,
 ): ContainerHandle => {
     const attempts = Math.max(1, options.attempts ?? DEFAULT_COLD_START_ATTEMPTS);
     const baseBackoff = options.backoffMs ?? DEFAULT_COLD_START_BACKOFF_MS;
@@ -483,7 +508,7 @@ const coldStartRetryingHandle = (
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                const response = await send(toRequest(input, init, port, traceparent));
+                const response = await send(toRequest(input, init, port, trace));
 
                 // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
                 if (isLastAttempt || !(await isColdStartTransient(response))) {
@@ -517,7 +542,7 @@ const coldStartRetryingHandle = (
 
             return fetchWithRetry(input, init);
         },
-        port: (targetPort) => coldStartRetryingHandle(send, label, options, targetPort, traceparent),
+        port: (targetPort) => coldStartRetryingHandle(send, label, options, targetPort, trace),
     };
 };
 
@@ -526,9 +551,9 @@ const handleFor = (
     instanceName: string,
     label: string,
     options?: InstanceRetryOptions,
-    traceparent?: string,
+    trace?: OutboundTraceContext,
 ): ContainerHandle =>
-    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), label, options, undefined, traceparent);
+    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), label, options, undefined, trace);
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
@@ -566,12 +591,12 @@ const instanceHandleFor = (
     spec: ContainerBindingSpec,
     instanceName: string,
     options?: InstanceRetryOptions,
-    traceparent?: string,
+    trace?: OutboundTraceContext,
 ): ContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...coldStartRetryingHandle(async (request) => stub().fetch(request), handleLabel(spec), options, undefined, traceparent),
+        ...coldStartRetryingHandle(async (request) => stub().fetch(request), handleLabel(spec), options, undefined, trace),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
@@ -600,7 +625,7 @@ const poolHandleFor = (
     spec: ContainerBindingSpec,
     options: PoolOptions = {},
     port?: number,
-    traceparent?: string,
+    trace?: OutboundTraceContext,
 ): ContainerHandle => {
     const size = options.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE;
     const attempts = Math.max(1, options.attempts ?? 3);
@@ -625,7 +650,7 @@ const poolHandleFor = (
                     await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
                 }
 
-                const request = toRequest(input, init, port, traceparent);
+                const request = toRequest(input, init, port, trace);
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
@@ -675,15 +700,15 @@ const poolHandleFor = (
 
             return poolFetch(input, init);
         },
-        port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, traceparent),
+        port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, trace),
     };
 };
 
-const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, traceparent?: string): ContainerAccessor => {
+const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, trace?: OutboundTraceContext): ContainerAccessor => {
     return {
-        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), options, traceparent),
-        get: (name, options) => instanceHandleFor(namespace, spec, name, options, traceparent),
-        pool: (options) => poolHandleFor(namespace, spec, options, undefined, traceparent),
+        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), options, trace),
+        get: (name, options) => instanceHandleFor(namespace, spec, name, options, trace),
+        pool: (options) => poolHandleFor(namespace, spec, options, undefined, trace),
     };
 };
 
@@ -705,15 +730,23 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
  * A missing binding doesn't throw here — only when the handle is actually used —
  * so one unprovisioned container never breaks unrelated functions.
  *
- * `traceparent` (the inbound RPC's W3C trace context, forwarded by the runtime
- * and read off the request by the DO) is stamped onto every outbound container
- * `fetch`, so the container's own spans stitch under the Worker's trace.
+ * The last two arguments carry the dispatch's telemetry verdict onto every
+ * outbound container `fetch`, both read off the inbound request by the DO:
+ *
+ * - `traceparent` — the W3C trace context, so the container's own spans stitch
+ * under the Worker's trace rather than starting a disconnected one.
+ * - `sampleErrors` — the tail-bias toggle, so the container exports what THIS
+ * dispatch decided instead of falling back to its own environment and agreeing
+ * with the other tiers only by coincidence. `undefined` (an alarm, a
+ * subscription re-run, a non-Lunora caller propagated no verdict) omits the
+ * header and leaves the container on its own configuration.
  */
 const createContainerContext = (
     env: Record<string, unknown>,
     specs: ReadonlyArray<ContainerBindingSpec>,
     jurisdiction?: DurableObjectJurisdiction,
     traceparent?: string,
+    sampleErrors?: boolean,
 ): Record<string, ContainerAccessor> => {
     const containers: Record<string, ContainerAccessor> = {};
 
@@ -722,7 +755,10 @@ const createContainerContext = (
 
         containers[spec.exportName] =
             binding && typeof binding.idFromName === "function" && typeof binding.get === "function"
-                ? accessorFor(applyJurisdiction(binding, jurisdiction), spec, traceparent)
+                ? accessorFor(applyJurisdiction(binding, jurisdiction), spec, {
+                      ...(sampleErrors === undefined ? {} : { sampleErrors }),
+                      ...(traceparent === undefined ? {} : { traceparent }),
+                  })
                 : missingBindingAccessor(spec);
     }
 

@@ -351,6 +351,7 @@ abstract class ShardDO {
         table: string;
     }): void;
     protected getCurrentTraceparent(): string | undefined;
+    protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): {
         rootSpanId: string;
         traceId: string;

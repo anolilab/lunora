@@ -300,7 +300,7 @@ const containerClassName: (exportName: string) => string;
 ### `createContainerContext` (const)
 
 ```ts
-const createContainerContext: (env: Record<string, unknown>, specs: ReadonlyArray<ContainerBindingSpec>, jurisdiction?: DurableObjectJurisdiction, traceparent?: string) => Record<string, ContainerAccessor>;
+const createContainerContext: (env: Record<string, unknown>, specs: ReadonlyArray<ContainerBindingSpec>, jurisdiction?: DurableObjectJurisdiction, traceparent?: string, sampleErrors?: boolean) => Record<string, ContainerAccessor>;
 ```
 
 ### `createContainerTestContext` (const)
@@ -536,6 +536,11 @@ interface ContainerTelemetryOptions {
     fetch?: OtelFetchLike;
     headers?: Record<string, string>;
     onError?: (error: unknown) => void;
+    request?: {
+        headers: {
+            get: (name: string) => null | string;
+        };
+    };
     resourceAttributes?: Record<string, ContainerAttributeValue>;
     serviceName?: string;
     serviceVersion?: string;

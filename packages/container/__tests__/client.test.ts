@@ -82,6 +82,45 @@ describe(createContainerContext, () => {
         }
     });
 
+    // The tail-bias toggle rides beside the trace context, so the container is
+    // TOLD what the worker decided instead of falling back to its own env and
+    // agreeing only by coincidence. Same three handle shapes, and `.port()`,
+    // because a re-bound handle that dropped it would be a silent hole.
+    it("stamps the forwarded tail-bias toggle onto outbound container requests", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext(
+            { CONTAINER_TRANSCODER: namespace },
+            [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 2 }],
+            undefined,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            false,
+        );
+
+        await containers.transcoder!.get("a").fetch("/x");
+        await containers.transcoder!.any().fetch("/x");
+        await containers.transcoder!.pool().fetch("/x");
+        await containers.transcoder!.get("a").port(8080).fetch("/x");
+
+        for (const request of requests) {
+            expect(request.headers.get("x-lunora-sample-errors")).toBe("0");
+        }
+    });
+
+    // Absent toggle means absent header: a container with no verdict propagated
+    // to it falls back to its own configuration rather than being told "off".
+    it("omits the toggle header when the dispatch propagated none", async () => {
+        expect.assertions(1);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }]);
+
+        await containers.transcoder!.get("a").fetch("/x");
+
+        expect(requests[0]!.headers.get("x-lunora-sample-errors")).toBeNull();
+    });
+
     it(".any() picks a pool instance within maxInstances", async () => {
         expect.assertions(2);
 

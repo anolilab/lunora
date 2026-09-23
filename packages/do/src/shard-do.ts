@@ -253,6 +253,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -315,6 +316,7 @@ import {
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
+    parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
     parseSeverityArgument,
@@ -836,6 +838,15 @@ interface RequestScope {
     ip: string | undefined;
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
+
+    /**
+     * The propagated tail-bias toggle, travelling with `traceparent` below for
+     * the same reason and with the same hazard: `buildCtx` hands both to
+     * `createContainerContext`, so a guest dispatch that re-pinned one but not
+     * the other would send a parked request's verdict to the container.
+     */
+    sampleErrors: boolean | undefined;
+
     system: boolean;
 
     /**
@@ -1833,6 +1844,9 @@ abstract class ShardDO {
      * prevent, inverted.
      */
     private currentRequestBaselineSeq: number | undefined;
+
+    /** The runtime's propagated tail-bias toggle (`x-lunora-sample-errors`); `undefined` when none was sent. */
+    private currentRequestSampleErrors: boolean | undefined;
 
     /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
     private currentRequestTraceparent: string | undefined;
@@ -3403,6 +3417,21 @@ abstract class ShardDO {
      */
     protected getCurrentTraceparent(): string | undefined {
         return this.currentRequestTraceparent;
+    }
+
+    /**
+     * The tail-bias toggle the runtime propagated for this dispatch
+     * (`x-lunora-sample-errors`), or `undefined` when none was sent.
+     *
+     * `buildCtx` hands it to `createContainerContext` alongside the
+     * `traceparent`, so a container decides what to export from the verdict this
+     * dispatch settled rather than from its own environment. `undefined` leaves
+     * the container on its own configuration, which is right for the callers
+     * that propagate nothing: an alarm, a subscription re-run, a non-Lunora
+     * caller.
+     */
+    protected getCurrentSampleErrors(): boolean | undefined {
+        return this.currentRequestSampleErrors;
     }
 
     /**
@@ -7233,6 +7262,7 @@ abstract class ShardDO {
             ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
+            sampleErrors: this.currentRequestSampleErrors,
             system: this.currentRequestSystem,
             traceparent: this.currentRequestTraceparent,
             userId: this.currentRequestUserId,
@@ -7257,6 +7287,7 @@ abstract class ShardDO {
         this.currentRequestIp = scope.ip;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
+        this.currentRequestSampleErrors = scope.sampleErrors;
         this.currentRequestSystem = scope.system;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
@@ -8973,6 +9004,7 @@ abstract class ShardDO {
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
+        this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
 
@@ -12127,6 +12159,13 @@ abstract class ShardDO {
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
+        // The runtime's tail-bias toggle, read ONCE here. Two consumers: the
+        // export gate below, and `buildCtx`, which forwards it to an outbound
+        // container so that tier is TOLD the verdict rather than falling back to
+        // its own configuration and agreeing by coincidence. `undefined` means
+        // no verdict was propagated (an alarm, a subscription re-run, a
+        // non-Lunora caller), which every tier reads as keep.
+        this.currentRequestSampleErrors = parseSampleErrorsHeader(request.headers.get(SAMPLE_ERRORS_HEADER));
         // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
@@ -12143,7 +12182,7 @@ abstract class ShardDO {
         // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
         // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
         this.traceSampling.set(dispatchTrace.traceId, {
-            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            keepErrors: this.currentRequestSampleErrors ?? true,
             sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
         });
         this.metrics.requests += 1;
@@ -12199,6 +12238,7 @@ abstract class ShardDO {
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;
         this.currentRequestIp = undefined;
+        this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
         this.currentScannedTables = undefined;

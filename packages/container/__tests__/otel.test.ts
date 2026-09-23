@@ -259,6 +259,108 @@ describe(createContainerTelemetry, () => {
         expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
     });
 
+    // The whole point of propagating the toggle: the container obeys what the
+    // WORKER decided, not what its own environment happens to say. With the env
+    // unset, the inbound request is the only thing that can tell it the operator
+    // turned the tail bias off — and it must be enough.
+    it("obeys a tail-bias toggle propagated on the inbound request, with no env set", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: {
+                    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+                    "x-lunora-sample-errors": "0",
+                },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
+    // The same request with the toggle ON keeps the errored span, so the test
+    // above is reading the header rather than failing for some other reason.
+    it("keeps the errored span when the propagated toggle leaves the tail bias on", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: {
+                    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+                    "x-lunora-sample-errors": "1",
+                },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        const traceCalls = calls.filter((call) => call.url.endsWith("/v1/traces"));
+
+        expect(traceCalls).toHaveLength(1);
+        expect(spanFrom(traceCalls[0]!.body).span.name).toBe("bad-work");
+    });
+
+    // `request` also carries the trace context, so a container handler reads one
+    // thing instead of two headers it would have to know the names of.
+    it("takes the trace context off the request too", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: { traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(span.parentSpanId).toBe("b7ad6b7169203331");
+    });
+
+    // Precedence, asserted rather than assumed: an explicit option beats the
+    // request, which beats the env.
+    it("prefers an explicit option over the request, and the request over the env", async () => {
+        vi.stubEnv("LUNORA_SAMPLE_ERRORS", "1");
+
+        const sampledOut = { traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00" };
+        const requestSaysOff = new Request("https://container/work", {
+            headers: { ...sampledOut, "x-lunora-sample-errors": "0" },
+        });
+
+        // Request beats the env's "1".
+        const viaRequest = stubFetch();
+        const fromRequest = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch: viaRequest.fetch, request: requestSaysOff });
+
+        fromRequest.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad", startMs: 10 });
+        await fromRequest.flush();
+
+        expect(viaRequest.calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+
+        // The explicit option beats the request's "0".
+        const viaOption = stubFetch();
+        const fromOption = createContainerTelemetry({
+            alwaysSampleErrors: true,
+            endpoint: "https://collect.example.com",
+            fetch: viaOption.fetch,
+            request: requestSaysOff,
+        });
+
+        fromOption.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad", startMs: 10 });
+        await fromOption.flush();
+
+        expect(viaOption.calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(1);
+    });
+
     it("stamps every log record with the propagated trace context", async () => {
         const { calls, fetch } = stubFetch();
         const telemetry = createContainerTelemetry({
