@@ -98,6 +98,17 @@ describe("discoverRatelimitKeySelectors", () => {
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("does not let an args field that shares the parameter's name read as trusted scoping", () => {
+        expect.assertions(1);
+
+        // The trailing `.ctx` is a property NAME, not a reference to the context
+        // parameter. Counting it would suppress the finding — the same
+        // name-position confusion that kept `ctx.args.*` invisible to begin with.
+        write("collide.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.args.ctx })).mutation(async () => {});`);
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags a dbRateLimit(...) key selector derived from args", () => {
         expect.assertions(2);
 
