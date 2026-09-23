@@ -3331,7 +3331,7 @@ describe("shardDO admin bulk delete", () => {
     const seedNotes = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
         for (let index = 0; index < count; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential seed writes
-            await writer.insert("notes", { projectId: project, title: `n${index.toString()}` });
+            await writer.insert("notes", { projectId: project, title: `n${index.toString()}` }); // gitleaks:allow -- a test fixture's shard key, not a credential
         }
     };
 

@@ -1,3 +1,9 @@
+## @lunora/hyperdrive [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.123...@lunora/hyperdrive@1.0.0-alpha.124) (2026-09-23)
+
+### Bug Fixes
+
+* **codegen:** reach the source client, the shape thunk and hidden return types ([#781](https://github.com/anolilab/lunora/issues/781)) ([3014b0d](https://github.com/anolilab/lunora/commit/3014b0dbb9f8601d4a95d15c62ca6c1b23eef46e))
+
 ## @lunora/hyperdrive [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.122...@lunora/hyperdrive@1.0.0-alpha.123) (2026-09-22)
 
 
