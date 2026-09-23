@@ -165,11 +165,41 @@ const { inFlight, queued, maxConcurrency } = await pool.status();
 await pool.cancel(id);
 ```
 
-Reach for the DO-backed `createWorkpool` when you need a hard concurrency cap,
-per-job cancellation, or per-job status. When you only want to rate-limit
-fire-and-forget work, `createQueueWorkpool` leans on Cloudflare Queues instead:
-concurrency, retries, and dead-lettering are configured on the consumer in
-`wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`):
+### What bounds a drain
+
+Two platform ceilings sit above `maxConcurrency`, and both apply to the drain as
+a whole rather than to one job:
+
+- **Six concurrent dispatches.** A Durable Object may have at most six
+  connections simultaneously waiting for response headers, so one alarm drain
+  keeps six jobs in flight. A `maxConcurrency` above six is not wrong, just not
+  reachable in a single drain — the surplus goes out on the following alarms.
+- **A 15-minute alarm.** An alarm handler has 15 minutes of wall time, and the
+  whole drain shares it. Work that does not fit is deferred to the next alarm,
+  not dropped: an unreached job keeps both its record and its index entry.
+
+Both matter more than they look, because the DO's dispatch only returns once the
+dispatched function has **finished running** — a dispatch's latency is the whole
+job's latency, not a kick's.
+
+### Long-running jobs belong on Queues
+
+That is the case to move off this pool. A job that runs for minutes holds one of
+the six slots and one slice of the 15-minute budget for its whole duration, and
+it does so for every other job in the app, not just its own pool.
+
+`createQueueWorkpool` + `createQueueConsumer` give each batch a fresh Worker
+invocation with its own connection budget and its own clock, and the consumer's
+`max_concurrency` is not capped at six. The dispatcher allows each job five
+minutes by default (`httpDispatcher({ timeoutMs })`).
+
+You give up the hard concurrency cap, per-job cancellation, and per-job status —
+that is the whole trade. Reach for the DO-backed `createWorkpool` when you need
+those and your jobs are short; reach for Queues when the jobs are long.
+
+Concurrency, retries, and dead-lettering are configured on the consumer in
+`wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`) rather
+than in code:
 
 ```ts
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "@lunora/scheduler";
@@ -185,9 +215,6 @@ export const queueHandler = createQueueConsumer({
     dispatch: httpDispatcher({ originUrl: "https://app.acme.test", adminToken: env.LUNORA_ADMIN_TOKEN }),
 });
 ```
-
-The Queues-backed pool has no hard concurrency cap, per-job cancel, or per-job
-status; that's the trade for letting Cloudflare own retries and backoff.
 
 <Callout type="warn">
     Neither workpool is for multi-step orchestration. Reach for Cloudflare Workflows (`@lunora/workflow`) when you need durable `step.do` / `step.sleep` /
