@@ -1349,7 +1349,9 @@ interface WorkerOptions {
      * as a whole on the worker and on every shard/container it fans out to (no
      * half traces). The head decision is propagated to shards via the
      * `traceparent` sampled flag, so they drop the matching `ctx.trace` spans
-     * coherently.
+     * coherently. Both dispatch paths settle it once and propagate it the same
+     * way: a single `/_lunora/rpc` call, and a `/_lunora/rpc-batch` whose entries
+     * all ride the batch's one verdict.
      *
      * With `alwaysSampleErrors` (default `true`), a trace that produced an error
      * span is kept whole regardless of the head decision — the tail bias, so
@@ -4463,7 +4465,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         });
 
         if (ignoredUpstream) {
-            noticeDroppedTrace();
+            noticeDroppedTrace(request);
         }
 
         // `x-lunora-sample-errors` carries the tail-bias toggle alongside the
@@ -4753,9 +4755,51 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             ),
         );
 
-        const { observability } = options;
+        const { observability, sampling } = options;
         const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
         const requestMeta = requestTelemetryMeta(request);
+
+        // ONE trace for the whole batch, opened exactly as `dispatchSingleShard`
+        // opens one for a single call: the head verdict is settled here and then
+        // propagated, so the batch is kept or dropped whole rather than having
+        // each sub-batch re-decide. Without this the export gate below never
+        // fired (no settled decision to hand it) and the shard minted a fresh,
+        // unrelated trace for every sub-request it received.
+        const { decision, ignoredUpstream, trace } = beginDispatchTrace(request, {
+            ...(sampling === undefined ? {} : { sampling }),
+            trustInbound: isTrustedUpstream(request),
+        });
+
+        if (ignoredUpstream) {
+            noticeDroppedTrace(request);
+        }
+
+        // The verdict every `emitRpcEvent` below is gated on. `trace.sampled` is
+        // the propagated bit (honoring a trusted upstream's sampled-out `00`),
+        // not the raw head verdict, so the gate cannot disagree with the
+        // `traceparent` the shard received.
+        const verdict = { isTraced: trace.sampled, keepErrors: decision.keepErrors };
+
+        // The sub-request header bag: the caller's forwarded context, plus the
+        // trace this batch belongs to and the tail-bias toggle, so the shard's
+        // own spans join it instead of starting a disconnected trace.
+        const outgoingHeaders: Record<string, string> = {
+            ...forwardedHeaders,
+            "content-type": "application/json",
+            "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
+        };
+
+        injectTraceContext(trace, outgoingHeaders);
+
+        // Trace fields for one entry's event. Each entry is its own span BENEATH
+        // the batch span the `traceparent` names — the shard adopts that span id
+        // as its dispatch root (`resolveTraceAnchor`), so the parent is real.
+        // Reusing one span id across the entries would instead put several spans
+        // on the wire under the same `(traceId, spanId)`, which collectors
+        // resolve inconsistently.
+        const entryTraceFields = (): Pick<ObservabilityEvent, "parentSpanId" | "spanId" | "traceFlags" | "traceId"> => {
+            return { parentSpanId: trace.spanId, spanId: otlpRandomHex(8), traceFlags: trace.traceFlags, traceId: trace.traceId };
+        };
 
         const results: unknown[] = [];
         // Each shard is a distinct source whose `x-d1-bookmark` values are not
@@ -4787,7 +4831,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             eventFor: (entry: BatchEntry) => ObservabilityEvent,
         ): void => {
             for (const entry of entries) {
-                emitRpcEvent(observability, eventFor(entry), sinkContext);
+                emitRpcEvent(observability, eventFor(entry), sinkContext, undefined, verdict);
                 results.push(slotError(entry, status, code, message));
             }
         };
@@ -4812,11 +4856,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         durationMs,
                         functionPath: entry.functionPath,
                         ...requestMeta,
+                        ...entryTraceFields(),
                         ok,
                         shardKey,
                         ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
                     },
                     sinkContext,
+                    // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
+                    // settled `decision` is passed — see `dispatchSingleShard`.
+                    undefined,
+                    verdict,
                 );
             }
         };
@@ -4825,11 +4874,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // watermarks); entries WITHIN a shard stay ordered by the DO's sequential loop.
         await Promise.all(
             [...groups.entries()].map(async ([shardKey, entries]) => {
-                const headers = new Headers(forwardedHeaders);
-
-                headers.set("content-type", "application/json");
-
-                const subRequest = new Request("https://shard.internal/rpc-batch", { body: JSON.stringify({ calls: entries }), headers, method: "POST" });
+                const subRequest = new Request("https://shard.internal/rpc-batch", {
+                    body: JSON.stringify({ calls: entries }),
+                    headers: new Headers(outgoingHeaders),
+                    method: "POST",
+                });
                 const subStartedAt = Date.now();
                 let response: Response;
 
@@ -4850,6 +4899,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         return {
                             ...buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }),
                             ...requestMeta,
+                            ...entryTraceFields(),
                         };
                     });
 
@@ -4878,6 +4928,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                             error: { code: "SHARD_ERROR", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
+                            ...entryTraceFields(),
                             ok: false,
                             shardKey,
                         };
