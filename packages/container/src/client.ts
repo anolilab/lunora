@@ -9,12 +9,12 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { readCapped } from "../../../shared/read-capped";
 import { containerBindingName } from "./define-container";
 import type { ContainerExecOptions, ContainerExecResult } from "./exec";
 import { execViaFetch } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
-import { readCapped } from "./read-capped";
 
 /**
  * Options for explicitly starting an instance (mirrors `@cloudflare/containers`).
@@ -782,13 +782,19 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
         const spec: ContainerBindingSpec = { binding: containerBindingName(exportName), exportName };
 
         containers[exportName] = {
-            // `.any()`/`.pool()` route to a fixed `pool-0` so the handler's
-            // `instance.name` is deterministic under test; the double doesn't
-            // simulate the random-pick or retry/backoff the real pool/cold-start
-            // path does (`attempts: 1` keeps a handler's own 5xx from looping).
-            any: () => handleFor(namespace, "pool-0", handleLabel(spec), { attempts: 1 }),
-            get: (name) => instanceHandleFor(namespace, spec, name, { attempts: 1 }),
-            pool: () => handleFor(namespace, "pool-0", `${handleLabel(spec)}.pool()`, { attempts: 1 }),
+            // `.any()`/`.pool()` re-pick a RANDOM instance per call, exactly as
+            // the real accessor does. They used to pin `pool-0`, which made the
+            // double MORE permissive than production: a stateful multi-step test
+            // (exec a build, then exec a test against its output) passed here and
+            // failed live, where the second call lands on a different container
+            // with its own disk. A test that needs a fixed instance asks for one
+            // with `.get(name)`. Retry/backoff is still not simulated
+            // (`attempts: 1` keeps a handler's own 5xx from looping).
+            any: (count, options) =>
+                handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), { attempts: 1, ...options }),
+            get: (name, options) => instanceHandleFor(namespace, spec, name, { attempts: 1, ...options }),
+            pool: (options) =>
+                handleFor(namespace, randomPoolName(options?.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), `${handleLabel(spec)}.pool()`, { attempts: 1 }),
         };
     }
 

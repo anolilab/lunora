@@ -638,8 +638,31 @@ describe(createContainerTestContext, () => {
         await expect(response.text()).resolves.toBe("video-1:/transcode");
         expect(handler).toHaveBeenCalledTimes(1);
 
-        const pooled = await containers.transcoder!.any().fetch("/probe");
+        const pooled = await containers.transcoder!.get("pool-0").fetch("/probe");
 
         await expect(pooled.text()).resolves.toBe("pool-0:/probe");
+    });
+
+    it(".any() spreads across the pool exactly as the real accessor does", async () => {
+        expect.assertions(1);
+
+        // The double used to pin `.any()` to `pool-0`, which is MORE permissive
+        // than production: a stateful multi-step test (write a file, then read
+        // it back) passed here and failed live, where each `.any()` re-picks a
+        // random instance with its own disk.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await containers.transcoder!.any(3).fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
     });
 });

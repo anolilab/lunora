@@ -2,7 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import { initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
-import { toBase64 } from "../../../shared/base64";
+import { readCapped } from "../../../shared/read-capped";
+import { SANDBOX_BROWSER_NAV_TIMEOUT_MS, SANDBOX_EXEC_TIMEOUT_MS } from "./sandbox-budgets";
 
 // The runtime function is built with the base procedure builders (no generated
 // server inside a package), same as the agent + presence components. This file
@@ -20,23 +21,37 @@ const sandboxScrapeDocument = (): string =>
  * codegen weaves the real `ctx.browser` onto the action ctx.
  */
 interface SandboxBrowserSurface {
-    content: (url: string) => Promise<string>;
-    pdf: (url: string) => Promise<Uint8Array>;
-    scrape: <T>(url: string, function_: (...arguments_: never[]) => T) => Promise<T>;
-    screenshot: (url: string, options?: { fullPage?: boolean; type?: "jpeg" | "png" }) => Promise<Uint8Array>;
+    content: (url: string, options?: { timeoutMs?: number }) => Promise<string>;
+    pdf: (url: string, options?: { timeoutMs?: number }) => Promise<Uint8Array>;
+    scrape: <T>(url: string, function_: (...arguments_: never[]) => T, options?: { timeoutMs?: number }) => Promise<T>;
+    screenshot: (url: string, options?: { fullPage?: boolean; timeoutMs?: number; type?: "jpeg" | "png" }) => Promise<Uint8Array>;
 }
 
-/** Structural view of a `ctx.containers.<name>` accessor + its fetch handle. */
+/**
+ * Structural view of one `ctx.containers.<name>` handle. The shape is
+ * `@lunora/container`'s `ContainerHandle`, re-declared by hand so this module
+ * stays free of a runtime import from that package.
+ */
+interface SandboxContainerHandle {
+    /**
+     * `ctx.containers.<name>.exec` — the first-class exec contract from
+     * `@lunora/container`.
+     */
+    exec: (command: string, options?: { args?: ReadonlyArray<string>; timeoutMs?: number }) => Promise<{ code: number; stderr: string; stdout: string }>;
+    fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string; signal?: AbortSignal }) => Promise<Response>;
+}
+
+/** Structural view of a `ctx.containers.<name>` accessor. */
 interface SandboxContainerAccessor {
-    any: () => {
-        /**
-         * `ctx.containers.<name>.exec` — the first-class exec contract from
-         * `@lunora/container`. Structural here so this module stays free of a
-         * runtime import, but the shape is that package's `ContainerHandle`.
-         */
-        exec: (command: string, options?: { args?: ReadonlyArray<string> }) => Promise<{ code: number; stderr: string; stdout: string }>;
-        fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{ text: () => Promise<string> }>;
-    };
+    any: () => SandboxContainerHandle;
+
+    /**
+     * Address ONE named instance. The sandbox always routes here rather than
+     * through `any()`: `any()` re-picks a random pool member per call, so a
+     * two-step `exec` session ("install", then "test") would run its second
+     * command on a different container with a fresh disk.
+     */
+    get: (name: string) => SandboxContainerHandle;
 }
 
 /** Structural view of one listed R2 object. */
@@ -55,11 +70,23 @@ interface R2BucketLike {
         limit?: number;
         prefix?: string;
     }) => Promise<{ cursor?: string; objects: ReadonlyArray<R2ObjectLike>; truncated?: boolean }>;
-    put: (key: string, value: string) => Promise<unknown>;
+    put: (key: string, value: ArrayBuffer | ArrayBufferView | string) => Promise<unknown>;
 }
 
 /** Max bytes read/written in one fs op — bounds Worker memory + prompt/token cost (model input is untrusted). */
 const MAX_FS_BYTES = 1_000_000;
+
+/**
+ * Max bytes buffered from a container `fetch` response before the read is cut
+ * and the reader cancelled. `exec` has capped its body since it shipped, with
+ * the reason spelled out on `ContainerExecOptions.maxOutputBytes`: the whole
+ * body is held in a 128MB isolate shared with every other in-flight request, so
+ * one unbounded read kills far more than its own call. A `fetch` reaches the
+ * same container over the same handle, so it needs the same bound — and its
+ * result is model context besides, which is capped at 4000 chars downstream
+ * anyway.
+ */
+const MAX_CONTAINER_FETCH_BYTES = 1_000_000;
 
 /** Max R2 list pages walked for one `ls` (each ~1000 objects) before surfacing `truncated`. */
 const MAX_LS_PAGES = 20;
@@ -84,6 +111,8 @@ interface SandboxInvokeArgs {
     /** fs: content for a `write`. */
     content?: string;
     fullPage?: boolean;
+    /** container: the author-pinned instance name (the agent's thread). */
+    instance?: string;
     kind: "browser" | "container" | "fs";
     method?: string;
     name?: string;
@@ -117,36 +146,6 @@ interface SandboxComponent {
     invoke: SandboxRegisteredFunction;
 }
 
-const runBrowserOp = async (browser: SandboxBrowserSurface, request: SandboxInvokeArgs): Promise<unknown> => {
-    const url = request.url ?? "";
-
-    switch (request.op) {
-        case "content": {
-            return browser.content(url);
-        }
-        case "pdf": {
-            return { data: toBase64(await browser.pdf(url)), encoding: "base64", mediaType: "application/pdf" };
-        }
-        case "scrape": {
-            // The scrape extractor runs in the page and cannot close over
-            // `selector` (Playwright serializes only the function), so it returns
-            // the page HTML for the model to narrow; `selector` is an advisory hint.
-            return browser.scrape(url, sandboxScrapeDocument);
-        }
-        case "screenshot": {
-            const bytes = await browser.screenshot(url, {
-                ...(request.fullPage === undefined ? {} : { fullPage: request.fullPage }),
-                ...(request.type === undefined ? {} : { type: request.type as "jpeg" | "png" }),
-            });
-
-            return { data: toBase64(bytes), encoding: "base64", mediaType: request.type === "jpeg" ? "image/jpeg" : "image/png" };
-        }
-        default: {
-            throw new LunoraError("INTERNAL", `@lunora/agent: sandbox browser op "${request.op}" is not supported`);
-        }
-    }
-};
-
 /**
  * Render an exec result as the single string a tool call returns to the model.
  * Streams are labelled and the exit code is always stated, including on success:
@@ -168,7 +167,18 @@ const renderExecResult = (result: { code: number; stderr: string; stdout: string
 };
 
 const runContainerOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<string> => {
-    const handle = accessor.any();
+    // Refused rather than defaulted. `idFromName("")` is a perfectly valid
+    // address, so an absent `instance` would silently route EVERY thread to one
+    // shared container — the defect this replaced, in a shape nothing notices.
+    // `BAD_REQUEST` so the failure is deterministic and lands as a tool result
+    // instead of burning the durable step's retry budget on a call that cannot
+    // succeed. The tool always sends one; this covers a dispatch that did not.
+    if (request.instance === undefined || request.instance.length === 0) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/agent: sandbox container op arrived with no `instance` — the tool pins the thread's own container");
+    }
+
+    // The author-pinned instance, never `any()` — see `SandboxContainerAccessor.get`.
+    const handle = accessor.get(request.instance);
 
     if (request.op === "exec") {
         // `ctx.containers.<name>.exec` owns the wire contract now (a typed POST
@@ -177,7 +187,7 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
         // the raw body back as output, so a command that failed — or a container
         // with no exec route at all — was indistinguishable from success.
         try {
-            return renderExecResult(await handle.exec(request.command ?? "", { args: request.args ?? [] }));
+            return renderExecResult(await handle.exec(request.command ?? "", { args: request.args ?? [], timeoutMs: SANDBOX_EXEC_TIMEOUT_MS }));
         } catch (error: unknown) {
             // Rendered, NOT rethrown. A tool call runs inside `step.do`, which
             // retries a step that throws — and `exec` throws on outcomes that
@@ -204,10 +214,36 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
             method: request.method ?? "GET",
         });
 
-        return response.text();
+        // Bounded + cancelled, not `response.text()`. See MAX_CONTAINER_FETCH_BYTES.
+        const body = await readCapped(response.body, MAX_CONTAINER_FETCH_BYTES);
+
+        return body.overflowed ? `${body.text}\n\n[truncated at ${String(MAX_CONTAINER_FETCH_BYTES)} bytes]` : body.text;
     }
 
     throw new LunoraError("INTERNAL", `@lunora/agent: sandbox container op "${request.op}" is not supported`);
+};
+
+/** The directed error for a sandbox op whose declared R2 binding is not on `env`. */
+const missingBucketError = (kind: string, bucket: string): LunoraError =>
+    new LunoraError(
+        "INTERNAL",
+        `@lunora/agent: sandbox ${kind} op found no R2 bucket "${bucket}" on env — declare the r2_bucket binding in wrangler.jsonc and run codegen`,
+    );
+
+/** Resolve the request's declared R2 binding off the action ctx env, or `undefined`. */
+const resolveBucket = (surface: SandboxActionContext, request: SandboxInvokeArgs): R2BucketLike | undefined => {
+    const bucket = surface.env?.[request.bucket ?? ""] as R2BucketLike | undefined;
+
+    return bucket && typeof bucket.get === "function" ? bucket : undefined;
+};
+
+/** The render destination, or a directed error — resolved BEFORE the billable render runs. */
+const requireRenderBucket = (bucket: R2BucketLike | undefined, request: SandboxInvokeArgs): R2BucketLike => {
+    if (!bucket) {
+        throw missingBucketError("browser", request.bucket ?? "");
+    }
+
+    return bucket;
 };
 
 /** Strip leading/trailing `/` without a regex (avoids backtracking / recompilation). */
@@ -290,6 +326,61 @@ const listFsEntries = async (bucket: R2BucketLike, key: string, base: string): P
 };
 
 /**
+ * Persist a render and describe it to the model.
+ *
+ * Deliberately NOT the bytes: a tool result is capped at `MAX_TOOL_OUTPUT_CHARS`
+ * (4000) before it is written to the thread, and base64 of even a small PNG is
+ * several times that — so the previous inline `{ data: toBase64(bytes) }` was
+ * billed, truncated mid-string, and arrived as something the model could not
+ * decode, parse, or ask about. A key names the whole object and costs ~40 chars.
+ */
+const storeRender = async (bucket: R2BucketLike, root: string, path: string, bytes: Uint8Array, mediaType: string): Promise<unknown> => {
+    const key = resolveFsKey(root, path);
+
+    await bucket.put(key, bytes);
+
+    return { bytes: bytes.byteLength, key, mediaType };
+};
+
+const runBrowserOp = async (browser: SandboxBrowserSurface, request: SandboxInvokeArgs, bucket: R2BucketLike | undefined): Promise<unknown> => {
+    const url = request.url ?? "";
+    // Pinned rather than left to the app's `createBrowser` default, so the
+    // budget this op runs under is the one `sandbox.ts` sized the dispatch
+    // against. See `sandbox-budgets.ts`.
+    const budget = { timeoutMs: SANDBOX_BROWSER_NAV_TIMEOUT_MS };
+
+    switch (request.op) {
+        case "content": {
+            return browser.content(url, budget);
+        }
+        case "pdf": {
+            return storeRender(requireRenderBucket(bucket, request), request.root ?? "", request.path ?? "", await browser.pdf(url, budget), "application/pdf");
+        }
+        case "scrape": {
+            // The scrape extractor runs in the page and cannot close over
+            // `selector` (Playwright serializes only the function), so it returns
+            // the page HTML for the model to narrow; `selector` is an advisory hint.
+            return browser.scrape(url, sandboxScrapeDocument, budget);
+        }
+        case "screenshot": {
+            // Resolved BEFORE the render, not after: a missing bucket would
+            // otherwise bill a screenshot only to discover it has nowhere to go.
+            const destination = requireRenderBucket(bucket, request);
+            const bytes = await browser.screenshot(url, {
+                ...budget,
+                ...(request.fullPage === undefined ? {} : { fullPage: request.fullPage }),
+                ...(request.type === undefined ? {} : { type: request.type as "jpeg" | "png" }),
+            });
+
+            return storeRender(destination, request.root ?? "", request.path ?? "", bytes, request.type === "jpeg" ? "image/jpeg" : "image/png");
+        }
+        default: {
+            throw new LunoraError("INTERNAL", `@lunora/agent: sandbox browser op "${request.op}" is not supported`);
+        }
+    }
+};
+
+/**
  * Run one R2-backed virtual-filesystem op, scoped under `root`. `ls` lists the
  * keys under a directory (root-relative), `read`/`write`/`rm`/`stat` operate on a
  * single file. workerd has no real shell; this is a persistent object-store FS.
@@ -369,6 +460,7 @@ const sandboxComponent = (): SandboxComponent => {
             command: v.optional(v.string()),
             content: v.optional(v.string()),
             fullPage: v.optional(v.boolean()),
+            instance: v.optional(v.string()),
             kind: v.union(v.literal("browser"), v.literal("container"), v.literal("fs")),
             method: v.optional(v.string()),
             name: v.optional(v.string()),
@@ -388,17 +480,14 @@ const sandboxComponent = (): SandboxComponent => {
                     throw new LunoraError("INTERNAL", "@lunora/agent: sandbox browser op needs `ctx.browser` — install @lunora/browser and run codegen");
                 }
 
-                return runBrowserOp(surface.browser, request);
+                return runBrowserOp(surface.browser, request, resolveBucket(surface, request));
             }
 
             if (request.kind === "fs") {
-                const bucket = surface.env?.[request.bucket ?? ""] as R2BucketLike | undefined;
+                const bucket = resolveBucket(surface, request);
 
-                if (!bucket || typeof bucket.get !== "function") {
-                    throw new LunoraError(
-                        "INTERNAL",
-                        `@lunora/agent: sandbox fs op found no R2 bucket "${request.bucket ?? ""}" on env — declare the r2_bucket binding in wrangler.jsonc and run codegen`,
-                    );
+                if (!bucket) {
+                    throw missingBucketError("fs", request.bucket ?? "");
                 }
 
                 return runFsOp(bucket, request.root ?? "", request);
@@ -420,5 +509,5 @@ const sandboxComponent = (): SandboxComponent => {
     return { invoke };
 };
 
-export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxInvokeArgs, SandboxRegisteredFunction };
+export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxContainerHandle, SandboxInvokeArgs, SandboxRegisteredFunction };
 export { resolveFsKey, runFsOp, sandboxComponent };

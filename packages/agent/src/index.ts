@@ -52,6 +52,7 @@ export type {
     AgentRunFunction,
     AgentRunHandle,
     AgentRunInput,
+    AgentRunOptions,
     AgentRunResult,
     AgentStepFinishInfo,
     AgentStepInfo,

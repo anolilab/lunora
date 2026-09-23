@@ -433,6 +433,31 @@ export const operator = defineAgent({
   to dedupe one against, and the approval decision is memoized in its own step,
   so the gate does not re-ask either. Make a command that cannot afford to run
   twice idempotent, or have it mark its own completion inside the container.
+
+    Every call is addressed to **one instance per thread**, not a random pool
+    member, so `exec("pnpm install")` and `exec("pnpm test")` on the same thread
+    share a filesystem. Size the container's `maxInstances` for the number of
+    threads you expect to be live at once.
+
+    **Time budgets and the ceiling that remains.** A dispatch defaults to a 30s
+    cap, and a dispatch that times out answers 503 — transient, so the tool's
+    durable step rethrows and the host retries it, dispatching the same call
+    again while the first is still running. For an `exec` that is the command
+    running twice. The sandbox therefore dispatches a browser op with a 150s
+    budget over a 120s navigation deadline, and a container op with a 150s budget
+    over a 120s `exec` deadline, so the **inner** deadline is always the one that
+    fires and the op ends rather than being abandoned. That widens the window; it
+    does not make an `exec` exactly-once. A command that outlives its 120s
+    deadline is killed, and one that somehow outlives the dispatch budget on top
+    of that is still re-dispatched by the step retry. Removing that ceiling needs
+    a fire-then-poll shape, which needs somewhere durable to record the op id —
+    which an action ctx does not have.
+
+    A container `fetch` reads at most 1MB of the response before the read is cut
+    and the reader cancelled (the result is marked `[truncated at … bytes]`), the
+    same bound `exec` has always had: the body is buffered in a 128MB isolate
+    shared with every other in-flight request.
+
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.

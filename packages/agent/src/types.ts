@@ -12,10 +12,33 @@ export interface AgentFunctionReference {
 }
 
 /**
+ * Per-call options an {@link AgentRunFunction} forwards to the dispatcher —
+ * a structural subset of `@lunora/dispatch`'s `RunFunctionOptions`, declared
+ * locally so this module stays free of that import.
+ * @experimental
+ */
+export interface AgentRunOptions {
+    /**
+     * Abort the dispatch after this many ms, overriding the runner's 30s
+     * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
+     *
+     * Load-bearing for any tool whose target legitimately runs longer than
+     * that. A dispatch timeout answers 503, which is NOT a deterministic
+     * dispatch failure, so the tool's `step.do` rethrows and the host retries
+     * the step — dispatching the same call again while the FIRST one is still
+     * running. For a side-effecting target (a container command, a billed page
+     * render) that is a second execution, not a second attempt. Set this at
+     * least as wide as the target's own budget, and give the target an inner
+     * deadline strictly under it so the target aborts itself first.
+     */
+    timeoutMs?: number;
+}
+
+/**
  * `ctx.run`-shaped dispatcher the loop uses to call Lunora functions.
  * @experimental
  */
-export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>) => Promise<unknown>;
+export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>, options?: AgentRunOptions) => Promise<unknown>;
 
 /**
  * Structural subset of the Cloudflare Workflows durable-step API the loop needs.

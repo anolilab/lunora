@@ -32,7 +32,9 @@ const memoryBucket = (): { bucket: R2BucketLike; store: Map<string, string> } =>
                 };
             },
             put: async (key, value) => {
-                store.set(key, value);
+                // `R2BucketLike.put` also takes bytes (the browser sandbox stores
+                // renders through it); every fs op writes a string.
+                store.set(key, value as string);
             },
         },
         store,

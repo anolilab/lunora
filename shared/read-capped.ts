@@ -1,9 +1,13 @@
 /**
  * A bounded, cancellable body reader.
  *
- * Its own module because both consumers need it and neither owns it: the
- * cold-start retry scans a response prefix for a provisioning sentinel, and the
- * exec contract reads a whole (capped) result document.
+ * In `shared/` because three consumers across two packages need it and none
+ * owns it: `@lunora/container`'s cold-start retry scans a response prefix for a
+ * provisioning sentinel, its exec contract reads a whole (capped) result
+ * document, and `@lunora/agent`'s sandbox bounds a container `fetch` body
+ * before it reaches the model. Inlined by the bundler rather than exported, so
+ * the agent does not take a runtime dependency edge on the container package.
+ * Zero-dependency by construction — keep it that way.
  */
 
 /** The outcome of a bounded body read: the decoded text, and whether the cap cut it short. */
