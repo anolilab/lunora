@@ -1,3 +1,9 @@
+## @lunora/testing [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.184...@lunora/testing@1.0.0-alpha.185) (2026-09-23)
+
+### Bug Fixes
+
+* **testing:** bind the per-table ctx.db facades in lunoraTest ([#799](https://github.com/anolilab/lunora/issues/799)) ([d0aa8af](https://github.com/anolilab/lunora/commit/d0aa8af2c4a06dea30d6fcecc644628d1fee203c))
+
 ## @lunora/testing [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.183...@lunora/testing@1.0.0-alpha.184) (2026-09-23)
 
 
