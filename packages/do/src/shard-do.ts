@@ -1518,6 +1518,29 @@ abstract class ShardDO {
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
 
     /**
+     * Cap on the number of distinct `(action, topic)` pairs one socket may have
+     * an `onWhisper` verdict decided for — enforced BEFORE the authorizer runs,
+     * in {@link ShardDO.authorizeWhisper}.
+     *
+     * {@link ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET} does not bound this: a join
+     * is authorized before membership is recorded, and a `whisper` send is
+     * authorized whether or not the sender is a member, so neither over-cap
+     * joins nor non-member sends are stopped by the membership cap. Without this
+     * ceiling a socket that names a fresh topic per frame grows
+     * {@link ShardDO.whisperVerdicts} without bound AND re-runs the authorizer —
+     * which is a database query — once per new name.
+     *
+     * Sized against what a legitimate client can reach rather than against the
+     * membership cap: a socket at full membership that also broadcasts on every
+     * topic it joined legitimately decides 2 × 64 = 128 pairs, so this leaves
+     * one whole membership's worth of headroom for a session that rotates
+     * topics (opening documents one after another). The memo is in-memory, so
+     * the ceiling is per warm instance, not per session — a hibernation clears
+     * it, as does a reconnect.
+     */
+    protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
+
+    /**
      * Cap on the serialized size (bytes) of a whisper `data` payload. Whispers
      * carry small awareness blobs (cursor, typing flag); bounding the payload
      * stops a client from turning the fan-out into a bandwidth-amplification
@@ -2090,7 +2113,8 @@ abstract class ShardDO {
      * cursor stream whispers many times a second and the authorizer is a database
      * query, so re-running it per frame would make the cheap primitive expensive.
      * Resetting on hibernation is the fail-safe direction — the next frame after a
-     * wake re-checks.
+     * wake re-checks. Bounded by
+     * {@link ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET}.
      */
     private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, boolean>>();
 
@@ -13057,6 +13081,13 @@ abstract class ShardDO {
      * receiving until the socket closes or the DO hibernates. Whispers carry
      * transient awareness and leave no durable trace; anything that must stop the
      * instant access is revoked belongs behind a query with RLS, not on a topic.
+     *
+     * **Distinct pairs are capped** at
+     * {@link ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET}, checked before the
+     * dispatch. Past the cap the socket is refused with a `TOO_MANY_WHISPER_TOPICS`
+     * error frame and the authorizer does not run — otherwise a socket naming a
+     * fresh topic per frame would grow the memo and re-enter the authorizer's
+     * query without bound.
      * @returns `true` when the socket may proceed
      */
     private async authorizeWhisper(ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
@@ -13072,6 +13103,23 @@ abstract class ShardDO {
 
         if (cached !== undefined) {
             return cached;
+        }
+
+        // Cap the DISTINCT pairs before dispatching, not after memoising: the
+        // authorizer is a database query, so an uncapped socket buys one query
+        // per never-seen topic name as well as one memo entry. Refused pairs are
+        // deliberately NOT memoised — recording them would let the refusal path
+        // grow the very map it exists to bound.
+        if (memo !== undefined && memo.size >= ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET) {
+            // Typed and actionable, unlike an ordinary denial (which stays silent
+            // so an error frame can't be used to probe topic existence). This
+            // message names only the socket's own ceiling — it says nothing about
+            // the topic or about what the authorizer would have answered.
+            const message = `whisper authorization cap of ${String(ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET)} distinct topics reached on this socket; reconnect to reset it`;
+
+            trySendFrame(ws, JSON.stringify({ code: "TOO_MANY_WHISPER_TOPICS", error: { code: "TOO_MANY_WHISPER_TOPICS", message }, type: "error" }));
+
+            return false;
         }
 
         const info = this.lifecycleInfo(this.readAttachment(ws));
