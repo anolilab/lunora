@@ -1,3 +1,14 @@
+## @lunora/runtime [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.132...@lunora/runtime@1.0.0-alpha.133) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/runtime [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.131...@lunora/runtime@1.0.0-alpha.132) (2026-09-22)
 
 
