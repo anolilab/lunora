@@ -1,3 +1,17 @@
+## @lunora/studio [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.197...@lunora/studio@1.0.0-alpha.198) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.145
+* **@lunora/client:** upgraded to 1.0.0-alpha.121
+* **@lunora/react:** upgraded to 1.0.0-alpha.127
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.133
+
 ## @lunora/studio [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.196...@lunora/studio@1.0.0-alpha.197) (2026-09-23)
 
 ### ⚠ BREAKING CHANGES
