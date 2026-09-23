@@ -7505,7 +7505,7 @@ abstract class ShardDO {
                 return;
             }
 
-            this.emitSpan(span, sink);
+            this.emitSpan(span, sink, true);
 
             return;
         }
@@ -7523,7 +7523,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.emitSpan(span, sink);
+        this.emitSpan(span, sink, true);
     }
 
     /**
@@ -7533,13 +7533,19 @@ abstract class ShardDO {
      * {@link recordSpan} and the deferred error-keep flush in
      * {@link flushSampledOutTrace} share one guarded emit.
      */
-    private emitSpan(span: SpanEvent, sink: TelemetrySink): void {
+    private emitSpan(span: SpanEvent, sink: TelemetrySink, sampled: boolean): void {
         if (!sink.onSpan) {
             return;
         }
 
         try {
-            sink.onSpan(span, { waitUntil: this.shardHost.waitUntil });
+            // Stamp the verdict here, at the single funnel every exported span
+            // passes through, rather than on each of the three builders. The OTLP
+            // encoder writes it into the span's `flags`; a span shipped without
+            // one reads as UNSAMPLED at the collector. The two call sites are
+            // exactly the two states: streamed live (kept) and flushed by the
+            // tail bias (head-sampled out, rescued because the trace errored).
+            sink.onSpan({ ...span, sampled }, { waitUntil: this.shardHost.waitUntil });
         } catch {
             // A buggy span sink must not break the handler.
         }
@@ -7581,7 +7587,9 @@ abstract class ShardDO {
         }
 
         for (const span of held) {
-            this.emitSpan(span, sink);
+            // `false`: the head decision dropped this trace and only the tail
+            // bias is exporting it, which is exactly what the cleared flag says.
+            this.emitSpan(span, sink, false);
         }
     }
 

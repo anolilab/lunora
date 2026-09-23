@@ -797,6 +797,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;

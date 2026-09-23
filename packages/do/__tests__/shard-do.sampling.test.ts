@@ -151,6 +151,43 @@ describe("shardDO trace sampling", () => {
         }
     });
 
+    // The verdict has to reach the sink ON the span: the OTLP encoder writes it
+    // into the span's `flags`, and a span shipped without one reads as UNSAMPLED
+    // at the collector — on every span, including the kept ones.
+    it("stamps each exported span with the trace's settled sampled verdict", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const kept = new SamplingShard(makeState(database), {});
+
+            kept.plan = async (trace) => {
+                await trace("work", () => undefined);
+            };
+
+            await kept.fetch(request("a:b", { sampled: true }));
+
+            expect(kept.exportedSpans.map((span) => span.sampled)).toStrictEqual([true]);
+
+            // Head-sampled out, rescued by the tail bias: exported with the bit
+            // CLEAR, because that is the verdict the trace actually got.
+            const rescued = new SamplingShard(makeState(database), {});
+
+            rescued.plan = async (trace) => {
+                await trace("bad-child", () => {
+                    throw new Error("kaboom");
+                }).catch(() => undefined);
+            };
+
+            await rescued.fetch(request("a:c", { keepErrors: true, sampled: false }));
+
+            expect(rescued.exportedSpans.map((span) => span.sampled)).toStrictEqual([false]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("drops a sampled-out error trace when alwaysSampleErrors is off", async () => {
         expect.assertions(1);
 
