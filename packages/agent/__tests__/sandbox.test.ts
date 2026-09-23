@@ -381,6 +381,32 @@ describe("sandboxComponent().invoke", () => {
         expect(result).toBe("<html></html>");
     });
 
+    // EVERY op, not just the render pair. The inner deadline is what makes the
+    // dispatch budget's `inner < dispatch` invariant real: an op left on the
+    // app's own `createBrowser` default (30s, or whatever the app configured)
+    // is not provably tighter than the 150s dispatch, so a slow page could
+    // outlive the dispatch, 503, and have the step re-run the navigation. The
+    // `screenshot` assertion above covered one of four.
+    it.each(["content", "pdf", "scrape", "screenshot"])("pins the inner navigation budget on a browser %s, not just the render pair", async (op) => {
+        const render = vi.fn<() => Promise<Uint8Array>>(async () => new Uint8Array([1]));
+        const browser = {
+            content: vi.fn<() => Promise<string>>(async () => ""),
+            pdf: render,
+            scrape: vi.fn<() => Promise<string>>(async () => ""),
+            screenshot: render,
+        };
+        const { bucket } = memoryBucket();
+
+        await invokeSandbox({ browser, env: { SHOTS: bucket } }, { bucket: "SHOTS", kind: "browser", op, path: `a.${op}`, url: "https://example.com" });
+
+        // `scrape` takes the extractor between the url and the options, so the
+        // budget is the LAST argument on every op rather than a fixed index.
+        const call = browser[op as keyof typeof browser].mock.calls[0] as unknown[];
+
+        expect(call.at(-1)).toMatchObject({ timeoutMs: SANDBOX_BROWSER_NAV_TIMEOUT_MS });
+        expect(SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS).toBeGreaterThan(SANDBOX_BROWSER_NAV_TIMEOUT_MS);
+    });
+
     it("errors when a browser op has no ctx.browser", async () => {
         await expect(invokeSandbox({}, { kind: "browser", op: "content", url: "https://x" })).rejects.toThrow(MISSING_BROWSER_ERROR);
     });
