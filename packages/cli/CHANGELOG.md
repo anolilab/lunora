@@ -1,3 +1,5 @@
+## @lunora/cli [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.270...@lunora/cli@1.0.0-alpha.271) (2026-09-23)
+
 ## @lunora/cli [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.269...@lunora/cli@1.0.0-alpha.270) (2026-09-23)
 
 
