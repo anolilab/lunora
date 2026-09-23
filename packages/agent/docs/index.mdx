@@ -395,8 +395,10 @@ import { browserTool, containerTool, defineAgent, fsTool } from "@lunora/agent";
 export const operator = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     tools: {
-        // One tool, every browser op — the model picks via `op`.
-        browser: browserTool(),
+        // One tool, every browser op — the model picks via `op`. `bucket` is
+        // required for `screenshot`/`pdf`: the render goes to R2 and the model
+        // gets its key back (see below).
+        browser: browserTool({ bucket: "SANDBOX_BUCKET", root: "renders" }),
         // Talks to `ctx.containers.sandbox` (a `lunora/containers.ts` export).
         sandbox: containerTool("sandbox"),
         // A persistent R2-backed filesystem scoped to `agents/operator`.
@@ -407,7 +409,15 @@ export const operator = defineAgent({
 
 - **`browserTool(opts?)`** exposes Cloudflare Browser Rendering as one tool. The
   model sets `op` to `screenshot` \| `pdf` \| `content` \| `scrape` plus a `url`;
-  `screenshot`/`pdf` return base64 bytes, `content`/`scrape` return HTML. The
+  `content`/`scrape` return HTML. `screenshot`/`pdf` write the render to
+  `opts.bucket` and return `{ bytes, key, mediaType }` — **not** the bytes: a
+  tool result is capped at 4000 characters before it is persisted, and base64 of
+  even a small PNG is several times that, so inline bytes arrived truncated
+  mid-string after the render had already been billed. Each render lands at
+  `<root>/<threadKey>/<toolCallId>.<ext>`, derived only from replay-stable
+  identifiers, so a retried step overwrites its own object instead of leaking one
+  per attempt. Without a `bucket` those two ops are refused as a tool result and
+  never dispatched, so nothing is billed. The
   model picks the `url` with no allowlist, so this is an **SSRF surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
   **unattended by default**; pass `opts.needsApproval` (a boolean or a predicate)
