@@ -1,3 +1,16 @@
+## @lunora/codegen [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.200...@lunora/codegen@1.0.0-alpha.201) (2026-09-23)
+
+### Bug Fixes
+
+* **codegen:** match the spellings security lints are actually written in ([#784](https://github.com/anolilab/lunora/issues/784)) ([b286ef3](https://github.com/anolilab/lunora/commit/b286ef382549a746f82eee17bf64ce5dda7a4796))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.125
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.58
+* **@lunora/do:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/codegen [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.199...@lunora/codegen@1.0.0-alpha.200) (2026-09-23)
 
 ### Tests
