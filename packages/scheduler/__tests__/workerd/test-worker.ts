@@ -52,6 +52,19 @@ class TestSchedulerDO extends DurableObject<Env> {
     /** Records every dispatch attempted by the real alarm fire path. */
     public dispatched: ScheduleRecord[] = [];
 
+    /**
+     * How many dispatches must be in flight at once before `hold()` lets any of
+     * them return. `0` disables the barrier (dispatch returns immediately),
+     * which is what every test that does not measure concurrency wants.
+     */
+    public barrier = 0;
+
+    /** Dispatches currently inside `hold()`. */
+    public inFlight = 0;
+
+    /** The largest `inFlight` ever observed — the drain's real concurrency. */
+    public peakInFlight = 0;
+
     private readonly scheduler: ConcreteScheduler;
 
     public constructor(context: DurableObjectState, env: Env) {
@@ -60,6 +73,38 @@ class TestSchedulerDO extends DurableObject<Env> {
         // subtype of it.
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- ConcreteScheduler and TestSchedulerDO are mutually referential; the class is fully defined by the time this constructor runs
         this.scheduler = new ConcreteScheduler(toSchedulerState(context), env as unknown as SchedulerEnv, this);
+    }
+
+    /** Arm the `hold()` barrier. A setter, so a test never assigns to the instance directly. */
+    public setBarrier(value: number): void {
+        this.barrier = value;
+    }
+
+    /**
+     * Park a dispatch until `barrier` of them are in flight together, standing
+     * in for the runtime receiver, which answers only once the dispatched
+     * function has finished running.
+     *
+     * The wait yields on a storage READ, not a timer. A Durable Object's timers
+     * are gated and delivered in scheduling order, so a `setTimeout` poll keeps
+     * handing control back to the SAME waiter and a sibling lane never gets to
+     * run — the barrier would then measure the poll, not the drain. A storage
+     * read is the yield the runtime actually interleaves.
+     *
+     * Bounded by a spin count so a drain that CANNOT reach the barrier (a
+     * one-at-a-time drain) still finishes and fails on `peakInFlight` rather
+     * than hanging the suite until the test timeout.
+     */
+    public async hold(): Promise<void> {
+        this.inFlight += 1;
+        this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
+
+        for (let spin = 0; spin < 50 && this.inFlight < this.barrier; spin += 1) {
+            // eslint-disable-next-line no-await-in-loop -- polling for sibling lanes to arrive is inherently sequential
+            await this.ctx.storage.get("__barrier_spin");
+        }
+
+        this.inFlight -= 1;
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -82,6 +127,8 @@ class ConcreteScheduler extends SchedulerDO {
 
     protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
         this.outer.dispatched.push(record);
+
+        await this.outer.hold();
 
         return true;
     }

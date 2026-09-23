@@ -27,6 +27,32 @@ const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body
         method: "POST",
     });
 
+/**
+ * Write `count` already-due records straight into the DO's storage, in the
+ * layout `SchedulerDO` uses: an `id:<id>` header plus a `t:<paddedTime>:<id>`
+ * index entry (15-digit zero pad, so lexical order matches numeric order).
+ * Bypasses `/schedule` so no alarm is armed — the caller drives `alarm()`.
+ */
+const seedDue = async (stub: DurableObjectStub<TestSchedulerDO>, count: number, prefix: string, extra: Record<string, unknown> = {}): Promise<void> => {
+    const scheduledFor = Date.now() - 1000;
+    const padded = String(scheduledFor).padStart(15, "0");
+
+    await runInDurableObject(stub, async (_instance, state) => {
+        for (let index = 0; index < count; index += 1) {
+            const id = `${prefix}-${String(index)}`;
+
+            // eslint-disable-next-line no-await-in-loop -- seeding one DO's storage in a deterministic order
+            await state.storage.put(`id:${id}`, { args: {}, enqueuedAt: scheduledFor, functionPath: `${prefix}${String(index)}`, id, scheduledFor, ...extra });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await state.storage.put(`t:${padded}:${id}`, id);
+        }
+
+        if (typeof extra.pool === "string") {
+            await state.storage.put(`pool:${extra.pool}`, { inFlight: 0, inFlightIds: [], maxConcurrency: extra.maxConcurrency ?? 1 });
+        }
+    });
+};
+
 describe("schedulerDO (workerd)", () => {
     it("/schedule arms the runtime alarm for the earliest pending task", async () => {
         expect.hasAssertions();
@@ -126,6 +152,61 @@ describe("schedulerDO (workerd)", () => {
 
             // `end` itself is excluded; everything below it is returned.
             expect([...bounded.keys()]).toEqual(["t:000000000001000:a"]);
+        });
+    });
+
+    it("drains several due jobs concurrently on the real runtime", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("concurrent-drain");
+
+        // Seeded straight into storage rather than through `/schedule`: an
+        // already-due `/schedule` arms the alarm in the past and the runtime
+        // delivers it immediately, so the drain would race the test's barrier
+        // setup. This still exercises real Durable Object storage and real
+        // gating — only the alarm's delivery is driven by hand.
+        await seedDue(stub, 4, "job");
+
+        // Every dispatch parks until four are in flight together. A drain that
+        // awaits each job in turn can never reach that, so it falls through the
+        // bounded spin one job at a time and `peakInFlight` stays at 1.
+        await runInDurableObject(stub, async (instance) => {
+            instance.setBarrier(4);
+
+            await instance.alarm();
+
+            expect(instance.dispatched).toHaveLength(4);
+            expect(instance.peakInFlight).toBe(4);
+        });
+    });
+
+    it("never oversubscribes a pool past maxConcurrency under a concurrent drain", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("pool-concurrency");
+
+        await seedDue(stub, 5, "pooled", { maxConcurrency: 3, pool: "p" });
+
+        await runInDurableObject(stub, async (instance, state) => {
+            instance.setBarrier(3);
+
+            await instance.alarm();
+
+            // Exactly the cap in flight at the peak — not one (the old
+            // sequential drain) and not five (a drain whose pool reservations
+            // lose updates to each other across the real storage round trip).
+            expect(instance.peakInFlight).toBe(3);
+            expect(instance.dispatched).toHaveLength(3);
+
+            const pool = await state.storage.get<{ inFlight: number; inFlightIds: string[] }>("pool:p");
+
+            expect(pool?.inFlightIds).toHaveLength(3);
+
+            // The two over the cap were re-armed as backpressure and still hold
+            // both of their rows.
+            const headers = await state.storage.list({ prefix: "id:" });
+
+            expect(headers.size).toBe(2);
         });
     });
 

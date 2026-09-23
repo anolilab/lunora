@@ -109,6 +109,31 @@ const RETRY_BASE_DELAY_MS = 30_000;
 // re-armed this far in the future so a later alarm drains it as slots free.
 // Small enough to feel responsive, large enough to avoid a busy alarm loop.
 const POOL_BACKPRESSURE_DELAY_MS = 1000;
+
+/**
+ * How many due records one {@link SchedulerDO.alarm} drain keeps in flight at
+ * once.
+ *
+ * This is not an arbitrary tuning knob, and raising it buys nothing.
+ * {@link SchedulerDO.dispatch} is an outbound `fetch`, and a Workers/Durable
+ * Object invocation may have at most **six connections simultaneously waiting
+ * for response headers** — a seventh simply queues behind them. So six is the
+ * platform's own concurrency, expressed here rather than discovered at runtime.
+ *
+ * It matters because the runtime's `/_lunora/scheduler/dispatch` receiver
+ * answers only AFTER the dispatched function has finished running: a dispatch's
+ * latency is the whole job's latency, not a kick's. Draining one record at a
+ * time therefore serialised every scheduled job in the app behind whichever one
+ * was running, and made a workpool's `maxConcurrency` unreachable — only one job
+ * was ever in flight, so the pool's semaphore never saw a second holder.
+ *
+ * The 15-minute alarm wall clock bounds the drain as a whole (one alarm
+ * invocation), so this divides the wall time a given backlog needs by up to six;
+ * it does not remove the ceiling. A backlog that still cannot finish inside it
+ * is bounded work, not lost work: an unreached record keeps BOTH its `id:`
+ * header and its `t:` index entry, so the next alarm fires it normally.
+ */
+const MAX_CONCURRENT_DISPATCHES = 6;
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
 // that still fits in TIME_PAD digits (999_999_999_999_999 = 1e15 - 1). Capping
 // here — rather than at the 8.64e15 ECMAScript `Date` max — guarantees EVERY
@@ -393,6 +418,14 @@ class SchedulerDO {
      */
     private reindexed = false;
 
+    /**
+     * Tail of the serialized `pool:<name>` critical section — see
+     * the pool lock (`withPoolLock`). Per-instance, which is the right scope: the pool rows
+     * live in this Durable Object's own storage and only this instance writes
+     * them.
+     */
+    private poolLock: Promise<unknown> = Promise.resolve();
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -476,7 +509,7 @@ class SchedulerDO {
             prefix: "t:",
         });
 
-        /* eslint-disable no-await-in-loop -- sequential by design: a Durable Object's storage is single-threaded local state, and the claim-before-dispatch protocol below requires each job's index write to complete in order so an alarm re-fire can't double-dispatch. */
+        /* eslint-disable no-await-in-loop -- sequential by design: reading the due slice's headers is local Durable Object storage, and a dangling-index delete must land before the next read. */
         for (const [indexKey, recordId] of indexEntries.entries()) {
             const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
 
@@ -498,28 +531,24 @@ class SchedulerDO {
                 }
             }
         }
+        /* eslint-enable no-await-in-loop */
 
         // Per-pool concurrency is gated by the durable `pool:<name>` row, which
-        // reservePoolSlot() reads FRESH from storage for every record. We
-        // deliberately do NOT cache pool state across the drain: dispatch()
-        // awaits an outbound fetch, during which the DO input gate is open and a
-        // concurrent /complete can decrement the pool row. A stale cached copy
-        // written back afterwards would resurrect the completed job's slot and
-        // leak pool capacity forever (there is no lease timeout to reclaim it).
+        // reservePoolSlot() reads FRESH from storage for every record, under the
+        // pool lock. We deliberately do NOT cache pool state across the drain:
+        // dispatch() awaits an outbound fetch, during which the DO input gate is
+        // open and a concurrent /complete can decrement the pool row. A stale
+        // cached copy written back afterwards would resurrect the completed
+        // job's slot and leak pool capacity forever (there is no lease timeout
+        // to reclaim it).
         try {
-            for (const record of due) {
-                // Per-record isolation: a storage throw for one record must NOT
-                // abort the whole pass (it would skip the other due records AND
-                // the rescheduleAlarm() in the finally, losing the clock).
-                await this.drainRecordGuarded(record);
-            }
+            await this.drainDue(due);
         } finally {
             // Always re-arm the clock, even if a record threw above — otherwise a
             // single failing record could leave the DO with no future alarm and
             // strand every still-pending job.
             await this.rescheduleAlarm();
         }
-        /* eslint-enable no-await-in-loop */
 
         // Jobs fired (and were removed or moved to retry), so push the new list
         // to live subscribers — this is the moment a studio wants to see.
@@ -649,6 +678,80 @@ class SchedulerDO {
     }
 
     /**
+     * Drain the due slice with up to {@link MAX_CONCURRENT_DISPATCHES} records in
+     * flight at once, so a slow job delays only its own lane instead of every
+     * other due job in the app (see the constant for why the drain used to
+     * serialise whole jobs, not just their kicks).
+     *
+     * Lanes pull from the head of the slice, so records still ENTER dispatch in
+     * the slice's order — the same `t:<paddedTime>:<id>` order the sequential
+     * drain used. What is no longer implied is that they FINISH in that order,
+     * which was never a guarantee worth relying on anyway: two jobs due at the
+     * same instant already ran in storage-key (id) order rather than arrival
+     * order, a saturated pooled job is pushed {@link POOL_BACKPRESSURE_DELAY_MS}
+     * into the future ahead of its queue-mates, and a failed job re-enters at the
+     * end of a backoff. Nothing in the public surface documents an ordering
+     * guarantee; jobs that must be ordered must chain themselves.
+     *
+     * {@link drainRecordGuarded} swallows every throw, so no lane can reject and
+     * abandon its siblings.
+     */
+    private async drainDue(due: ScheduleRecord[]): Promise<void> {
+        const queue = [...due];
+        const lanes: Promise<void>[] = [];
+        // Fixed BEFORE the loop: each lane's body runs synchronously up to its
+        // first await, so it has already shifted a record off `queue` by the
+        // time the next iteration's condition is evaluated. Reading
+        // `queue.length` there would race the lanes and open too few of them.
+        const width = Math.min(MAX_CONCURRENT_DISPATCHES, queue.length);
+
+        for (let lane = 0; lane < width; lane += 1) {
+            lanes.push(
+                (async () => {
+                    for (let record = queue.shift(); record !== undefined; record = queue.shift()) {
+                        // eslint-disable-next-line no-await-in-loop -- one lane drains its records in sequence; the lanes themselves are what run concurrently
+                        await this.drainRecordGuarded(record);
+                    }
+                })(),
+            );
+        }
+
+        await Promise.all(lanes);
+    }
+
+    /**
+     * Run `critical` with exclusive access to the `pool:<name>` rows.
+     *
+     * Every pool mutation is a read-modify-write (`loadPool` → mutate →
+     * `savePool`), and the two halves are separated by an `await`. That was safe
+     * while the drain ran one record at a time — the Durable Object input gate
+     * keeps a foreign event (a concurrent `/complete`) out while a storage
+     * operation is in flight, and nothing else in this instance could interleave.
+     * Concurrent lanes break exactly that assumption: lane A and lane B can both
+     * issue their `get` before either `put` lands, both observe `inFlight: 0`,
+     * and the second `put` then erases the first lane's reservation — the pool
+     * oversubscribes and one holder's id is lost, so its slot is never released.
+     *
+     * The lock is a promise chain rather than anything cleverer because the
+     * critical section is two local storage ops with no I/O in it. It is held
+     * across NO outbound fetch: `dispatch()` runs outside it, which is the whole
+     * point of draining concurrently.
+     *
+     * The chain is rebuilt from a swallowed copy so one rejecting section can
+     * never wedge every later one.
+     */
+    private async withPoolLock<T>(critical: () => Promise<T>): Promise<T> {
+        const run = this.poolLock.then(critical, critical);
+
+        this.poolLock = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return run;
+    }
+
+    /**
      * Claim + drain one due record with per-record fault isolation, so a storage
      * throw can never abort the whole alarm pass (which would skip the remaining
      * due records and the `rescheduleAlarm()` that re-arms the clock).
@@ -728,20 +831,24 @@ class SchedulerDO {
         }
 
         const ok = await this.dispatch(record);
+        const poolName = record.pool;
 
-        if (!ok && record.pool !== undefined) {
+        if (!ok && poolName !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
             // Re-load the pool row FRESH from storage rather than reusing a copy
             // held from before the dispatch() fetch await: a concurrent
-            // /complete may have decremented the row during that await, and
-            // releasing against a stale copy would clobber that decrement and
-            // oversubscribe the pool. Release by id so a later (spurious)
-            // /complete for the same job can't double-free either.
-            const pool = await this.loadPool(record.pool);
-            const released = SchedulerDO.releaseSlot(pool, record.id);
+            // /complete — or a sibling lane's reservation — may have rewritten
+            // the row during that await, and releasing against a stale copy
+            // would clobber it and oversubscribe the pool. Release by id so a
+            // later (spurious) /complete for the same job can't double-free
+            // either, and under the pool lock so the read-modify-write is atomic
+            // against every other writer in this instance.
+            await this.withPoolLock(async () => {
+                const pool = await this.loadPool(poolName);
 
-            await this.savePool(record.pool, released);
+                await this.savePool(poolName, SchedulerDO.releaseSlot(pool, record.id));
+            });
         }
 
         if (ok) {
@@ -776,41 +883,56 @@ class SchedulerDO {
      * always return `true` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
-     * across the drain. Each reservation durably `savePool()`s before the next
-     * record runs, so a same-pass reservation is still visible to the next
-     * record's fresh read (the budget carries forward); and because dispatch()
-     * awaits an outbound fetch between records, a concurrent /complete that
-     * decrements the row mid-drain IS reflected here instead of being clobbered
-     * by a stale in-memory copy (which would leak a slot permanently).
+     * across the drain — and the read-modify-write runs under
+     * the pool lock (`withPoolLock`). Both halves are load-bearing. Freshness is what
+     * keeps a concurrent `/complete` landing during a dispatch from being
+     * clobbered by a stale in-memory copy (which would leak a slot permanently,
+     * there being no lease to reclaim it). The lock is what keeps two drain
+     * lanes from both reading the same pre-reservation row and both believing a
+     * slot was free — without it the pool oversubscribes past `maxConcurrency`
+     * and one holder's id is dropped from `inFlightIds`, so its slot is never
+     * released.
      */
     private async reservePoolSlot(record: ScheduleRecord): Promise<boolean> {
-        if (record.pool === undefined) {
+        const poolName = record.pool;
+
+        if (poolName === undefined) {
             return true;
         }
 
-        const pool = await this.loadPool(record.pool);
+        const reserved = await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
 
-        if (pool.inFlight >= pool.maxConcurrency) {
+            if (pool.inFlight >= pool.maxConcurrency) {
+                return false;
+            }
+
+            // Reserve a slot durably BEFORE dispatching so neither a concurrent
+            // alarm nor a sibling lane in this same pass can oversubscribe the
+            // pool. Track the holding job id so the eventual release (success →
+            // /complete, failed kick → drainRecord) is idempotent per job and
+            // can't over-release.
+            const ids: string[] = pool.inFlightIds ?? [];
+
+            if (!ids.includes(record.id)) {
+                ids.push(record.id);
+            }
+
+            pool.inFlightIds = ids;
+            pool.inFlight = ids.length;
+            await this.savePool(poolName, pool);
+
+            return true;
+        });
+
+        if (!reserved) {
+            // Backpressure, not failure: re-arm outside the lock — it writes only
+            // this record's own rows, so holding the pool lock for it would stall
+            // every other lane's reservation for nothing.
             await this.requeuePooled(record);
-
-            return false;
         }
 
-        // Reserve a slot durably BEFORE dispatching so neither a concurrent
-        // alarm nor this same pass can oversubscribe the pool. Track the holding
-        // job id so the eventual release (success → /complete, failed kick →
-        // drainRecord) is idempotent per job and can't over-release.
-        const ids: string[] = pool.inFlightIds ?? [];
-
-        if (!ids.includes(record.id)) {
-            ids.push(record.id);
-        }
-
-        pool.inFlightIds = ids;
-        pool.inFlight = ids.length;
-        await this.savePool(record.pool, pool);
-
-        return true;
+        return reserved;
     }
 
     /**
@@ -1066,15 +1188,23 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "pool is required");
         }
 
-        const pool = await this.loadPool(poolName);
+        // Under the pool lock: this read-modify-write races the concurrent drain
+        // lanes, which reserve and release the same row while their dispatches
+        // are in flight (the input gate is open across an outbound fetch, so a
+        // `/complete` genuinely does land mid-drain). See `withPoolLock`.
+        const next = await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
 
-        // Release by job id so an at-least-once /complete (the runtime may
-        // re-deliver the completion callback) is idempotent and can't free a
-        // slot belonging to a different in-flight job. Without an id we fall
-        // back to a best-effort decrement (legacy clients / runtimes).
-        const next = jobId === undefined ? SchedulerDO.releaseFirstSlot(pool) : SchedulerDO.releaseSlot(pool, jobId);
+            // Release by job id so an at-least-once /complete (the runtime may
+            // re-deliver the completion callback) is idempotent and can't free a
+            // slot belonging to a different in-flight job. Without an id we fall
+            // back to a best-effort decrement (legacy clients / runtimes).
+            const released = jobId === undefined ? SchedulerDO.releaseFirstSlot(pool) : SchedulerDO.releaseSlot(pool, jobId);
 
-        await this.savePool(poolName, next);
+            await this.savePool(poolName, released);
+
+            return released;
+        });
 
         // A freed slot means a queued job can now run; pull the alarm forward so
         // the drain happens promptly instead of waiting for the backpressure tick.
@@ -1472,10 +1602,21 @@ class SchedulerDO {
      * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
      * a thrown storage op, not a lost instance.
      *
-     * Re-firing is safe: the dispatch carries the record id, which the receiver
-     * spends as `x-lunora-mutation-id` for a function target and as the workflow
-     * INSTANCE id for a `workflow` target, so a job that DID reach the origin
-     * before the crash is not run twice either way.
+     * Re-firing is deduplicated, but NOT unconditionally: the dispatch carries
+     * the record id, which the receiver spends as `x-lunora-mutation-id` for a
+     * function target and as the workflow INSTANCE id for a `workflow` target.
+     * A workflow attaches to the running instance, and a mutation's dedup read
+     * runs inside the shard's single-writer gate, so both are exactly-once.
+     *
+     * An ACTION is the exception, and it is the case this path most often
+     * recovers. `@lunora/do` deliberately does NOT take the gate for a
+     * non-mutation — gating one would let any caller freeze a whole shard for
+     * the length of an action's outbound I/O — and the dedup row is written only
+     * after the handler returns. So a long action that was still running when
+     * this instance was lost has no row yet, and the re-fire runs the handler a
+     * SECOND time, concurrently with the first. That is at-least-once, not
+     * exactly-once, and an action with non-idempotent side effects has to carry
+     * its own guard.
      *
      * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
      * per-header `get`, so the cost is one pass over each prefix.
@@ -1530,5 +1671,5 @@ class SchedulerDO {
     }
 }
 
-export { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
+export { MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };
