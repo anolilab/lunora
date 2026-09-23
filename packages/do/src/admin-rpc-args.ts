@@ -108,6 +108,18 @@ interface RunShardImportArgs {
  */
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+
+    /**
+     * `delete` only: remove the row PHYSICALLY even on a `.softDelete()` table,
+     * instead of stamping the marker column.
+     *
+     * Internal — {@link parseWriteRowArgs} does not read it off the wire, so the
+     * single-row `writeRow` op cannot set it. The bulk delete arm builds its args
+     * in-process and is the only caller that does: its bounded scan re-reads the
+     * physical table each batch, so a delete that leaves the row in place never
+     * shrinks the match set and the drain cannot converge.
+     */
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;
