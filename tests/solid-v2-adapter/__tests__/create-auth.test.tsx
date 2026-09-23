@@ -51,7 +51,17 @@ const createAuthFakeClient = (options: { user?: User | null; userResolves?: bool
     // exists for: a token is set but `getCurrentUser` has not come back yet.
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => (userResolves ? currentUser : new Promise<never>(() => {})));
 
-    const client = { getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken } as unknown as LunoraClient;
+    // `expectIdentityResolution` is how the identity store declares itself to
+    // the client on attach; this double has no gates to arm, so it only has to
+    // exist.
+    const client = {
+        expectIdentityResolution: () => undefined,
+        getAuthToken,
+        getCurrentUser,
+        onAuthTokenChange,
+        onConnectionStatus,
+        setAuthToken,
+    } as unknown as LunoraClient;
 
     return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken };
 };

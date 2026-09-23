@@ -5041,7 +5041,7 @@ describe("lunoraClient", () => {
 
     describe("lunoraClient — the read cache is stamped with the delivering socket's identity", () => {
         it("does not write the previous user's rows under the new user's identity after a switch", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const cache = createInMemoryQueryCache();
             const puts: CachedQuery[] = [];
@@ -5075,20 +5075,25 @@ describe("lunoraClient", () => {
 
             const subId = firstSub(socket).id as string;
 
-            // The user switches. Nothing closes user A's socket — the WS credential
-            // is pinned in the upgrade URL and only `setWsToken` bounces it.
+            // The user switches. A's socket is retired — `close()` flips
+            // `readyState` synchronously but its EVENT lands a turn later, so
+            // the connection still points at it for the rest of this one.
             client.setAuthToken("token-b", "user-b");
 
             expect(client.currentIdentity()).not.toBe(identityA);
+            expect(socket.readyState).toBe(3);
 
-            // ...and it keeps delivering user A's rows.
+            // A frame A's socket had already put on the wire lands in that gap.
             socket.receive({ cursor: 1, data: ["a-row"], id: subId, type: "data" });
 
             // `close()` flushes the debounced cache writes.
             client.close();
             await flushMicrotasks();
 
-            expect(puts.map((entry) => entry.identity)).toStrictEqual([identityA]);
+            // Refused outright, so it is neither stamped `subj:user-b` (which
+            // would hydrate A's row into B's next session) nor written under
+            // A's stamp — a retired socket's frame is not a read of anyone's.
+            expect(puts).toStrictEqual([]);
         });
     });
 
