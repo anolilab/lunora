@@ -1,3 +1,9 @@
+## @lunora/browser [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.48...@lunora/browser@1.0.0-alpha.49) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
 ## @lunora/browser [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.47...@lunora/browser@1.0.0-alpha.48) (2026-09-13)
 
 
