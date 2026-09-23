@@ -1,3 +1,9 @@
+## @lunora/sql-store [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.128...@lunora/sql-store@1.0.0-alpha.129) (2026-09-23)
+
+### Bug Fixes
+
+* **sql-store:** qualify the global-table drift probe ([#804](https://github.com/anolilab/lunora/issues/804)) ([f621477](https://github.com/anolilab/lunora/commit/f621477fbc060bb672be2d2a035d0c0f1e702858)), closes [#800](https://github.com/anolilab/lunora/issues/800)
+
 ## @lunora/sql-store [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.127...@lunora/sql-store@1.0.0-alpha.128) (2026-09-23)
 
 
