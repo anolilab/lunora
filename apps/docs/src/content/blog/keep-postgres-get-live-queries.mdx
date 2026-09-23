@@ -108,12 +108,13 @@ import { defineShape } from "lunorash/server";
 export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
 ```
 
-You supply the driver once, when the shard DO is constructed, and Lunora memoizes it per binding:
+You supply the driver once, on the app builder, and Lunora memoizes it per binding:
 
 ```ts
-createShardDO({
-    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
-});
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .build();
 ```
 
 Clients subscribe with the shape they would use over any table. There is no special case on the

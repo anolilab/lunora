@@ -236,6 +236,7 @@ interface EmitAppOptions {
     hasQueue: boolean;
     hasR2sql: boolean;
     hasScheduler: boolean;
+    hasSourcedTables: boolean;
     hasStorage: boolean;
     hasVectors?: boolean;
     hasWorkflow: boolean;

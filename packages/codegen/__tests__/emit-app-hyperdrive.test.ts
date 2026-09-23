@@ -22,6 +22,7 @@ const baseOptions = {
     hasR2sql: false,
     hasHyperdriveGlobal: false,
     hasScheduler: false,
+    hasSourcedTables: false,
     hasStorage: false,
     hasVectors: false,
     hasWorkflow: false,
