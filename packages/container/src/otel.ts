@@ -39,6 +39,7 @@ import {
 } from "../../../shared/otlp";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
 import { detectHostResource, detectServiceResource, mergeResourceAttributes } from "../../../shared/otlp-resource";
+import { shouldExportTrace } from "../../../shared/sampling";
 
 /**
  * An attribute value carried on a span or log.
@@ -92,6 +93,21 @@ interface ContainerLogInput {
  */
 interface ContainerTelemetryOptions {
     /**
+     * Keep a span that ERRORED even when the inbound `traceparent` says the trace
+     * was sampled out — the **tail bias**, the same rule `@lunora/runtime`'s
+     * `sampling.alwaysSampleErrors` and the shard's `x-lunora-sample-errors`
+     * apply. Default `true`, falling back to the `LUNORA_SAMPLE_ERRORS` env var
+     * (`"0"` turns it off), so the container agrees with the other two tiers
+     * without being told.
+     *
+     * Per SPAN, not per trace: the container is a long-running process with no
+     * dispatch boundary to re-decide at, so a span that already settled `ok`
+     * before a sibling failed is not retro-exported. That is the same shape the
+     * worker applies to its own dispatch events.
+     */
+    alwaysSampleErrors?: boolean;
+
+    /**
      * Value of the `deployment.environment` resource attribute. Falls back to
      * the `DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV` env vars **only
      * when {@link ContainerTelemetryOptions.detectResources} is `true`** —
@@ -144,7 +160,9 @@ interface ContainerTelemetryOptions {
      * OBEYS rather than re-derives: a `traceparent` whose flags say the trace was
      * sampled out (`…-00`) suppresses span export, because the worker and shard
      * spans of that trace were dropped and shipping ours would leave the collector
-     * holding the middle of a trace. Logs are never sampled and are unaffected.
+     * holding the middle of a trace. An ERRORED span is the exception — see
+     * {@link ContainerTelemetryOptions.alwaysSampleErrors}. Logs are never sampled
+     * and are unaffected.
      *
      * `@lunora/container` stamps this trace context as the **`traceparent` request
      * header** on every proxied fetch (`ctx.containers.<name>.…`), so a container
@@ -326,8 +344,12 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     // worker and shard spans were dropped — the "middle of a trace" the sampling
     // model promises cannot happen. No inbound verdict (no traceparent, or a
     // malformed one) reads as keep, exactly like every other tier. Logs are not
-    // sampled and keep flowing either way.
-    const exportSpans = parent?.sampled !== false;
+    // sampled and keep flowing either way. The one exception is the tail bias
+    // below, which every tier applies: an ERRORED span is kept regardless.
+    const headSampled = parent?.sampled !== false;
+    // The tail-bias toggle. `!== "0"` mirrors how the shard reads the
+    // `x-lunora-sample-errors` header, so all three tiers default to keep.
+    const keepErrors = options.alwaysSampleErrors ?? readEnv("LUNORA_SAMPLE_ERRORS") !== "0";
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
@@ -442,7 +464,12 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     });
 
     const emitSpan = (span: ContainerSpanInput): void => {
-        if (!enabled || !exportSpans) {
+        // `shouldExportTrace` is the SAME decision the worker's `emitRpcEvent`
+        // and the shard's dispatch `finally` take — one implementation of the
+        // head-verdict-plus-tail-bias rule, not a third opinion. Previously this
+        // checked the head verdict alone, so a container failure inside a
+        // sampled-out trace was the one failure sampling silently hid.
+        if (!enabled || !shouldExportTrace({ isTraced: headSampled, keepErrors }, span.error !== undefined)) {
             return;
         }
 

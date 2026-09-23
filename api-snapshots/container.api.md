@@ -529,6 +529,7 @@ interface ContainerTelemetry {
 
 ```ts
 interface ContainerTelemetryOptions {
+    alwaysSampleErrors?: boolean;
     deploymentEnvironment?: string;
     detectResources?: boolean;
     endpoint?: string;

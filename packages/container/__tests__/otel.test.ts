@@ -201,6 +201,64 @@ describe(createContainerTelemetry, () => {
         expect(records[0]?.flags).toBe(0);
     });
 
+    // The tail bias, the same rule the worker and the shard apply: a trace the
+    // head decision dropped is still exported when it ERRORED. Without it a
+    // container failure inside a sampled-out trace is the one thing that is
+    // never visible — exactly the failure sampling is supposed to never hide.
+    it("exports an errored span of a sampled-OUT trace, and only that one", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "ok-work", startMs: 5 });
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        const traceCalls = calls.filter((call) => call.url.endsWith("/v1/traces"));
+
+        expect(traceCalls).toHaveLength(1);
+
+        const { span } = spanFrom(traceCalls[0]!.body);
+
+        expect(span.name).toBe("bad-work");
+        // Head-sampled out: the bit stays clear even though the span shipped.
+        expect(span.flags).toBe(0);
+    });
+
+    it("drops even an errored span of a sampled-OUT trace when the tail bias is off", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            alwaysSampleErrors: false,
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
+    it("reads the tail-bias toggle from LUNORA_SAMPLE_ERRORS", async () => {
+        vi.stubEnv("LUNORA_SAMPLE_ERRORS", "0");
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
     it("stamps every log record with the propagated trace context", async () => {
         const { calls, fetch } = stubFetch();
         const telemetry = createContainerTelemetry({
