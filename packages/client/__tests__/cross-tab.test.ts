@@ -850,6 +850,8 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                         heartbeatTimer?: unknown;
                         polling?: { stop: () => void };
                         reconnectTimer?: unknown;
+                        resubscribePending?: Map<string, unknown>;
+                        resubscribeQueue?: unknown[];
                         socket?: { close: () => void };
                         wsState?: string;
                     }
@@ -863,6 +865,10 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
                 // required field on a real connection), so the double carries one.
                 polling: { stop: () => {} },
                 reconnectTimer: undefined,
+                // Same reason as `polling`: teardown clears the paced-resubscribe
+                // queue unconditionally, so the double carries both halves of it.
+                resubscribePending: new Map(),
+                resubscribeQueue: [],
                 socket: { close: socketClose },
                 wsState: "open",
             });

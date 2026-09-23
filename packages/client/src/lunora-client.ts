@@ -199,6 +199,30 @@ const SOCKET_STABLE_MS = 5000;
 const MAX_PENDING_STREAMS = 64;
 
 /**
+ * How many `subscribe` frames a reconnect may have on the wire at once, per
+ * shard, before it waits for a reply.
+ *
+ * Every re-subscribe runs its query server-side to build the initial snapshot,
+ * and most apps put most queries on the default `__root__` shard — so sending
+ * all of them in one tick lands the whole burst on a single Durable Object.
+ * Three is the width measured to keep a local dev backend up where an unpaced
+ * burst of ~11 crash-looped it (issue #796); it costs at most a round trip per
+ * three subscriptions to restore live data.
+ */
+const RESUBSCRIBE_CONCURRENCY = 3;
+
+/**
+ * How long one sent-but-unanswered `subscribe` holds its slot in the drain
+ * before the next one goes out without it.
+ *
+ * The drain must never be able to wedge: a client that silently stops
+ * re-subscribing loses live data, which is worse than the burst this paces.
+ * Any frame bearing the subscription's id releases its slot immediately, so
+ * this deadline only fires when the server answered nothing at all.
+ */
+const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
+
+/**
  * How many identities keep a cached mutator watermark. The nesting exists so
  * signing back into a previous identity recovers its watermark rather than
  * re-deriving `1` against a server watermark already past it (the `OUT_OF_ORDER`
@@ -538,6 +562,17 @@ interface ShardConnection {
     readonly polling: PollingFallback;
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Subscriptions whose `subscribe` frame is on the wire but unanswered,
+     * keyed by subscription id, each holding the watchdog that frees its slot
+     * if the server never replies. Its size is the live concurrency the drain
+     * meters against {@link RESUBSCRIBE_CONCURRENCY}.
+     */
+    resubscribePending: Map<string, ReturnType<typeof setTimeout>>;
+
+    /** Subscriptions waiting their turn to be re-sent on this shard (see {@link RESUBSCRIBE_CONCURRENCY}). */
+    resubscribeQueue: SubscriptionState[];
 
     /**
      * Set when {@link LunoraClient.bounceShardSockets} retires this
@@ -4570,6 +4605,7 @@ class LunoraClient {
         // subscriptions when it closes, so there is nothing left to tell it.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
+        this.clearResubscribeQueue(conn);
         this.clearConnectionTimers(conn);
         this.stopHeartbeat(conn);
 
@@ -4614,10 +4650,12 @@ class LunoraClient {
             channelName,
             onBecomeLeader: () => {
                 // Re-open sockets for every active subscription now that
-                // we own the WS connections.
+                // we own the WS connections. Paced like the socket-open path:
+                // a handover replays every tab's subscriptions combined, so
+                // this is the wider of the two bursts, not the narrower.
                 for (const state of this.subscriptions.all()) {
                     this.ensureSocket(state.shardKey);
-                    this.sendSubscribeIfOpen(state);
+                    this.queueResubscribe(state);
                 }
 
                 // …and for every shard with a write queued on it. A hydrated
@@ -5675,6 +5713,8 @@ class LunoraClient {
                 }),
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
+                resubscribePending: new Map(),
+                resubscribeQueue: [],
                 shardKey,
                 socket: undefined,
                 stableTimer: undefined,
@@ -6356,12 +6396,16 @@ class LunoraClient {
                 // context is recorded for replay to `onDisconnect` at close.
                 this.sendConnectEnvelope(conn);
 
-                // Resubscribe everyone bound to this shard.
+                // Resubscribe everyone bound to this shard, a bounded few frames
+                // at a time (see `queueResubscribe`) — every one of them runs its
+                // query server-side to build a snapshot, and on the default shard
+                // they all land on one Durable Object.
                 this.markShardPendingAck(shardKey);
+                this.clearResubscribeQueue(conn);
 
                 for (const state of this.subscriptions.all()) {
                     if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
-                        this.sendSubscribeIfOpen(state);
+                        this.queueResubscribe(state);
                     }
                 }
 
@@ -6500,6 +6544,9 @@ class LunoraClient {
         conn.wsState = "idle";
         this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
+        // Frames still queued (or in flight) belong to the socket that just
+        // died; the `open` handler re-queues every subscription on this shard.
+        this.clearResubscribeQueue(conn);
 
         // Settle every in-flight stream bound to this shard. An EPHEMERAL stream
         // whose start frame was already sent lost its server-side iterator when
@@ -6634,11 +6681,97 @@ class LunoraClient {
         }
     }
 
-    private sendSubscribeIfOpen(state: SubscriptionState): void {
+    /**
+     * Re-send `state`'s `subscribe` frame, but only once fewer than
+     * {@link RESUBSCRIBE_CONCURRENCY} frames on this shard are still awaiting a
+     * reply. Used by every path that resends MANY subscriptions at once — the
+     * socket-open resubscribe and the cross-tab leader handover, which replays
+     * every tab's subscriptions combined. A first subscribe (one frame, caller
+     * paced) still goes straight out through {@link sendSubscribeIfOpen}.
+     */
+    private queueResubscribe(state: SubscriptionState): void {
+        const conn = this.getConnection(state.shardKey);
+
+        if (!conn) {
+            return;
+        }
+
+        conn.resubscribeQueue.push(state);
+        this.drainResubscribeQueue(conn);
+    }
+
+    /**
+     * Send queued `subscribe` frames until the in-flight window is full.
+     *
+     * Cannot wedge: a queued subscription whose frame does not actually go out
+     * (socket closed, already acked, unsubscribed while queued) takes no slot,
+     * every sent frame is released by the first server frame carrying its id
+     * (see {@link handleServerMessage}) or by its own watchdog, and a disconnect
+     * drops the queue wholesale — the next `open` re-queues every subscription
+     * on the shard, because `markShardPendingAck` un-acked them all.
+     */
+    private drainResubscribeQueue(conn: ShardConnection): void {
+        while (conn.resubscribePending.size < RESUBSCRIBE_CONCURRENCY) {
+            const state = conn.resubscribeQueue.shift();
+
+            if (!state) {
+                return;
+            }
+
+            // Dropped while it waited its turn: nothing to resubscribe.
+            if (!this.subscriptions.getById(state.id)) {
+                continue;
+            }
+
+            if (!this.sendSubscribeIfOpen(state)) {
+                continue;
+            }
+
+            conn.resubscribePending.set(
+                state.id,
+                setTimeout(() => {
+                    this.releaseResubscribeSlot(conn, state.id);
+                }, RESUBSCRIBE_ACK_TIMEOUT_MS),
+            );
+        }
+    }
+
+    /** Free the in-flight slot `id` holds on `conn` (if any) and let the next queued subscribe go out. */
+    private releaseResubscribeSlot(conn: ShardConnection, id: string): void {
+        const watchdog = conn.resubscribePending.get(id);
+
+        if (watchdog === undefined) {
+            return;
+        }
+
+        clearTimeout(watchdog);
+        conn.resubscribePending.delete(id);
+        this.drainResubscribeQueue(conn);
+    }
+
+    /**
+     * Abandon this connection's paced resubscribe: clear every watchdog and
+     * forget both the in-flight and the waiting entries. Called wherever the
+     * socket they were sent on goes away — the server drops that socket's
+     * subscriptions anyway, and the next `open` re-queues all of them.
+     */
+    // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
+    private clearResubscribeQueue(conn: ShardConnection): void {
+        for (const watchdog of conn.resubscribePending.values()) {
+            clearTimeout(watchdog);
+        }
+
+        conn.resubscribePending.clear();
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do
+        conn.resubscribeQueue = [];
+    }
+
+    /** Send `state`'s `subscribe` frame when the shard's socket can carry it; `true` when a frame actually went out. */
+    private sendSubscribeIfOpen(state: SubscriptionState): boolean {
         const conn = this.getConnection(state.shardKey);
 
         if (conn?.wsState !== "open" || state.acked) {
-            return;
+            return false;
         }
 
         // A resume position is only replayable with the VALUE it describes behind
@@ -6651,7 +6784,7 @@ class LunoraClient {
         // Drop `sinceSeq` there and take the full snapshot.
         const resumable = state.serverCursor !== undefined && state.serverBase !== undefined;
 
-        sendOn(conn, {
+        return sendOn(conn, {
             id: state.id,
             // `sinceSeq` rides along when we hold a persisted cursor for this
             // sub (a hydrated read or an earlier frame), so the server can
@@ -6731,6 +6864,19 @@ class LunoraClient {
         // storm this moved the reset out of `onOpen` to fix.
         if (message.type !== "error") {
             this.getConnection(shardKey)?.reconnect.reset();
+        }
+
+        // ANY frame bearing a subscription's id proves the server has taken that
+        // resubscribe off its plate — `ack` on the happy path, but equally the
+        // `error` that refuses it, or a `data`/`resume`/`settled` that overtakes
+        // its own ack. Releasing here rather than in each handler is what keeps a
+        // frame shape nobody anticipated from stalling the drain.
+        if (typeof (message as { id?: unknown }).id === "string") {
+            const conn = this.getConnection(shardKey);
+
+            if (conn) {
+                this.releaseResubscribeSlot(conn, (message as { id: string }).id);
+            }
         }
 
         switch (message.type) {
