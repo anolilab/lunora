@@ -36,7 +36,7 @@ plus `protocol/`, `scripts/`, `api-snapshots/`, `plans/`, `plugins/`,
 
 Every package has the same shape: `src/index.ts`, `__tests__/` (Vitest), and its
 own `vitest.config.ts`, `tsconfig.json` (extends `tsconfig.base.json`),
-`project.json` (vis tags), `.releaserc.json`. All ESM, `"sideEffects": false`.
+`project.json` (vis tags). All ESM, `"sideEffects": false`.
 
 ## Commands
 
@@ -69,7 +69,7 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 
 ## Conventions
 
-- **On pre-release branches, do not preserve backward compatibility.** On `alpha` / `next` / `beta` the packages are `1.0.0-alpha.*`: change the API, delete the old path, update all call sites in the same change — no deprecated aliases, no `legacy*` shims, no dual code paths. Note the break in the commit body so semantic-release records it. **On `main` the opposite holds** — keep the API working, deprecate before removing, land removals on a pre-release branch. Check `git branch --show-current` before deciding; a change targeting both is written the `main` way.
+- **On pre-release branches, do not preserve backward compatibility.** On `alpha` / `next` / `beta` the packages are `1.0.0-alpha.*`: change the API, delete the old path, update all call sites in the same change — no deprecated aliases, no `legacy*` shims, no dual code paths. Note the break in the commit body so the release records it. **On `main` the opposite holds** — keep the API working, deprecate before removing, land removals on a pre-release branch. Check `git branch --show-current` before deciding; a change targeting both is written the `main` way.
 - **Build what is asked.** Simplest implementation that meets the current requirement; no config knobs, extension points, or abstractions with a single implementation until a second one exists.
 - **Reach for a maintained dependency before hand-rolling**, and pin its version in the right catalog (below). Exceptions: the zero-dep packages (`@lunora/errors`, `@lunora/fingerprint`, `@lunora/platform`), `shared/`, and anything that would not survive the Workers runtime.
 - **Never skip verification** — no `--no-verify`, no `.skip`ped tests, no silenced type errors or disabled lint rules to get something green.
@@ -120,7 +120,7 @@ build  chore  ci  deps  docs  feat  fix
 perf   refactor  revert  security  style  test  translation
 ```
 
-Subject: imperative, lowercase, no trailing period. **Body lines wrap at 100 characters** and the header is capped at 100 — an over-long body line is the usual reason a hook-blocked commit surprises you. House style keeps the subject under ~50. Never author `release` commits by hand; semantic-release writes those.
+Subject: imperative, lowercase, no trailing period. **Body lines wrap at 100 characters** and the header is capped at 100 — an over-long body line is the usual reason a hook-blocked commit surprises you. House style keeps the subject under ~50. Never author `release` commits by hand; the release job writes those.
 
 Branches: **`alpha`** is the default and the target for most PRs; `main` carries stable releases; `next` / `beta` are pre-release channels; feature branches are `feat/name` / `fix/issue-number`.
 
