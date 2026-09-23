@@ -224,6 +224,27 @@ benchmarks:
     - "vis.config.ts"
     - ".github/workflows/codspeed.yml"
 
+# The registry-item suite (`packages/cli/__tests__/commands/registry-items.test.ts`),
+# which scaffolds every shipped item into a throwaway project and runs the real
+# codegen + advisor over it, on top of the manifest/binding/dependency sweeps.
+#
+# Its own filter and its own job because `registry/` is not a `vis` project: a
+# registry-only PR marks NOTHING affected, so `test:affected` never reaches
+# packages/cli and every gate in that file — the advisor sweep included — was
+# skipped on exactly the PRs it exists for. The `packages` filter in test.yml
+# already lists `registry/**`, which starts the job but not the affected set.
+#
+# `packages/advisor/**` and `packages/codegen/**` are listed because the findings
+# are theirs: a new ERROR-level lint, or a feeder that starts seeing a shape,
+# changes this gate's verdict without touching registry/ or the CLI.
+registry_items:
+    - "registry/**"
+    - "packages/cli/**"
+    - "packages/advisor/**"
+    - "packages/codegen/**"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
+
 # The auth-ui → registry/auth-ui-* copy-sync check.
 registry_sync:
     - "packages/auth-ui/**"

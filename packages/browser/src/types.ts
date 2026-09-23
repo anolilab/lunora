@@ -194,18 +194,27 @@ export interface PdfOptions extends NavigateOptions {
  */
 export interface LunoraBrowserOptions {
     /**
-     * Strict host allowlist. When set (non-empty), a navigation URL is refused
-     * unless its hostname exactly matches one of these entries (case-insensitive,
+     * Strict host allowlist. When set, a navigation URL is refused unless its
+     * hostname exactly matches one of these entries (case-insensitive,
      * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
      * that fully closes DNS rebinding: a public hostname that resolves to a
      * private/metadata IP can still be pinned out if it isn't on the list. Set it
      * whenever you pass client-controlled URLs to the browser.
      *
+     * **`allowedHosts: []` allows NOTHING.** An empty list is a configured
+     * allowlist with no members, so every navigation, redirect hop and http(s)
+     * sub-resource is refused with a `FORBIDDEN` naming the empty list — it is
+     * never read as "no allowlist configured". To run without an allowlist, omit
+     * the option; that is the guarded default described below. (The allowlist arm
+     * is not relaxed by {@link LunoraBrowserOptions.allowPrivateTargets}, so an
+     * empty list refuses private targets too.)
+     *
      * Leaving it unset (the default) is NOT unguarded: it turns
      * {@link LunoraBrowserOptions.resolveDns} on, so every host is resolved over
-     * DoH and refused if it maps to a private address. Setting an allowlist turns
-     * that re-check off (the allowlist is the stronger guard, and may deliberately
-     * name an internal host); `resolveDns: true` forces both.
+     * DoH and refused if it maps to a private address. Setting an allowlist —
+     * empty or not — turns that re-check off by default (the allowlist is the
+     * stronger guard, and may deliberately name an internal host); `resolveDns:
+     * true` forces both.
      */
     allowedHosts?: string[];
 
@@ -255,7 +264,8 @@ export interface LunoraBrowserOptions {
      * re-resolves independently), and if the DoH lookup itself fails it falls
      * back to the string guard rather than allowing a resolved private IP.
      *
-     * Configuring `allowedHosts` turns it OFF by default: an exact-origin
+     * Configuring `allowedHosts` at all — an empty list included, since that
+     * refuses every navigation outright — turns it OFF by default: an exact-origin
      * allowlist is the stronger guard and may deliberately name an internal host
      * (reachable over a Tunnel / private-network binding) that a resolved-address
      * check would refuse. Set this explicitly to `true` to run both, or to
