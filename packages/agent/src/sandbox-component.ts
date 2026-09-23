@@ -3,7 +3,7 @@ import { initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
 import { readCapped } from "../../../shared/read-capped";
-import { SANDBOX_BROWSER_NAV_TIMEOUT_MS, SANDBOX_EXEC_TIMEOUT_MS } from "./sandbox-budgets";
+import { SANDBOX_BROWSER_NAV_TIMEOUT_MS, SANDBOX_CONTAINER_FETCH_TIMEOUT_MS, SANDBOX_EXEC_TIMEOUT_MS } from "./sandbox-budgets";
 
 // The runtime function is built with the base procedure builders (no generated
 // server inside a package), same as the agent + presence components. This file
@@ -209,13 +209,21 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
     }
 
     if (request.op === "fetch") {
+        // One deadline over BOTH halves, for the reason `exec` has one: without
+        // it a request can outlive the dispatch budget, and the step retry then
+        // re-issues an approved mutating request while the first is still in
+        // flight. The body read is inside the same deadline because a response
+        // that stalls mid-stream is the same unbounded wait — `readCapped`
+        // bounds the BYTES, the signal bounds the TIME.
+        const deadline = AbortSignal.timeout(SANDBOX_CONTAINER_FETCH_TIMEOUT_MS);
         const response = await handle.fetch(request.path ?? "/", {
             ...(request.body === undefined ? {} : { body: request.body }),
             method: request.method ?? "GET",
+            signal: deadline,
         });
 
         // Bounded + cancelled, not `response.text()`. See MAX_CONTAINER_FETCH_BYTES.
-        const body = await readCapped(response.body, MAX_CONTAINER_FETCH_BYTES);
+        const body = await readCapped(response.body, MAX_CONTAINER_FETCH_BYTES, deadline);
 
         return body.overflowed ? `${body.text}\n\n[truncated at ${String(MAX_CONTAINER_FETCH_BYTES)} bytes]` : body.text;
     }

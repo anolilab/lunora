@@ -14,8 +14,42 @@ import type { AgentToolContext, AgentToolDefinition } from "./types";
  */
 const SANDBOX_REF = toFunctionReference(SANDBOX_INVOKE_PATH);
 
-/** The R2 object extension for each byte-returning browser op. */
-const BROWSER_RENDER_EXTENSIONS: Record<string, string> = { pdf: "pdf", screenshot: "png" };
+/**
+ * The R2 object extension for a byte-returning browser op, or `undefined` for
+ * an op that returns text and needs no destination.
+ *
+ * Keyed off the render's OWN format, not just the op: the component stores a
+ * `type: "jpeg"` screenshot with `mediaType: "image/jpeg"`, so a fixed `.png`
+ * would hand back a key whose extension contradicts the bytes — and anything
+ * that infers the format from the key (a CDN, a thumbnailer, a browser opening
+ * the object) would read it wrong.
+ */
+const browserRenderExtension = (input: BrowserToolInput): string | undefined => {
+    if (input.op === "pdf") {
+        return "pdf";
+    }
+
+    if (input.op === "screenshot") {
+        return input.type === "jpeg" ? "jpeg" : "png";
+    }
+
+    return undefined;
+};
+
+/**
+ * What a byte-returning browser op resolves to. The render is written to R2 and
+ * its key comes back — never the bytes, which would be truncated to the model's
+ * output cap and billed for nothing.
+ * @experimental
+ */
+interface BrowserRenderResult {
+    /** Size of the stored object. */
+    bytes: number;
+    /** The absolute R2 key the render was written to. */
+    key: string;
+    /** The render's content type, e.g. `image/jpeg`. */
+    mediaType: string;
+}
 
 /**
  * The render-destination fields `browserTool` pins itself. Stripped from model
@@ -254,19 +288,25 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  * ```
  * @experimental
  */
-const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, string> => {
+const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, BrowserRenderResult | string> => {
+    // An empty string is "not configured", not a binding name: `resolveBucket`
+    // would look up `env[""]`, find nothing, and throw `INTERNAL` — which is
+    // RETRYABLE, so the run would burn its whole retry budget and fail instead
+    // of returning the directed refusal below.
+    const bucket = options.bucket !== undefined && options.bucket.length > 0 ? options.bucket : undefined;
+
     return {
         description: options.description ?? DEFAULT_BROWSER_DESCRIPTION,
         // Pin `kind` LAST so out-of-schema model input can never override it.
         execute: async (input, context: AgentToolContext) => {
-            const extension = BROWSER_RENDER_EXTENSIONS[input.op];
+            const extension = browserRenderExtension(input);
             // Refused HERE, as the tool's RESULT, rather than thrown: a throw
             // out of `execute` is not a deterministic dispatch failure, so the
             // durable step retries it to exhaustion and the run fails on a
             // misconfiguration the model could route around. A string lets the
             // next turn pick `content` instead — and nothing was dispatched, so
             // no render was billed for output that could not be returned.
-            if (extension !== undefined && options.bucket === undefined) {
+            if (extension !== undefined && bucket === undefined) {
                 return `Cannot run a "${input.op}": this browser tool has no \`bucket\` configured, so the render has nowhere to go. Use "content" or "scrape" for page text, or ask the operator to pass \`browserTool({ bucket })\`.`;
             }
 
@@ -274,7 +314,7 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
                 extension === undefined
                     ? {}
                     : {
-                          bucket: options.bucket,
+                          bucket,
                           // Replay-stable: both identifiers are fixed for the
                           // life of this tool call, so a retried step rewrites
                           // the same object instead of leaking one per attempt.
@@ -284,11 +324,8 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
 
             const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
 
-            return (await context.run(
-                SANDBOX_REF,
-                { ...modelInput, ...destination, kind: "browser" },
-                { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS },
-            )) as string;
+            return (await context.run(SANDBOX_REF, { ...modelInput, ...destination, kind: "browser" }, { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS })) as
+                BrowserRenderResult | string;
         },
         inputSchema: BROWSER_TOOL_SCHEMA,
         isLunoraAgentTool: true,
@@ -411,5 +448,5 @@ const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinitio
     };
 };
 
-export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
+export type { BrowserRenderResult, BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
 export { browserTool, containerTool, fsTool };

@@ -665,4 +665,30 @@ describe(createContainerTestContext, () => {
 
         expect(seen.size).toBeGreaterThan(1);
     });
+
+    it("re-picks the instance inside each request on a pooled handle, as production does", async () => {
+        expect.assertions(1);
+
+        // `.any()` and `.pool()` do NOT pick the same way, and the difference is
+        // exactly what this covers: `.any()` fixes one instance for the life of
+        // the handle, while production's `.pool()` picks inside every request.
+        // Reusing ONE handle is what separates them — the `.any()` test above
+        // takes a fresh handle per call, so it passes against a double that
+        // pins per handle, which is what this one did.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+        const handle = containers.transcoder!.pool({ size: 3 });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await handle.fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
+    });
 });

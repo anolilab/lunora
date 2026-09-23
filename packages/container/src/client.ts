@@ -782,19 +782,21 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
         const spec: ContainerBindingSpec = { binding: containerBindingName(exportName), exportName };
 
         containers[exportName] = {
-            // `.any()`/`.pool()` re-pick a RANDOM instance per call, exactly as
-            // the real accessor does. They used to pin `pool-0`, which made the
-            // double MORE permissive than production: a stateful multi-step test
-            // (exec a build, then exec a test against its output) passed here and
-            // failed live, where the second call lands on a different container
-            // with its own disk. A test that needs a fixed instance asks for one
-            // with `.get(name)`. Retry/backoff is still not simulated
+            // Each accessor picks instances the way its real counterpart does,
+            // and the two do NOT agree with each other — which is the whole
+            // point. `.any()` fixes one instance for the life of the handle;
+            // `.pool()` re-picks inside every request, so a stateful sequence
+            // through one pooled handle lands on a different container with its
+            // own disk each time. The double used to pin `pool-0` for both,
+            // which made it more permissive than production in exactly that
+            // shape: "exec a build, then exec a test against its output" passed
+            // here and failed live. A test that needs a fixed instance asks for
+            // one with `.get(name)`. Retry/backoff is still not simulated
             // (`attempts: 1` keeps a handler's own 5xx from looping).
             any: (count, options) =>
                 handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), { attempts: 1, ...options }),
             get: (name, options) => instanceHandleFor(namespace, spec, name, { attempts: 1, ...options }),
-            pool: (options) =>
-                handleFor(namespace, randomPoolName(options?.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), `${handleLabel(spec)}.pool()`, { attempts: 1 }),
+            pool: (options) => poolHandleFor(namespace, spec, { ...options, attempts: 1 }),
         };
     }
 

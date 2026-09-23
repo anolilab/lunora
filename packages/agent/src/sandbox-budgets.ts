@@ -38,8 +38,19 @@ export const SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS = 150_000;
 export const SANDBOX_EXEC_TIMEOUT_MS = 120_000;
 
 /**
+ * Per-request budget for a container `fetch`, matching
+ * {@link SANDBOX_EXEC_TIMEOUT_MS} and for the same reason: a request without an
+ * inner deadline can outlive the dispatch budget, and the step retry then
+ * re-issues it while the first is still in flight — which runs an approved
+ * mutating request twice. It also bounds the body read, so a response that
+ * stalls mid-stream releases the isolate instead of holding it to the dispatch
+ * ceiling.
+ */
+export const SANDBOX_CONTAINER_FETCH_TIMEOUT_MS = 120_000;
+
+/**
  * Dispatch budget for a container op — strictly wider than
- * {@link SANDBOX_EXEC_TIMEOUT_MS}.
+ * {@link SANDBOX_EXEC_TIMEOUT_MS} and {@link SANDBOX_CONTAINER_FETCH_TIMEOUT_MS}.
  *
  * REMAINING CEILING, stated plainly: this widens the window, it does not make
  * an `exec` exactly-once. A command that outlives {@link SANDBOX_EXEC_TIMEOUT_MS}

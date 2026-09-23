@@ -247,6 +247,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `BrowserRenderResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `BrowserToolInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -647,6 +651,10 @@ const replyToEmail: (mailer: Mailer, replyRef: EmailReplyRef, body: ReplyBody) =
 ```
 
 ## `@lunora/agent/sandbox`
+
+### `BrowserRenderResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `BrowserToolInput` (type)
 

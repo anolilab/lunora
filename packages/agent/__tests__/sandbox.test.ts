@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { sandboxComponent } from "../src/component";
 import { SANDBOX_INVOKE_PATH } from "../src/paths";
+import type { BrowserRenderResult } from "../src/sandbox";
 import { browserTool, containerTool } from "../src/sandbox";
 import {
     SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS,
@@ -147,6 +148,51 @@ describe(browserTool, () => {
 
         const result = await tool.execute({ op: "pdf", url: "https://example.com" }, context);
 
+        expect(calls).toHaveLength(0);
+        expect(result).toMatch(NO_RENDER_BUCKET_HINT);
+    });
+
+    it("keys a jpeg screenshot .jpeg, so the extension cannot contradict the bytes", async () => {
+        const tool = browserTool({ bucket: "SHOTS" });
+        const { calls, context } = recordingContext();
+
+        await tool.execute({ op: "screenshot", type: "jpeg", url: "https://example.com" }, context);
+
+        // The component stores this render as `image/jpeg`. A fixed `.png` key
+        // would disagree with its own media type, and anything that infers the
+        // format from the key — a CDN, a thumbnailer, a browser opening the
+        // object — reads it wrong.
+        expect(calls[0]?.args).toMatchObject({ path: "t-1/call-1.jpeg" });
+    });
+
+    it("declares the render metadata in its result type, not just `string`", async () => {
+        const tool = browserTool({ bucket: "SHOTS" });
+        const { context } = recordingContext();
+
+        const result = await tool.execute({ op: "screenshot", url: "https://example.com" }, context);
+
+        // A render op resolves to `{ bytes, key, mediaType }`, and while
+        // `execute` declared `string` an external caller had no such branch to
+        // narrow into: `result.toUpperCase()` compiled and failed at runtime.
+        //
+        // Asserted with `expectTypeOf`, NOT by narrowing on `typeof` and reading
+        // `.key` — under a regressed `string` the object branch is `never`, and
+        // TypeScript accepts any property access on `never`. That check passes
+        // either way and proves nothing.
+        expectTypeOf(result).toEqualTypeOf<BrowserRenderResult | string>();
+
+        expect(result).toBe("ok");
+    });
+
+    it('treats an empty bucket as unconfigured, not as a binding named ""', async () => {
+        const tool = browserTool({ bucket: "" });
+        const { calls, context } = recordingContext();
+
+        const result = await tool.execute({ op: "pdf", url: "https://example.com" }, context);
+
+        // Dispatched, `resolveBucket` would look up `env[""]`, find nothing and
+        // throw INTERNAL — which is RETRYABLE, so the run burns its whole retry
+        // budget and fails instead of returning this directed refusal.
         expect(calls).toHaveLength(0);
         expect(result).toMatch(NO_RENDER_BUCKET_HINT);
     });
@@ -451,6 +497,43 @@ describe("sandboxComponent().invoke", () => {
 
         expect(result.length).toBeLessThan(huge.length);
         expect(result).toMatch(TRUNCATION_HINT);
+    });
+
+    it("bounds a container fetch in TIME as well as bytes, on both the request and the body read", async () => {
+        // `exec` has had an inner deadline since it shipped; `fetch` had none, so
+        // a request that outlived the 150s dispatch budget let the step retry
+        // re-issue an approved mutating request while the first was still in
+        // flight. `readCapped` bounds the BYTES; only a signal bounds the WAIT.
+        let requestSignal: AbortSignal | undefined;
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode("ok"));
+                controller.close();
+            },
+        });
+        const fetch = vi.fn<(input: string, init?: { signal?: AbortSignal }) => Promise<Response>>(async (_input, init) => {
+            requestSignal = init?.signal;
+
+            return new Response(body);
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    throw new Error("must not reach .any()");
+                },
+                get: () => {
+                    return { exec: vi.fn<() => Promise<never>>(), fetch };
+                },
+            },
+        };
+
+        await invokeSandbox({ containers }, { instance: "t-1", kind: "container", name: "sandbox", op: "fetch", path: "/slow" });
+
+        // What this pins is that a deadline EXISTS and reaches the request; the
+        // same signal is handed to the body read, which nothing here observes
+        // (`readCapped` is bundler-inlined, not injected).
+        expect(requestSignal).toBeInstanceOf(AbortSignal);
+        expect(requestSignal?.aborted).toBe(false);
     });
 
     it("delegates a container exec to ctx.containers.<name>.exec", async () => {
