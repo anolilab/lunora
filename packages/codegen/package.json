@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.202",
+    "version": "1.0.0-alpha.203",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -61,13 +61,13 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.145",
-        "@lunora/agent": "1.0.0-alpha.126",
-        "@lunora/container": "1.0.0-alpha.53",
+        "@lunora/advisor": "1.0.0-alpha.146",
+        "@lunora/agent": "1.0.0-alpha.127",
+        "@lunora/container": "1.0.0-alpha.54",
         "@lunora/errors": "1.0.0-alpha.39",
-        "@lunora/platform": "1.0.0-alpha.32",
-        "@lunora/queue": "1.0.0-alpha.59",
-        "@lunora/scheduler": "1.0.0-alpha.76",
+        "@lunora/platform": "1.0.0-alpha.33",
+        "@lunora/queue": "1.0.0-alpha.60",
+        "@lunora/scheduler": "1.0.0-alpha.77",
         "@lunora/values": "1.0.0-alpha.49",
         "@lunora/workflow": "1.0.0-alpha.58",
         "jiti": "catalog:tooling",
@@ -76,9 +76,9 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.155",
-        "@lunora/server": "1.0.0-alpha.134",
-        "@lunora/shard-engine": "1.0.0-alpha.76",
+        "@lunora/do": "1.0.0-alpha.156",
+        "@lunora/server": "1.0.0-alpha.135",
+        "@lunora/shard-engine": "1.0.0-alpha.77",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
