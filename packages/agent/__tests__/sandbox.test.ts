@@ -23,6 +23,7 @@ const NO_FS_BUCKET_ERROR = /found no R2 bucket/u;
 const RESERVED_ROUTE_ERROR = /reserved for Lunora's own container routes/u;
 const NO_RENDER_BUCKET_HINT = /bucket/u;
 const TRUNCATION_HINT = /truncated/u;
+const FETCH_FAILED_HINT = /^fetch failed: /u;
 const NO_INSTANCE_ERROR = /arrived with no `instance`/u;
 
 /** A tool `execute` context whose `run` records the dispatched (ref, args, options). */
@@ -534,6 +535,36 @@ describe("sandboxComponent().invoke", () => {
         // (`readCapped` is bundler-inlined, not injected).
         expect(requestSignal).toBeInstanceOf(AbortSignal);
         expect(requestSignal?.aborted).toBe(false);
+    });
+
+    it("renders a failed container fetch instead of rethrowing it into the step retry", async () => {
+        // The deadline added for the dispatch-budget gap is exactly why this
+        // matters: a fired deadline THROWS, a throw fails the tool's `step.do`,
+        // and the retry re-dispatches. For an approved POST that is the mutating
+        // request sent twice — and in the body-read case the container has
+        // already applied the first one. `exec` has rendered its failures since
+        // it shipped for this reason; `fetch` did not.
+        const fetch = vi.fn<() => Promise<Response>>(async () => {
+            throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    throw new Error("must not reach .any()");
+                },
+                get: () => {
+                    return { exec: vi.fn<() => Promise<never>>(), fetch };
+                },
+            },
+        };
+
+        const result = await invokeSandbox(
+            { containers },
+            { body: "{}", instance: "t-1", kind: "container", method: "POST", name: "sandbox", op: "fetch", path: "/charge" },
+        );
+
+        expect(result).toMatch(FETCH_FAILED_HINT);
+        expect(fetch).toHaveBeenCalledTimes(1);
     });
 
     it("delegates a container exec to ctx.containers.<name>.exec", async () => {

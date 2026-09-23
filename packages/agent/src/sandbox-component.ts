@@ -166,6 +166,48 @@ const renderExecResult = (result: { code: number; stderr: string; stdout: string
     return sections.join("\n\n");
 };
 
+/**
+ * Send one HTTP request to the container and render the response as the string a
+ * tool call returns. Split out of {@link runContainerOp} to keep that dispatcher
+ * under the complexity ceiling once the failure path grew a body of its own.
+ */
+const runContainerFetch = async (handle: SandboxContainerHandle, request: SandboxInvokeArgs): Promise<string> => {
+    // One deadline over BOTH halves, for the reason `exec` has one: without it a
+    // request can outlive the dispatch budget, and the step retry then re-issues
+    // an approved mutating request while the first is still in flight. The body
+    // read is inside the same deadline because a response that stalls mid-stream
+    // is the same unbounded wait — `readCapped` bounds the BYTES, the signal
+    // bounds the TIME.
+    const deadline = AbortSignal.timeout(SANDBOX_CONTAINER_FETCH_TIMEOUT_MS);
+
+    try {
+        const response = await handle.fetch(request.path ?? "/", {
+            ...(request.body === undefined ? {} : { body: request.body }),
+            method: request.method ?? "GET",
+            signal: deadline,
+        });
+
+        // Bounded + cancelled, not `response.text()`. See MAX_CONTAINER_FETCH_BYTES.
+        const body = await readCapped(response.body, MAX_CONTAINER_FETCH_BYTES, deadline);
+
+        return body.overflowed ? `${body.text}\n\n[truncated at ${String(MAX_CONTAINER_FETCH_BYTES)} bytes]` : body.text;
+    } catch (error: unknown) {
+        // Rendered, NOT rethrown — the same contract as `exec`, and the deadline
+        // above is exactly why it is needed. A fired deadline throws, and a throw
+        // fails the tool's `step.do`, which re-dispatches the request: for an
+        // approved POST/PUT/DELETE that sends the mutating request a second time.
+        // The body-read case is the sharp one — the container has already
+        // received the request and may have already applied the change, so the
+        // retry is a second write.
+        //
+        // A string cannot distinguish "never reached the container" from "applied
+        // and then timed out", and neither can this code. It takes the safe
+        // direction: never re-send. The ceiling is the one `exec` already states
+        // — a request that cannot afford to run twice must be idempotent itself.
+        return `fetch failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+};
+
 const runContainerOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<string> => {
     // Refused rather than defaulted. `idFromName("")` is a perfectly valid
     // address, so an absent `instance` would silently route EVERY thread to one
@@ -209,23 +251,7 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
     }
 
     if (request.op === "fetch") {
-        // One deadline over BOTH halves, for the reason `exec` has one: without
-        // it a request can outlive the dispatch budget, and the step retry then
-        // re-issues an approved mutating request while the first is still in
-        // flight. The body read is inside the same deadline because a response
-        // that stalls mid-stream is the same unbounded wait — `readCapped`
-        // bounds the BYTES, the signal bounds the TIME.
-        const deadline = AbortSignal.timeout(SANDBOX_CONTAINER_FETCH_TIMEOUT_MS);
-        const response = await handle.fetch(request.path ?? "/", {
-            ...(request.body === undefined ? {} : { body: request.body }),
-            method: request.method ?? "GET",
-            signal: deadline,
-        });
-
-        // Bounded + cancelled, not `response.text()`. See MAX_CONTAINER_FETCH_BYTES.
-        const body = await readCapped(response.body, MAX_CONTAINER_FETCH_BYTES, deadline);
-
-        return body.overflowed ? `${body.text}\n\n[truncated at ${String(MAX_CONTAINER_FETCH_BYTES)} bytes]` : body.text;
+        return await runContainerFetch(handle, request);
     }
 
     throw new LunoraError("INTERNAL", `@lunora/agent: sandbox container op "${request.op}" is not supported`);
