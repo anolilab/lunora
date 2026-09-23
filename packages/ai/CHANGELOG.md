@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.93...@lunora/ai@1.0.0-alpha.94) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
 ## @lunora/ai [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.92...@lunora/ai@1.0.0-alpha.93) (2026-09-13)
 
 
