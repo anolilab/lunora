@@ -29,10 +29,14 @@ describe("discoverRatelimitKeySelectors", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("flags a rateLimit(...) key selector derived from args", () => {
+    it("flags a rateLimit(...) key selector derived from `ctx.args`", () => {
         expect.assertions(2);
 
-        write("send.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => args.email })).mutation(async ({ ctx, args }) => {});`);
+        // `ctx.args` is the only spelling a user can write: the middleware hands
+        // the selector the *context*, and the validated call args hang off it.
+        // A bare `args` identifier is not in scope where these selectors are
+        // declared, so a fixture using one proves nothing about real code.
+        write("send.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.args.email })).mutation(async () => {});`);
 
         const found = discoverRatelimitKeySelectors(project, join(workdir, "lunora"));
 
@@ -40,10 +44,64 @@ describe("discoverRatelimitKeySelectors", () => {
         expect(found[0]).toMatchObject({ callee: "rateLimit", exportName: "send", file: "send", limitName: "send", line: 1 });
     });
 
+    it("flags a key selector whose context parameter is named something other than `ctx`", () => {
+        expect.assertions(1);
+
+        write("renamed.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (c) => c.args.email })).mutation(async () => {});`);
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a key selector that destructures `args` out of its context parameter", () => {
+        expect.assertions(1);
+
+        write(
+            "destructured.ts",
+            `export const send = mutation.use(rateLimit(limiter, "send", { key: ({ args: { email } }) => email })).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a key selector hoisted into a module-scope const", () => {
+        expect.assertions(1);
+
+        // How every example in this repo writes its guard options; a feeder that
+        // reads only a direct object-literal third argument sees none of them.
+        write(
+            "hoisted.ts",
+            `const byEmail = { key: (ctx) => ctx.args.email };\nexport const send = mutation.use(rateLimit(limiter, "send", byEmail)).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a hoisted key selector scoped by a server-trusted identity", () => {
+        expect.assertions(1);
+
+        write(
+            "hoisted-scoped.ts",
+            `const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };\nexport const send = mutation.use(rateLimit(limiter, "send", byUser)).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("ignores a key selector that reaches `ctx.args` only as a fallback behind a trusted identity", () => {
+        expect.assertions(1);
+
+        write(
+            "mixed.ts",
+            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId ?? ctx.args.email })).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("flags a dbRateLimit(...) key selector derived from args", () => {
         expect.assertions(2);
 
-        write("db.ts", `export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => args.email })).mutation(async () => {});`);
+        write("db.ts", `export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.args.email })).mutation(async () => {});`);
 
         const found = discoverRatelimitKeySelectors(project, join(workdir, "lunora"));
 
@@ -54,7 +112,10 @@ describe("discoverRatelimitKeySelectors", () => {
     it("flags an args-derived key selector with a block-body arrow", () => {
         expect.assertions(1);
 
-        write("block.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => { return args.email; } })).mutation(async () => {});`);
+        write(
+            "block.ts",
+            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => { return ctx.args.email; } })).mutation(async () => {});`,
+        );
 
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
     });
@@ -97,7 +158,7 @@ describe("discoverRatelimitKeySelectors", () => {
     it("ignores an unrelated call with the same options shape", () => {
         expect.assertions(1);
 
-        write("other.ts", `export const send = mutation.use(otherMiddleware(limiter, "send", { key: (ctx) => args.email })).mutation(async () => {});`);
+        write("other.ts", `export const send = mutation.use(otherMiddleware(limiter, "send", { key: (ctx) => ctx.args.email })).mutation(async () => {});`);
 
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
     });

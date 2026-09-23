@@ -338,6 +338,46 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "procedure_without_structured_event",
         "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
         "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "storage_key_from_user_args:messages:101",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A `ctx.storage.*` call uses an R2 object key taken directly from the handler's `args` with no server-side scoping. The bucket methods key by the caller-supplied string, so any caller can read, overwrite, or delete another user's object — object-level IDOR.",
+        "detail": "`ctx.storage.*.getSignedUrl` in `attachmentUrl` (messages:101) uses an object key derived from `args` with no server-side scoping — any caller can read/overwrite/delete another user's object (IDOR). Prefix the key with a server-trusted identity (e.g. `${ctx.auth.userId}/…`) or resolve the object through an owned record.",
+        "facing": "EXTERNAL",
+        "level": "ERROR",
+        "metadata": {
+            "exportName": "attachmentUrl",
+            "file": "messages",
+            "line": 101,
+            "method": "getSignedUrl",
+            "visibility": "public"
+        },
+        "name": "storage_key_from_user_args",
+        "remediation": "Prefix the object key with a server-trusted identity (e.g. `${ctx.auth.userId}/…`) or resolve the object through a record the caller is known to own. Never pass request input straight through as an R2 object key.",
+        "title": "R2 object key taken directly from user args (IDOR)"
+    },
+    {
+        "cacheKey": "storage_key_from_user_args:profiles:60",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A `ctx.storage.*` call uses an R2 object key taken directly from the handler's `args` with no server-side scoping. The bucket methods key by the caller-supplied string, so any caller can read, overwrite, or delete another user's object — object-level IDOR.",
+        "detail": "`ctx.storage.*.getSignedUrl` in `avatarUrl` (profiles:60) uses an object key derived from `args` with no server-side scoping — any caller can read/overwrite/delete another user's object (IDOR). Prefix the key with a server-trusted identity (e.g. `${ctx.auth.userId}/…`) or resolve the object through an owned record.",
+        "facing": "EXTERNAL",
+        "level": "ERROR",
+        "metadata": {
+            "exportName": "avatarUrl",
+            "file": "profiles",
+            "line": 60,
+            "method": "getSignedUrl",
+            "visibility": "public"
+        },
+        "name": "storage_key_from_user_args",
+        "remediation": "Prefix the object key with a server-trusted identity (e.g. `${ctx.auth.userId}/…`) or resolve the object through a record the caller is known to own. Never pass request input straight through as an R2 object key.",
+        "title": "R2 object key taken directly from user args (IDOR)"
     }
 ];
 

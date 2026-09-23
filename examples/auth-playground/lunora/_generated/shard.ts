@@ -176,6 +176,27 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "procedure_without_structured_event",
         "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
         "title": "Public write emits no structured event"
+    },
+    {
+        "cacheKey": "owner_field_from_args_not_auth:documents:87:organizationId",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A `ctx.db` write sets an ownership/identity column (`userId`, `ownerId`, `tenantId`, …) from the handler's `args`. The caller controls who the row belongs to, so any caller can write rows owned by another user or tenant — an act-as-any-user / cross-tenant IDOR.",
+        "detail": "`insert` in `create` (documents:87) sets the ownership field `organizationId` from `args` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp `organizationId` from `ctx.auth`/`ctx.identity`, never from request input.",
+        "facing": "EXTERNAL",
+        "level": "ERROR",
+        "metadata": {
+            "exportName": "create",
+            "field": "organizationId",
+            "file": "documents",
+            "line": 87,
+            "method": "insert",
+            "visibility": "public"
+        },
+        "name": "owner_field_from_args_not_auth",
+        "remediation": "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it.",
+        "title": "Ownership field written from args, not server identity"
     }
 ];
 

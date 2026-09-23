@@ -329,6 +329,38 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
+/**
+ * The object literal an options argument denotes: `node` itself when it already
+ * IS one, or — when `node` is a bare identifier — the initializer of the
+ * module-scope `const <name> = { … }` that binds it.
+ *
+ * Hoisting the options out of the call is how every example in this repo writes
+ * a rate-limit guard (`const byUser = { key: … }; … rateLimit(limiter, "send",
+ * byUser)`), so a feeder that inspects only a direct object-literal argument is
+ * blind to the exact spelling its own examples use. Module scope only: a local
+ * binding can be reassigned between declaration and call, and a feeder that
+ * under-reports is fail-safe while one that reads a stale shape is not.
+ */
+const optionsObjectLiteral = (node: Node | undefined): ObjectLiteralExpression | undefined => {
+    if (!node) {
+        return undefined;
+    }
+
+    if (Node.isObjectLiteralExpression(node)) {
+        return node;
+    }
+
+    if (!Node.isIdentifier(node)) {
+        return undefined;
+    }
+
+    // `getVariableDeclaration` searches the file's TOP-LEVEL statements only,
+    // which is exactly the module-scope restriction above.
+    const initializer = node.getSourceFile().getVariableDeclaration(node.getText())?.getInitializer();
+
+    return initializer !== undefined && Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
+};
+
 /** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
 const isDatabaseAccessor = (receiver: Node): boolean =>
     (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
@@ -592,6 +624,7 @@ export {
     listSecurityScanFiles,
     lunoraRelativePath,
     objectLiteralFromCallbackBody,
+    optionsObjectLiteral,
     propertyInitializer,
     readTargetOf,
     stringPropertyFor,

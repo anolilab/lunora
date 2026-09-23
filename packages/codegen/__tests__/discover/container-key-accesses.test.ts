@@ -40,6 +40,14 @@ describe("discoverContainerKeyAccesses", () => {
         expect(found[0]).toMatchObject({ exportName: "start", file: "start", line: 1, method: "get" });
     });
 
+    it("flags a destructured `args` instance key — the form the docs example uses", () => {
+        expect.assertions(1);
+
+        write("destructured.ts", `export const start = mutation(async ({ args: { id }, ctx }) => ctx.containers.app.get(id));`);
+
+        expect(discoverContainerKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags an args value reached through one local const hop", () => {
         expect.assertions(1);
 
