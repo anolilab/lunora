@@ -361,12 +361,19 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   so nothing reconnects to trigger the next flush, and a client MUST fall back to
   a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
-  committed, and the entry's `mutationId` is what makes that safe.
+  committed, and the entry's `mutationId` is what makes that safe. So is a slot
+  whose `error` key holds no envelope: a slot carries no HTTP status of its own,
+  so there is nothing to classify it by, which leaves the entry in exactly the
+  position of one that never came back.
 - A body with **no** `results` array is a whole-batch outcome, classified by the
   same rule: a transient code retries the whole chunk, and any other coded
   `{ error }` is a verdict on every entry and terminal. A reply carrying no
-  envelope to read at all — a non-JSON body, an edge's HTML page — is classified
-  by HTTP STATUS instead, per the paragraph below.
+  envelope to read at all — a non-JSON body, an edge's HTML page, or an `error`
+  slot that is not an object (§4.2) — is classified by HTTP STATUS instead, per
+  the paragraph below. This is the sharpest edge the §4.2 rule has: a codeless
+  failure here settles every write in the chunk, so reading a proxy's
+  `{"error": "bad gateway"}` as an envelope discards durable writes that the
+  same reply, classified by its 502, keeps.
 - A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
   more than one entry MUST be split and retried rather than settled. A client
   also holds the request body under the 1 MiB cap up front, splitting before it
