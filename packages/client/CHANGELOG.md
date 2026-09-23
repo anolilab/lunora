@@ -1,3 +1,14 @@
+## @lunora/client [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.119...@lunora/client@1.0.0-alpha.120) (2026-09-23)
+
+### Bug Fixes
+
+* **client:** classify a non-object error slot as transport ([#780](https://github.com/anolilab/lunora/issues/780)) ([f48c841](https://github.com/anolilab/lunora/commit/f48c841493e9b1773303ffb20b1181e1adf39f03))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.153
+
 ## @lunora/client [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.118...@lunora/client@1.0.0-alpha.119) (2026-09-22)
 
 
