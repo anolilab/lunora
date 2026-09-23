@@ -1,3 +1,14 @@
+## @lunora/auth [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.149...@lunora/auth@1.0.0-alpha.150) (2026-09-23)
+
+### Bug Fixes
+
+* **auth:** qualify the account.issuer column probe ([#798](https://github.com/anolilab/lunora/issues/798)) ([631e727](https://github.com/anolilab/lunora/commit/631e72793268499d0713f9abc9439833aa7e0d09))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.136
+
 ## @lunora/auth [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.148...@lunora/auth@1.0.0-alpha.149) (2026-09-23)
 
 
