@@ -4781,25 +4781,34 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `traceparent` the shard received.
         const verdict = { isTraced: trace.sampled, keepErrors: decision.keepErrors };
 
-        // The sub-request header bag: the caller's forwarded context, plus the
-        // trace this batch belongs to and the tail-bias toggle, so the shard's
-        // own spans join it instead of starting a disconnected trace.
-        const outgoingHeaders: Record<string, string> = {
-            ...forwardedHeaders,
-            "content-type": "application/json",
-            [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
+        // One sub-request's header bag: the caller's forwarded context, the
+        // tail-bias toggle, and a `traceparent` naming a span id MINTED PER
+        // SHARD — never one shared by the whole fan-out.
+        //
+        // Each shard runs its own dispatch and adopts the id it is handed as
+        // that dispatch's root (`resolveTraceAnchor` takes the inbound
+        // `parentSpanId`), then stamps it onto its `lunora.dispatch` wide event,
+        // its `ctx.log` records and the parent of every `ctx.trace` child. Hand
+        // two shards the same id and their unrelated work arrives at the
+        // collector under one `(traceId, spanId)` — the same rule the per-entry
+        // ids below follow, one level up and across processes.
+        const subRequestHeaders = (shardSpanId: string): Record<string, string> => {
+            const headers: Record<string, string> = {
+                ...forwardedHeaders,
+                "content-type": "application/json",
+                [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
+            };
+
+            injectTraceContext({ ...trace, spanId: shardSpanId }, headers);
+
+            return headers;
         };
 
-        injectTraceContext(trace, outgoingHeaders);
-
-        // Trace fields for one entry's event. Each entry is its own span BENEATH
-        // the batch span the `traceparent` names — the shard adopts that span id
-        // as its dispatch root (`resolveTraceAnchor`), so the parent is real.
-        // Reusing one span id across the entries would instead put several spans
-        // on the wire under the same `(traceId, spanId)`, which collectors
-        // resolve inconsistently.
-        const entryTraceFields = (): Pick<ObservabilityEvent, "parentSpanId" | "spanId" | "traceFlags" | "traceId"> => {
-            return { parentSpanId: trace.spanId, spanId: otlpRandomHex(8), traceFlags: trace.traceFlags, traceId: trace.traceId };
+        // Trace fields for one entry's event: its own span, beneath the span its
+        // OWN shard was told to use. That groups a batch by the hop that
+        // actually carried each entry, and keeps every id on the wire distinct.
+        const entryTraceFields = (shardSpanId: string): Pick<ObservabilityEvent, "parentSpanId" | "spanId" | "traceFlags" | "traceId"> => {
+            return { parentSpanId: shardSpanId, spanId: otlpRandomHex(8), traceFlags: trace.traceFlags, traceId: trace.traceId };
         };
 
         const results: unknown[] = [];
@@ -4843,6 +4852,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const emitEntryEvents = (
             entries: BatchEntry[],
             shardKey: string,
+            shardSpanId: string,
             durationMs: number,
             statusById: Map<unknown, number>,
             fallbackStatus: number,
@@ -4857,7 +4867,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         durationMs,
                         functionPath: entry.functionPath,
                         ...requestMeta,
-                        ...entryTraceFields(),
+                        ...entryTraceFields(shardSpanId),
                         ok,
                         shardKey,
                         ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
@@ -4875,9 +4885,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // watermarks); entries WITHIN a shard stay ordered by the DO's sequential loop.
         await Promise.all(
             [...groups.entries()].map(async ([shardKey, entries]) => {
+                // This sub-request's own span, distinct per shard — see
+                // `subRequestHeaders`.
+                const shardSpanId = otlpRandomHex(8);
                 const subRequest = new Request("https://shard.internal/rpc-batch", {
                     body: JSON.stringify({ calls: entries }),
-                    headers: new Headers(outgoingHeaders),
+                    headers: new Headers(subRequestHeaders(shardSpanId)),
                     method: "POST",
                 });
                 const subStartedAt = Date.now();
@@ -4900,7 +4913,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         return {
                             ...buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }),
                             ...requestMeta,
-                            ...entryTraceFields(),
+                            ...entryTraceFields(shardSpanId),
                         };
                     });
 
@@ -4929,7 +4942,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                             error: { code: "SHARD_ERROR", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
-                            ...entryTraceFields(),
+                            ...entryTraceFields(shardSpanId),
                             ok: false,
                             shardKey,
                         };
@@ -4942,7 +4955,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 const statusById = new Map(entryResults.map((entry) => [entry.id, entry.status ?? response.status]));
                 const seenIds = new Set(entryResults.map((entry) => entry.id));
 
-                emitEntryEvents(entries, shardKey, durationMs, statusById, response.status);
+                emitEntryEvents(entries, shardKey, shardSpanId, durationMs, statusById, response.status);
                 results.push(...entryResults);
 
                 // Any entry the shard omitted (short/partial response) gets an
