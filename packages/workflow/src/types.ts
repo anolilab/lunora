@@ -464,6 +464,18 @@ export interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly env: Record<string, unknown>;
     /** The triggering event (id, payload, timestamp, workflow name). */
     readonly event: WorkflowEventLike<Params>;
+
+    /**
+     * The `fetch` the host injected for this run, if it injected one — absent on
+     * a host that relies on the runtime's global.
+     *
+     * Exposed because `ctx.run` is not the only dispatcher a workflow body
+     * builds: `@lunora/agent`'s loop builds its own (to carry the run's
+     * identity), and without this it would fall back to a global `fetch` the
+     * host deliberately replaced — or, where there is none, throw before its
+     * first dispatch. A body that builds a dispatcher passes this to it.
+     */
+    readonly fetchImpl?: typeof fetch;
     /** Structured logger surfaced in `wrangler tail` / Studio logs. */
     readonly log: WorkflowLogger;
     /** Run branches as isolated child workflow instances and await their outputs (declaration-ordered tuple). */

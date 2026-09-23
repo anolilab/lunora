@@ -29,13 +29,14 @@ const minimalAgent = (overrides?: Partial<AgentDefinition>): AgentDefinition => 
 const sentinelRun: AgentRunFunction = async () => "sentinel";
 
 /** The minimal workflow handler context the compiled handler reads. */
-const makeContext = (env: Record<string, unknown> = {}, params: Record<string, unknown> = {}) => {
+const makeContext = (env: Record<string, unknown> = {}, params: Record<string, unknown> = {}, fetchImpl?: typeof fetch) => {
     return {
         env,
         event: { instanceId: "wf-instance-1" },
         params: { input: "hi", threadKey: "t-1", ...params },
         run: sentinelRun,
         step: { do: async <T>(_name: string, callback: () => Promise<T>): Promise<T> => callback() },
+        ...(fetchImpl === undefined ? {} : { fetchImpl }),
     };
 };
 
@@ -45,11 +46,11 @@ const OTLP_ENV = { LUNORA_OTLP_ENDPOINT: "https://otlp.example", LUNORA_OTLP_TOK
 const compileAndRun = async (
     agent: AgentDefinition,
     env: Record<string, unknown> = {},
-    options?: { params?: Record<string, unknown>; paths?: AgentFunctionPaths },
+    options?: { fetchImpl?: typeof fetch; params?: Record<string, unknown>; paths?: AgentFunctionPaths },
 ): Promise<AgentLoopOptions> => {
     const definition = compileAgentWorkflow(agent, "support", options?.paths === undefined ? undefined : { paths: options.paths });
 
-    await definition.handler(makeContext(env, options?.params) as never);
+    await definition.handler(makeContext(env, options?.params, options?.fetchImpl) as never);
 
     const call = vi.mocked(runAgentLoop).mock.calls.at(-1)?.[0];
 
@@ -151,6 +152,32 @@ describe(compileAgentWorkflow, () => {
             // callbacks that a replay does not re-invoke. See `resolve-run.ts`.
             expect(ownerless.run).not.toBe(sentinelRun);
             expect(owned.run).not.toBe(sentinelRun);
+        });
+
+        it("dispatches through the fetch the host injected on the context, not a global", async () => {
+            expect.assertions(2);
+
+            // The loop's runner is built here, so the host's injection does not
+            // reach it for free. Where the host replaced `fetch` the loop would
+            // silently use the wrong transport; where the runtime has none at
+            // all it throws a bare TypeError before dispatching anything.
+            vi.stubGlobal("fetch", () => {
+                throw new Error("the global fetch must not be used");
+            });
+
+            const calls: string[] = [];
+            const fetchImpl = (async (url: unknown) => {
+                calls.push(String(url));
+
+                return Response.json({ result: null });
+            }) as unknown as typeof fetch;
+
+            const received = await compileAndRun(minimalAgent(), { LUNORA_ADMIN_TOKEN: "admin", LUNORA_ORIGIN_URL: "https://app.example/" }, { fetchImpl });
+
+            await expect(received.run({ __lunoraRef: "agents:agentEnsureThread" }, {})).resolves.toBeNull();
+            expect(calls).toStrictEqual(["https://app.example/_lunora/scheduler/dispatch"]);
+
+            vi.unstubAllGlobals();
         });
 
         it("forwards the workflow instance id and step to the loop", async () => {

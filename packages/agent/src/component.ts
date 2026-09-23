@@ -109,19 +109,30 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             error: v.optional(v.string().nullable()),
 
             /**
-             * The workflow instance id of the last run whose completion found an
-             * empty queue — i.e. the run that ended this thread rather than
-             * handing it on.
+             * The workflow instance id of the run that last completed on this
+             * thread — whether it ended the thread or handed it to a queued
+             * successor. The one durable fact a run's own replay cannot
+             * reconstruct: an activation boundary resets every in-memory flag,
+             * and `instanceId` alone answers neither question below.
              *
              * `agentCompleteRun` reads it to tell a first completion from a
-             * re-dispatch of one that already happened, which `instanceId` alone
-             * cannot: that branch leaves `instanceId` naming the finishing run, so
-             * a writer which marks the thread live again WITHOUT taking ownership
+             * re-dispatch of one that already happened. The empty-queue branch
+             * leaves `instanceId` naming the finishing run, so a writer which
+             * marks the thread live again WITHOUT taking ownership
              * (`agentEnsureThread` with no `instanceId` — a voice turn, an inbound
              * dispatch) leaves the finished run still reading as the owner of a
-             * thread somebody else is holding. See `agentCompleteRun`.
+             * thread somebody else is holding; re-reading the queue there would
+             * wake a run parked behind that holder. The handoff branch has the
+             * mirror problem: it moves `instanceId` to the successor, so the
+             * finishing run's replay reads as neither owner nor queued —
+             * `agentEnsureThread` would treat it as a second run, and its
+             * re-dispatched completion would report no successor to wake.
+             *
+             * Retired by the next writer that TAKES ownership (stamps a different
+             * `instanceId`), cleared with `null` — by then the completion it
+             * describes has been superseded and no replay of it may act.
              */
-            completedInstanceId: v.optional(v.string()),
+            completedInstanceId: v.optional(v.string().nullable()),
 
             /**
              * The workflow instance id of the run that currently owns this
@@ -320,10 +331,59 @@ const applyConcurrencyPolicy = async (
         error: null,
         status: "running",
         updatedAt: now,
-        ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
+        // Taking ownership retires the previous run's completion marker: a
+        // replay of that run must not still read this thread as the one it
+        // handed on. A caller with no id takes no ownership, so it retires
+        // nothing — see `completedInstanceId`.
+        // eslint-disable-next-line unicorn/no-null -- as above: `null` is the only value a patch can clear a column with
+        ...(args.instanceId === undefined ? {} : { completedInstanceId: null, instanceId: args.instanceId }),
     });
 
     return { outcome: "replaced", priorInstanceId: args.priorInstanceId };
+};
+
+/**
+ * The live instance this dispatch would CONTEND with, or `undefined` when it may
+ * write to the thread itself.
+ *
+ * A thread already owned by a DIFFERENT workflow instance is a genuine second
+ * run — the two would interleave their messages on the shared seq counter.
+ * "running" and "awaiting_input" both mean the prior instance is alive: the
+ * latter is a HITL pause hibernating on step.waitForEvent, which still owns the
+ * thread and will resume. A matching instance id is a REPLAY of the same run,
+ * which must be allowed. An ABSENT prior instance id (pre-column thread) can't
+ * be told apart from a replay either, so it also falls through. But an id-LESS
+ * caller dispatching onto a thread with a KNOWN, live prior instance is NOT a
+ * safe replay — the inbound-email/inbound-channel paths dispatch with no
+ * instanceId at all, and without this check that silently resets an
+ * `awaiting_input` thread straight back to "running", resuming writes on the
+ * shared `seq` counter out from under the still-hibernating prior instance. So
+ * only a *matching* instance id is exempt; missing OR differing both contend.
+ *
+ * Staleness reclaim. Ownership transfers to a dequeued run BEFORE its wake event
+ * is sent, so an instance terminated while parked leaves the thread owned by a
+ * workflow that will never resume. Nothing else reaps that: under `"reject"`
+ * every later run CONFLICTs, and under `"queue"` every later run parks behind a
+ * corpse. A thread untouched for longer than any run could plausibly hold it is
+ * treated as free — but an `awaiting_input` thread is measured against the far
+ * longer approval horizon, because its instance really is alive and hibernating
+ * on a slow human decision (see ABANDONED_APPROVAL_MS).
+ */
+const liveOwnerContendedBy = (existing: Record<string, unknown>, instanceId: string | undefined, now: number): string | undefined => {
+    const priorInstanceId = existing["instanceId"] as string | undefined;
+
+    if (priorInstanceId === undefined || instanceId === priorInstanceId) {
+        return undefined;
+    }
+
+    if (existing["status"] !== "running" && existing["status"] !== "awaiting_input") {
+        return undefined;
+    }
+
+    const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
+    const staleAfter = existing["status"] === "awaiting_input" ? ABANDONED_APPROVAL_MS : ABANDONED_RUN_MS;
+
+    return now - updatedAt > staleAfter ? undefined : priorInstanceId;
 };
 
 /**
@@ -398,43 +458,29 @@ export const agentComponent = (): AgentComponent => {
                     throw new Error(`@lunora/agent: thread "${args.key}" belongs to another owner`);
                 }
 
-                // Concurrency guard: a thread already owned by a DIFFERENT
-                // workflow instance is a genuine second run — the two would
-                // interleave their messages on the shared seq counter. "running"
-                // and "awaiting_input" both mean the prior instance is alive: the
-                // latter is a HITL pause hibernating on step.waitForEvent, which
-                // still owns the thread and will resume. A matching instance id is
-                // a REPLAY of the same run, which must be allowed. An ABSENT prior
-                // instance id (pre-column thread) can't be told apart from a
-                // replay either, so it also falls through. But an id-LESS caller
-                // dispatching onto a thread with a KNOWN, live prior instance is
-                // NOT a safe replay — the inbound-email/inbound-channel paths
-                // dispatch with no instanceId at all, and without this check that
-                // silently resets an `awaiting_input` thread straight back to
-                // "running", resuming writes on the shared `seq` counter out from
-                // under the still-hibernating prior instance. So only a *matching*
-                // instance id is exempt; missing OR differing both trip the policy.
-                const priorInstanceId = existing["instanceId"] as string | undefined;
-                // Staleness reclaim. Ownership transfers to a dequeued run BEFORE
-                // its wake event is sent, so an instance terminated while parked
-                // leaves the thread owned by a workflow that will never resume.
-                // Nothing else reaps that: under `"reject"` every later run
-                // CONFLICTs, and under `"queue"` every later run parks behind a
-                // corpse. A thread untouched for longer than any run could
-                // plausibly hold it is treated as free — but an `awaiting_input`
-                // thread is measured against the far longer approval horizon,
-                // because its instance really is alive and hibernating on a slow
-                // human decision (see ABANDONED_APPROVAL_MS).
-                const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
-                const staleAfter = existing["status"] === "awaiting_input" ? ABANDONED_APPROVAL_MS : ABANDONED_RUN_MS;
-                const abandoned = now - updatedAt > staleAfter;
-                const isConcurrentRun =
-                    !abandoned &&
-                    (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
-                    priorInstanceId !== undefined &&
-                    (args.instanceId === undefined || args.instanceId !== priorInstanceId);
+                // This run already completed, and is replaying because the
+                // completion's REPLY was lost (a dispatch timeout is a retryable
+                // 503 even when the mutation committed). The body re-executes
+                // from the top — a workflow memoizes steps, not the top level —
+                // and arrives here holding no claim on the thread: if it handed
+                // the thread to a queued successor, `instanceId` now names that
+                // successor, and without this the guard below would read the
+                // run's own replay as a genuine second run and apply
+                // `onConcurrentRun` to it — failing the replay under "reject",
+                // parking it behind the very successor it dequeued under
+                // "queue". Neither is a state it can be in.
+                //
+                // So it falls straight through, taking no ownership and
+                // reviving nothing: its body re-dispatches the same terminal
+                // completion (absolute, so it converges) and re-sends the
+                // successor's wake, which is the only effect still outstanding.
+                if (args.instanceId !== undefined && existing["completedInstanceId"] === args.instanceId) {
+                    return { outcome: "completed" };
+                }
 
-                if (isConcurrentRun) {
+                const contendedWith = liveOwnerContendedBy(existing, args.instanceId, now);
+
+                if (contendedWith !== undefined) {
                     return applyConcurrencyPolicy(
                         context.db,
                         {
@@ -443,7 +489,7 @@ export const agentComponent = (): AgentComponent => {
                             instanceId: args.instanceId,
                             key: args.key,
                             policy: args.onConcurrentRun ?? "reject",
-                            priorInstanceId,
+                            priorInstanceId: contendedWith,
                         },
                         now,
                     );
@@ -459,7 +505,13 @@ export const agentComponent = (): AgentComponent => {
                     error: null,
                     status: "running",
                     updatedAt: now,
-                    ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
+                    // Taking ownership retires the previous run's completion
+                    // marker — see `completedInstanceId`. An id-less caller
+                    // (voice, inbound) takes no ownership and retires nothing,
+                    // which is what keeps a finished run's re-dispatched
+                    // completion from waking a run parked behind THIS writer.
+                    // eslint-disable-next-line unicorn/no-null -- as above: `null` is the only value a patch can clear a column with
+                    ...(args.instanceId === undefined ? {} : { completedInstanceId: null, instanceId: args.instanceId }),
                 });
 
                 return { outcome: "continued" };
@@ -659,12 +711,29 @@ export const agentComponent = (): AgentComponent => {
                 .first();
 
             if (thread?.["instanceId"] !== args.instanceId) {
-                // Not the owner: either a replay of a completion whose handoff
-                // already happened, or a run that ended while still PARKED — its
-                // wait timed out, or it threw before its turn came. The parked
-                // case must still release the slot it holds, or an abandoned run
-                // occupies a queue position forever and the depth cap eventually
-                // refuses every new start on this thread.
+                // Not the owner because this run ALREADY handed the thread on:
+                // the handoff moved `instanceId` to the successor and left the
+                // marker naming this run. Its wake is the one effect that could
+                // still be outstanding — the handoff and the wake are separate
+                // trips, and a completion whose reply was lost never made the
+                // second one. Re-report the successor so the replay can, and
+                // dequeue nobody: the queue was already advanced, atomically,
+                // by the commit this call is re-applying.
+                //
+                // The successor is read as the thread's CURRENT owner, which is
+                // exact while the marker stands — any writer that took ownership
+                // since retires it (see `completedInstanceId`), so a stale
+                // pointer cannot be reported here.
+                if (thread?.["completedInstanceId"] === args.instanceId && thread["status"] === "running" && typeof thread["instanceId"] === "string") {
+                    return { dequeued: thread["instanceId"] };
+                }
+
+                // Otherwise: a replay of a completion that ended the thread, or
+                // a run that ended while still PARKED — its wait timed out, or
+                // it threw before its turn came. The parked case must still
+                // release the slot it holds, or an abandoned run occupies a
+                // queue position forever and the depth cap eventually refuses
+                // every new start on this thread.
                 const parked = await context.db
                     .query(RUN_QUEUE_TABLE)
                     .withIndex("byThreadInstance", (q) => q.eq("threadKey", args.key).eq("instanceId", args.instanceId))
@@ -719,12 +788,20 @@ export const agentComponent = (): AgentComponent => {
             // dequeued run is already the owner when it resumes, so it can append
             // on the shared seq counter the moment it wakes.
             //
+            // The completion marker is written in the SAME mutation as the
+            // transfer, which is what makes the pair survive an activation
+            // boundary: the wake is a second trip, and a run whose first trip
+            // committed but whose reply was lost replays with every in-memory
+            // flag reset. The marker is how both this mutation and
+            // `agentEnsureThread` recognise that replay for what it is.
+            //
             // The finishing run's `error` is CARRIED, not cleared: a run that
             // failed with another queued behind it would otherwise vanish without
             // trace — the thread goes straight from one run to the next and
             // nothing records that the first one failed. The incoming run clears
             // it through its own bootstrap.
             await context.db.patch(thread["_id"] as never, {
+                completedInstanceId: args.instanceId,
                 instanceId: nextInstanceId,
                 status: "running",
                 updatedAt: now,

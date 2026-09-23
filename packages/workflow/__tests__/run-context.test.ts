@@ -211,6 +211,21 @@ describe("createWorkflowRunContext", () => {
         expect(ids.at(-1)).toBe("charge:o1");
     });
 
+    it("re-exposes the injected fetch so a body building its own dispatcher uses the same transport", () => {
+        expect.assertions(2);
+
+        // `ctx.run` is not the only dispatcher a body builds — `@lunora/agent`'s
+        // loop builds its own to carry the run's identity. Consuming the
+        // injection without re-exposing it sends that runner to a global `fetch`
+        // the host replaced, or to none at all.
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: null })));
+
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() }).fetchImpl).toBe(fetchImpl);
+        // Absent stays absent: a present key holding `undefined` reads as "the
+        // host injected nothing" to a spread, and as an injection to `in`.
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() })).not.toHaveProperty("fetchImpl");
+    });
+
     it("prefixes ctx.log with the workflow name", () => {
         expect.assertions(1);
 
