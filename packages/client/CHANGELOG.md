@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.124...@lunora/client@1.0.0-alpha.125) (2026-09-23)
+
+### Bug Fixes
+
+* **client:** pace the reconnect resubscribe burst ([#802](https://github.com/anolilab/lunora/issues/802)) ([e99aa76](https://github.com/anolilab/lunora/commit/e99aa76f191c03ac5b8c23abaeab8e32fb3079ff)), closes [#796](https://github.com/anolilab/lunora/issues/796)
+
 ## @lunora/client [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.123...@lunora/client@1.0.0-alpha.124) (2026-09-23)
 
 
