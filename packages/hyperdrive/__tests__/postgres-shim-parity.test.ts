@@ -94,6 +94,68 @@ export const run = async (): Promise<number> => {
 
 export const query = postgres("postgres://u@h/db").unsafe("select 1").simple().execute();
 `,
+
+    /**
+     * The result metadata is STRUCTURED. A stub that erases these to `unknown`
+     * rejects reads the real package accepts — the false-positive direction,
+     * which a stub-only check reports as a failure no consumer ever sees.
+     */
+    "reads-the-result-metadata.ts": `import postgres from "postgres";
+
+export const run = async (): Promise<string> => {
+    const rows = await postgres("postgres://u@h/db").unsafe("select 1");
+
+    return \`\${rows.columns[0].name}\${rows.state.status}\${rows.statement.name}\`;
+};
+`,
+
+    /** \`forEach\` takes the execution result as a second callback argument, and resolves to it. */
+    "passes-the-execution-result-to-foreach.ts": `import postgres from "postgres";
+
+export const run = async (): Promise<number> => {
+    const result = await postgres("postgres://u@h/db").unsafe("select 1").forEach((row, execution) => {
+        void row;
+        void execution.count;
+    });
+
+    return result.count;
+};
+`,
+
+    /** \`cursor\` is overloaded: the callback forms are not reachable through the iterator signature alone. */
+    "cursor-takes-a-callback.ts": `import postgres from "postgres";
+
+export const run = async (): Promise<number> => {
+    const result = await postgres("postgres://u@h/db").unsafe("select 1").cursor(10, (rows) => {
+        void rows.length;
+    });
+
+    return result.count;
+};
+`,
+
+    /** \`.raw()\` yields the unparsed column bytes, not row objects — so a string method on a cell is an error. */
+    "raw-rows-are-bytes.ts": `import postgres from "postgres";
+
+export const run = async (): Promise<number> => {
+    const rows = await postgres("postgres://u@h/db").unsafe("select 1").raw();
+    const cell = rows[0][0];
+
+    cell.toUpperCase();
+
+    return cell.byteLength;
+};
+`,
+
+    /** \`.values()\` yields POSITIONAL arrays, so a keyed read is an error — `Row`'s index signature hides this when the shape is wrong. */
+    "values-rows-are-positional.ts": `import postgres from "postgres";
+
+export const run = async (): Promise<unknown> => {
+    const rows = await postgres("postgres://u@h/db").unsafe("select 1").values();
+
+    return rows[0].title;
+};
+`,
 };
 
 const BASE_OPTIONS: CompilerOptions = {
