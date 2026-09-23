@@ -173,4 +173,60 @@ describe("discoverRatelimitKeySelectors", () => {
 
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
     });
+
+    it("still flags an args-derived selector when a nested callback shadows the context parameter's name", () => {
+        expect.assertions(1);
+
+        // Two DIFFERENT `ctx` bindings. Matching references by spelling credited
+        // the nested parameter's own declaration to the selector, which read as
+        // "this selector touches something server-trusted" and dropped a finding
+        // whose key is `ctx.args.email` — spoofable, and the whole point of the
+        // lint.
+        write(
+            "shadow.ts",
+            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.args.email + rows.map((ctx) => ctx.id).join("") })).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("does not credit a nested callback's own `ctx.args` read to the enclosing selector", () => {
+        expect.assertions(1);
+
+        // The mirror of the case above: the selector never touches its own
+        // parameter, so it is not args-derived and must not be reported.
+        write(
+            "shadow-only.ts",
+            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => rows.map((ctx) => ctx.args.email).join(",") })).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does not read hoisted options out of a reassignable module-scope `let`", () => {
+        expect.assertions(1);
+
+        // The shape that runs is the second one. Reporting the initializer would
+        // be a finding about code that never executes.
+        write(
+            "let.ts",
+            `let options = { key: (ctx) => ctx.args.email };\noptions = { key: (ctx) => ctx.auth.userId };\nexport const send = mutation.use(rateLimit(limiter, "send", options)).mutation(async () => {});`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does not resolve hoisted options to a module-scope const that merely shares the name", () => {
+        expect.assertions(1);
+
+        // The call site binds the FUNCTION-LOCAL `byUser`. A name-keyed lookup
+        // answered with the module-scope one and cleared a spoofable selector by
+        // reading a different object entirely.
+        write(
+            "shadowed-const.ts",
+            `const byUser = { key: (ctx) => ctx.auth.userId };\nexport function build() { const byUser = { key: (ctx) => ctx.args.email }; return mutation.use(rateLimit(limiter, "send", byUser)).mutation(async () => {}); }`,
+        );
+
+        expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
 });

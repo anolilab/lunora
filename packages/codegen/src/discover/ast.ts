@@ -2,8 +2,8 @@ import type { Stats } from "node:fs";
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 
-import type { Block, CallExpression, Expression, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { Block, CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 
@@ -330,16 +330,52 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
 };
 
 /**
+ * The initializer of the module-scope `const <name> = …` that `identifier`
+ * binds to, or `undefined` when it binds to anything else.
+ *
+ * Resolved through the identifier's SYMBOL, not its spelling. A name-keyed
+ * lookup answers for whichever declaration happens to share the text: a
+ * function-local `const byUser = { key: (ctx) => ctx.args.email }` shadowing a
+ * module-scope `const byUser = { key: (ctx) => ctx.auth.userId }` made the
+ * feeder read the outer, safe object and miss the inner, spoofable one.
+ *
+ * `const` only, and module scope only. A `let` can be reassigned after its
+ * initializer (`let o = { key: spoofable }; o = { key: safe }` — the feeder
+ * would report the shape that never runs), and a binding declared inside a
+ * function is out of reach of this one-hop read. Under-reporting is fail-safe;
+ * reporting a stale or unrelated shape is not.
+ */
+const moduleConstInitializer = (identifier: Identifier): Node | undefined => {
+    const declaration = identifier
+        .getSymbol()
+        ?.getDeclarations()
+        .find((candidate) => Node.isVariableDeclaration(candidate));
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const list = declaration.getParent();
+
+    if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) {
+        return undefined;
+    }
+
+    const statement = list.getParent();
+
+    return Node.isVariableStatement(statement) && Node.isSourceFile(statement.getParent()) ? declaration.getInitializer() : undefined;
+};
+
+/**
  * The object literal an options argument denotes: `node` itself when it already
  * IS one, or — when `node` is a bare identifier — the initializer of the
- * module-scope `const <name> = { … }` that binds it.
+ * module-scope `const <name> = { … }` it binds to (see
+ * {@link moduleConstInitializer}).
  *
  * Hoisting the options out of the call is how every example in this repo writes
  * a rate-limit guard (`const byUser = { key: … }; … rateLimit(limiter, "send",
  * byUser)`), so a feeder that inspects only a direct object-literal argument is
- * blind to the exact spelling its own examples use. Module scope only: a local
- * binding can be reassigned between declaration and call, and a feeder that
- * under-reports is fail-safe while one that reads a stale shape is not.
+ * blind to the exact spelling its own examples use.
  */
 const optionsObjectLiteral = (node: Node | undefined): ObjectLiteralExpression | undefined => {
     if (!node) {
@@ -354,9 +390,7 @@ const optionsObjectLiteral = (node: Node | undefined): ObjectLiteralExpression |
         return undefined;
     }
 
-    // `getVariableDeclaration` searches the file's TOP-LEVEL statements only,
-    // which is exactly the module-scope restriction above.
-    const initializer = node.getSourceFile().getVariableDeclaration(node.getText())?.getInitializer();
+    const initializer = moduleConstInitializer(node);
 
     return initializer !== undefined && Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
 };

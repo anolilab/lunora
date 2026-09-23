@@ -22,19 +22,19 @@ const RATELIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);
 const selectorBody = (key: TsNode): TsNode => (Node.isArrowFunction(key) ? key.getBody() : key);
 
 /**
- * The name of the selector's single parameter — `(ctx) => …` → `"ctx"` — or
+ * The selector's single parameter binding — the `ctx` of `(ctx) => …` — or
  * `undefined` when it is destructured, absent, or not a plain identifier. The
- * name is freely chosen at the call site, so the analysis below reads it rather
- * than assuming the conventional `ctx`.
+ * name is freely chosen at the call site, so the analysis below resolves the
+ * binding rather than assuming the conventional `ctx`.
  */
-const selectorParameterName = (key: TsNode): string | undefined => {
+const selectorParameter = (key: TsNode): Identifier | undefined => {
     if (!Node.isArrowFunction(key)) {
         return undefined;
     }
 
     const nameNode = key.getParameters()[0]?.getNameNode();
 
-    return nameNode !== undefined && Node.isIdentifier(nameNode) ? nameNode.getText() : undefined;
+    return nameNode !== undefined && Node.isIdentifier(nameNode) ? nameNode : undefined;
 };
 
 /**
@@ -47,10 +47,26 @@ const isArgsBagReceiver = (identifier: Identifier): boolean => {
     return Node.isPropertyAccessExpression(parent) && parent.getExpression() === identifier && parent.getName() === "args";
 };
 
-/** Every reference to the selector's parameter inside its body. */
-const parameterReferencesIn = (body: TsNode, parameterName: string): Identifier[] =>
-    body.getDescendantsOfKind(SyntaxKind.Identifier).filter((identifier) => {
-        if (identifier.getText() !== parameterName) {
+/**
+ * Every reference to the selector's own parameter inside its body, matched by
+ * SYMBOL rather than by spelling.
+ *
+ * A nested callback is free to reuse the name — `(ctx) => ctx.args.email +
+ * rows.map((ctx) => ctx.id).join("")` declares two different `ctx` bindings —
+ * and a spelling match credits the inner one's uses to the outer selector. That
+ * made a genuinely spoofable key read as context-scoped: the nested parameter's
+ * own declaration is a `ctx` that is not an `.args` receiver, so
+ * {@link readsTrustedContext} said yes and the finding was dropped.
+ */
+const parameterReferencesIn = (body: TsNode, parameter: Identifier): Identifier[] => {
+    const symbol = parameter.getSymbol();
+
+    if (symbol === undefined) {
+        return [];
+    }
+
+    return body.getDescendantsOfKind(SyntaxKind.Identifier).filter((identifier) => {
+        if (identifier.getSymbol() !== symbol) {
             return false;
         }
 
@@ -58,6 +74,7 @@ const parameterReferencesIn = (body: TsNode, parameterName: string): Identifier[
 
         return !(Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier);
     });
+};
 
 /**
  * True when the selector derives its key from the call's arguments.
@@ -70,8 +87,8 @@ const parameterReferencesIn = (body: TsNode, parameterName: string): Identifier[
  * NAMED `args` while `ctx.args` is a property *name*. So the `<param>.args`
  * access is recognised here directly.
  */
-const isSelectorArgumentDerived = (body: TsNode, parameterName: string | undefined): boolean =>
-    isArgumentDerived(body) || (parameterName !== undefined && parameterReferencesIn(body, parameterName).some((identifier) => isArgsBagReceiver(identifier)));
+const isSelectorArgumentDerived = (body: TsNode, parameter: Identifier | undefined): boolean =>
+    isArgumentDerived(body) || (parameter !== undefined && parameterReferencesIn(body, parameter).some((identifier) => isArgsBagReceiver(identifier)));
 
 /**
  * True when the selector reads a server-trusted value off its context — any use
@@ -82,12 +99,12 @@ const isSelectorArgumentDerived = (body: TsNode, parameterName: string | undefin
  * (a property name, not a value reference) *and* ctx-scoped (it mentions
  * `ctx`), so the only spelling a user can write could never be flagged.
  */
-const readsTrustedContext = (body: TsNode, parameterName: string | undefined): boolean => {
-    if (parameterName === undefined) {
+const readsTrustedContext = (body: TsNode, parameter: Identifier | undefined): boolean => {
+    if (parameter === undefined) {
         return isScopedByContext(body);
     }
 
-    return parameterReferencesIn(body, parameterName).some((identifier) => !isArgsBagReceiver(identifier));
+    return parameterReferencesIn(body, parameter).some((identifier) => !isArgsBagReceiver(identifier));
 };
 
 /**
@@ -111,14 +128,14 @@ const ratelimitKeySelectorInCall = (call: CallExpression, relativePath: string):
     }
 
     const body = selectorBody(key);
-    const parameterName = selectorParameterName(key);
+    const parameter = selectorParameter(key);
 
     // Arg-derived (`ctx.args.*`, or — in a destructured selector — through the
     // shared `args` taint) *and* reading nothing server-trusted off the context:
     // `(ctx) => ctx.auth.userId` is scoped, so it is not flagged. A selector with
     // no argument reference at all (a fixed/global bucket) is not arg-derived
     // either — that "no key" case is deliberately out of scope for this lint.
-    if (!isSelectorArgumentDerived(body, parameterName) || readsTrustedContext(body, parameterName)) {
+    if (!isSelectorArgumentDerived(body, parameter) || readsTrustedContext(body, parameter)) {
         return undefined;
     }
 
