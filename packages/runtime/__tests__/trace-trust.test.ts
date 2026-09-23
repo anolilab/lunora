@@ -97,9 +97,9 @@ describe("createDroppedTraceNotice", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const notice = createDroppedTraceNotice(undefined);
 
-        notice();
-        notice();
-        notice();
+        notice(requestWith());
+        notice(requestWith());
+        notice(requestWith());
 
         expect(warn).toHaveBeenCalledTimes(1);
         expect(warn.mock.calls[0]![0]).toContain("trustInboundTraceContext");
@@ -108,13 +108,42 @@ describe("createDroppedTraceNotice", () => {
     it.each([
         ["false", false as const],
         ["true", true as const],
-        ["a signal", "mtls" as const],
     ])("stays silent once the option is set to %s", (_label, option) => {
         expect.assertions(1);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        createDroppedTraceNotice(option)();
+        createDroppedTraceNotice(option)(requestWith());
+
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    // A named signal reads PLATFORM-INJECTED request metadata. On a host that
+    // injects none, `"mtls"` can never be satisfied, so it silently collapses to
+    // "never trust" — the operator asked for edge-verified mTLS and got the
+    // default. That is worth one line, and it is the only place it can be seen.
+    it("warns once when a named signal cannot be satisfied on this host", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const notice = createDroppedTraceNotice("mtls");
+
+        notice(requestWith());
+        notice(requestWith());
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]![0]).toContain("mtls");
+        expect(warn.mock.calls[0]![0]).toContain("trustInboundTraceContext");
+    });
+
+    // On a host that DOES inject it, a caller without a verified certificate is
+    // the option working exactly as asked — never a warning.
+    it("stays silent for a signal the host can satisfy", () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        createDroppedTraceNotice("mtls")(requestWith({}, { tlsClientAuth: { certVerified: "FAILED" } }));
 
         expect(warn).not.toHaveBeenCalled();
     });
