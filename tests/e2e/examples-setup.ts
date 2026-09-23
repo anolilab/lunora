@@ -15,6 +15,23 @@ export const EXAMPLES = [
     { name: "tanstack-start", port: 5277 },
 ] as const;
 
+/**
+ * Whether the examples that need a real Cloudflare account can run.
+ *
+ * A CI runner has neither `CLOUDFLARE_API_TOKEN` nor a cached `wrangler login`,
+ * so the Workers AI binding cannot boot. Locally the example is left in: a
+ * developer usually is logged in, and if not, the plugin's own error names the
+ * variable to set.
+ *
+ * Read by BOTH halves on purpose — the Playwright config, to decide whether to
+ * start that example's dev server, and the spec, to skip its tests with a
+ * reason the reporter counts. Before that, the config quietly dropped the whole
+ * project and logged a `console.warn`: three tests then existed in no run, no
+ * report and no required check, and the gate went green having executed them
+ * zero times.
+ */
+export const CLOUDFLARE_AUTH_AVAILABLE = process.env.CI !== "true" || Boolean(process.env.CLOUDFLARE_API_TOKEN);
+
 const ROOT = new URL("../../", import.meta.url).pathname;
 
 const DEV_VARS = `# Written by tests/e2e/examples-setup.ts because none existed.

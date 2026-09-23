@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 
 import { defineConfig, devices, firefox } from "@playwright/test";
 
+import { BASE_URL } from "./origin";
+
 /**
  * Playwright config for the Lunora E2E suite.
  *
@@ -23,8 +25,6 @@ import { defineConfig, devices, firefox } from "@playwright/test";
  *     calls are forbidden by convention and only appear where wall-clock time
  *     is itself under test (scheduler delay, signed-URL expiry).
  */
-const baseURL = process.env.LUNORA_E2E_BASE_URL ?? "http://localhost:5173";
-
 const isCI = process.env.CI === "true";
 
 /**
@@ -78,7 +78,7 @@ export default defineConfig({
     timeout: 30_000,
     use: {
         actionTimeout: 5000,
-        baseURL,
+        baseURL: BASE_URL,
         navigationTimeout: 10_000,
         screenshot: "only-on-failure",
         trace: "retain-on-failure",

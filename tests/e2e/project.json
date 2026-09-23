@@ -10,7 +10,8 @@
                 "{projectRoot}/tests/**/*",
                 "{projectRoot}/fixtures/**/*",
                 "{projectRoot}/globalSetup.ts",
-                "{projectRoot}/globalTeardown.ts"
+                "{projectRoot}/globalTeardown.ts",
+                "{projectRoot}/origin.ts"
             ],
             "command": "playwright test"
         },

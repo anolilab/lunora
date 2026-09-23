@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { CLOUDFLARE_AUTH_AVAILABLE } from "../examples-setup";
+
 /**
  * Browser smoke for the feedback board. The interesting part is the optimistic
  * vote: the count and the "have I voted" flag live in two different queries, so
@@ -9,6 +11,14 @@ import { expect, test } from "@playwright/test";
  * The AI summary button is left alone — it calls Workers AI, which has no local
  * binding.
  */
+/**
+ * The whole example needs a Cloudflare account to boot (see `examples-setup.ts`),
+ * so on a tokenless runner these skip rather than fail. It is a `test.skip`
+ * rather than the config dropping the project, because a drop is invisible: the
+ * run, the report and the required check all read exactly as they do when the
+ * three cases passed.
+ */
+test.skip(!CLOUDFLARE_AUTH_AVAILABLE, "needs a Cloudflare account for the Workers AI binding — set CLOUDFLARE_API_TOKEN to run it");
 /** Anchored so it matches the post body, not the "Upvote <title>" control. */
 const uniqueTitle = (): string => `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
