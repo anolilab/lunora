@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runCodegen } from "@lunora/codegen";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { ScriptTarget, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -248,6 +249,26 @@ const mailerCallSites = (): { guarded: string[]; unguarded: string[] } => {
 
 /** The message shapes that mark a throw as an authorization refusal rather than a server fault. */
 const AUTHORIZATION_MESSAGE = /requires an authenticated user|belongs to a different user|is not allowed/iu;
+
+/**
+ * Items generated from `packages/auth-ui/src` by `scripts/sync-auth-ui-registry.mjs`
+ * and held to their source by `pnpm run lint:registry:sync`.
+ *
+ * Skipped by the advisor sweep below for cost, not for trust: each ships ~80-125
+ * files into `lunora/auth-ui/**`, six times over, and they are client-side view
+ * code — no `ctx.db` write, no `ctx.browser` navigation, nothing the static lints
+ * key on. Reviewing the copy also reviews nothing the source review missed. The
+ * ONE lunora-side thing they scaffold is the base `auth` item they `require`,
+ * which the sweep covers on its own row.
+ *
+ * Derived from the sync script's own output prefix rather than listed by hand, so
+ * a seventh dialect is excluded automatically and — more to the point — a
+ * non-generated item can never be dropped into this set by a typo.
+ */
+const SYNCED_AUTH_UI_PREFIX = "auth-ui-";
+
+/** Items the advisor sweep covers: everything `lunora registry add` can put in front of a user, minus the synced copies. */
+const advisorSweepItems = itemNames.filter((name) => !name.startsWith(SYNCED_AUTH_UI_PREFIX));
 
 /** Authorization refusals thrown as a bare `Error`, which `toErrorBody` redacts to a 500. */
 const uncodedAuthorizationThrows = (): string[] =>
@@ -488,6 +509,43 @@ describe("shipped registry items", () => {
         for (const name of itemNames) {
             expect(output).toContain(name);
         }
+    });
+
+    describe("advisor", () => {
+        it("sweeps every item that is not a synced auth-ui copy", () => {
+            expect.assertions(3);
+
+            // Guard the guard. The sweep below passes by finding nothing, so a
+            // filter that stops matching turns it green rather than red — and the
+            // registry is exactly where that goes unnoticed, because nothing else
+            // in CI runs the advisor over it. Pin the shape of the covered set.
+            expect(advisorSweepItems.length).toBeGreaterThanOrEqual(15);
+            expect(advisorSweepItems).toStrictEqual(expect.arrayContaining(["ai", "auth", "browser", "crons", "payment", "presence", "storage"]));
+            expect(advisorSweepItems.filter((name) => name.startsWith(SYNCED_AUTH_UI_PREFIX))).toStrictEqual([]);
+        });
+
+        it.each(advisorSweepItems)("`%s` scaffolds with no ERROR-level advisory", async (name) => {
+            expect.assertions(1);
+
+            // Registry items are copy-in code that `lunora registry add` writes
+            // into a user's project VERBATIM, so an ERROR-level advisory in one
+            // ships to every consumer — a wider blast radius than an example. Yet
+            // `registry/` is not a vis project and `scripts/check-generated-files.mjs`
+            // reads `examples/` only, so until this ran, `tsc -p registry/tsconfig.json`
+            // was the directory's entire CI coverage and an item could carry an
+            // `owner_field_from_args_not_auth` (ERROR, act-as-any-user IDOR) with
+            // nothing to notice.
+            //
+            // Scaffolded and then read exactly as a consumer's project is: `add`
+            // writes the item's files and merges its schema extension, then the
+            // real `runCodegen` discovery feeds the real advisor. `dryRun`, so
+            // nothing is emitted.
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+
+            expect(advisories.filter((finding) => finding.level === "ERROR").map((finding) => `${finding.name}: ${finding.detail}`)).toStrictEqual([]);
+        });
     });
 
     describe.each(itemNames)("%s", (name) => {

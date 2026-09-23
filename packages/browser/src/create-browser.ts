@@ -78,7 +78,7 @@ const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DO
  * so a hostile caller can't drive it at a local file or a non-network scheme.
  * - Credentials — a `user:pass@host` userinfo component is rejected: page navigation
  * never needs it, and it's a credential-leak / host-spoof smell.
- * - Host allowlist — when `allowedHosts` is set (non-empty), the hostname must match
+ * - Host allowlist — when `allowedHosts` is set (an EMPTY list allows nothing), the hostname must match
  * one of its entries exactly (case-insensitive, trailing-dot-normalized, IPv6 brackets
  * stripped); anything else is refused. This is the one guard that fully closes DNS
  * rebinding for a URL boundary that accepts client-controlled hosts.
@@ -126,11 +126,23 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
         throw new LunoraError("BAD_REQUEST", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
     }
 
-    if (allowedHosts && allowedHosts.length > 0) {
+    // PRESENCE, not length. An empty `allowedHosts` is a configured allowlist
+    // that permits nothing (fail closed), never "no allowlist" — the reading its
+    // name carries, and the one the sibling registry item's EMPTY
+    // `ALLOWED_RENDER_HOSTS` already ships. Keying on `length > 0` made
+    // `createBrowser({ allowedHosts: [] })` permit every host while reading as
+    // hardened to a reviewer and to the advisor's
+    // `browser_user_url_without_allowlist`, which suppresses on the key being set.
+    if (allowedHosts !== undefined) {
         const host = normalizeHost(parsed.hostname);
 
         if (!allowedHosts.some((entry) => normalizeHost(entry) === host)) {
-            throw new LunoraError("FORBIDDEN", `@lunora/browser: url host "${parsed.hostname}" is not in the configured allowedHosts allowlist`);
+            throw new LunoraError(
+                "FORBIDDEN",
+                allowedHosts.length === 0
+                    ? `@lunora/browser: allowedHosts is configured but EMPTY, so every navigation is refused (including "${parsed.hostname}"). List the hosts to allow, or omit the option entirely to fall back to the private-target + DNS-rebinding guards.`
+                    : `@lunora/browser: url host "${parsed.hostname}" is not in the configured allowedHosts allowlist`,
+            );
         }
     }
 
@@ -327,7 +339,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         // the resolved-address check on top would refuse that documented config,
         // so the allowlist suppresses it, exactly as `allowedPushOrigins` does in
         // `@lunora/notify`. An explicit `resolveDns: true` still forces it on.
-        const resolveDns = options.resolveDns ?? (options.allowedHosts?.length ?? 0) === 0;
+        const resolveDns = options.resolveDns ?? options.allowedHosts === undefined;
         // Reuse the navigation timeout budget for the DoH re-check, but never let a
         // single lookup exceed the DoH ceiling — a stalled resolver mustn't burn
         // the full (up to 120s) navigation budget before the browser even launches.
@@ -386,7 +398,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 return false;
             }
 
-            if (options.allowedHosts && options.allowedHosts.length > 0) {
+            if (options.allowedHosts !== undefined) {
                 const host = normalizeHost(parsed.hostname);
 
                 if (!options.allowedHosts.some((entry) => normalizeHost(entry) === host)) {
@@ -424,7 +436,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             // allowlist: `allowPrivateTargets: true` WITH `allowedHosts` (the
             // documented pin-to-internal-host-via-Tunnel config) must still re-check
             // every redirect hop against the allowlist, not only the initial URL.
-            if (page.route && (!allowPrivateTargets || (options.allowedHosts?.length ?? 0) > 0)) {
+            if (page.route && (!allowPrivateTargets || options.allowedHosts !== undefined)) {
                 await page.route("**/*", async (route: RouteLike) => {
                     const request = route.request();
                     const isNavigation = request.isNavigationRequest?.() ?? true;
