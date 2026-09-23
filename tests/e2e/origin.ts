@@ -17,16 +17,19 @@ export const BASE_URL = configured.replace(/\/+$/u, "");
 /**
  * The port `BASE_URL` names — what the spawned `vite --strictPort` binds.
  *
- * A URL with no explicit port has none to bind, and the implicit 80/443 is not
- * something a dev server can be started on, so that is a configuration error
- * rather than a default to guess at.
+ * A function, not a constant, because only the branch that starts its own
+ * server needs one: `LUNORA_E2E_EXTERNAL=true` against a deployed preview has
+ * no port to bind and nothing to bind it to, and a constant evaluated at import
+ * would fail that run at config load. An implicit 80/443 is not something a dev
+ * server can be started on, so the spawning branch treats a missing port as a
+ * configuration error rather than guessing a default.
  */
-export const PORT = ((): string => {
+export const resolvePort = (): string => {
     const { port } = new URL(BASE_URL);
 
     if (port === "") {
-        throw new Error(`[e2e] LUNORA_E2E_BASE_URL must name an explicit port (got "${BASE_URL}").`);
+        throw new Error(`[e2e] LUNORA_E2E_BASE_URL must name an explicit port to start a dev server on (got "${BASE_URL}").`);
     }
 
     return port;
-})();
+};

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { FullConfig } from "@playwright/test";
 
-import { BASE_URL, PORT } from "./origin";
+import { BASE_URL, resolvePort } from "./origin";
 
 /**
  * Boots the playground exactly like `pnpm dev`: one Vite dev server whose
@@ -211,7 +211,7 @@ const globalSetup = async (_config: FullConfig): Promise<void> => {
 
     // `LUNORA_E2E` in the process env tells `vite.config.ts` to make storage
     // ephemeral; the same flag in `.dev.vars` (above) gates the worker's /test routes.
-    const vite = spawnProc("vite", "pnpm", ["exec", "vite", "--port", PORT, "--strictPort"], PLAYGROUND, { LUNORA_E2E: "true" });
+    const vite = spawnProc("vite", "pnpm", ["exec", "vite", "--port", resolvePort(), "--strictPort"], PLAYGROUND, { LUNORA_E2E: "true" });
 
     globalThis.LUNORA_E2E_PROCS = [vite];
 
