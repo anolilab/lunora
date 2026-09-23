@@ -527,6 +527,18 @@ export const ERROR_CATALOG = {
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
     TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
+
+    /**
+     * A socket asked an `onWhisper` authorizer to decide more distinct topics
+     * than the shard allows. Names only the socket's own ceiling — never the
+     * topic, never what the authorizer would have answered — so it is safe on
+     * the wire and not `internal`.
+     */
+    TOO_MANY_WHISPER_TOPICS: {
+        hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.",
+        status: 429,
+        title: "Too many whisper topics",
+    },
     UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },
 
     /**
