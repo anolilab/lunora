@@ -1,3 +1,9 @@
+## @lunora/workflow [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.57...@lunora/workflow@1.0.0-alpha.58) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** carry the host's fetch into the loop, and make a handoff replay-safe ([#789](https://github.com/anolilab/lunora/issues/789)) ([4079fe8](https://github.com/anolilab/lunora/commit/4079fe805db5e868617c51896a483edb321b2c80))
+
 ## @lunora/workflow [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.56...@lunora/workflow@1.0.0-alpha.57) (2026-09-22)
 
 ### Bug Fixes
