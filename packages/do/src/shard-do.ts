@@ -1069,6 +1069,51 @@ const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise
     }
 };
 
+/**
+ * How long a dispatch waits for its own after-commit hooks before answering
+ * without them.
+ *
+ * A healthy hook is a remote embed plus a Vectorize upsert — hundreds of
+ * milliseconds — so it is always awaited and the response keeps meaning "this
+ * write's external projection was attempted". The case this bounds is an
+ * embedder that never settles: its link on the shard's hook chain stays pending
+ * forever, and since every later transaction links behind it and awaits its own
+ * link, one stuck remote call otherwise hangs every subsequent mutation response
+ * on the shard — including mutations that queue no hooks at all.
+ */
+const AFTER_COMMIT_WAIT_MS = 15_000;
+
+/**
+ * Wait for `link`, at most {@link AFTER_COMMIT_WAIT_MS}. `true` when it settled
+ * in time, `false` when the deadline won.
+ *
+ * `link` is left RUNNING and in place on the chain either way — the bound is on
+ * the wait, never on the chain. Racing the chain itself would advance it past a
+ * hook that is still going to write, and the stalled hook's upsert would then
+ * land after the one that overwrote it: the row at `"v2"` with its vector at
+ * `"v1"`, which is exactly the reordering the chain exists to prevent. Nothing
+ * here can make the timed-out work unable to write — the queued closures reach
+ * Vectorize through `@lunora/bindings` (and, for a hand-rolled `onWrite`,
+ * through application code), and no signal this side of them can recall a remote
+ * call that is already in flight. So the ordering obligation is kept and only the
+ * dispatch stops waiting.
+ */
+const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<boolean>((resolve) => {
+        timer = setTimeout(resolve, AFTER_COMMIT_WAIT_MS, false);
+    });
+
+    try {
+        return await Promise.race([link.then(() => true), deadline]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+};
+
 const UNDELIVERED_BASELINE = "<undelivered>";
 
 /**
@@ -1672,6 +1717,18 @@ abstract class ShardDO {
      * not throw.
      */
     private afterCommitTail: Promise<void> = Promise.resolve();
+
+    /**
+     * True once a dispatch's bounded wait for its link on
+     * {@link ShardDO.afterCommitTail} expired — i.e. a hook is stuck on a remote
+     * call that is not coming back.
+     *
+     * Later transactions then still LINK onto the chain (commit order is never
+     * given up) but stop waiting for it, so a stuck embedder costs
+     * {@link AFTER_COMMIT_WAIT_MS} once rather than on every mutation behind it.
+     * Cleared when the chain drains back to its newest link.
+     */
+    private afterCommitStalled: boolean = false;
 
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
@@ -3167,8 +3224,30 @@ abstract class ShardDO {
                 // order is the one thing that is knowable; the work itself runs
                 // on the chain, outside it. Ordered, not serialized: the next
                 // transaction still commits while this hook is in flight.
-                this.afterCommitTail = this.afterCommitTail.then(async () => flushAfterCommit(queued));
-                flushed = this.afterCommitTail;
+                // A transaction that queued nothing has no hooks to order, so it
+                // takes no link: an empty one would grow the chain on every
+                // mutation of a shard that has no hooks at all, and — the reason
+                // it matters here — would make such a mutation inherit the wait
+                // of a stalled hook it has nothing to do with.
+                if (queued.length === 0) {
+                    return;
+                }
+
+                const link = this.afterCommitTail.then(async () =>
+                    // Recovery, on the link itself rather than beside it so the
+                    // chain stays one promise: once it has drained to here and
+                    // nothing has been queued behind it, the stall is over and
+                    // the next dispatch waits normally again. `flushed` is this
+                    // link, assigned below before anything can run this.
+                    flushAfterCommit(queued).finally(() => {
+                        if (this.afterCommitTail === flushed) {
+                            this.afterCommitStalled = false;
+                        }
+                    }),
+                );
+
+                this.afterCommitTail = link;
+                flushed = link;
             },
         );
 
@@ -3176,7 +3255,16 @@ abstract class ShardDO {
         // rather than for `afterCommitTail`, which a later transaction may have
         // already extended. The dispatch's response still implies its own hooks
         // were attempted, as it did before the chain.
-        await flushed;
+        //
+        // Bounded, and bounded on the WAIT rather than on the chain — see
+        // {@link waitForAfterCommit} for why the distinction is the whole fix.
+        // A transaction that queued no hooks has no link and skips this outright;
+        // one arriving at an already-stalled chain links and skips it too.
+        if (queued.length === 0 || this.afterCommitStalled) {
+            return result;
+        }
+
+        this.afterCommitStalled = !(await waitForAfterCommit(flushed));
 
         return result;
     }

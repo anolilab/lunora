@@ -276,6 +276,118 @@ describe("shardDO.runInTransaction — external write hooks", () => {
         reported.mockRestore();
     });
 
+    it("answers a hook-less transaction while an earlier hook is still unsettled", async () => {
+        expect.assertions(2);
+
+        const shard = new WriteHookShard(makeState());
+        const db = shard.writer();
+        const id = await shard.run(async () => db.insert("notes", { body: "v0" }));
+
+        // An embedder that never comes back. Nothing releases this.
+        shard.beforeLand = async () =>
+            new Promise<void>(() => {
+                // Never settles.
+            });
+
+        const stalled = shard.run(async () => db.patch(id, { body: "v1" }));
+
+        // This transaction queued no hooks at all, so it has nothing to order
+        // against the stalled one and must not inherit its wait. Before the wait
+        // was bounded, every later transaction linked behind the stuck hook and
+        // awaited its own link — one stuck remote call hung every subsequent
+        // mutation response on the shard, hooks or no hooks.
+        await expect(shard.run(async () => "done")).resolves.toBe("done");
+
+        // And the stalled one genuinely is still stalled, rather than having been
+        // answered by abandoning the hook that holds it.
+        await expect(Promise.race([stalled, Promise.resolve("pending")])).resolves.toBe("pending");
+    });
+
+    it("answers later transactions past the wait deadline, and still lands their hooks in commit order", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            const shard = new WriteHookShard(makeState());
+            const db = shard.writer();
+            const id = await shard.run(async () => db.insert("notes", { body: "v0" }));
+
+            shard.events.length = 0;
+
+            let release = (): void => undefined;
+            const held = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            shard.beforeLand = async (event) => {
+                if ((event.doc as undefined | { body?: string })?.body === "v1") {
+                    await held;
+                }
+            };
+
+            const first = shard.run(async () => db.patch(id, { body: "v1" }));
+            const second = shard.run(async () => db.patch(id, { body: "v2" }));
+
+            // Well past the deadline. Both dispatches answer without their hooks.
+            await vi.advanceTimersByTimeAsync(60_000);
+            await Promise.all([first, second]);
+
+            // Answering is NOT abandoning: the chain was never advanced past the
+            // stalled link, so neither hook has landed.
+            expect(shard.events).toStrictEqual([]);
+
+            release();
+            await vi.advanceTimersByTimeAsync(1);
+
+            // The hook that outlived the dispatch which waited for it still lands
+            // FIRST. A bare race on the chain would let "v2" overtake it here and
+            // leave the row at "v2" with its vector at "v1" — the reordering the
+            // chain exists to prevent.
+            expect(shard.events.map((event) => (event.doc as { body: string }).body)).toStrictEqual(["v1", "v2"]);
+            expect(shard.events).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("stops re-paying the deadline on every mutation once the chain has stalled", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        try {
+            const shard = new WriteHookShard(makeState());
+            const db = shard.writer();
+            const id = await shard.run(async () => db.insert("notes", { body: "v0" }));
+
+            shard.events.length = 0;
+            shard.beforeLand = async () =>
+                new Promise<void>(() => {
+                    // Never settles.
+                });
+
+            const stalled = shard.run(async () => db.patch(id, { body: "v1" }));
+
+            await vi.advanceTimersByTimeAsync(60_000);
+            await stalled;
+
+            // A stuck embedder costs the deadline ONCE. Charging it again to
+            // every mutation behind it is still an unusable shard, just a slower
+            // way of saying so — so a later hook-carrying transaction links
+            // (order is never given up) and answers without waiting.
+            //
+            // Timers stay frozen from here: this await can only return on a
+            // wait-free path, and hangs the test if a second deadline is armed.
+            await shard.run(async () => db.patch(id, { body: "v2" }));
+
+            // Linked, not abandoned — nothing has landed behind the stuck hook.
+            expect(shard.events).toStrictEqual([]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("keeps the committed row when the post-commit hook fails, and reports it", async () => {
         expect.assertions(3);
 

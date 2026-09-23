@@ -118,6 +118,28 @@ watermark proof has expired rather than only before it. The refusal carries the
 current epoch to resume against, and the remedy is unchanged: re-seed, because
 an incremental cursor cannot cross a fork.
 
+The refusal arrives as that shard's `error` in the response, with the shard's own
+code on it — branch on `code`, never on the message:
+
+```json
+{
+    "shards": [
+        {
+            "shardKey": "c1",
+            "cursor": 812,
+            "epoch": "6c95…",
+            "error": { "code": "CDC_TIMELINE_FORKED", "message": "…", "timedOut": false }
+        }
+    ]
+}
+```
+
+`CDC_TIMELINE_FORKED` means re-seed against the epoch the message names.
+`CDC_LOG_TRIMMED` and `CDC_PAYLOAD_COMPACTED` also mean re-seed — the range you
+asked for is gone rather than moved. Anything else (`SHARD_TIMEOUT`,
+`SHARD_HTTP_ERROR`, `INTERNAL`) is transport: retry the same cursor and epoch,
+which the response echoes back to you for exactly that purpose.
+
 Both halves are optional. A connector that ignores `epoch` and never sends
 `epochs` behaves exactly as it did, with exactly the guarantee described above —
 so this widens the window for consumers that opt in, and does not replace the

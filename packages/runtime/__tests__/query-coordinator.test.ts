@@ -392,6 +392,26 @@ describe("error handling", () => {
         expect(result.errors[0]?.message).toContain("row not found");
     });
 
+    it("echoes a catalogued LunoraError code from a shard's non-2xx response", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // A `LunoraError` with a non-500 status leaves the shard as a non-2xx
+        // `{ error: { code, message } }` envelope rather than as a throw this
+        // coordinator catches — the same catalogued verdict, reached by the other
+        // half of the shard's error path. `ShardError.code` documents itself as
+        // carrying "a shard's own `LunoraError` code when it had one", and read
+        // off the status alone this half carried none of them.
+        const spy = createShardSpy(() => Response.json({ error: { code: "NOT_FOUND", message: "row not found" } }, { status: 404 }));
+
+        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+
+        expect(result.errors[0]?.code).toBe("NOT_FOUND");
+        expect(result.errors[0]?.message).toContain("row not found");
+    });
+
     it("slow shard hits the per-shard timeout", async () => {
         expect.assertions(5);
 

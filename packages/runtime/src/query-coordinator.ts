@@ -478,7 +478,18 @@ interface ShardCdcOutcome {
      * resumes from the same pair rather than dropping the timeline half.
      */
     epoch?: string;
-    error?: { message: string; timedOut: boolean };
+
+    /**
+     * Why this shard served no page. `code` is the shard's own verdict — see
+     * {@link ShardError.code} — and it is the half a consumer has to branch on:
+     * `CDC_TIMELINE_FORKED` means re-seed from a snapshot on the new timeline,
+     * `CDC_LOG_TRIMMED` / `CDC_PAYLOAD_COMPACTED` mean re-seed from a snapshot,
+     * and a transport code (`SHARD_TIMEOUT`, `SHARD_HTTP_ERROR`, `INTERNAL`)
+     * means retry the same cursor. Reported through `message` alone they are one
+     * indistinguishable failure, and the epoch guard's whole value is the
+     * verdict it reaches the caller with.
+     */
+    error?: { code: string; message: string; timedOut: boolean };
     shardKey: string;
 }
 
@@ -996,7 +1007,7 @@ const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceE
             // watermark-only guarantee on its next poll.
             shards.push({
                 cursor: sinceSeq,
-                error: { message: outcome.message, timedOut: outcome.timedOut },
+                error: { code: outcome.code, message: outcome.message, timedOut: outcome.timedOut },
                 shardKey: outcome.shardKey,
                 ...(sinceEpoch === undefined ? {} : { epoch: sinceEpoch }),
             });
@@ -1166,6 +1177,31 @@ const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     };
 };
 
+/**
+ * The `{ error: { code, message } }` envelope a shard puts on a non-2xx, or
+ * `undefined` when the response carries none.
+ *
+ * `undefined` is the honest answer for everything that is not a shard verdict:
+ * the DO router's bare-text 404 for an unrouted path, a platform 5xx with no
+ * body, a truncated read. Those stay `SHARD_HTTP_ERROR`, because reporting a
+ * transport failure under a shard's own error code would send a consumer
+ * re-seeding a warehouse table over a blip.
+ */
+const readShardErrorEnvelope = async (response: Response): Promise<undefined | { code: string; message: string }> => {
+    try {
+        const body: unknown = await response.json();
+        const error = (body as undefined | { error?: { code?: unknown; message?: unknown } })?.error;
+
+        if (typeof error?.code !== "string" || error.code.length === 0) {
+            return undefined;
+        }
+
+        return { code: error.code, message: typeof error.message === "string" ? error.message : "" };
+    } catch {
+        return undefined;
+    }
+};
+
 const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
@@ -1202,7 +1238,28 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { code: "SHARD_HTTP_ERROR", kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
+                // A shard's refusal is a VERDICT, and the status alone does not
+                // carry it: `CDC_TIMELINE_FORKED`, `CDC_LOG_TRIMMED` and
+                // `CDC_PAYLOAD_COMPACTED` are all 409 and demand three different
+                // things of the caller. The shard already shaped the envelope
+                // with the same `toErrorBody` this function's catch below uses
+                // (`ShardDO.errorToResponse`), so the code is catalogued and the
+                // message is redacted before it ever reaches this hop — echoing
+                // both is the documented contract of {@link ShardError.code},
+                // which read off the status alone was true on the throw path and
+                // false on this one.
+                const envelope = await readShardErrorEnvelope(response);
+                const status = `shard "${shardKey}" returned ${String(response.status)}`;
+
+                return {
+                    code: envelope?.code ?? "SHARD_HTTP_ERROR",
+                    kind: "err",
+                    // The status prefix stays ahead of the shard's own reason so a
+                    // caller matching on it still matches.
+                    message: envelope === undefined || envelope.message.length === 0 ? status : `${status}: ${envelope.message}`,
+                    shardKey,
+                    timedOut: false,
+                };
             }
 
             const value = await response.json();
