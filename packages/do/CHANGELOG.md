@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.154...@lunora/do@1.0.0-alpha.155) (2026-09-23)
+
+### Bug Fixes
+
+* carry a shard's refusal code to /sync, and bound the post-commit hook wait ([#788](https://github.com/anolilab/lunora/issues/788)) ([f8a222a](https://github.com/anolilab/lunora/commit/f8a222ac4f5df10662d876227336ffaaa7201fc5))
+
 ## @lunora/do [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.153...@lunora/do@1.0.0-alpha.154) (2026-09-23)
 
 ### Bug Fixes
