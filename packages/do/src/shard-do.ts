@@ -1530,6 +1530,12 @@ abstract class ShardDO {
      * {@link ShardDO.whisperVerdicts} without bound AND re-runs the authorizer —
      * which is a database query — once per new name.
      *
+     * The check alone would not hold it: the dispatch it guards yields, and
+     * frames delivered during that yield would all read the same pre-dispatch
+     * size. It binds because each pair's slot is reserved with its in-flight
+     * verdict promise before the first await — see
+     * {@link ShardDO.authorizeWhisper}.
+     *
      * Sized against what a legitimate client can reach rather than against the
      * membership cap: a socket at full membership that also broadcasts on every
      * topic it joined legitimately decides 2 × 64 = 128 pairs, so this leaves
@@ -2115,8 +2121,13 @@ abstract class ShardDO {
      * Resetting on hibernation is the fail-safe direction — the next frame after a
      * wake re-checks. Bounded by
      * {@link ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET}.
+     *
+     * An entry is a `Promise<boolean>` while its authorizer is in flight and the
+     * settled verdict afterwards. The pending form is what makes the bound hold:
+     * it occupies the slot from before the first await, so concurrent frames see
+     * the pair as taken rather than all passing an unchanged size check.
      */
-    private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, boolean>>();
+    private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, Promise<boolean> | boolean>>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -13102,7 +13113,10 @@ abstract class ShardDO {
         const cached = memo?.get(memoKey);
 
         if (cached !== undefined) {
-            return cached;
+            // A pending entry is this same pair's dispatch, still in flight —
+            // awaiting it collapses a burst of frames naming one topic onto a
+            // single authorizer run instead of one run per frame.
+            return await cached;
         }
 
         // Cap the DISTINCT pairs before dispatching, not after memoising: the
@@ -13122,6 +13136,51 @@ abstract class ShardDO {
             return false;
         }
 
+        if (!memo) {
+            memo = new Map();
+            this.whisperVerdicts.set(ws, memo);
+        }
+
+        // Reserve the pair's slot BEFORE the first await. An authorizer that does
+        // any non-storage async work yields, and a Durable Object keeps delivering
+        // socket frames across a non-storage yield — so without the reservation
+        // every frame of a burst clears the size check above while the map is
+        // still short, and the cap bounds neither the authorizer dispatches nor
+        // the entries the map ends up holding. The reservation is the verdict
+        // promise itself, so a burst naming ONE pair also collapses onto one run.
+        const pending = this.runWhisperAuthorizers(paths, ws, topic, action);
+
+        memo.set(memoKey, pending);
+
+        let allowed: boolean;
+
+        try {
+            allowed = await pending;
+        } catch (error: unknown) {
+            // Nothing in the run path rejects today — an authorizer's failure is
+            // caught there and read as a denial — but a reservation must never
+            // outlive its dispatch: a rejected promise left in the map would
+            // re-throw for every later frame naming this pair, and hold the slot
+            // until the socket closes.
+            memo.delete(memoKey);
+
+            throw error;
+        }
+
+        memo.set(memoKey, allowed);
+
+        return allowed;
+    }
+
+    /**
+     * Run every registered `onWhisper` authorizer for one `(action, topic)` pair
+     * as a sequential AND, under the socket's own verified identity.
+     *
+     * Split out of {@link ShardDO.authorizeWhisper} for one reason: the verdict
+     * promise has to exist before the first await so it can be memoised as the
+     * pair's reservation.
+     */
+    private async runWhisperAuthorizers(paths: ReadonlyArray<string>, ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
         const info = this.lifecycleInfo(this.readAttachment(ws));
         const event = { ...info.event, action, topic };
         let allowed = true;
@@ -13160,13 +13219,6 @@ abstract class ShardDO {
                 break;
             }
         }
-
-        if (!memo) {
-            memo = new Map();
-            this.whisperVerdicts.set(ws, memo);
-        }
-
-        memo.set(memoKey, allowed);
 
         return allowed;
     }

@@ -546,4 +546,50 @@ describe("shardDO whisper authorization cap", () => {
         expect(shard.calls).toHaveLength(256);
         expect(JSON.stringify(refusals[0])).not.toMatch(/secret-|allow|den|exist/iu);
     });
+
+    /**
+     * Every test above feeds the socket one frame at a time, and a cap that
+     * merely READS the memo size passes all of them. The authorizer is awaited
+     * between the check and the write, and a Durable Object keeps delivering
+     * socket frames across a non-storage yield — so frames that arrive in one
+     * batch all see the pre-dispatch size. These two drive the frames WITHOUT
+     * awaiting between them, which is what the reservation exists for.
+     */
+    it("bounds a burst of concurrent frames, not just a sequential flood", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "flooder" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // 400 distinct topics delivered as one batch: not one of them is awaited
+        // before the next starts, so each reaches the cap check while the earlier
+        // dispatches are still in flight.
+        await Promise.all(
+            Array.from({ length: 400 }, async (_, index) => {
+                await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+            }),
+        );
+
+        expect(shard.calls).toHaveLength(256);
+        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
+    });
+
+    it("collapses a burst naming one pair onto a single authorizer run", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // The memo cannot answer a pair whose verdict has not settled yet, so
+        // without the in-flight reservation these are ten separate queries for
+        // one question.
+        await Promise.all(
+            Array.from({ length: 10 }, async () => {
+                await sendTo(shard, a, { topic: "same", type: "whisper_subscribe" });
+            }),
+        );
+
+        expect(shard.calls).toHaveLength(1);
+        expect(a.frames).toHaveLength(0);
+    });
 });
