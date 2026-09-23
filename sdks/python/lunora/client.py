@@ -704,7 +704,17 @@ class LunoraClient:
             return self._handle_poke_end(frame, deferred)
 
         if kind == "complete":
-            self._subs.pop(frame.get("id"), None)
+            # NON-DESTRUCTIVE, and that is the whole point: dropping the state
+            # takes it out of ``_subs``, which is the set
+            # :meth:`resend_subscriptions` walks — so the query froze for the
+            # life of the process, across every future reconnect, with nothing
+            # reported. Fan a cancellation to the listener and mark the
+            # registration un-acked instead; the next reconnect resubscribes it.
+            sub = self._subs.get(frame.get("id"))
+            if sub is not None:
+                sub.acked = False
+                cancelled = SubscriptionError("subscription was cancelled by the server", "SUBSCRIPTION_CANCELLED")
+                deferred.extend(partial(cb, cancelled) for cb in sub.error_callbacks)
             return {"kind": "complete", "id": frame.get("id")}
 
         return {"kind": "ignored", "type": kind}

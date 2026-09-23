@@ -1393,9 +1393,22 @@ final class OptimisticOfflineTest {
     @SuppressWarnings("unchecked")
     private static void offlineFlushBatchesMultipleWrites() throws IOException {
         covers("offline_flush_batches_multiple_writes");
+        covers("offline_flush_unreadable_slot_is_retried");
 
         Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
         List<Object> slots = list(testCase.get("slots"));
+        int unreadable = 0;
+
+        // A slot the fixture no longer describes is a case that asserts nothing.
+        for (Object raw : slots) {
+            Map<String, Object> slot = map(raw);
+
+            if ("unreadable-error".equals(slot.get("outcome")) && slot.containsKey("rawError")) {
+                unreadable++;
+            }
+        }
+
+        check(unreadable == 1, "batchReplay must carry one unreadable slot");
         List<String> urls = new ArrayList<>();
         List<Object> calls = new ArrayList<>();
         List<Long> confirmed = new ArrayList<>();
@@ -1422,6 +1435,19 @@ final class OptimisticOfflineTest {
                                     answers.append(",\"body\":{\"commitCursor\":")
                                             .append(count(slot.get("commitCursor")))
                                             .append(",\"result\":null}}");
+
+                                    continue;
+                                }
+
+                                if ("unreadable-error".equals(slot.get("outcome"))) {
+                                    // An `error` key holding a NON-object: no envelope to read
+                                    // a verdict out of, and no per-slot HTTP status to fall back
+                                    // on. Written from the fixture's own value, so a port cannot
+                                    // pass by answering itself a shape the spec does not
+                                    // describe.
+                                    answers.append(",\"body\":{\"error\":")
+                                            .append(Json.write(slot.get("rawError")))
+                                            .append("}}");
 
                                     continue;
                                 }

@@ -111,6 +111,10 @@ fn conformance_manifest_is_covered() {
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
             "client_frame_builders" => client_frame_builders(),
             "server_frame_consumer" => server_frame_consumer(),
+            // The `complete` case lives inside the `serverFrames` loop, which is
+            // where every other frame's expectations already are. Two manifest
+            // names, one dispatch: the loop asserts both.
+            "complete_frame_cancels_without_dropping_the_subscription" => server_frame_consumer(),
             "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "shape_subscriptions_resend_after_reconnect" => shape_subscriptions_resend_after_reconnect(),
@@ -130,6 +134,7 @@ fn conformance_manifest_is_covered() {
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
             "offline_flush_batches_multiple_writes" => offline_flush_batches_multiple_writes(),
+            "offline_flush_unreadable_slot_is_retried" => offline_flush_batches_multiple_writes(),
             "offline_flush_batch_splits_on_payload_too_large" => offline_flush_batch_splits_on_payload_too_large(),
             "optimistic_cursorless_frame_preserves_cursor" => optimistic_cursorless_frame_preserves_cursor(),
             "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
@@ -481,12 +486,17 @@ fn client_frame_builders() {
 
 fn server_frame_consumer() {
     let document = fixture("ws-frames.json");
+    let mut cancellations = 0;
 
     for case in document["serverFrames"].as_array().expect("serverFrames") {
         let name = case["name"].as_str().unwrap_or("?");
         let mut client = Client::new("https://app.example", None);
+        let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let outbound = Arc::clone(&sent);
 
-        client.attach_socket(Box::new(|_frame| {}));
+        client.attach_socket(Box::new(move |frame| {
+            outbound.lock().expect("sent").push(frame.clone());
+        }));
 
         // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
         // `Send`, which is what makes `Client` itself `Send` and shareable — see
@@ -502,6 +512,8 @@ fn server_frame_consumer() {
             Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
             Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.clone()))),
         );
+
+        sent.lock().expect("sent").clear();
 
         let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
         let expect = &case["expect"];
@@ -521,7 +533,38 @@ fn server_frame_consumer() {
             assert_eq!(errors.len(), 1, "{name}");
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
+
+        // Cancelled AND kept. Removing the entry takes it out of the map
+        // `resend_subscriptions` walks, which froze the query across every
+        // future reconnect — and dropped the stream's `Sender` with it, so the
+        // consumer saw a bare `RecvError` instead of a coded cancellation.
+        if expect["resendsAfterReconnect"] == json!(true) {
+            cancellations += 1;
+
+            {
+                let errors = errors.lock().expect("errors");
+
+                assert_eq!(errors.len(), 1, "{name}");
+                assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
+                assert_eq!(errors[0].message.as_str(), expect["message"].as_str().expect("message"), "{name}");
+            }
+
+            client.resend_subscriptions().expect("resend");
+
+            let outbound = sent.lock().expect("sent");
+            let resubscribed: Vec<&str> = outbound
+                .iter()
+                .filter(|frame| frame["type"] == json!("subscribe"))
+                .map(|frame| frame["id"].as_str().unwrap_or("?"))
+                .collect();
+
+            assert_eq!(resubscribed, vec![expect["id"].as_str().expect("id")], "{name}");
+        }
     }
+
+    // A conditional assertion that never runs is worse than none: without this,
+    // renaming the fixture key would leave every suite green.
+    assert_eq!(cancellations, 1, "serverFrames must carry one cancelling case");
 
     a_refused_payload_stays_on_its_own_subscription();
 }

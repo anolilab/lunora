@@ -219,21 +219,24 @@
             "maxEntries": 500,
             "path": "/_lunora/rpc-batch",
             "requests": 1,
-            "queued": ["m1", "m2", "m3", "m4"],
+            "$unreadableSlotComment": "`m5` is the fifth rule, and the one nothing reached before: a slot whose `error` key holds something that is NOT an object carries no envelope to read a verdict out of (protocol/README.md §4.2), and a slot has no HTTP status of its own to classify it by — which leaves it exactly where `m4`, the slot the server never returned, already is. §4.3 retries both. Every port matched the envelope with a type-checked pattern and fell THROUGH to the commit branch, settling this durable write committed with a null result and un-persisting it; a proxy answering the batch endpoint is all it takes. `rawError` is the literal JSON the slot's `error` key holds.",
+            "queued": ["m1", "m2", "m3", "m4", "m5"],
             "calls": [
                 { "id": 0, "mutationId": "m1", "functionPath": "messages:send", "clientId": "c-1" },
                 { "id": 1, "mutationId": "m2", "functionPath": "messages:send", "clientId": "c-1" },
                 { "id": 2, "mutationId": "m3", "functionPath": "messages:send", "clientId": "c-1" },
-                { "id": 3, "mutationId": "m4", "functionPath": "messages:send", "clientId": "c-1" }
+                { "id": 3, "mutationId": "m4", "functionPath": "messages:send", "clientId": "c-1" },
+                { "id": 4, "mutationId": "m5", "functionPath": "messages:send", "clientId": "c-1" }
             ],
             "slots": [
                 { "id": 0, "outcome": "ok", "commitCursor": 9 },
                 { "id": 1, "outcome": "transient-error", "code": "SHARD_UNAVAILABLE" },
-                { "id": 2, "outcome": "coded-error", "code": "NOT_FOUND" }
+                { "id": 2, "outcome": "coded-error", "code": "NOT_FOUND" },
+                { "id": 4, "outcome": "unreadable-error", "rawError": "bad gateway" }
             ],
             "committed": ["m1"],
             "rejected": ["m3"],
-            "queuedAfterFlush": ["m2", "m4"],
+            "queuedAfterFlush": ["m2", "m4", "m5"],
             "confirmedCommitCursor": 9,
             "persistRemoveCalls": ["m1", "m3"]
         },

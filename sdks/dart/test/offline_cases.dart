@@ -412,8 +412,14 @@ Future<void> caseGoldenBatchEntryCapMatchesProtocol() async {
 /// and each slot is classified exactly as a whole single-call response is.
 Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
   covers('offline_flush_batches_multiple_writes');
+  covers('offline_flush_unreadable_slot_is_retried');
 
   final case_ = _scenario('batchReplay');
+  // A slot the fixture no longer describes is a case that asserts nothing.
+  final unreadable = objectList(case_['slots']).where((slot) => slot['outcome'] == 'unreadable-error' && slot.containsKey('rawError')).length;
+
+  equals(unreadable, 1, 'batchReplay must carry one unreadable slot');
+
   final store = _RecordingPersistence();
   final queue = OfflineQueue(persistence: store);
   final poster = Poster();
@@ -446,6 +452,12 @@ Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
     for (final slot in objectList(case_['slots']))
       if (slot['outcome'] == 'ok')
         '{"id":${slot['id']},"body":{"result":null,"commitCursor":${slot['commitCursor']}}}'
+      // An `error` key holding a NON-object: no envelope to read a verdict out
+      // of, and no per-slot HTTP status to fall back on. Encoded from the
+      // fixture's own value, so a port cannot pass by answering itself a shape
+      // the spec does not describe.
+      else if (slot['outcome'] == 'unreadable-error')
+        '{"id":${slot['id']},"body":{"error":${jsonEncode(slot['rawError'])}}}'
       else
         '{"id":${slot['id']},"body":{"error":{"code":"${slot['code']}","message":"slot failed"}}}',
   ];

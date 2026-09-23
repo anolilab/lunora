@@ -98,6 +98,10 @@ final class ConformanceTests: XCTestCase {
             case "non_2xx_without_error_envelope_fails": try caseNon2xxWithoutErrorEnvelopeThrows()
             case "client_frame_builders": try caseClientFrameBuilders()
             case "server_frame_consumer": try caseServerFrameConsumer()
+            // The `complete` case lives inside the `serverFrames` loop, which is
+            // where every other frame's expectations already are. Two manifest
+            // names, one dispatch: the loop asserts both.
+            case "complete_frame_cancels_without_dropping_the_subscription": try caseServerFrameConsumer()
             case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "shape_subscriptions_resend_after_reconnect": try caseShapeSubscriptionsResendAfterReconnect()
@@ -117,6 +121,7 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
             case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
             case "offline_flush_batches_multiple_writes": try caseOfflineFlushBatchesMultipleWrites()
+            case "offline_flush_unreadable_slot_is_retried": try caseOfflineFlushBatchesMultipleWrites()
             case "offline_flush_batch_splits_on_payload_too_large": try caseOfflineFlushBatchSplitsOnPayloadTooLarge()
             case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
@@ -398,14 +403,18 @@ final class ConformanceTests: XCTestCase {
     }
 
     func caseServerFrameConsumer() throws {
+        var cancellations = 0
+
         for testCase in try XCTUnwrap(fixture("ws-frames.json")["serverFrames"] as? [[String: Any]]) {
             let name = testCase["name"] as? String ?? "?"
             let client = LunoraClient(url: "https://app.example")
-            client.attachSocket { _ in }
+            var sent: [[String: Any]] = []
+            client.attachSocket { sent.append($0) }
 
             var seen: [Any] = []
             var errors: [LunoraSubscriptionError] = []
             client.subscribe("messages:list", args: ["channel": "general"], onData: { seen.append($0) }, onError: { errors.append($0) })
+            sent.removeAll()
 
             let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(testCase["frame"]))
             let kind = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
@@ -422,7 +431,27 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(errors.count, 1)
                 XCTAssertEqual(errors.first?.code, expect["code"] as? String)
             }
+
+            // Cancelled AND kept. Removing the entry takes it out of the
+            // dictionary `resendSubscriptions` walks, which froze the query
+            // across every future reconnect with nothing reported.
+            if expect["resendsAfterReconnect"] as? Bool == true {
+                cancellations += 1
+                XCTAssertEqual(errors.count, 1, name)
+                XCTAssertEqual(errors.first?.code, expect["code"] as? String, name)
+                XCTAssertEqual(errors.first?.message, expect["message"] as? String, name)
+                client.resendSubscriptions()
+                XCTAssertEqual(
+                    sent.filter { $0["type"] as? String == "subscribe" }.map { $0["id"] as? String },
+                    [expect["id"] as? String],
+                    name
+                )
+            }
         }
+
+        // A conditional assertion that never runs is worse than none: without
+        // this, renaming the fixture key would leave every suite green.
+        XCTAssertEqual(cancellations, 1, "serverFrames must carry one cancelling case")
     }
 
     /// The `AsyncStream` form of a live query: same subscription, same decode,

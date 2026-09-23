@@ -581,8 +581,15 @@ class LunoraClient {
 
         return kind;
       case 'complete':
+        // NON-DESTRUCTIVE, and that is the whole point: removing the entry
+        // takes it out of the map `resendSubscriptions` walks, so the query
+        // froze for the life of the process across every future reconnect, with
+        // nothing reported. Fan a cancellation to the listener and leave the
+        // registration in place; the next reconnect resubscribes it.
+        const cancelled = LunoraSubscriptionError('SUBSCRIPTION_CANCELLED', 'subscription was cancelled by the server');
+
         if (id != null) {
-          _subscriptions.remove(id);
+          _subscriptions[id]?.onError?.call(cancelled);
         }
 
         return kind;

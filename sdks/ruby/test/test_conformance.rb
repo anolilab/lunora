@@ -237,14 +237,19 @@ class TestWsFrames < Minitest::Test
 
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
+    ConformanceManifest.covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    cancellations = 0
 
     fixture("ws-frames.json")["serverFrames"].each do |entry|
       client = Lunora::Client.new("https://app.example")
-      client.attach_socket(->(_frame) {})
+      sent = []
+      client.attach_socket(->(frame) { sent << frame })
       seen = []
       errors = []
       client.subscribe("messages:list", { "channel" => "general" }, ->(value) { seen << value },
                        ->(error) { errors << error })
+      sent.clear
 
       kind = client.handle_frame(JSON.generate(entry["frame"]))
       expect = entry["expect"]
@@ -260,7 +265,28 @@ class TestWsFrames < Minitest::Test
         assert_equal 1, errors.length
         assert_equal expect["code"], errors.first.code
       end
+
+      next unless expect["resendsAfterReconnect"]
+
+      cancellations += 1
+      assert_cancelled_but_kept(client, expect, errors, sent)
     end
+
+    # A conditional assertion that never runs is worse than none: without this,
+    # renaming the fixture key would leave every suite green.
+    assert_equal 1, cancellations, "serverFrames must carry one cancelling case"
+  end
+
+  # Cancelled AND kept. Deleting the entry takes it out of the hash
+  # +resend_subscriptions+ walks, which froze the query across every future
+  # reconnect with nothing reported.
+  def assert_cancelled_but_kept(client, expect, errors, sent)
+    assert_equal 1, errors.length
+    assert_equal expect["code"], errors.first.code
+    assert_equal expect["message"], errors.first.message
+    client.resend_subscriptions
+
+    assert_equal([expect["id"]], sent.select { |frame| frame["type"] == "subscribe" }.map { |frame| frame["id"] })
   end
 
   # A payload the codec refuses belongs on the addressed subscription's error
