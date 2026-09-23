@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc as Document_ } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_, Id } from "../../lunora/_generated/dataModel.js";
 
 /**
  * One text field out of a `FormData`.
@@ -108,16 +108,15 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     const nameOf = (id: string): string => byUser.get(id) ?? "Unknown";
 
     /**
-     * Upload straight to R2: the action mints a signed PUT, the browser sends
-     * the bytes to storage, and only the resulting key travels through the
-     * mutation. The Worker never handles the file.
+     * Resolve a download URL on demand — the query returns keys, not
+     * time-varying URLs. The message id goes over the wire rather than the key:
+     * the server reads the key off the row, so a caller cannot name an object.
      */
-    /** Resolve a download URL on demand — the query returns keys, not time-varying URLs. */
-    const openAttachment = async (key: string): Promise<void> => {
+    const openAttachment = async (messageId: Id<"messages">): Promise<void> => {
         setError(null);
 
         try {
-            const url = await client.action(api.messages.attachmentUrl, { channelId, key });
+            const url = await client.action(api.messages.attachmentUrl, { messageId }, { shardKey: channelId });
 
             globalThis.open(url, "_blank", "noreferrer");
         } catch (error_: unknown) {
@@ -126,6 +125,10 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     };
 
     /**
+     * Upload straight to R2: the action mints a signed PUT, the browser sends
+     * the bytes to storage, and only the resulting key travels through the
+     * mutation. The Worker never handles the file.
+     *
      * No `try` here on purpose: the submit handler below owns both the spinner
      * and the error, and the React Compiler cannot lower a `finally` (or a
      * `throw` inside a `try`) — a component containing one silently opts out of
@@ -184,7 +187,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                             <button
                                 className="link"
                                 onClick={() => {
-                                    void openAttachment(message.attachmentKey as string);
+                                    void openAttachment(message._id);
                                 }}
                                 type="button"
                             >

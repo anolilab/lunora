@@ -3,21 +3,29 @@
  * procedure here is behind sign-in, so the first thing worth asserting is that
  * a signed-out caller sees and writes nothing.
  *
- * The two attachment actions are left out — they mint R2 signed URLs, and there
- * is no bucket in the harness. Their guard (a key must be prefixed with the
- * caller's own channel/user path) is asserted through `send` instead, which is
- * where a forged key would actually do damage.
+ * The harness has no R2 bucket: `ctx.storage` throws the moment a handler
+ * touches it, and each signing action wraps that in its own "object storage did
+ * not answer". That makes it a usable oracle — a call refused BEFORE that error
+ * proves the guard ran first, and one that reaches it proves the handler got as
+ * far as signing a key it resolved server-side. Harness v1 also creates only
+ * the sharded tables, so the `.global()` `profiles` row cannot be read here;
+ * `avatarUrl` is pinned at its argument boundary instead.
  */
 import { lunoraTest } from "@lunora/testing";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
+import type { Id } from "../lunora/_generated/dataModel";
 import { create, list as listChannels } from "../lunora/channels";
-import { list as listMessages, search, send } from "../lunora/messages";
+import { attachmentUrl, list as listMessages, search, send } from "../lunora/messages";
 import { heartbeat, leave, list as listPresence } from "../lunora/presence";
+import { avatarUrl, save } from "../lunora/profiles";
 import schema from "../lunora/schema";
 
 const SIGN_IN_RE = /sign in/i;
 const ALREADY_EXISTS_RE = /already exists/i;
+const NO_ATTACHMENT_RE = /no attachment/i;
+const NOT_YOUR_KEY_RE = /not your avatar key/i;
+const SIGNING_FAILED_RE = /object storage did not answer/i;
 
 let t: ReturnType<typeof lunoraTest>;
 let ada: ReturnType<typeof lunoraTest>;
@@ -115,4 +123,57 @@ it("tracks presence per session and clears it on leave", async () => {
 
     await ada.mutation(leave, { channelId: "general", sessionId: "s1" });
     expect(await ada.query(listPresence, { channelId: "general" })).toStrictEqual([]);
+});
+
+it("will not sign a download for a message that carries no attachment", async () => {
+    expect.assertions(1);
+    const messageId = await ada.mutation(send, { channelId: "general", content: "no file here" });
+
+    // Refused at the row, before `ctx.storage` is touched at all. The old shape
+    // took the object key from `args` and checked it against a prefix built out
+    // of another `args` field, so this call had nothing to fail on — every
+    // `files/channels/…` string in the bucket was signable by anyone.
+    await expect(ada.action(attachmentUrl, { messageId })).rejects.toThrow(NO_ATTACHMENT_RE);
+});
+
+it("will not sign a download for a message id that does not exist", async () => {
+    expect.assertions(1);
+
+    await expect(ada.action(attachmentUrl, { messageId: "m-does-not-exist" as Id<"messages"> })).rejects.toThrow(NO_ATTACHMENT_RE);
+});
+
+it("signs only the key stored on the message, reached through the row", async () => {
+    expect.assertions(1);
+    const messageId = await ada.mutation(send, {
+        attachmentKey: "files/channels/general/u-ada/f.png",
+        channelId: "general",
+        content: "",
+    });
+
+    // Past the guard and into the bucket, which the harness does not provide —
+    // the handler's own `catch` reports the stub as a signing failure. The point
+    // is what it took to get here: a message id, resolved server-side. There is
+    // no argument on this action that names an object.
+    await expect(ada.action(attachmentUrl, { messageId })).rejects.toThrow(SIGNING_FAILED_RE);
+});
+
+it("refuses a profile save that claims an avatar key that is not the caller's own", async () => {
+    expect.assertions(2);
+
+    // `avatarKey` is stored and later treated as an object reference, so a
+    // caller-written value here is the same hole as accepting a key at the
+    // signing action — just laundered through the row.
+    await expect(ada.mutation(save, { avatarKey: "files/avatars/u-grace", name: "Ada" })).rejects.toThrow(NOT_YOUR_KEY_RE);
+    await expect(ada.mutation(save, { avatarKey: "files/channels/general/u-grace/f.png", name: "Ada" })).rejects.toThrow(NOT_YOUR_KEY_RE);
+});
+
+it("gives the avatar action no argument that names an object", async () => {
+    expect.assertions(2);
+
+    // The old shape took `{ key }` and let anything under `files/avatars/`
+    // through. Validation runs before the handler, so these are refused without
+    // the bucket — or the `.global()` profiles table, which harness v1 does not
+    // create — being reachable at all.
+    await expect(ada.action(avatarUrl, { key: "files/avatars/u-grace" } as unknown as { userId: string })).rejects.toThrow();
+    await expect(ada.action(avatarUrl, {} as unknown as { userId: string })).rejects.toThrow();
 });

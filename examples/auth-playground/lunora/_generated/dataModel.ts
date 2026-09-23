@@ -25,7 +25,6 @@ export type Id<TName extends string> = string & { readonly __table: TName };
 export interface Doc_documents {
     _id: Id<"documents">;
     _creationTime: number;
-    organizationId: string;
     ownerId: string;
     title: string;
     body: string;
@@ -53,7 +52,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  * Used by `TableReader.withIndex()` to constrain callers to declared names.
  */
 export interface IndexNamesByTable {
-    documents: "by_org_owner_created";
+    documents: "by_owner_created";
     ratelimit_buckets: "by_key";
 }
 
@@ -89,7 +88,6 @@ export type VectorIndexName = never;
 export interface Insert_documents {
     _id?: Id<"documents">;
     _creationTime?: number;
-    organizationId: string;
     ownerId: string;
     title: string;
     body: string;

@@ -63,6 +63,35 @@ describe("discoverFailOpenGuards", () => {
         expect(row).toMatchObject({ callee: "verifyTurnstileMiddleware", exportName: "register", failOpen: true, limitName: "" });
     });
 
+    it("records failOpen:true from options hoisted into a module-scope const", () => {
+        expect.assertions(1);
+
+        // How every example in this repo writes its guard options. A feeder that
+        // reads only a direct object literal records this as fail-CLOSED — the
+        // wrong answer, on the one spelling the repo itself uses.
+        write(
+            "hoisted.ts",
+            `const degraded = { failOpen: true, key: (ctx) => ctx.ip ?? "anon" };\nexport const signIn = mutation.use(rateLimit(limiter, "signin", degraded)).mutation(async () => {});`,
+        );
+
+        const [row] = discoverFailOpenGuards(project, join(workdir, "lunora"));
+
+        expect(row).toMatchObject({ callee: "rateLimit", exportName: "signIn", failOpen: true, limitName: "signin" });
+    });
+
+    it("records failOpen:false for hoisted options that do not set it", () => {
+        expect.assertions(1);
+
+        write(
+            "hoisted-closed.ts",
+            `const byUser = { key: (ctx) => ctx.ip ?? "anon" };\nexport const signIn = mutation.use(rateLimit(limiter, "signin", byUser)).mutation(async () => {});`,
+        );
+
+        const [row] = discoverFailOpenGuards(project, join(workdir, "lunora"));
+
+        expect(row?.failOpen).toBe(false);
+    });
+
     it("records failOpen:false when the option is absent (a bare fail-closed guard)", () => {
         expect.assertions(1);
 

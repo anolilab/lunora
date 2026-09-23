@@ -11,6 +11,7 @@
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit",
+        "test": "vitest run",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix"
     },
@@ -26,6 +27,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/testing": "workspace:*",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",

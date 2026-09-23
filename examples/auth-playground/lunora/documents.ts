@@ -23,7 +23,6 @@ interface DocumentRow {
     _id: Id<"documents">;
     body: string;
     createdAt: number;
-    organizationId: string;
     ownerId: string;
     title: string;
 }
@@ -43,24 +42,30 @@ const assertSignedIn = (userId: null | string): string => {
 };
 
 /**
- * What isolates these documents, and what does not.
+ * What isolates these documents — and why there is no `organizationId` column.
  *
- * `ownerId` is stamped from the session on `create` and required to match on
- * every read, so a caller only ever sees their own rows. `organizationId` is
- * NOT a trust boundary here: it arrives in `args`, so a caller can file a
- * document under any org id they like — it is a label on their own documents,
- * not a claim the server verified.
+ * `ownerId` is stamped from the session on `create` and is the equality prefix
+ * of every read, so a caller only ever sees their own rows. That is a boundary
+ * the server can enforce on its own.
  *
- * Gating on *membership* needs the inbound `Headers`, because better-auth
- * authorizes `getActiveMember` from the caller's session cookie. A Lunora
- * procedure context deliberately carries only the resolved identity, so a
- * `query`/`mutation` cannot make that call — compose `withAuthPlugins(auth)`
- * onto an `httpAction`, which does have the request, and check
- * `ctx.authApi.getActiveMember({ headers: request.headers, query: {
- * organizationId } })` there before trusting the org id. A production app wants
- * that check in addition to the owner scoping below.
+ * An `organizationId` would not be. A procedure context carries the resolved
+ * identity and nothing else — no org claim, and no inbound `Headers` — so an
+ * org id could only arrive in `args`, where the caller picks it. Storing one
+ * there produces a column that *looks* like a tenant boundary and is really a
+ * caller-chosen label: `assertSignedIn` proves the caller is somebody, never
+ * that they belong to the org they named. Writing rows under another tenant's
+ * id is then one request away, and every later query that trusts the column
+ * inherits the hole. A field the server cannot verify does not belong in the
+ * row.
+ *
+ * To scope by organization for real, put the check where the request is: a
+ * better-auth membership lookup authorizes from the caller's session cookie, so
+ * compose `withAuthPlugins(auth)` onto an `httpAction` — which does have the
+ * request — and call `ctx.authApi.getActiveMember({ headers: request.headers,
+ * query: { organizationId } })` before the org id is allowed anywhere near a
+ * write. Add the column once that gate exists, not before.
  */
-export const list = query.input({ organizationId: v.string().max(128) }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
+export const list = query.query(async ({ ctx }): Promise<DocumentRow[]> => {
     const userId = assertSignedIn(ctx.auth.userId);
 
     // The equality prefix pins the row set to this caller's own documents; the
@@ -68,7 +73,7 @@ export const list = query.input({ organizationId: v.string().max(128) }).query(a
     // (or over-read) in JS.
     return ctx.db
         .query("documents")
-        .withIndex("by_org_owner_created", (range) => range.eq("organizationId", organizationId).eq("ownerId", userId))
+        .withIndex("by_owner_created", (range) => range.eq("ownerId", userId))
         .order("desc")
         .collect();
 });
@@ -77,15 +82,13 @@ export const list = query.input({ organizationId: v.string().max(128) }).query(a
 export const create = mutation
     .use(rateLimit(limiter, "write", byUser))
     .input({
-        organizationId: v.string().max(128),
         title: v.string().max(256),
         body: v.string().max(100_000),
     })
-    .mutation(async ({ args: { organizationId, title, body }, ctx }): Promise<Id<"documents">> => {
+    .mutation(async ({ args: { title, body }, ctx }): Promise<Id<"documents">> => {
         const userId = assertSignedIn(ctx.auth.userId);
 
         return ctx.db.insert("documents", {
-            organizationId,
             ownerId: userId,
             title,
             body,

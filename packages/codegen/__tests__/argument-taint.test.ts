@@ -80,6 +80,20 @@ describe("argument-taint", () => {
             expect(referencesArgs(sinkArgument(`SINK({ args: 1 });`))).toBe(false);
             expect(referencesArgs(sinkArgument(`SINK(payload.args);`))).toBe(false);
         });
+
+        it("follows a destructured `args` parameter — the spelling every handler here is written in", () => {
+            expect.assertions(5);
+
+            expect(referencesArgs(sinkArgument(`SINK(url);`, "{ args: { url }, ctx }"))).toBe(true);
+            // Renamed, and nested one level deeper.
+            expect(referencesArgs(sinkArgument(`SINK(target);`, "{ args: { url: target }, ctx }"))).toBe(true);
+            expect(referencesArgs(sinkArgument(`SINK(id);`, "{ args: { page: { id } }, ctx }"))).toBe(true);
+            // A rest element holds what is left of the SAME object, so it is
+            // tainted too — no special case, the chain walk reaches `args` anyway.
+            expect(referencesArgs(sinkArgument(`SINK(rest);`, "{ args: { url, ...rest }, ctx }"))).toBe(true);
+            // A sibling binding off a different property is not `args`.
+            expect(referencesArgs(sinkArgument(`SINK(userId);`, "{ args, ctx: { userId } }"))).toBe(false);
+        });
     });
 
     describe("singleHopInitializer", () => {
@@ -152,6 +166,15 @@ describe("argument-taint", () => {
 
             expect(isScopedByContext(unscoped)).toBe(false);
             expect(isArgumentDerived(unscoped)).toBe(true);
+        });
+
+        it("stays symmetric when the handler destructures both halves of its parameter", () => {
+            expect.assertions(2);
+
+            const scoped = sinkArgument(`SINK(\`\${userId}/\${name}\`);`, "{ args: { name }, ctx: { auth: { userId } } }");
+
+            expect(isScopedByContext(scoped)).toBe(true);
+            expect(isArgumentDerived(scoped)).toBe(true);
         });
     });
 

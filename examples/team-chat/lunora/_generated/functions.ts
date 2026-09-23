@@ -93,11 +93,8 @@ return { "name": source["name"] };
 installCompiledValidatorMap(lunora_messages_1.attachmentUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["channelId"] !== "string") return DEFER;
-if (source["channelId"].length > 128) return DEFER;
-if (typeof source["key"] !== "string") return DEFER;
-if (source["key"].length > 512) return DEFER;
-return { "channelId": source["channelId"], "key": source["key"] };
+if (typeof source["messageId"] !== "string") return DEFER;
+return { "messageId": source["messageId"] };
 });
 installCompiledValidatorMap(lunora_messages_1.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -179,9 +176,9 @@ return { "channelId": source["channelId"] };
 installCompiledValidatorMap(lunora_profiles_3.avatarUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["key"] !== "string") return DEFER;
-if (source["key"].length > 512) return DEFER;
-return { "key": source["key"] };
+if (typeof source["userId"] !== "string") return DEFER;
+if (source["userId"].length > 128) return DEFER;
+return { "userId": source["userId"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.requestAvatarUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -264,7 +261,7 @@ export interface Caller {
         list: (args?: {}) => Promise<import("./dataModel.js").Doc_channels[]>;
     };
     messages: {
-        attachmentUrl: (args: { channelId: string; key: string }) => Promise<string>;
+        attachmentUrl: (args: { messageId: Id<"messages"> }) => Promise<string>;
         list: (args: { channelId: string }) => Promise<import("./dataModel.js").Doc_messages[]>;
         requestAttachmentUpload: (args: { channelId: string; contentType: string }) => Promise<{ key: string; url: string; }>;
         search: (args: { channelId: string; text: string }) => Promise<import("./dataModel.js").Doc_messages[]>;
@@ -276,7 +273,7 @@ export interface Caller {
         list: (args: { channelId: string }) => Promise<import("./dataModel.js").Doc_presence[]>;
     };
     profiles: {
-        avatarUrl: (args: { key: string }) => Promise<string>;
+        avatarUrl: (args: { userId: string }) => Promise<string>;
         list: (args?: {}) => Promise<import("./dataModel.js").Doc_profiles[]>;
         requestAvatarUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
         save: (args: { name: string; avatarKey?: string }) => Promise<Id<"profiles">>;
