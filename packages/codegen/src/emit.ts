@@ -4896,15 +4896,29 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
     // root-instance call against a genuinely root-scoped index stays
     // namespace-less (correct — unchanged), while the same call against a
     // sharded index throws (see `createContextVectors`'s docblock) rather than
-    // silently defaulting to "every tenant". Gated on `hasShardedVectors` so an
-    // unsharded (or no-vectors) schema keeps emitting the bare
-    // `createContextVectors(lunora)` call, byte-identical.
-    const vectorsContextNamespaceOption = hasShardedVectors
-        ? `, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: [${schema.vectorIndexes
-              .filter((index) => shardedTableNames.has(index.table))
-              .map((index) => JSON.stringify(index.name))
-              .join(", ")}] }`
-        : "";
+    // silently defaulting to "every tenant". The two namespace keys are gated on
+    // `hasShardedVectors` so an unsharded (or no-vectors) schema carries neither.
+    //
+    // `deferAfterCommit` is emitted unconditionally, sharded or not: it is what
+    // makes `ctx.vectors.upsert` mean what `MutationCtx` documents it to mean —
+    // held until the mutation's transaction COMMITS, so a handler that upserts a
+    // vector and then throws does not leave one behind for a row that was rolled
+    // back. `upsertNow` keeps writing inline, which is the distinction the two
+    // names carry. Same host primitive the auto-sync hook goes through below, so
+    // a manual upsert and the hook it sits next to drain in one ordered queue.
+    const vectorsContextOptions = [
+        "deferAfterCommit: (work) => this.deferAfterCommit(work)",
+        ...(hasShardedVectors
+            ? [
+                  "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey",
+                  `shardedIndexNames: [${schema.vectorIndexes
+                      .filter((index) => shardedTableNames.has(index.table))
+                      .map((index) => JSON.stringify(index.name))
+                      .join(", ")}]`,
+              ]
+            : []),
+    ];
+    const vectorsContextOption = `, { ${vectorsContextOptions.join(", ")} }`;
     const vectorsBuild = hasVectorIndexes
         ? `
             let vectors: VectorSearchLike;
@@ -4913,7 +4927,7 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 ${vectorNamespaceField}
-                vectors = createContextVectors(lunora${vectorsContextNamespaceOption});
+                vectors = createContextVectors(lunora${vectorsContextOption});
                 onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;
@@ -5143,7 +5157,14 @@ ${vectorNamespaceField}
             // never what changed in them, so it costs one small read per poll tick
             // for the whole shard — and a tick whose answer omits a shape's table
             // skips that shape's membership drain entirely.
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and \`readGlobalShapeRows\`: \`bookmark\` is not declared
+            // on the narrower Hyperdrive thunk's \`request\` type, and an inline
+            // literal trips an excess-property error (TS2353) that makes the
+            // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
+            // a \`defineShape\`. The Hyperdrive factory simply never reads it.
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }
@@ -6032,8 +6053,12 @@ ${adminWriterPrelude("headroom ?? this.transactionHeadroom()")}
             // an absent row falling through to the \`.global()\` D1 twin, though that
             // branch is already unreachable here: \`adminWriter\` is built without a
             // \`globalDb\`, so a miss throws \`NOT_FOUND\` either way.
+            // \`hard\` is set only by the BULK delete arm, which needs the row gone
+            // from the physical table for its next batch's scan to make progress.
+            // A single-row \`writeRow\` delete never carries it, so it keeps the
+            // table's declared \`.softDelete()\` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }

@@ -3167,6 +3167,22 @@ const todosRankByDone: RankIndexDefinitionLike = {
 
 const todosSchema: SchemaLike = {
     tables: {
+        /**
+         * A `.softDelete()` sibling of `todos`, so the bulk ops are exercised on
+         * BOTH delete modes from one harness. Its absence is why the bulk-delete
+         * non-convergence below shipped: every bulk test ran against a table whose
+         * writer-routed delete physically removes the row, so the tombstone branch
+         * — where a scan re-matches the rows it just wrote — was never reached.
+         */
+        notes: {
+            indexes: [],
+            shape: {
+                deletedAt: { kind: "number" },
+                projectId: { kind: "string" },
+                title: { kind: "string" },
+            },
+            softDeleteMode: { field: "deletedAt" },
+        },
         todos: {
             aggregateIndexes: [todosByProject],
             indexes: [],
@@ -3218,7 +3234,10 @@ class BulkOpsShard extends ShardDO {
         });
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "", args.table);
+            // Codegen's exact forwarding — the harness has to carry it or the bulk
+            // arm's `hard: true` is invisible here, which is how the non-converging
+            // soft-delete drain shipped.
+            await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
         } else if (args.op === "patch") {
             await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
         } else {
@@ -3300,6 +3319,21 @@ describe("shardDO admin bulk delete", () => {
                 `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
             )[0]?.["c"] ?? 0,
         );
+
+    /** Physical rows in `notes` — tombstones included, because a soft delete keeps the row. */
+    const notesPhysical = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "notes"`)[0]?.["c"] ?? 0);
+
+    /** Rows of `notes` carrying a soft-delete marker — what a soft delete would leave behind. */
+    const notesTombstoned = (): number =>
+        Number(database.raw(`SELECT COUNT(*) AS c FROM "notes" WHERE json_extract("__doc__", '$.deletedAt') IS NOT NULL`)[0]?.["c"] ?? 0);
+
+    /** Seed `count` notes in the given project on the `.softDelete()` table. */
+    const seedNotes = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
+        for (let index = 0; index < count; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert("notes", { projectId: project, title: `n${index.toString()}` }); // gitleaks:allow -- a test fixture's shard key, not a credential
+        }
+    };
 
     /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
@@ -3701,12 +3735,20 @@ describe("shardDO admin bulk delete", () => {
             functionPath: string,
             args: Record<string, unknown>,
             openCursor?: string,
-        ): Promise<{ outcome: string; written: number }> => {
+        ): Promise<{ batches: number; outcome: string; written: number }> => {
+            // Round-trips actually issued. A drain that stops asking because it ran
+            // out of batches reports `cap-hit`, but one that keeps re-matching rows
+            // it already wrote reports the SAME outcome as honest work — the batch
+            // count is what separates "converged" from "spun".
+            let batches = 0;
+
             const drained = await drainBulkOp({
                 args,
                 maxBatches: 50,
                 openCursor,
                 query: async (batchArgs) => {
+                    batches += 1;
+
                     const response = await shard.fetch(bulkRequest(functionPath, batchArgs));
 
                     if (!response.ok) {
@@ -3719,7 +3761,7 @@ describe("shardDO admin bulk delete", () => {
                 },
             });
 
-            return { outcome: drained.outcome, written: drained.written };
+            return { batches, outcome: drained.outcome, written: drained.written };
         };
 
         it("patches every matching row when the patch leaves them matching", async () => {
@@ -3769,6 +3811,63 @@ describe("shardDO admin bulk delete", () => {
             expect(written).toBe(12);
             expect(rowCount()).toBe(3);
         });
+
+        /**
+         * The `.softDelete()` half of the same seam. "Clear table" is a PHYSICAL
+         * removal — see the note on the delete arm in `handleBulkRowOp` — so the
+         * drain converges: each batch's writes take their rows out of the match set,
+         * which is the invariant the whole cursorless delete path is built on.
+         *
+         * Left soft, the scan re-matched the tombstones it had just stamped on every
+         * subsequent batch, each `apply` no-opped, `count` kept incrementing and
+         * `hasMore` never dropped — so the drain ran to its batch ceiling, reported
+         * far more rows than the table ever held, and left everything past the first
+         * page live.
+         */
+        it("drains a clear of a .softDelete() table in bounded batches, removing the rows", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 7);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" });
+
+            expect(outcome).toBe("completed");
+            // 7 rows at 3 per call: three full batches and no more. A non-converging
+            // drain spends all 50.
+            expect(batches).toBe(3);
+            expect(written).toBe(7);
+            expect(notesPhysical()).toBe(0);
+            expect(notesTombstoned()).toBe(0);
+        });
+
+        it("drains a predicated delete on a .softDelete() table, leaving non-matching rows untouched", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 5);
+            await seedNotes(seed, "p2", 2);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.deleteRows, {
+                filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                limit: 2,
+                table: "notes",
+            });
+
+            expect(outcome).toBe("completed");
+            // 5 matching rows at 2 per call: three batches (the third returns 1).
+            expect(batches).toBe(3);
+            expect(written).toBe(5);
+            // p2's two rows survive, and nothing is left tombstoned.
+            expect(notesPhysical()).toBe(2);
+            expect(notesTombstoned()).toBe(0);
+        });
     });
 
     it("withholds a cursor from an unordered scan, so no caller can resume from a meaningless boundary", async () => {
@@ -3795,6 +3894,35 @@ describe("shardDO admin bulk delete", () => {
         const body = await ordered.json<{ result: { cursor?: string } }>();
 
         expect(body.result.cursor).toBeDefined();
+    });
+
+    /**
+     * One call, no drain: the reported `count` must be rows the table actually
+     * lost. A soft delete made this count tombstone stamps — and on a re-run, the
+     * same rows again — so the audit record ("deleted: N") and the operator's
+     * banner both described work that had not happened.
+     */
+    it("reports a clear of a .softDelete() table as rows actually removed", async () => {
+        expect.assertions(4);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedNotes(seed, "p1", 5);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
+
+        expect(body.result).toStrictEqual({ count: 3, hasMore: true });
+        // The three it counted are the three the table lost.
+        expect(notesPhysical()).toBe(2);
+
+        const second = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+
+        await expect(second.json<{ result: { count: number; hasMore: boolean } }>()).resolves.toStrictEqual({
+            result: { count: 2, hasMore: false },
+        });
+        expect(notesPhysical()).toBe(0);
     });
 });
 

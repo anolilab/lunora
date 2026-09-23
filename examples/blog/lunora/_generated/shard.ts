@@ -1182,8 +1182,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // an absent row falling through to the `.global()` D1 twin, though that
             // branch is already unreachable here: `adminWriter` is built without a
             // `globalDb`, so a miss throws `NOT_FOUND` either way.
+            // `hard` is set only by the BULK delete arm, which needs the row gone
+            // from the physical table for its next batch's scan to make progress.
+            // A single-row `writeRow` delete never carries it, so it keeps the
+            // table's declared `.softDelete()` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
@@ -1347,7 +1351,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 
-                vectors = createContextVectors(lunora);
+                vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });
                 onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;

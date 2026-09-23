@@ -52,6 +52,7 @@ class AppBuilder<Env extends object> {
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
+    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
@@ -153,6 +154,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** Resolve the SQL client a `.source(...)` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with `@lunora/hyperdrive`'s `createHyperdrive` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
+    public sourceClient(factory: (env: Env, binding: string) => ReturnType<NonNullable<ShardConfig["sourceClient"]>>): this {
+        this.sourceClientFactory = factory as NonNullable<ShardConfig["sourceClient"]>;
+
+        return this;
+    }
+
     /** Materialise the standalone Cloudflare worker + `ShardDO` class. */
     public build(): ComposedApp {
         return this.assemble();
@@ -200,6 +208,7 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
+            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
@@ -253,7 +262,7 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["notes", "boards"];
+        options.listSchemaTables = () => ["notes", "boards", "contacts"];
 
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);

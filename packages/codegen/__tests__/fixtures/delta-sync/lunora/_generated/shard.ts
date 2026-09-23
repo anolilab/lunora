@@ -2,7 +2,8 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SubscriptionIdentity, SystemReaderStorageLike, TelemetrySink, WhereInput } from "@lunora/do";
-import { applyCdcChanges, buildReprojectionMigration, assertShapeShardable, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
+import { applyCdcChanges, buildReprojectionMigration, assertShapeShardable, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
+import type { ExternalSourceLike, SourceClientLike, TraceRefLike } from "@lunora/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 
@@ -106,6 +107,29 @@ const LUNORA_TABLE_COLUMNS: Record<
             "optional": false,
             "type": "string"
         }
+    ],
+    "contacts": [
+        {
+            "name": "_id",
+            "optional": false,
+            "pk": true,
+            "type": "id"
+        },
+        {
+            "name": "_creationTime",
+            "optional": false,
+            "type": "number"
+        },
+        {
+            "name": "boardId",
+            "optional": false,
+            "type": "string"
+        },
+        {
+            "name": "email",
+            "optional": false,
+            "type": "string"
+        }
     ]
 };
 
@@ -155,7 +179,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "14e34397640889d5", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"boards\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner\": {\n          \"fields\": [\n            \"ownerId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"global:d1\"\n    },\n    \"notes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_board\": {\n          \"fields\": [\n            \"boardId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "0d7dbc7f1c8601d5", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"boards\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner\": {\n          \"fields\": [\n            \"ownerId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"global:d1\"\n    },\n    \"contacts\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    },\n    \"notes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_board\": {\n          \"fields\": [\n            \"boardId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
@@ -172,6 +196,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
     d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
+    sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;
 }
 
 const schedulerStub = {
@@ -261,6 +286,9 @@ const globalDbStub: DatabaseWriterLike = {
     },
 };
 
+const sourceClientCache = new WeakMap<object, Map<string, SourceClientLike>>();
+const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
+
 // Bound in-process `ctx.run*` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -347,6 +375,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
                 ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
             });
+
+            const autoSourced = Object.values((schema as unknown as SchemaLike).tables).some((definition) => {
+                const source = (definition as { externalSource?: ExternalSourceLike }).externalSource;
+
+                return source !== undefined && source.refresh !== "manual";
+            });
+
+            if (autoSourced) {
+                void this.scheduleSourcePoll();
+            }
         }
 
         protected override isCacheableQuery(functionPath: string): boolean {
@@ -713,9 +751,156 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // never what changed in them, so it costs one small read per poll tick
             // for the whole shard — and a tick whose answer omits a shape's table
             // skips that shape's membership drain entirely.
-            const globalDb: DatabaseWriterLike = config.d1?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and `readGlobalShapeRows`: `bookmark` is not declared
+            // on the narrower Hyperdrive thunk's `request` type, and an inline
+            // literal trips an excess-property error (TS2353) that makes the
+            // emitted `shard.ts` uncompilable for every Hyperdrive-global app with
+            // a `defineShape`. The Hyperdrive factory simply never reads it.
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
+        }
+
+        protected override async pollExternalSources(trace?: TraceRefLike): Promise<number | undefined> {
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const sourced = Object.entries((schema as unknown as SchemaLike).tables)
+                .map(([table, definition]) => [table, (definition as { externalSource?: ExternalSourceLike }).externalSource] as const)
+                .filter((entry): entry is [string, ExternalSourceLike] => entry[1] !== undefined);
+
+            if (sourced.length === 0) {
+                return undefined;
+            }
+
+            const shardKey = this.currentShardKey();
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+
+            let clients = sourceClientCache.get(this);
+
+            if (clients === undefined) {
+                clients = new Map();
+                sourceClientCache.set(this, clients);
+            }
+
+            let polledAt = sourcePollAtCache.get(this);
+
+            if (polledAt === undefined) {
+                polledAt = new Map();
+                sourcePollAtCache.set(this, polledAt);
+            }
+
+            const now = Date.now();
+            // `nextDueAt` tracks the EARLIEST next-due timestamp across every
+            // non-manual source; the shared alarm re-arms there instead of the
+            // fixed 2 s global-shape floor, so a large `refresh.everyMs` actually
+            // sleeps until it's due. Stays `undefined` when every source is
+            // `refresh: "manual"`, so the shared alarm goes idle for this tier.
+            let nextDueAt: number | undefined;
+
+            for (const [table, source] of sourced) {
+                if (source.refresh === "manual") {
+                    continue;
+                }
+
+                if (isSourceDue(source.refresh, polledAt.get(table), now)) {
+                    try {
+                        let client = clients.get(source.binding);
+
+                        if (client === undefined) {
+                            client = config.sourceClient?.(env, source.binding);
+
+                            if (client !== undefined) {
+                                clients.set(source.binding, client);
+                            }
+                        }
+
+                        if (client === undefined) {
+                            // No SqlClient resolved for this binding (host never wired
+                            // `config.sourceClient`, or wired it wrong). Surface it in the
+                            // Logs panel and stamp `polledAt` so a persistent misconfig backs
+                            // off to `refresh.everyMs` instead of retrying every alarm tick.
+                            this.recordExternalSourceError(table, new Error(`external-source: no sourceClient resolved for binding "${source.binding}"`), trace);
+                        } else {
+                            // A FRESH tracker per TABLE, not one shared across the whole
+                            // loop: one table's runaway pull must not spend a budget a
+                            // sibling table needs, and a limit hit here must not block
+                            // that sibling from getting its own full budget this tick.
+                            const writer = createShardCtxDb({
+                                // Admin and maintenance writes go through the SAME reactive-cache hooks as
+                                // a user mutation. Without this, a studio row edit, a TTL sweep, an admin
+                                // import, a CDC apply or a data-migration backfill writes without
+                                // invalidating, and the next query answers from the pre-write snapshot.
+                                ...this.ctxDbTuning(),
+                                broadcast: (delta) => {
+                                    this.recordChangedTable(delta.table, delta.indexKeys);
+                                },
+                                cdc: config.cdc ?? false,
+                                headroom: this.alarmHeadroom(),
+                                scheduler,
+                                schema: schema as unknown as SchemaLike,
+                                sql: this.sql as SqlExec,
+                            });
+
+                            if (source.mode === "incremental") {
+                                // Incremental (plan 136): pull only rows past the durable
+                                // watermark (or a full-pull seed/reconcile), upsert-only.
+                                // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; sequential keeps the writer transaction simple
+                                await pullExternalSourceIncrementalTick(this.sql as SqlExec, writer, client, table, source, shardKey, now);
+                            } else {
+                                // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                                await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                            }
+                        }
+
+                        // Timestamp AFTER the poll finishes, not the batch-start `now` — a
+                        // poll that outruns `everyMs` must not make `nextDueAt` (below)
+                        // stale-immediate and re-arm the alarm in a hammering loop.
+                        polledAt.set(table, Date.now());
+                    } catch (error) {
+                        if (error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED") {
+                            // Batch full, not a genuine failure. Incremental mode only
+                            // persists its watermark AFTER a full apply (see
+                            // `pullExternalSourceIncrementalTick`), so this throw left it
+                            // untouched — the next tick safely re-pulls/re-applies the
+                            // SAME slice (idempotent upsert). Full-pull mode (and an
+                            // incremental source's own occasional full-pull/reconcile
+                            // sweep) has no resumable cursor at all — deliberately not
+                            // inventing one here; a retry just redoes the whole pull,
+                            // safe if wasteful. Either way: warn instead of
+                            // `recordExternalSourceError`, and leave `polledAt`
+                            // UNCHANGED (skip the stamp below via `continue`) so this
+                            // table stays "due" and `nextPollAlarmTarget`'s existing
+                            // due-now floor re-arms the shared alarm promptly — not a
+                            // fresh `setAlarm(now)`.
+                            this.recordExternalSourceWarning(
+                                table,
+                                `external-source poll for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
+                                trace,
+                            );
+
+                            nextDueAt = nextDueAt === undefined ? now : Math.min(nextDueAt, now);
+
+                            continue;
+                        }
+
+                        this.recordExternalSourceError(table, error, trace);
+                        // Stamp on failure too, so a persistently failing source throttles
+                        // to `refresh.everyMs` rather than being hammered every tick.
+                        polledAt.set(table, Date.now());
+                    }
+                }
+
+                // This source's own next-due time, read AFTER the poll-or-skip above
+                // so a just-polled source reports `now + everyMs` (its FRESH due
+                // time), not the stale pre-poll one. An omitted `refresh` (poll
+                // every tick) is due again immediately.
+                const sourceNextDueAt = source.refresh === undefined ? now : (polledAt.get(table) ?? now) + source.refresh.everyMs;
+
+                nextDueAt = nextDueAt === undefined ? sourceNextDueAt : Math.min(nextDueAt, sourceNextDueAt);
+            }
+
+            return nextDueAt;
         }
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
@@ -921,8 +1106,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // an absent row falling through to the `.global()` D1 twin, though that
             // branch is already unreachable here: `adminWriter` is built without a
             // `globalDb`, so a miss throws `NOT_FOUND` either way.
+            // `hard` is set only by the BULK delete arm, which needs the row gone
+            // from the physical table for its next batch's scan to make progress.
+            // A single-row `writeRow` delete never carries it, so it keeps the
+            // table's declared `.softDelete()` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
@@ -1233,6 +1422,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["notes"] = bindTableFacade(db, "notes");
             facade["boards"] = bindTableFacade(db, "boards");
+            facade["contacts"] = bindTableFacade(db, "contacts");
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.

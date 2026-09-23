@@ -76,6 +76,28 @@ describe("client batch transport (088)", () => {
         expect(slots[1]?.ok).toBe(false);
     });
 
+    it("fails a slot whose error slot is not an object rather than reporting it as a success", async () => {
+        expect.assertions(2);
+
+        // §4.2: only an OBJECT `error` slot is an envelope. `{ error: null }`
+        // read as a MISSING error and was demuxed as `{ ok: true, value:
+        // undefined }` — a failed call reported to the caller as committed —
+        // while `{ error: "bad gateway" }` produced an `Error` with no `code`.
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            jsonResponse({
+                results: [
+                    { body: { error: null }, id: 0, status: 502 },
+                    { body: { error: "bad gateway" }, id: 1, status: 502 },
+                ],
+            }),
+        );
+
+        const slots = await client(fetchMock).batch([{ fn: fnRef("docs:a") }, { fn: fnRef("docs:b") }]);
+
+        expect(slots[0]?.ok).toBe(false);
+        expect(slots[1]?.ok).toBe(false);
+    });
+
     it("rejects the whole batch (not per-slot) when the worker returns a batch-level error", async () => {
         expect.assertions(2);
 

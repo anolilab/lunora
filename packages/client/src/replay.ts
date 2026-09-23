@@ -164,6 +164,49 @@ const unparseableResponseError = (status: number, statusText: string, retryAfter
 };
 
 /**
+ * A §4.2 / §4.3 response body as it ARRIVES — every slot optional, and `error`
+ * `unknown`, because the sender is a peer and a proxy sits between.
+ *
+ * The exported `RpcResponseBody` is the union the protocol documents, and
+ * `"error" in body` narrows it — which is exactly how seven read sites came to
+ * hand a slot no one had checked was an object to `reconstructError`.
+ */
+type RpcEnvelopeBody = { commitCursor?: number; error?: unknown; lastMutationId?: number; result?: unknown };
+
+/**
+ * The `{ code, message, data?, … }` envelope a response carries, or `undefined`
+ * when it carries none.
+ *
+ * `protocol/README.md` §4.2: only an OBJECT in the `error` slot is an envelope.
+ * A proxy's `{"error": "bad gateway"}` page, a `{"error": null}`, an array — the
+ * key is present and there is no verdict in it, so the response is classified by
+ * HTTP status like a body with no `error` key at all ({@link
+ * unparseableResponseError}), never read as one.
+ *
+ * That matters past the crash an unchecked read produces: an uncoded `Error` is
+ * what `LunoraClient.settleWholeBatchError` rejects a whole chunk of durable
+ * writes on, where the same response classified as transport re-queues them. All
+ * eight `sdks/*` ports narrow the slot this way and are held to
+ * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
+ */
+const errorEnvelopeOf = (body: unknown): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string } | undefined => {
+    const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
+
+    return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
+};
+
+/**
+ * The failure a BATCH SLOT whose `error` slot holds no envelope arrives as.
+ *
+ * A slot carries no HTTP status of its own, so there is no
+ * {@link unparseableResponseError} verdict to reach for: nothing readable came
+ * back about this entry, which is the same position as a slot the server never
+ * returned at all, and §4.3 retries that one. A {@link TransportError} is how
+ * the replay classifier spells "no verdict, keep the write".
+ */
+const unreadableSlotError = (): TransportError => new TransportError("LunoraClient: batch slot carried no error envelope");
+
+/**
  * The `data` an error should carry once a `Retry-After` response header is
  * folded in as `data.retryAfterMs` — the ONE channel a retry hint travels on.
  * `undefined` when the header adds nothing, so the caller leaves the error
@@ -270,9 +313,12 @@ const MAX_BATCH_BODY_BYTES = 1_048_576 - 65_536;
  */
 const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefined" ? text.length : new TextEncoder().encode(text).length);
 
+export type { RpcEnvelopeBody };
+
 export {
     AUTH_REPLAY_ERROR_CODES,
     defaultReplayRetryDelayMs,
+    errorEnvelopeOf,
     isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
@@ -282,5 +328,6 @@ export {
     retryAfterHeaderMs,
     TRANSIENT_REPLAY_ERROR_CODES,
     unparseableResponseError,
+    unreadableSlotError,
     utf8ByteLength,
 };

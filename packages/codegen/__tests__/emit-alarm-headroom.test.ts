@@ -48,8 +48,10 @@ describe("emitShard — runShardWrite alarm headroom (plan 207)", () => {
         expect(shard).toContain("const writer = this.adminWriter();");
         // Every by-id op pins its table, so an id belonging to a different table
         // cannot be located and mutated through this one (`locateRowById` probes
-        // every non-global table when unpinned).
-        expect(shard).toContain('await writer.delete(args.id ?? "", args.table);');
+        // every non-global table when unpinned). The delete also forwards `hard`,
+        // which only the BULK arm sets — a single-row `writeRow` delete leaves it
+        // unset and so keeps a `.softDelete()` table's tombstone behaviour.
+        expect(shard).toContain('await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });');
         // `TransactionHeadroomTracker` is a TYPE-only reference here — it must
         // already be in the generated file's import list (buildDoTypeImports),
         // not a new runtime import this override would need.

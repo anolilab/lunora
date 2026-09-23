@@ -236,6 +236,7 @@ interface RunShardRankPageArgs {
 ```ts
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;

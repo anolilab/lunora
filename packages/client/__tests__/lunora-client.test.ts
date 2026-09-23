@@ -3221,6 +3221,28 @@ describe("lunoraClient", () => {
             expect(init.method).toBe("GET");
         });
 
+        it("reports an admin non-2xx whose error slot is not an object as a transport failure", async () => {
+            expect.assertions(4);
+
+            // §4.2: only an OBJECT `error` slot is an envelope. The admin path
+            // narrowed the BODY and then indexed the slot unchecked, so a
+            // proxy's `{"error": null}` page raised a `TypeError` — and
+            // `{"error": "..."}` an `Error` with no `code` — past every handler
+            // an admin caller wrote.
+            for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ error: slot }, { status: 502 }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                });
+
+                // eslint-disable-next-line no-await-in-loop -- one client per slot shape; the shapes are the table
+                await expect(client.listFunctions()).rejects.toMatchObject({ code: "INTERNAL" });
+
+                client.close();
+            }
+        });
+
         it("listFunctions defaults to an empty array when functions are absent", async () => {
             expect.assertions(1);
 

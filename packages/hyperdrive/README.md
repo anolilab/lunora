@@ -146,12 +146,13 @@ export default defineSchema({
 export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
 ```
 
-Supply the driver once, when the shard DO is constructed. Lunora memoizes it per binding:
+Supply the driver once, on the app builder — required, or every tick records `no sourceClient resolved for binding "…"` and the table stays empty. Lunora memoizes it per binding:
 
 ```ts
-createShardDO({
-    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
-});
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .build();
 ```
 
 Clients subscribe with the shape they would use over any table — external data stops being external once it is materialized.

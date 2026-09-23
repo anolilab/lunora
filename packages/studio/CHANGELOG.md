@@ -1,3 +1,43 @@
+## @lunora/studio [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.196...@lunora/studio@1.0.0-alpha.197) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `__lunora_admin__:deleteRows` and `__lunora_admin__:clearTable`
+remove rows physically on a `.softDelete()` table instead of tombstoning them.
+
+The suite missed this because the bulk harness' schema declared no
+`softDeleteMode`, so the tombstone branch was never reached. It now carries a
+`.softDelete()` table alongside the plain one, and the drain helper reports the
+batch count — a spinning drain and a capped one report the same outcome, so the
+round-trip count is what separates converged from spun.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** make the admin bulk delete converge on a soft-delete table ([#782](https://github.com/anolilab/lunora/issues/782)) ([d1fcf5f](https://github.com/anolilab/lunora/commit/d1fcf5f38677945df25d001fbb3f1a8081b0b8e5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.120
+* **@lunora/react:** upgraded to 1.0.0-alpha.126
+
+## @lunora/studio [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.195...@lunora/studio@1.0.0-alpha.196) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.144
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.65
+* **@lunora/client:** upgraded to 1.0.0-alpha.119
+* **@lunora/react:** upgraded to 1.0.0-alpha.125
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+
 ## @lunora/studio [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.194...@lunora/studio@1.0.0-alpha.195) (2026-09-22)
 
 

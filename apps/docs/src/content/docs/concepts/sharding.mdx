@@ -103,6 +103,12 @@ a dump taken before the edit lands on the right DOs after it.
    stay consistent. This step is off the critical path — do it after writes
    resume, not during the window.
 
+    <Callout type="warn">
+        **Clear table and Delete matching remove rows permanently**, including on a [`.softDelete()`](/docs/concepts/schema) table — reclaiming the storage is
+        the point of this step, and a tombstone reclaims none. The Studio's other two delete affordances, the row editor's **Delete** and the checkbox
+        selection's, keep the table's declared soft-delete behaviour.
+    </Callout>
+
     Only for `.shardBy()`. A `.global()` migration has to clear the root DO
     **before** the schema edit, because afterwards the writer refuses the table
     outright — see

@@ -1050,6 +1050,12 @@ interface SubscriptionMemo {
  * writes the row twice. So a failure is a reported divergence, not a failed
  * response: the row exists, its external projection does not, and re-running the
  * (idempotent) write converges.
+ *
+ * Containing every failure per item is also what keeps the shard's hook chain
+ * alive: {@link ShardDO.runInTransaction} links these flushes into one promise
+ * tail to hold them in commit order, and a tail that ever latched rejected would
+ * make every LATER transaction on this shard skip its hooks, silently and for
+ * the life of the instance.
  */
 const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise<void> => {
     for (const work of queued) {
@@ -1657,6 +1663,15 @@ abstract class ShardDO {
      * run it now".
      */
     private afterCommitQueue?: (() => Promise<void> | void)[];
+
+    /**
+     * Chain that holds every committed transaction's after-commit side effects
+     * in commit order. Each link is one transaction's `flushAfterCommit`, joined
+     * inside the single-writer gate so the chain order IS the commit order; see
+     * {@link ShardDO.runInTransaction}. Never rejects — `flushAfterCommit` does
+     * not throw.
+     */
+    private afterCommitTail: Promise<void> = Promise.resolve();
 
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
@@ -3074,6 +3089,11 @@ abstract class ShardDO {
      * still fail on its own (Vectorize unreachable), and then the row exists
      * with no vector. See `flushAfterCommit` for why that is reported rather
      * than thrown.
+     *
+     * Ordering: queued work runs in the order it was queued, and one
+     * transaction's queue drains entirely before the next transaction's — see
+     * the hook chain in {@link ShardDO.runInTransaction}. Two writes to the same
+     * row therefore reach the external index in commit order.
      * @param work the side effect to hold until the commit lands
      */
     protected async deferAfterCommit(work: () => Promise<void> | void): Promise<void> {
@@ -3114,21 +3134,49 @@ abstract class ShardDO {
         // running transaction is filling. `queued` escapes to the flush below;
         // when the transaction throws we never reach it and the work is dropped.
         let queued: (() => Promise<void> | void)[] = [];
+        // This transaction's link in the shard-wide hook chain. Assigned by
+        // `onCommitted` below, which the runner calls before it releases the gate.
+        let flushed: Promise<void> = Promise.resolve();
 
-        const result = await this.runner.runInTransaction(async () => {
-            this.transactionDepth = 1;
-            queued = [];
-            this.afterCommitQueue = queued;
+        const result = await this.runner.runInTransaction(
+            async () => {
+                this.transactionDepth = 1;
+                queued = [];
+                this.afterCommitQueue = queued;
 
-            try {
-                return await handler();
-            } finally {
-                this.transactionDepth = 0;
-                this.afterCommitQueue = undefined;
-            }
-        });
+                try {
+                    return await handler();
+                } finally {
+                    this.transactionDepth = 0;
+                    this.afterCommitQueue = undefined;
+                }
+            },
+            () => {
+                // The hooks themselves must NOT run under the gate — one is a
+                // remote embed plus a Vectorize upsert, and holding the gate for
+                // that stalls every dispatch on the shard. But run loose, two of
+                // them race: the gate admits the next mutation the moment this
+                // one commits, so a slow hook for `body: "v1"` can land AFTER the
+                // fast hook for the `"v2"` that overwrote it — and the row then
+                // says "v2" while its vector says "v1", permanently, until the
+                // next write to that row. Insert-then-delete is the worse shape:
+                // the delete's hook lands first, the insert's upsert after it,
+                // and the vector outlives the row it points at.
+                //
+                // So only the LINKING happens here, inside the gate, where commit
+                // order is the one thing that is knowable; the work itself runs
+                // on the chain, outside it. Ordered, not serialized: the next
+                // transaction still commits while this hook is in flight.
+                this.afterCommitTail = this.afterCommitTail.then(async () => flushAfterCommit(queued));
+                flushed = this.afterCommitTail;
+            },
+        );
 
-        await flushAfterCommit(queued);
+        // Wait for THIS transaction's link (and, transitively, every earlier one)
+        // rather than for `afterCommitTail`, which a later transaction may have
+        // already extended. The dispatch's response still implies its own hooks
+        // were attempted, as it did before the chain.
+        await flushed;
 
         return result;
     }
@@ -7952,8 +8000,30 @@ abstract class ShardDO {
 
             if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
                 const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
+                // `hard: true` — the admin bulk delete REMOVES rows, on a
+                // `.softDelete()` table too.
+                //
+                // Two reasons, and they agree. The first is that the whole
+                // cursorless delete path is built on "its own writes take the rows
+                // out of the match set" (see `selectMatchingIds` and `drainBulkOp`):
+                // a soft delete leaves the tombstone in the physical table the next
+                // batch's raw scan re-reads, so the scan re-matched what it had just
+                // stamped, every `apply` after the first page no-opped, `hasMore`
+                // never dropped, and the drain spun to its batch ceiling reporting
+                // rows it had not removed. The second is that this is the posture
+                // the rest of the admin plane already takes: `readTablePage` scans
+                // the physical table with no soft-delete scope (so the operator is
+                // looking at tombstones, marker column and all), `exportShardRows`
+                // passes `includeDeleted: true` because a snapshot is not a
+                // user-facing list read, and `wipeShard` — the whole-table erasure
+                // primitive — sweeps with `{ hard: true }`.
+                //
+                // The single-row `writeRow` delete is deliberately NOT changed: one
+                // row neither has a scan to converge nor a count to overstate, and
+                // it is the path that should keep a table's declared `.softDelete()`
+                // behaviour. The studio's confirm dialogs say which is which.
                 const result = await this.runShardBulkRowOp(parsed, async (id) => {
-                    await this.runShardWrite({ id, op: "delete", table: parsed.table }, headroom);
+                    await this.runShardWrite({ hard: true, id, op: "delete", table: parsed.table }, headroom);
                     applied += 1;
                 });
 

@@ -4038,7 +4038,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
             expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
             // The read side (`ctx.vectors`) must stay just as bare as the write side.
-            expect(output).toContain("vectors = createContextVectors(lunora);");
+            expect(output).toContain("vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
             expect(output).not.toContain("currentShardKey");
@@ -4084,7 +4084,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // which ones are tenant-partitioned (a root-instance call against
             // any other listed index stays namespace-less, unaffected).
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
@@ -4125,7 +4125,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
             expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
@@ -4172,7 +4172,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
         });
 

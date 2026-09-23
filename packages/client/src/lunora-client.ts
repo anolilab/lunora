@@ -28,14 +28,17 @@ import { createPollingFallback } from "./polling-fallback";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
+import type { RpcEnvelopeBody } from "./replay";
 import {
     defaultReplayRetryDelayMs,
+    errorEnvelopeOf,
     isAuthReplayFailure,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
     retryAfterData,
     unparseableResponseError,
+    unreadableSlotError,
     utf8ByteLength,
 } from "./replay";
 import createSnapshotPrecondition from "./snapshot-precondition";
@@ -77,7 +80,6 @@ import type {
     ReconnectOptions,
     ReturnOf,
     RowOp,
-    RpcResponseBody,
     ScheduleRecord,
     SchedulerStatus,
     ServerDataMessage,
@@ -871,6 +873,20 @@ const encodeCallArgs = (payload: unknown, label: string): unknown => {
 const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
     "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
 
+/**
+ * The error a replayed batch slot carrying an `{ error }` body settles or
+ * re-queues on: the envelope it carries, or {@link unreadableSlotError} when the
+ * slot holds no envelope to read a verdict out of (§4.2).
+ */
+const slotError = (inner: { error?: unknown }): LunoraClientError => {
+    const envelope = errorEnvelopeOf(inner);
+
+    // The cast spans one slot: `@lunora/errors` types `hint` as a READONLY
+    // string array and this module's public `LunoraClientError` as a mutable
+    // one. A `TransportError` never sets it, so nothing crosses the gap.
+    return envelope === undefined ? (unreadableSlotError() as LunoraClientError) : reconstructError(envelope);
+};
+
 /** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
 type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
 
@@ -879,6 +895,11 @@ type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: un
  * wire-decoding each success value and reconstructing `.code`/`.data` on a
  * failing call. A slot the server never returned surfaces as an error rather
  * than a silent `undefined` success.
+ *
+ * So does a slot whose `error` key holds no readable envelope: it used to read
+ * as a MISSING error (`{ error: null }` is falsy) and be handed back as
+ * `{ ok: true, value: undefined }` — a failed call reported to the caller as a
+ * committed one.
  */
 const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
     const slots = Array.from<BatchSlot | undefined>({ length: count });
@@ -888,10 +909,9 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
             continue;
         }
 
-        const inner = entry.body as { error?: { code?: string; data?: unknown; message?: string }; result?: unknown } | undefined;
+        const inner = entry.body as { error?: unknown; result?: unknown } | undefined;
 
-        slots[entry.id] =
-            inner && "error" in inner && inner.error ? { error: reconstructError(inner.error), ok: false } : { ok: true, value: decodeWire(inner?.result) };
+        slots[entry.id] = inner !== undefined && "error" in inner ? { error: slotError(inner), ok: false } : { ok: true, value: decodeWire(inner?.result) };
     }
 
     return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
@@ -2470,7 +2490,7 @@ class LunoraClient {
             this.bookmark.set(bookmark);
         }
 
-        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: unknown; id?: number }[] };
+        let body: { error?: unknown; results?: { body?: unknown; id?: number }[] };
 
         try {
             body = await response.json();
@@ -2478,13 +2498,17 @@ class LunoraClient {
             throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
         }
 
+        const envelope = errorEnvelopeOf(body);
+
         // A whole-batch rejection (bad request, method, or a per-entry authorization
         // denial that fails the batch closed BEFORE any dispatch) comes back as a
         // non-2xx `{ error }` with no `results` — surface it like a single call
-        // rather than reporting every slot as an opaque "no result".
-        if (!response.ok || (body.error && !body.results)) {
-            if (body.error) {
-                throw reconstructError(body.error);
+        // rather than reporting every slot as an opaque "no result". An `error`
+        // slot with no envelope in it (a proxy's page) is classified by status
+        // instead, per §4.2.
+        if (!response.ok || (envelope !== undefined && !body.results)) {
+            if (envelope !== undefined) {
+                throw reconstructError(envelope);
             }
 
             throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
@@ -5698,7 +5722,7 @@ class LunoraClient {
             }
         }
 
-        let body: RpcResponseBody;
+        let body: RpcEnvelopeBody;
 
         try {
             body = await response.json();
@@ -5710,18 +5734,22 @@ class LunoraClient {
             throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
         }
 
-        if ("error" in body) {
+        const envelope = errorEnvelopeOf(body);
+
+        if (envelope !== undefined) {
             // Rebuilt with its `.code` and (for an app `LunoraError`) wire-decoded
             // `.data`, plus any `Retry-After` normalised into that `data` — the
             // one channel the hint travels on.
-            throw reconstructErrorWithRetryAfter(body.error, response.headers.get("retry-after"));
+            throw reconstructErrorWithRetryAfter(envelope, response.headers.get("retry-after"));
         }
 
-        // A non-2xx response whose body parsed as JSON but carried no `error`
-        // envelope would otherwise be treated as a successful result. Classified
-        // by status, exactly as an unparseable body is: a 5xx re-queues a durable
-        // write rather than dropping it over a gateway blip, a 4xx settles it
-        // rather than replaying a refusal forever.
+        // A non-2xx response whose body parsed as JSON but carried no READABLE
+        // `error` envelope would otherwise be treated as a successful result —
+        // a proxy's `{"error": "bad gateway"}` page reaches here alongside a body
+        // with no `error` key at all (§4.2). Classified by status, exactly as an
+        // unparseable body is: a 5xx re-queues a durable write rather than
+        // dropping it over a gateway blip, a 4xx settles it rather than replaying
+        // a refusal forever.
         if (!response.ok) {
             throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
         }
@@ -5795,17 +5823,22 @@ class LunoraClient {
             throw new LunoraError("INTERNAL", `LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
         }
 
-        // Untrusted server payload: narrow before inspecting for an error envelope.
-        if (typeof body === "object" && body !== null && "error" in body) {
-            const envelope = body.error as { code?: string; message?: string };
+        // Untrusted server payload: the BODY was narrowed here and the `error`
+        // SLOT inside it was not, so a proxy's `{"error": null}` page threw a
+        // `TypeError` — and `{"error": "bad gateway"}` an `Error` with no
+        // `code` — past every handler an admin caller wrote.
+        const envelope = errorEnvelopeOf(body);
+
+        if (envelope !== undefined) {
             const error = new Error(envelope.message ?? "admin request failed");
 
             (error as Error & { code?: string }).code = envelope.code;
             throw error;
         }
 
-        // A non-2xx response with a JSON body but no `error` envelope would
-        // otherwise be returned as a successful payload. Surface the HTTP status.
+        // A non-2xx response with a JSON body but no READABLE `error` envelope
+        // would otherwise be returned as a successful payload. Surface the HTTP
+        // status, exactly as §4.2 does for the RPC path.
         if (!response.ok) {
             const statusText = response.statusText ? ` ${response.statusText}` : "";
 
@@ -8381,7 +8414,7 @@ class LunoraClient {
             return await this.replayBatchedHalves(items, shardKey);
         }
 
-        let payload: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: RpcResponseBody; id?: number }[] };
+        let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] };
 
         const retryAfterHeader = response.headers.get("retry-after");
 
@@ -8396,12 +8429,17 @@ class LunoraClient {
 
         // Whole-batch rejection with no per-slot results: one outcome covering
         // every entry in the chunk — a coded `{ error }` the server sent, or the
-        // status of a non-2xx that carried no envelope.
+        // status of a non-2xx that carried no READABLE envelope. This is the
+        // sharpest edge of §4.2's rule: `settleWholeBatchError` below settles a
+        // codeless failure terminally, so a proxy's `{"error": "bad gateway"}`
+        // read as an envelope destroyed every durable write in the chunk, where
+        // the same reply classified by its 502 re-queues them.
         if (!payload.results) {
+            const whole = errorEnvelopeOf(payload);
             const error =
-                payload.error === undefined
+                whole === undefined
                     ? unparseableResponseError(response.status, response.statusText, retryAfterHeader)
-                    : reconstructErrorWithRetryAfter(payload.error, retryAfterHeader);
+                    : reconstructErrorWithRetryAfter(whole, retryAfterHeader);
 
             return this.settleWholeBatchError(items, error, shardKey);
         }
@@ -8462,14 +8500,18 @@ class LunoraClient {
      * against the echoed `commitCursor`; a coded application verdict is terminal;
      * a failure {@link shouldRequeueReplayFailure} keeps, or a slot the server
      * never returned, is returned for the caller to re-queue.
+     *
+     * A slot whose `error` key holds no readable envelope is in the same position
+     * as one the server never returned — nothing came back about that entry that
+     * can be read as a verdict — so it is kept, not settled.
      * @returns the writes that must be re-queued (kept slots), in input order
      */
     private settleReplayBatchSlots(
         items: QueuedMutation[],
-        results: { body?: RpcResponseBody; id?: number }[],
+        results: { body?: RpcEnvelopeBody; id?: number }[],
         shardKey: string | undefined,
     ): QueuedMutation[] {
-        const bySlot = new Map<number, RpcResponseBody>();
+        const bySlot = new Map<number, RpcEnvelopeBody>();
 
         for (const entry of results) {
             if (typeof entry.id === "number" && entry.body !== undefined) {
@@ -8487,7 +8529,7 @@ class LunoraClient {
                 // committed; retry under the same `mutationId` (idempotent).
                 requeue.push(item);
             } else if ("error" in inner) {
-                const error = reconstructError(inner.error);
+                const error = slotError(inner);
 
                 if (this.shouldRequeueReplayFailure(error)) {
                     this.noteReplayRetryDelay(shardKey, error);

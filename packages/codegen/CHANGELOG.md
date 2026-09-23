@@ -1,3 +1,60 @@
+## @lunora/codegen [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.198...@lunora/codegen@1.0.0-alpha.199) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `__lunora_admin__:deleteRows` and `__lunora_admin__:clearTable`
+remove rows physically on a `.softDelete()` table instead of tombstoning them.
+
+The suite missed this because the bulk harness' schema declared no
+`softDeleteMode`, so the tombstone branch was never reached. It now carries a
+`.softDelete()` table alongside the plain one, and the drain helper reports the
+batch count — a spinning drain and a capped one report the same outcome, so the
+round-trip count is what separates converged from spun.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** reach the source client, the shape thunk and hidden return types ([#781](https://github.com/anolilab/lunora/issues/781)) ([3014b0d](https://github.com/anolilab/lunora/commit/3014b0dbb9f8601d4a95d15c62ca6c1b23eef46e))
+* **do:** make the admin bulk delete converge on a soft-delete table ([#782](https://github.com/anolilab/lunora/issues/782)) ([d1fcf5f](https://github.com/anolilab/lunora/commit/d1fcf5f38677945df25d001fbb3f1a8081b0b8e5))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.153
+
+## @lunora/codegen [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.197...@lunora/codegen@1.0.0-alpha.198) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardRunner.runInTransaction` takes an optional second
+argument, and `ctx.vectors.upsert` no longer writes before the mutation commits.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** order post-commit write hooks by commit, and defer ctx.vectors.upsert ([#778](https://github.com/anolilab/lunora/issues/778)) ([b8b02ab](https://github.com/anolilab/lunora/commit/b8b02ab27d2d3266708dcff294230db26c811c3a))
+
+### Documentation
+
+* correct two claims describing APIs that do not exist ([#776](https://github.com/anolilab/lunora/issues/776)) ([e6fe8f0](https://github.com/anolilab/lunora/commit/e6fe8f0f30cc8e08812853362de7cffc91cc8cc8))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.144
+* **@lunora/agent:** upgraded to 1.0.0-alpha.124
+* **@lunora/do:** upgraded to 1.0.0-alpha.152
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+
 ## @lunora/codegen [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.196...@lunora/codegen@1.0.0-alpha.197) (2026-09-22)
 
 

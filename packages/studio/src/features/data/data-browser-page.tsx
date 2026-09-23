@@ -138,13 +138,20 @@ const DataBrowserViewControls = ({
                  * runs over the whole predicate. Both labels also say the delete
                  * cascades — these bulk paths never open the per-row cascade preview,
                  * so this is the only place the operator is told.
+                 *
+                 * And "Permanently", because these two paths are the ones that remove
+                 * rows PHYSICALLY: the server's bulk delete arm passes `hard: true`,
+                 * so a `.softDelete()` table is emptied rather than tombstoned. The
+                 * row editor's delete and the checkbox-selection delete go through
+                 * `writeRow`, which keeps the table's declared soft-delete behaviour —
+                 * which is exactly why only these two labels say it.
                  */}
                 {editable && total > 0 && hasPredicate && (
                     <ConfirmButton
                         confirmLabel={
                             totalKnown
-                                ? t("Delete {total} matching rows and everything that cascades?", { total: total.toString() })
-                                : t("Delete all matching rows and everything that cascades?")
+                                ? t("Permanently delete {total} matching rows and everything that cascades?", { total: total.toString() })
+                                : t("Permanently delete all matching rows and everything that cascades?")
                         }
                         onConfirm={onBulkDelete}
                         testId="db-bulk-delete"
@@ -174,8 +181,8 @@ const DataBrowserViewControls = ({
                     <ConfirmButton
                         confirmLabel={
                             totalKnown
-                                ? t("Clear all {total} rows and everything that cascades?", { total: total.toString() })
-                                : t("Clear every row and everything that cascades?")
+                                ? t("Permanently clear all {total} rows and everything that cascades?", { total: total.toString() })
+                                : t("Permanently clear every row and everything that cascades?")
                         }
                         onConfirm={onClearTable}
                         testId="db-clear-table"
