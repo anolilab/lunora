@@ -1,3 +1,13 @@
+## @lunora/do [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.153...@lunora/do@1.0.0-alpha.154) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
+### Tests
+
+* **do:** mark the seed fixture's shard key ([#785](https://github.com/anolilab/lunora/issues/785)) ([7d928f7](https://github.com/anolilab/lunora/commit/7d928f72daf82f8a2937c3a9a2784f7eb0b7d5d9))
+
 ## @lunora/do [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.152...@lunora/do@1.0.0-alpha.153) (2026-09-23)
 
 ### ⚠ BREAKING CHANGES
