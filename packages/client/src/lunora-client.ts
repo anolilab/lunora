@@ -529,6 +529,7 @@ interface ShardConnection {
      * and silently stale every live query bound to it forever.
      */
     lastFrameAt: number;
+
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
@@ -537,6 +538,26 @@ interface ShardConnection {
     readonly polling: PollingFallback;
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Set when {@link LunoraClient.bounceShardSockets} retires this
+     * connection's socket, and cleared when a new one is pinned in its place.
+     *
+     * `close()` returns before the `close` event fires, so for the rest of that
+     * turn `conn.socket` still points at the retired socket and the
+     * `conn.socket !== socket` guard every other late-frame check relies on
+     * does not hold. A frame the previous identity's socket had already put on
+     * the wire therefore reached `handleServerMessage` AFTER
+     * `evictPreviousIdentitySession` had blanked the subscriptions, refilled
+     * them and notified whoever was subscribed by then — the new user.
+     *
+     * Not `conn.identity !== identityFingerprint()`: that also fires on a plain
+     * sign-in from signed-out, which deliberately leaves the socket open (no
+     * previous identity to retire, and a reconnect on the most common auth
+     * transition there is), and would then drop every frame on a live socket
+     * nothing will ever replace.
+     */
+    retired?: boolean;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
@@ -1196,6 +1217,44 @@ class LunoraClient {
     private sessionProbesInFlight = 0;
 
     /**
+     * Monotonic id stamped on each `/get-session` round trip, so only the
+     * NEWEST one may write the shared identity.
+     *
+     * `adoptResolvedSubject`'s token check asks whether the credential the
+     * answer is about is still the one in hand. On a cookie app there is no
+     * credential to ask about: every probe captures `requestToken === null`, so
+     * two overlapping probes both pass it and whichever lands LAST wins —
+     * including an older one, which then replaces the subject a newer answer
+     * already established. Comparing the generation instead asks the question
+     * the token cannot: is this still the current question?
+     */
+    private sessionProbeGeneration = 0;
+
+    /**
+     * Whether anything resolves this client's identity at all.
+     *
+     * The gates need to tell an app with NO AUTH — whose `null` fingerprint is
+     * settled forever and shared with nobody — from a cookie app that simply
+     * has not asked yet. Nothing in the client's own configuration says which
+     * it is (`authBasePath` has a default), so the answer is declared: a
+     * `getCurrentUser()` call, or `@lunora/client/auth`'s identity store
+     * attaching itself, is what makes `null` provisional. An app that does
+     * neither keeps its read cache and its offline queue exactly as before.
+     */
+    private identityResolutionExpected = false;
+
+    /**
+     * Whether a `/get-session` round trip has ever produced an ANSWER — a user,
+     * or an explicit "no session". Distinct from `sessionProbesInFlight`, which
+     * only covers the request's own lifetime and so reopened the gates both
+     * before the first probe started and after one failed to answer, leaving a
+     * `null` fingerprint free to match the previous cookie user's cached rows
+     * and queued writes in exactly the window the probe count was added to
+     * close. A transport or parse failure never sets this: it learned nothing.
+     */
+    private identitySettled = false;
+
+    /**
      * Identity stamp recorded against each queued offline mutation, keyed by
      * the queue-assigned mutation id. Captured at enqueue from the auth token
      * in effect at the time, and re-checked at flush so a queued write can
@@ -1613,6 +1672,28 @@ class LunoraClient {
     }
 
     /**
+     * Declare that this client's identity is resolved by something — call it
+     * before the first `getCurrentUser()`, not after.
+     *
+     * `@lunora/client/auth`'s identity store calls this when it attaches, which
+     * is the moment an app becomes one that HAS auth. Until something says so,
+     * a `null` fingerprint is taken to be the settled, unshared identity of an
+     * app with no auth at all, because nothing else distinguishes the two: both
+     * hold no token, both have never been answered, and `authBasePath` has a
+     * default. That reading is right for the no-auth app and wrong for a cookie
+     * app whose first `/get-session` has not started — the window where
+     * `null === null` matched the PREVIOUS browser user's cached rows and
+     * queued writes, before any probe was in flight to mark the fingerprint
+     * provisional.
+     *
+     * Idempotent, and one-way: a client that resolves an identity keeps its
+     * gates armed until a probe actually answers.
+     */
+    public expectIdentityResolution(): void {
+        this.identityResolutionExpected = true;
+    }
+
+    /**
      * This client's current CDC baseline for `shardKey` — the cursor its live
      * queries have reached, which is what a write composed right now should be
      * judged against.
@@ -1834,7 +1915,16 @@ class LunoraClient {
      * user switch and discarded the user's own queued writes and read cache.
      */
     public async getCurrentUser(): Promise<User | null> {
+        // Asking IS the declaration that this client resolves an identity — see
+        // `identityResolutionExpected`. Recorded before the early return so a
+        // client that cannot ask is not mistaken for one that never would.
+        this.identityResolutionExpected = true;
+
         if (this.closed || !this.fetchImpl) {
+            // No transport to ask over, and none is coming: this is as settled
+            // as the answer gets, so the gates must not hold on it forever.
+            this.identitySettled = true;
+
             // eslint-disable-next-line unicorn/no-null -- signed-out / unavailable sentinel matches the User | null contract
             return null;
         }
@@ -1853,6 +1943,9 @@ class LunoraClient {
         // `finally` so a rejection (offline) reopens the gates too: an endpoint
         // that cannot be reached is never going to name anyone.
         this.sessionProbesInFlight += 1;
+        this.sessionProbeGeneration += 1;
+
+        const requestGeneration = this.sessionProbeGeneration;
 
         try {
             // Deliberately un-caught: a rejection here means the endpoint was
@@ -1865,6 +1958,9 @@ class LunoraClient {
             });
 
             if (!response.ok) {
+                // A response, and therefore an answer — see `identitySettled`.
+                this.identitySettled = true;
+
                 // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
                 return null;
             }
@@ -1875,7 +1971,11 @@ class LunoraClient {
             // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
             const user = body?.user ?? null;
 
-            this.adoptResolvedSubject(requestToken, user);
+            // The body parsed into a verdict: either a named user, or the
+            // server saying there is no session. Both settle the fingerprint.
+            this.identitySettled = true;
+
+            this.adoptResolvedSubject(requestToken, user, requestGeneration);
 
             return user;
         } finally {
@@ -6186,8 +6286,11 @@ class LunoraClient {
         // `ShardConnection.identity`. Captured here (not at frame time) because
         // the credential in the upgrade URL is what the server authenticates,
         // and it can't change for the life of the socket.
-        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         conn.identity = this.identityFingerprint();
+        // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
+        conn.retired = false;
+        /* eslint-enable no-param-reassign */
 
         this.openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.connectTimeoutMs, {
             onClose: (event) => {
@@ -6204,6 +6307,14 @@ class LunoraClient {
                 this.handleDisconnect(conn);
             },
             onMessage: (event) => {
+                // A frame from a socket an identity change already retired —
+                // see `ShardConnection.retired`. Delivering it would put the
+                // previous identity's rows back into the subscriptions the
+                // eviction just cleared, under the new identity's subscribers.
+                if (conn.retired === true) {
+                    return;
+                }
+
                 this.handleServerMessage(event.data, shardKey);
             },
             onOpen: () => {
@@ -7495,7 +7606,7 @@ class LunoraClient {
     private releaseSessionProbe(): void {
         this.sessionProbesInFlight -= 1;
 
-        if (this.sessionProbesInFlight > 0 || this.identityFingerprint() !== null) {
+        if (this.identityUnresolved() || this.identityFingerprint() !== null) {
             return;
         }
 
@@ -7511,7 +7622,17 @@ class LunoraClient {
      * to treat `null` as an identity rather than as an absence of one.
      */
     private identityUnresolved(): boolean {
-        return this.sessionProbesInFlight > 0;
+        if (this.sessionProbesInFlight > 0) {
+            return true;
+        }
+
+        // Outside the request itself the question is settlement, not traffic: a
+        // client that resolves an identity but has not been ANSWERED yet holds
+        // a `null` that may still become `subj:<id>` — before its first probe
+        // starts, and after one failed to answer. A client that resolves no
+        // identity at all never enters this branch, so its `null` stays the
+        // stable, unshared identity it has always been.
+        return this.identityResolutionExpected && !this.identitySettled;
     }
 
     /**
@@ -7523,9 +7644,15 @@ class LunoraClient {
      * signed in, and a token that rotated mid-flight belongs to a session this
      * answer predates — both leave the established label alone rather than
      * clearing it (which would look like an identity change and drop the queue).
+     *
+     * A superseded probe is the same case, and the one the token check cannot
+     * see: on a cookie app both `requestToken`s are `null`, so a slow answer
+     * from an OLDER probe passed that check and overwrote the subject a newer
+     * one had already established. `requestGeneration` is the question's id —
+     * it must still be the current one at the moment of the write.
      */
-    private adoptResolvedSubject(requestToken: string | null, user: User | null): void {
-        if (this.closed || user === null || this.authToken !== requestToken) {
+    private adoptResolvedSubject(requestToken: string | null, user: User | null, requestGeneration: number): void {
+        if (this.closed || user === null || this.authToken !== requestToken || requestGeneration !== this.sessionProbeGeneration) {
             return;
         }
 
@@ -7743,6 +7870,21 @@ class LunoraClient {
             notifySubscription(state, foldOptimistic(undefined, state.optimisticLayers));
         }
 
+        // Shapes are the same rows by another protocol, and were left untouched
+        // here: their `rows` map kept the previous user's membership (which
+        // every shape callback goes on exposing) and their `serverCursor` /
+        // `serverEpoch` kept that user's checkpoint, so the reconnect resumed
+        // from it under the NEW identity — asking the server for the diff since
+        // a cursor this view was never at, and splicing it onto rows that are
+        // not this user's. Cleared, so the resubscribe below is a cold one and
+        // the server re-seeds the membership the new identity can actually see.
+        for (const shapeState of this.shapeSubscriptions.values()) {
+            shapeState.rows.clear();
+            shapeState.serverCursor = undefined;
+            shapeState.serverEpoch = undefined;
+            this.emitShapeRows(shapeState);
+        }
+
         this.bounceShardSockets();
     }
 
@@ -7792,6 +7934,11 @@ class LunoraClient {
     private bounceShardSockets(): void {
         for (const conn of this.connections.values()) {
             if (conn.socket) {
+                // Retired as of now, not as of the `close` event — the gap
+                // between the two is where an already-queued frame lands with
+                // `conn.socket` still pointing here. See `ShardConnection.retired`.
+                conn.retired = true;
+
                 try {
                     conn.socket.close();
                 } catch {

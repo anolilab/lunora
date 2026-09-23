@@ -406,6 +406,7 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    expectIdentityResolution(): void;
     currentBaseline(shardKey?: string): number | undefined;
     replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;

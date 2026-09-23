@@ -108,10 +108,18 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     // also the value the first hydration render agrees with.
     let status: AuthStatus = "loading";
     let started = false;
-    // Whether the server has answered at least once for this store. Until it
+    // Whether the server has ANSWERED at least once for this store. Until it
     // has, a null token is not evidence of anything (a cookie session holds no
     // token here); after it has, a cleared token is a sign-out and reflects
     // without a round trip.
+    //
+    // Set only where an answer lands, never where one is asked for: a probe
+    // that rejects (the endpoint was unreachable) learned nothing, and marking
+    // it answered turned the next `refresh` — the one the reconnect fires to
+    // recover from `unreachable` — into an instant `unauthenticated` off the
+    // absent bearer token, with no second request ever made. A cookie session
+    // whose first `/get-session` missed stayed signed out for the life of the
+    // page, `identityFingerprint()` null with it.
     let answered = false;
 
     const notify = (): void => {
@@ -135,9 +143,6 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     const refresh = (): void => {
         generation += 1;
         const current = generation;
-        const hadAnswer = answered;
-
-        answered = true;
 
         // A cleared token short-circuits to signed-out without a round-trip so
         // sign-out is reflected immediately — but only ONCE the server has
@@ -145,7 +150,7 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
         // because a cookie session (better-auth's default) holds no token here
         // and would otherwise be reported signed out for the whole session,
         // leaving `identityFingerprint()` null for every user of the app.
-        if (client.getAuthToken() === null && hadAnswer) {
+        if (client.getAuthToken() === null && answered) {
             // eslint-disable-next-line unicorn/no-null -- signed-out sentinel
             setState("unauthenticated", null);
 
@@ -161,6 +166,10 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
             .getCurrentUser()
             .then((next) => {
                 if (current === generation) {
+                    // The server answered, and this is still the current
+                    // question — the only place a cleared token earns the right
+                    // to short-circuit a later resolve.
+                    answered = true;
                     setState(next === null ? "unauthenticated" : "authenticated", next);
                 }
 
@@ -179,6 +188,13 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
                 }
             });
     };
+
+    // This app has auth, as of now. Declared at ATTACH rather than at the first
+    // resolve: `refresh` waits for a subscriber, and a `useQuery` that mounts
+    // ahead of the auth gate (or `hydrateOnStart`'s reseed) runs in between —
+    // with the client otherwise unable to tell this from an app that has no
+    // auth at all and whose `null` identity really is its own.
+    client.expectIdentityResolution();
 
     // Refetch identity whenever the token changes (sign-in / sign-out / rotate).
     // Registered once for the store's lifetime, independent of UI framework subscribers.

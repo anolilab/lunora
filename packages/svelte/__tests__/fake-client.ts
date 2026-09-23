@@ -124,6 +124,9 @@ const createFakeClient = (): FakeClient => {
 
     const fake = {
         currentIdentity: (): string | null => authSubject ?? authToken,
+        // The identity store declares itself on attach; the fake has nothing
+        // to gate, so this only has to exist.
+        expectIdentityResolution: (): void => undefined,
         getAuthToken: (): string | null => authToken,
         onAuthTokenChange: (listener: (token: string | null) => void): Unsubscribe => {
             authTokenListeners.add(listener);

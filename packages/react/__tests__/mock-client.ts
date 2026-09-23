@@ -157,6 +157,9 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
         currentIdentity: currentIdentityFunction,
+        // The identity store declares itself on attach; this mock has no gates
+        // to arm, so it only has to exist.
+        expectIdentityResolution: () => undefined,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,
