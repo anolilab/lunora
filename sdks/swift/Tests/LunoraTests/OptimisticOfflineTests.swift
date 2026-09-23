@@ -894,6 +894,11 @@ extension ConformanceTests {
     func caseOfflineFlushBatchesMultipleWrites() throws {
         let testCase = try scenario("offlineQueue", "batchReplay")
         let slots = testCase["slots"] as? [[String: Any]] ?? []
+        // A slot the fixture no longer describes is a case that asserts nothing.
+        let unreadable = slots.filter { $0["outcome"] as? String == "unreadable-error" && $0.keys.contains("rawError") }
+
+        XCTAssertEqual(unreadable.count, 1, "batchReplay must carry one unreadable slot")
+
         var urls: [String] = []
         var calls: [[String: Any]] = []
         let store = MemoryPersistence()
@@ -910,6 +915,21 @@ extension ConformanceTests {
                         let cursor = (slot["commitCursor"] as? NSNumber)?.intValue ?? 0
 
                         return "{\"id\":\(id),\"body\":{\"commitCursor\":\(cursor),\"result\":null}}"
+                    }
+
+                    if slot["outcome"] as? String == "unreadable-error" {
+                        // An `error` key holding a NON-object: no envelope to
+                        // read a verdict out of, and no per-slot HTTP status to
+                        // fall back on. Serialised from the fixture's own value,
+                        // so a port cannot pass by answering itself a shape the
+                        // spec does not describe.
+                        let raw =
+                            (try? JSONSerialization.data(
+                                withJSONObject: [slot["rawError"] ?? NSNull()]
+                            )) ?? Data("[null]".utf8)
+                        let inner = String(String(decoding: raw, as: UTF8.self).dropFirst().dropLast())
+
+                        return "{\"id\":\(id),\"body\":{\"error\":\(inner)}}"
                     }
 
                     let code = slot["code"] as? String ?? "INTERNAL"

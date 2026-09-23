@@ -881,7 +881,19 @@ impl Client {
                 }
             }
             "complete" => {
-                self.subscriptions.remove(&id);
+                // NON-DESTRUCTIVE, and that is the whole point: removing the
+                // entry takes it out of the map `resend_subscriptions` walks,
+                // so the query froze for the life of the process across every
+                // future reconnect — and, because removing it also dropped the
+                // stream's `Sender`, a consumer saw a bare `RecvError` rather
+                // than a coded cancellation. Fan one to the listener and leave
+                // the registration in place; the next reconnect resubscribes it.
+                if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
+                    handler(&SubscriptionError {
+                        code: Some("SUBSCRIPTION_CANCELLED".to_string()),
+                        message: "subscription was cancelled by the server".to_string(),
+                    });
+                }
             }
             "pokeStart" => {
                 if let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) {

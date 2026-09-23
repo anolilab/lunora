@@ -762,6 +762,18 @@ public final class Submit {
                 continue;
             }
 
+            if (slot.containsKey("error") && !(slot.get("error") instanceof Map<?, ?>)) {
+                // An `error` key holding a string, a null, an array or a number is no envelope
+                // (§4.2), and a slot carries no HTTP status of its own to classify it by — so
+                // nothing readable came back about this entry, which is exactly the position of a
+                // slot the server never returned. §4.3 retries that one. Falling through to the
+                // commit branch below settled a durable write COMMITTED with a null result and
+                // un-persisted it.
+                requeue.add(item);
+
+                continue;
+            }
+
             if (slot.get("error") instanceof Map<?, ?> envelope) {
                 ApiException error = batchSlotError(envelope, "request failed");
 

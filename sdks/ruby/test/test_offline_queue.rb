@@ -632,7 +632,12 @@ class TestFlushIntegration < Minitest::Test
   # and each slot is classified exactly as a whole single-call response is.
   def test_two_or_more_writes_coalesce_into_one_batch_round_trip
     ConformanceManifest.covers("offline_flush_batches_multiple_writes")
+    ConformanceManifest.covers("offline_flush_unreadable_slot_is_retried")
     case_data = queue_case("batchReplay")
+    # A slot the fixture no longer describes is a case that asserts nothing.
+    unreadable = case_data["slots"].count { |slot| slot["outcome"] == "unreadable-error" && slot.key?("rawError") }
+
+    assert_equal 1, unreadable, "batchReplay must carry one unreadable slot"
     urls = []
     calls = []
     confirmed = []
@@ -645,8 +650,15 @@ class TestFlushIntegration < Minitest::Test
         calls.concat(JSON.parse(body)["calls"])
 
         slots = case_data["slots"].map do |slot|
-          if slot["outcome"] == "ok"
+          case slot["outcome"]
+          when "ok"
             { "id" => slot["id"], "body" => { "commitCursor" => slot["commitCursor"], "result" => nil } }
+          when "unreadable-error"
+            # An +error+ key holding a NON-object: no envelope to read a verdict
+            # out of, and no per-slot HTTP status to fall back on. Verbatim from
+            # the fixture, so a port cannot pass by answering itself a shape the
+            # spec does not describe.
+            { "id" => slot["id"], "body" => { "error" => slot["rawError"] } }
           else
             { "id" => slot["id"], "body" => { "error" => { "code" => slot["code"], "message" => "slot failed" } } }
           end

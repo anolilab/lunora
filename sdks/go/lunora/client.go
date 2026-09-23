@@ -1040,9 +1040,14 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 		return kind, nil
 	case "complete":
-		c.mu.Lock()
-		delete(c.subscriptions, id)
-		c.mu.Unlock()
+		// NON-DESTRUCTIVE, and that is the whole point: deleting the entry takes
+		// it out of the map ResendSubscriptions walks, so the query froze for
+		// the life of the process across every future reconnect, with nothing
+		// reported. Fan a cancellation to the listener and leave the
+		// registration in place; the next reconnect resubscribes it.
+		if entry != nil && entry.onError != nil {
+			entry.onError(SubscriptionError{Code: "SUBSCRIPTION_CANCELLED", Message: "subscription was cancelled by the server"})
+		}
 
 		return kind, nil
 	case "pokeStart":

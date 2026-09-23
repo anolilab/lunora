@@ -434,12 +434,16 @@ private fun clientFrameBuilders() {
 
 private fun serverFrameConsumer() {
     covers("server_frame_consumer")
+    covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    var cancellations = 0
 
     for (entry in fixture("ws-frames.json")["serverFrames"] as List<*>) {
         val testCase = entry as Map<*, *>
         val client = Client("https://app.example")
+        val sent = mutableListOf<Map<String, Any?>>()
 
-        client.attachSocket { }
+        client.attachSocket { sent.add(it) }
 
         val seen = mutableListOf<WireValue>()
         val errors = mutableListOf<SubscriptionError>()
@@ -450,6 +454,7 @@ private fun serverFrameConsumer() {
             { seen.add(it) },
             { errors.add(it) },
         )
+        sent.clear()
 
         val kind = client.handleFrame(Json.write(testCase["frame"]))
         val expect = testCase["expect"] as Map<*, *>
@@ -465,7 +470,26 @@ private fun serverFrameConsumer() {
             check(errors.size == 1, "onError should fire once")
             check(errors[0].code == expect["code"], "error code")
         }
+
+        // Cancelled AND kept. Removing the entry takes it out of the map
+        // `resendSubscriptions` walks, which froze the query across every future
+        // reconnect with nothing reported.
+        if (expect["resendsAfterReconnect"] == true) {
+            cancellations++
+            check(errors.size == 1, "a complete frame cancels once")
+            check(errors[0].code == expect["code"], "cancellation code")
+            check(errors[0].message == expect["message"], "cancellation message")
+            client.resendSubscriptions()
+            check(
+                sent.filter { it["type"] == "subscribe" }.map { it["id"] } == listOf(expect["id"]),
+                "the cancelled subscription is resent on reconnect",
+            )
+        }
     }
+
+    // A conditional assertion that never runs is worse than none: without this,
+    // renaming the fixture key would leave every suite green.
+    check(cancellations == 1, "serverFrames must carry one cancelling case")
 }
 
 /**

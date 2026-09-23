@@ -525,6 +525,19 @@ Run `pageDeltaFrames` only once you announce the token.
 | `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
 | `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
 
+A `complete` naming a live SUBSCRIPTION is a cancellation, NOT a de-registration:
+a client MUST report it to that subscription's error listener (the reference and
+all eight `sdks/*` ports use the code `SUBSCRIPTION_CANCELLED`) and MUST KEEP the
+registration, so the next reconnect resubscribes it under §5.1's resume rules.
+Dropping the state instead takes it out of the set the resubscribe loop walks,
+which freezes the query for the life of the process across every future
+reconnect — and reports nothing, because the listener was dropped with it. Today
+only `stream_*` ids receive this frame, so the two id spaces do not overlap and a
+stream's own completion is unaffected; the rule is what makes a
+user-subclassed shard, or a future server that sends it for a `sub_*` id, safe.
+`serverFrames`'s `complete` case in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins both halves.
+
 ### 5.3 Shape poke protocol (partial replication)
 
 A poke is an atomically-applied batch of shape diffs:

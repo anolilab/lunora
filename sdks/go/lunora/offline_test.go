@@ -830,9 +830,23 @@ func TestFlushReplaysInOrderAndConfirmsOptimistic(t *testing.T) {
 // classified exactly as a whole single-call response would be.
 func TestFlushBatchesTwoOrMoreWrites(t *testing.T) {
 	covers("offline_flush_batches_multiple_writes")
+	covers("offline_flush_unreadable_slot_is_retried")
 
 	scenario := fixtureScenario(t, "offlineQueue", "batchReplay")
 	slots, _ := scenario["slots"].([]any)
+	unreadable := 0
+
+	// A slot the fixture no longer describes is a case that asserts nothing.
+	for _, raw := range slots {
+		slot, _ := raw.(map[string]any)
+		if _, present := slot["rawError"]; present && slot["outcome"] == "unreadable-error" {
+			unreadable++
+		}
+	}
+
+	if unreadable != 1 {
+		t.Fatalf("batchReplay carried %d unreadable slots, want 1", unreadable)
+	}
 
 	var (
 		urls  []string
@@ -861,6 +875,21 @@ func TestFlushBatchesTwoOrMoreWrites(t *testing.T) {
 			if slot["outcome"] == "ok" {
 				cursor, _ := slot["commitCursor"].(float64)
 				answers = append(answers, fmt.Sprintf(`{"id":%d,"body":{"commitCursor":%d,"result":null}}`, int(id), int64(cursor)))
+
+				continue
+			}
+
+			if slot["outcome"] == "unreadable-error" {
+				// An `error` key holding a NON-object: no envelope to read a
+				// verdict out of, and no per-slot HTTP status to fall back on.
+				// Sent verbatim from the fixture, so a port cannot pass by
+				// answering itself a shape the spec does not describe.
+				raw, err := json.Marshal(slot["rawError"])
+				if err != nil {
+					return 0, nil, err
+				}
+
+				answers = append(answers, fmt.Sprintf(`{"id":%d,"body":{"error":%s}}`, int(id), raw))
 
 				continue
 			}

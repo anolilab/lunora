@@ -761,7 +761,17 @@ class Client(
 
                 for (handler in handlers) handler(error)
             }
-            "complete" -> synchronized(lock) { subscriptions.remove(id) }
+            "complete" -> {
+                // NON-DESTRUCTIVE, and that is the whole point: removing the
+                // entry takes it out of the map `resendSubscriptions` walks, so
+                // the query froze for the life of the process across every
+                // future reconnect, with nothing reported. Fan a cancellation to
+                // the listener and leave the registration in place; the next
+                // reconnect resubscribes it.
+                val cancelled = synchronized(lock) { subscriptions[id]?.onError }
+
+                cancelled?.invoke(SubscriptionError("SUBSCRIPTION_CANCELLED", "subscription was cancelled by the server"))
+            }
             "pokeStart" -> synchronized(lock) {
                 // Evict oldest-first at the cap. A LinkedHashMap iterates in
                 // insertion order, so the first key is the oldest buffer; one

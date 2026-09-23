@@ -685,7 +685,21 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 			continue
 		}
 
-		if envelope, failed := payload["error"].(map[string]any); failed {
+		if raw, present := payload["error"]; present {
+			envelope, isObject := raw.(map[string]any)
+			if !isObject {
+				// An `error` key holding a string, a null, an array or a number
+				// is no envelope (protocol/README.md 4.2), and a slot carries no
+				// HTTP status of its own to classify it by — so nothing readable
+				// came back about this entry, which is exactly the position of a
+				// slot the server never returned. 4.3 retries that one. Falling
+				// through to the commit branch below settled a durable write
+				// COMMITTED with a null result and un-persisted it.
+				requeue = append(requeue, item)
+
+				continue
+			}
+
 			slotError := batchSlotError(envelope, "request failed")
 
 			// The SAME predicate the whole-batch and single-call paths use, not a

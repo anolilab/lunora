@@ -883,9 +883,24 @@ public final class LunoraClient {
 
             return kind
         case "complete":
-            withLock {
-                if let id { subscriptions.removeValue(forKey: id) }
+            // NON-DESTRUCTIVE, and that is the whole point: removing the entry
+            // takes it out of the dictionary `resendSubscriptions` walks, so
+            // the query froze for the life of the process across every future
+            // reconnect, with nothing reported. Fan a cancellation to the
+            // listener and leave the registration in place; the next reconnect
+            // resubscribes it.
+            let cancelled = withLock { () -> ((LunoraSubscriptionError) -> Void)? in
+                guard let id else { return nil }
+
+                return subscriptions[id]?.onError
             }
+
+            cancelled?(
+                LunoraSubscriptionError(
+                    code: "SUBSCRIPTION_CANCELLED",
+                    message: "subscription was cancelled by the server"
+                )
+            )
 
             return kind
         case "pokeStart":

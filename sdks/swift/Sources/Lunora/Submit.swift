@@ -625,6 +625,19 @@ extension LunoraClient {
                 continue
             }
 
+            if slot.keys.contains("error"), slot["error"] as? [String: Any] == nil {
+                // An `error` key holding a string, a null, an array or a number
+                // is no envelope (§4.2), and a slot carries no HTTP status of
+                // its own to classify it by — so nothing readable came back
+                // about this entry, which is exactly the position of a slot the
+                // server never returned. §4.3 retries that one. Falling through
+                // to the commit branch below settled a durable write COMMITTED
+                // with a null result and un-persisted it.
+                requeue.append(entry)
+
+                continue
+            }
+
             if let envelope = slot["error"] as? [String: Any] {
                 let error = LunoraClient.batchSlotError(envelope, fallback: "request failed")
 

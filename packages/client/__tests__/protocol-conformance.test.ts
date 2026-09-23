@@ -450,7 +450,7 @@ const makeWsClient = (): LunoraClient =>
 interface WsServerCase {
     /** Cached value the frame is applied ON TOP of; absent means the frame replaces wholesale. */
     baseWire?: unknown;
-    expect: { code?: string; kind: string; message?: string; valueWire?: unknown };
+    expect: { code?: string; kind: string; message?: string; resendsAfterReconnect?: boolean; valueWire?: unknown };
     frame: Record<string, unknown>;
     name: string;
 }
@@ -574,6 +574,50 @@ describe("ws-frames fixtures", () => {
         expect(errors).toHaveLength(1);
         expect(errors[0]?.code).toBe(testCase.expect.code);
         expect(errors[0]?.message).toBe(testCase.expect.message);
+    });
+
+    const cancellingFrames = ws.serverFrames.filter((testCase) => testCase.expect.resendsAfterReconnect === true);
+
+    // `complete` addressed to a live SUBSCRIPTION cancels it WITHOUT dropping
+    // the registration — the eight ports removed it, and that takes the state
+    // out of the set the reconnect resubscribe loop walks, so the query froze
+    // for the life of the process. The fixture pins both halves; this is the
+    // reference held to the same file rather than to a rule restated beside it.
+    it.each(
+        table(
+            "ws cancelling frames",
+            cancellingFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("cancels but keeps the subscription on frame %s", (_name, testCase) => {
+        expect.hasAssertions();
+
+        // A conditional case that never runs is worse than none: without this,
+        // renaming the fixture key would leave the suite green.
+        expect(cancellingFrames).toHaveLength(1);
+
+        const client = makeWsClient();
+        const errors: { code?: string; message: string }[] = [];
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, () => undefined, {
+            onError: (error) => errors.push(error),
+        });
+        latestSocket().open();
+        latestSocket().receive(testCase.frame);
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.code).toBe(testCase.expect.code);
+        expect(errors[0]?.message).toBe(testCase.expect.message);
+
+        // Still registered: the resubscribe loop runs on `open`, so driving it
+        // again is the reconnect this frame must survive.
+        const socket = latestSocket();
+
+        socket.sent.length = 0;
+        socket.open();
+
+        const resubscribed = socket.sent.map((raw) => JSON.parse(raw) as { id?: string; type?: string }).filter((frame) => frame.type === "subscribe");
+
+        expect(resubscribed.map((frame) => frame.id)).toStrictEqual([testCase.frame["id"]]);
     });
 
     it("delivers a subscription's frame values in order", () => {
