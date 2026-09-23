@@ -26,6 +26,24 @@ const physicalColumn = (field: string): string => (field === "_id" || field === 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
 
+/**
+ * Table-qualified twin of {@link columnRefSql}, for the one thing an unqualified
+ * reference cannot do: **fail** when the column is absent.
+ *
+ * workerd and D1 build SQLite with the double-quoted-string misfeature enabled,
+ * so a bare `"slug"` that resolves to no column is silently reinterpreted as the
+ * string literal `'slug'` and the statement succeeds. Any probe that reads a
+ * throw as "missing" therefore answers "present" for every database on the
+ * runtime this store actually ships to. A qualified name has no string-literal
+ * reading, so `"t"."slug"` raises `no such column: t.slug` on workerd, D1 and
+ * `node:sqlite` alike.
+ *
+ * Only for references against a table the caller has aliased
+ * (`FROM "x" AS "t"`); every other site keeps {@link columnRefSql}, whose
+ * statements name no alias to qualify with.
+ */
+const qualifiedColumnRefSql = (alias: string, field: string): SQL => sql`${sql.identifier(alias)}.${sql.identifier(physicalColumn(field))}`;
+
 /** A table's fields paired with their column meta, skipping fields that declare none. */
 const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
     const columns: [string, ColumnMetaLike][] = [];
@@ -420,6 +438,7 @@ export {
     decodeRows,
     forEachRowPaged,
     physicalColumn,
+    qualifiedColumnRefSql,
     queryAll,
     queryBatch,
     queryRun,
