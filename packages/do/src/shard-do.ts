@@ -253,6 +253,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -315,6 +316,7 @@ import {
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
+    parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
     parseSeverityArgument,
@@ -836,6 +838,15 @@ interface RequestScope {
     ip: string | undefined;
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
+
+    /**
+     * The propagated tail-bias toggle, travelling with `traceparent` below for
+     * the same reason and with the same hazard: `buildCtx` hands both to
+     * `createContainerContext`, so a guest dispatch that re-pinned one but not
+     * the other would send a parked request's verdict to the container.
+     */
+    sampleErrors: boolean | undefined;
+
     system: boolean;
 
     /**
@@ -1386,6 +1397,28 @@ const WIDE_EVENT_NAME = "lunora.dispatch";
  */
 const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
 
+/** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` tally, and the sink they go to. */
+interface DispatchSpanEntry {
+    collector?: SpanCollector;
+    dbTally?: DatabaseTally;
+    sink?: TelemetrySink;
+}
+
+/**
+ * Whether a finished dispatch produced anything the synthetic root span would
+ * carry — so the caller can skip minting a bar for a dispatch that recorded
+ * nothing rather than filling the bounded ring with empty traces.
+ *
+ * A wide event counts: it is the span its attributes live on, so skipping the
+ * span would discard everything the handler attached. **So does a non-empty
+ * `ctx.db` tally** — `instrumentDatabase: "summary"` exists to answer "was this
+ * request database-bound", and a handler that only reads `ctx.db` (the common
+ * shape) has no other way to say so. Counting it here is what makes those
+ * counters reach a reader instead of being tallied on the hot path and dropped.
+ */
+const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
+    entry !== undefined && (entry.collector !== undefined || (entry.dbTally?.calls ?? 0) > 0);
+
 /**
  * Base class for shard Durable Objects.
  *
@@ -1812,6 +1845,9 @@ abstract class ShardDO {
      */
     private currentRequestBaselineSeq: number | undefined;
 
+    /** The runtime's propagated tail-bias toggle (`x-lunora-sample-errors`); `undefined` when none was sent. */
+    private currentRequestSampleErrors: boolean | undefined;
+
     /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
     private currentRequestTraceparent: string | undefined;
 
@@ -1884,7 +1920,7 @@ abstract class ShardDO {
      * subscription re-run) mints its own anchor and has no such boundary, so the
      * map is FIFO-capped rather than trusted to drain.
      */
-    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: DatabaseTally; sink?: TelemetrySink }>();
+    private dispatchSpans = new Map<string, DispatchSpanEntry>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -3381,6 +3417,21 @@ abstract class ShardDO {
      */
     protected getCurrentTraceparent(): string | undefined {
         return this.currentRequestTraceparent;
+    }
+
+    /**
+     * The tail-bias toggle the runtime propagated for this dispatch
+     * (`x-lunora-sample-errors`), or `undefined` when none was sent.
+     *
+     * `buildCtx` hands it to `createContainerContext` alongside the
+     * `traceparent`, so a container decides what to export from the verdict this
+     * dispatch settled rather than from its own environment. `undefined` leaves
+     * the container on its own configuration, which is right for the callers
+     * that propagate nothing: an alarm, a subscription re-run, a non-Lunora
+     * caller.
+     */
+    protected getCurrentSampleErrors(): boolean | undefined {
+        return this.currentRequestSampleErrors;
     }
 
     /**
@@ -6092,9 +6143,11 @@ abstract class ShardDO {
             },
             shardKey: this.runner.shardKey,
             // Parked on the dispatch entry rather than written through `ctx.span`:
-            // the counters enrich a root span that is being recorded anyway, but
-            // must never be the reason one gets recorded. Read once in
-            // `recordDispatchRootSpan`, so a query pays only integer increments.
+            // a query pays only integer increments, and the tally is read ONCE in
+            // `recordDispatchRootSpan`. A non-empty tally IS reason enough to
+            // record that root span (see `hasRootSpanContent`) — otherwise the
+            // counters were computed on the hot path of every db-touching
+            // dispatch and discarded, which is the common shape.
             tally: this.dispatchTally(anchor),
             userId: () => this.getCurrentUserId(),
         });
@@ -7063,13 +7116,10 @@ abstract class ShardDO {
             return this.errorToResponse(error);
         } finally {
             // Guard hoisted to the call site so the common case — a handler that
-            // touched neither `ctx.trace` nor `ctx.span` — is visibly a no-op here.
-            // A wide event alone is reason enough to record the root span: it is
-            // the span the attributes live on, so skipping it would silently
-            // discard everything the handler attached.
+            // produced no telemetry at all — is visibly a no-op here.
             const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
 
-            if (this.spans.hasTrace(dispatchTrace.traceId) || dispatchSpan?.collector !== undefined) {
+            if (this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
             }
 
@@ -7212,6 +7262,7 @@ abstract class ShardDO {
             ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
+            sampleErrors: this.currentRequestSampleErrors,
             system: this.currentRequestSystem,
             traceparent: this.currentRequestTraceparent,
             userId: this.currentRequestUserId,
@@ -7236,6 +7287,7 @@ abstract class ShardDO {
         this.currentRequestIp = scope.ip;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
+        this.currentRequestSampleErrors = scope.sampleErrors;
         this.currentRequestSystem = scope.system;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
@@ -7312,7 +7364,7 @@ abstract class ShardDO {
             // Only when the trigger actually produced telemetry — an idle alarm
             // that did nothing should not mint a bar in the studio waterfall and
             // evict a real trace from the bounded ring.
-            if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(dispatchSpanKey(anchor))?.collector !== undefined) {
+            if (this.spans.hasTrace(anchor.traceId) || hasRootSpanContent(this.dispatchSpans.get(dispatchSpanKey(anchor)))) {
                 this.recordDispatchRootSpan(name, startedAt, failure, anchor);
             }
 
@@ -7363,13 +7415,16 @@ abstract class ShardDO {
         // (see `currentStmtSamples`) hit its distinct-statement cap, so the
         // query-metrics leaderboard's contribution from this dispatch is partial.
         const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
-        const collected =
-            wide?.collector === undefined
-                ? undefined
-                : {
-                      ...wide.collector.collected,
-                      attributes: { ...databaseAttributes, ...stmtSamplesAttributes, ...wide.collector.collected.attributes },
-                  };
+        const attributes = { ...databaseAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
+        // Built whenever there is anything to carry, not only when the handler
+        // opened a `ctx.span` — the auto-instrumentation counters are attributes
+        // in their own right, and gating them on the wide event's collector is
+        // what dropped them for every handler that only read `ctx.db`.
+        // With no `ctx.span` there are no `events`/`links` — those come from the
+        // wide-event collector alone — so an attribute-only collection is the
+        // whole of it, and an empty one is nothing worth carrying.
+        const withoutWideEvent = Object.keys(attributes).length === 0 ? undefined : { attributes, events: [], links: [] };
+        const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
         try {
             this.spans.push(
@@ -7505,7 +7560,7 @@ abstract class ShardDO {
                 return;
             }
 
-            this.emitSpan(span, sink);
+            this.emitSpan(span, sink, true);
 
             return;
         }
@@ -7523,7 +7578,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.emitSpan(span, sink);
+        this.emitSpan(span, sink, true);
     }
 
     /**
@@ -7533,13 +7588,19 @@ abstract class ShardDO {
      * {@link recordSpan} and the deferred error-keep flush in
      * {@link flushSampledOutTrace} share one guarded emit.
      */
-    private emitSpan(span: SpanEvent, sink: TelemetrySink): void {
+    private emitSpan(span: SpanEvent, sink: TelemetrySink, sampled: boolean): void {
         if (!sink.onSpan) {
             return;
         }
 
         try {
-            sink.onSpan(span, { waitUntil: this.shardHost.waitUntil });
+            // Stamp the verdict here, at the single funnel every exported span
+            // passes through, rather than on each of the three builders. The OTLP
+            // encoder writes it into the span's `flags`; a span shipped without
+            // one reads as UNSAMPLED at the collector. The two call sites are
+            // exactly the two states: streamed live (kept) and flushed by the
+            // tail bias (head-sampled out, rescued because the trace errored).
+            sink.onSpan({ ...span, sampled }, { waitUntil: this.shardHost.waitUntil });
         } catch {
             // A buggy span sink must not break the handler.
         }
@@ -7581,7 +7642,9 @@ abstract class ShardDO {
         }
 
         for (const span of held) {
-            this.emitSpan(span, sink);
+            // `false`: the head decision dropped this trace and only the tail
+            // bias is exporting it, which is exactly what the cleared flag says.
+            this.emitSpan(span, sink, false);
         }
     }
 
@@ -8941,6 +9004,7 @@ abstract class ShardDO {
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
+        this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
 
@@ -12095,6 +12159,13 @@ abstract class ShardDO {
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
+        // The runtime's tail-bias toggle, read ONCE here. Two consumers: the
+        // export gate below, and `buildCtx`, which forwards it to an outbound
+        // container so that tier is TOLD the verdict rather than falling back to
+        // its own configuration and agreeing by coincidence. `undefined` means
+        // no verdict was propagated (an alarm, a subscription re-run, a
+        // non-Lunora caller), which every tier reads as keep.
+        this.currentRequestSampleErrors = parseSampleErrorsHeader(request.headers.get(SAMPLE_ERRORS_HEADER));
         // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
@@ -12111,7 +12182,7 @@ abstract class ShardDO {
         // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
         // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
         this.traceSampling.set(dispatchTrace.traceId, {
-            keepErrors: request.headers.get("x-lunora-sample-errors") !== "0",
+            keepErrors: this.currentRequestSampleErrors ?? true,
             sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
         });
         this.metrics.requests += 1;
@@ -12167,6 +12238,7 @@ abstract class ShardDO {
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;
         this.currentRequestIp = undefined;
+        this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
         this.currentScannedTables = undefined;

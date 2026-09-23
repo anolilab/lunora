@@ -1390,6 +1390,27 @@ const parseBaselineSeqHeader = (raw: string | null): number | undefined => {
     return Number.isInteger(seq) && seq >= 0 ? seq : undefined;
 };
 
+/**
+ * Parse the runtime's `x-lunora-sample-errors` tail-bias toggle, or `undefined`
+ * when the header is absent.
+ *
+ * Absent and `"0"` are deliberately different answers, which is why this returns
+ * a tri-state rather than the `!== "0"` boolean the export gate wants. Absent
+ * means NO verdict was propagated — an alarm, a subscription re-run, a
+ * non-Lunora caller — and the shard forwards that absence to an outbound
+ * container so it stays on its own configuration. Collapsing absent to `true`
+ * here would instead TELL the container "the tail bias is on", overriding a
+ * container that was deliberately configured otherwise. The export gate applies
+ * its own `?? true` where keep-by-default is the right reading.
+ */
+const parseSampleErrorsHeader = (raw: string | null): boolean | undefined => {
+    if (raw === null) {
+        return undefined;
+    }
+
+    return raw !== "0";
+};
+
 const parseClientSeqHeader = (raw: string | null): number | undefined => {
     if (!raw) {
         return undefined;
@@ -1531,6 +1552,7 @@ export {
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
+    parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
     parseSeverityArgument,

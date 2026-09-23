@@ -3789,11 +3789,14 @@ const emitContainerFragments = (
 
     return {
         // Schema `.jurisdiction("…")` pins every container DO this shard reaches
-        // to the data-residency region (`undefined` when undeclared). The trailing
-        // `this.getCurrentTraceparent()` forwards the inbound RPC's W3C trace
-        // context onto outbound container fetches so their spans join the trace.
+        // to the data-residency region (`undefined` when undeclared). The two
+        // trailing arguments forward this dispatch's telemetry verdict onto
+        // outbound container fetches: `getCurrentTraceparent()` so the
+        // container's spans join the trace, and `getCurrentSampleErrors()` so it
+        // exports on the verdict the worker settled rather than on its own
+        // environment. Both are `undefined` outside a propagated dispatch.
         build: `
-            const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent());
+            const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent(), this.getCurrentSampleErrors());
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],

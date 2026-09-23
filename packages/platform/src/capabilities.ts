@@ -32,10 +32,11 @@
  * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
  * `vectorStore`, `workflows`.
  *
- * Every other key here — `httpCache`, `identityProxy`,
- * `localSql`, `memoryTables`, `objectStorageBackups`,
- * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
- * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is
+ * Every other key here — `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
+ * `objectStorageBackups`, `objectStorageCdcArchive`, `serverReactors`,
+ * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
+ * `websocketHibernation` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -47,6 +48,22 @@
  * its own (`httpCache` falls back to headers-only, `identityProxy` to header
  * verification). There is nothing an app declares for codegen to notice, so
  * there is nothing to gate. These stay ratings, permanently.
+ *
+ * The three telemetry keys — `edgeRequestMetadata`, `hostTraceFusion`,
+ * `logArchive` — are advisory by nature for a third reason worth naming, since
+ * it is not obvious: each is configured through a `createWorker` argument or an
+ * `ObservabilitySink` field (`trustInboundTraceContext`, `fuseCloudflareTraces`,
+ * `logArchive`), and codegen reads neither. There is no app-side DECLARATION to
+ * gate on, so promoting them would mean inventing one. Where that silence
+ * actually bites — `trustInboundTraceContext: "mtls"` collapsing to never-trust
+ * off Cloudflare — the runtime warns once instead, from the only tier that can
+ * observe it (`createDroppedTraceNotice` in `@lunora/runtime`).
+ *
+ * The rest of the telemetry pipeline — `ctx.log`, `ctx.trace`, `ctx.span`,
+ * `ctx.metrics`, traced `ctx.fetch`, and W3C trace propagation — deliberately
+ * has NO key: it is sink callbacks over the `fetch` global, needs no host
+ * primitive, and a key every target must rate `native` forever is paperwork, not
+ * a control.
  *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,
@@ -166,8 +183,54 @@ export interface PlatformCapabilities {
          * or second client resumes the same transcript.
          */
         durableStreams?: Capability;
+
+        /**
+         * Platform-injected PER-REQUEST metadata the runtime reads off the
+         * request object itself rather than a header — Cloudflare's `request.cf`.
+         *
+         * Two telemetry surfaces stand on it, and both degrade SILENTLY without
+         * it, which is why it is rated rather than assumed: the
+         * `trustInboundTraceContext: "mtls"` trust signal reads
+         * `cf.tlsClientAuth.certVerified` (absent ⇒ no caller is ever trusted, so
+         * every inbound `traceparent` is dropped), and the OTLP resource detector
+         * reads the colo/country placement attributes (absent ⇒ the spans carry
+         * no placement resource).
+         *
+         * What makes it a capability and not a header check is unforgeability:
+         * the platform sets it, so a caller cannot write it. A host that merely
+         * stamps a header carries no such proof and should rate this
+         * `unsupported`.
+         *
+         * Advisory by nature: both consumers are `createWorker` options, which
+         * codegen never sees, so there is no app-side declaration to gate on. The
+         * runtime warns once instead when a dropped trace proves the signal is
+         * undeliverable — see `createDroppedTraceNotice` in `@lunora/runtime`.
+         */
+        edgeRequestMetadata?: Capability;
+
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
+
+        /**
+         * Merging Lunora's spans into the HOST's own trace tree, so its native
+         * tracing shows one nested tree instead of two unrelated ones — the
+         * sink's `fuseCloudflareTraces` opt-in, which reaches `cloudflare:workers`'
+         * `tracing.enterSpan`.
+         *
+         * Rated because it is the one telemetry surface that reaches past
+         * `ShardHost` into a provider API. Everything else in the pipeline is
+         * engine-level (a sink callback), so it runs anywhere; this needs the
+         * host to HAVE a trace tree and to expose a way to enter a span in it.
+         *
+         * `unsupported` costs nothing: the feature is already capability-probed
+         * at runtime and no-ops where the import is unavailable. The rating is
+         * what makes that a stated fact rather than something a second host
+         * discovers.
+         *
+         * Advisory by nature: the flag lives on the sink object passed to
+         * `createWorker`/`createShardDO`, which codegen never sees.
+         */
+        hostTraceFusion?: Capability;
 
         /**
          * A shared HTTP cache in front of the app that the runtime can READ AND
@@ -211,6 +274,25 @@ export interface PlatformCapabilities {
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
+
+        /**
+         * Reading back the DURABLE `ctx.log` archive — the `logArchive` worker
+         * option behind the studio Logs panel's Archive feed and `lunora logs
+         * --durable`.
+         *
+         * Distinct from `pipelines` (which writes the records) because the read
+         * side needs two more things the write side does not: an Iceberg catalog
+         * over the object store, and an SQL engine that can query it
+         * (R2 Data Catalog + R2 SQL). A host that can ship log records to cold
+         * storage but cannot query them back should say `unsupported` here.
+         *
+         * Advisory by nature: the archive table is named by a `createWorker`
+         * option or the `LUNORA_LOG_ARCHIVE_TABLE` env var, neither of which
+         * codegen sees. Both fail closed at runtime with a single
+         * `LOG_ARCHIVE_NOT_CONFIGURED`, which the panel renders as an empty
+         * state, so an unsupported host degrades visibly rather than silently.
+         */
+        logArchive?: Capability;
 
         /** Email sending (Resend / SES / etc). */
         mail?: Capability;
@@ -414,6 +496,18 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
         },
         analytics: { level: "native", note: "Analytics Engine" },
+        edgeRequestMetadata: {
+            level: "native",
+            note: 'request.cf — the edge stamps placement (colo, country) and, where an mTLS-enabled hostname is configured, the verified client certificate under tlsClientAuth. Unforgeable because it is not a header: trustInboundTraceContext: "mtls" and the OTLP placement resource detector both read it directly',
+        },
+        hostTraceFusion: {
+            level: "native",
+            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
+        },
+        logArchive: {
+            level: "native",
+            note: "R2 Data Catalog (Iceberg) written by pipelineLogSink and queried back over R2 SQL, which the admin route runs server-side because R2 SQL needs a Cloudflare API token that must never reach the browser",
+        },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
@@ -564,6 +658,18 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        edgeRequestMetadata: {
+            level: "unsupported",
+            note: 'Nothing injects per-request platform metadata here — a Node request carries only what the caller wrote. Two telemetry surfaces degrade silently as a result: trustInboundTraceContext: "mtls" can never be satisfied, so it collapses to never-trust and every inbound traceparent is dropped (the runtime warns once when that actually happens, since no codegen gate can see a createWorker option), and the OTLP resource detector finds no placement attributes, so spans ship without them',
+        },
+        hostTraceFusion: {
+            level: "unsupported",
+            note: "No host-native trace tree to merge into, and cloudflare:workers is not importable here. Already capability-probed at runtime, so fuseCloudflareTraces is a no-op rather than a throw; onSpan remains the source of truth for the waterfall either way",
+        },
+        logArchive: {
+            level: "unsupported",
+            note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route is still registered here: it answers LOG_ARCHIVE_NOT_CONFIGURED (which the studio renders as a not-configured empty state) only while the logArchive table or the R2 SQL credentials are absent. Configure both and it stops failing closed — it builds an R2 SQL client and queries Cloudflare's API over the network, which is not this host serving the archive",
+        },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
         mail: {
             level: "unsupported",

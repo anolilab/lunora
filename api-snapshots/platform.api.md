@@ -278,13 +278,16 @@ interface PlatformCapabilities {
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;
+        edgeRequestMetadata?: Capability;
         globalTables?: Capability;
+        hostTraceFusion?: Capability;
         httpCache?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
         images?: Capability;
         keyValueStore?: Capability;
         localSql?: Capability;
+        logArchive?: Capability;
         mail?: Capability;
         memoryTables?: Capability;
         objectStorage?: Capability;

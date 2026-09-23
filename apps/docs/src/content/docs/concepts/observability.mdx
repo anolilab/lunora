@@ -547,7 +547,10 @@ missing, or the reverse.
 
 The worker decides once and propagates it: the sampled bit rides the
 `traceparent` it forwards, so the shard drops the matching spans without
-re-deciding.
+re-deciding. That includes a **batched** call (`client.batch(...)`, and the
+coalesced replay of queued offline writes): one verdict covers the whole batch
+and every sub-request carries it, so a batch is kept or dropped as one thing
+rather than each entry deciding for itself.
 
 ### Errors are never sampled away
 
@@ -561,6 +564,23 @@ that exports only its tail.
 So `headRate: 0.01` does not mean "1% of your errors". It means 1% of your
 _successful_ traffic, plus every failure. That is usually the shape you want:
 aggressive sampling on the boring path, complete traces on the interesting one.
+
+A **container** applies the same bias to its own spans, and is _told_ the
+verdict rather than guessing it: the shard stamps this dispatch's toggle onto
+every `ctx.containers.<name>` request beside the `traceparent`, so
+`createContainerTelemetry({ request })` picks up both. One honest limit — a
+container is a long-running process with no dispatch boundary to re-decide at,
+so it keeps the span that errored rather than holding and re-exporting that
+span's siblings.
+
+```ts
+// inside the container's request handler
+const telemetry = createContainerTelemetry({ request });
+```
+
+Pass `alwaysSampleErrors` explicitly to override what the request carries. A
+one-shot container with no request to read falls back to `LUNORA_SAMPLE_ERRORS`
+in its env, then to the same default as every other tier.
 
 :::note[`headRate` and the trace id]
 `headRate >= 1` keeps everything and `<= 0` drops every non-error trace; in

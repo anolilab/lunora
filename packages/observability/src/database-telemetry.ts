@@ -226,11 +226,12 @@ interface DatabaseTelemetryDeps {
      * increments numbers on it; the shard reads it ONCE at the dispatch boundary
      * and formats it with {@link formatTally}.
      *
-     * Two properties fall out of that split. Per-call cost stays at a few integer
-     * increments — no object allocation, no lookup — which matters because this is
-     * on the path of every query. And because nothing is written through the
-     * dispatch's `SpanHandle`, the wide-event collector is never materialized, so
-     * a handler that instrumented nothing still doesn't trip the root-span gate.
+     * Per-call cost stays at a few integer increments — no object allocation, no
+     * lookup — which matters because this is on the path of every query. Nothing
+     * is written through the dispatch's `SpanHandle` either, so the wide-event
+     * collector is never materialized by instrumentation alone: a dispatch that
+     * ran queries gets a root span carrying these counters, but no `lunora.dispatch`
+     * log record unless the handler actually opened `ctx.span`.
      */
     tally: DatabaseTally;
 

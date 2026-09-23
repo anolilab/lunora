@@ -351,6 +351,7 @@ abstract class ShardDO {
         table: string;
     }): void;
     protected getCurrentTraceparent(): string | undefined;
+    protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): {
         rootSpanId: string;
         traceId: string;
@@ -930,6 +931,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;
