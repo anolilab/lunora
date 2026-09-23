@@ -242,9 +242,14 @@ export interface LunoraBrowserOptions {
     /**
      * The `@cloudflare/playwright` `launch` function. Injected rather than
      * imported at module top so the optional peer dep stays out of the bundle
-     * for non-browser apps and tests can pass a double. The generated worker
-     * passes the real function; omitting it makes the helper throw on first use
-     * with a clear "install `@cloudflare/playwright`" error.
+     * for non-browser apps and tests can pass a double.
+     *
+     * The APP passes the real function, not codegen: the generated shard builds
+     * `ctx.browser` from a `config.browser` thunk and falls back to a throwing
+     * stub, so `createShardDO({ browser: (env) => createBrowser({ binding:
+     * env.BROWSER, launch }) })` is what wires it. Omitting `launch` makes the
+     * helper throw on first use with a clear "install `@cloudflare/playwright`"
+     * error.
      */
     launch?: BrowserLaunchLike;
 

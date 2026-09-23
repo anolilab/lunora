@@ -1629,7 +1629,7 @@ const CAPABILITY_ROWS: readonly [
     {
         readonly appMethod: {
             readonly configKey: "browser";
-            readonly doc: "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`).";
+            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
             readonly method: "browser";
         };
         readonly contextProperty: "browser";
