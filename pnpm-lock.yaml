@@ -1681,6 +1681,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30)
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: catalog:types
         version: 26.4.1

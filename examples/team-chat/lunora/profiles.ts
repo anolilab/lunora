@@ -15,6 +15,17 @@ const AVATAR_TTL_SECONDS = 3600;
 const ALLOWED_AVATAR_TYPES = new Set(["image/avif", "image/jpeg", "image/png", "image/webp"]);
 
 /**
+ * The one object key a given user's avatar may ever occupy.
+ *
+ * Every handler below derives the key through this rather than accepting one,
+ * so "which object does this call touch" is answered by the resolved session
+ * and a table lookup, never by a string the caller typed. `requestAvatarUpload`
+ * mints it, `save` refuses anything else, and `avatarUrl` signs it — one
+ * definition, three call sites, no room for them to disagree.
+ */
+const avatarKeyFor = (userId: string): string => `files/avatars/${userId}`;
+
+/**
  * The member directory.
  *
  * Note the shape of these reads. `profiles` is `.global()`, so it lives in D1
@@ -41,23 +52,35 @@ export const list = query.query(async ({ ctx }): Promise<Document_<"profiles">[]
     return page;
 });
 
-/** A short-lived URL for one avatar. An action for the same reason as `messages.attachmentUrl`. */
+/**
+ * A short-lived URL for one member's avatar. An action for the same reason as
+ * `messages.attachmentUrl`.
+ *
+ * It takes the member's `userId` — which the directory hands out — and derives
+ * the key, instead of accepting a key and checking its prefix. The prefix check
+ * bounded the namespace but not the identity: `files/avatars/<anyone>` passed
+ * it, and so would any other object that ever lands under that prefix. Deriving
+ * the key removes the choice rather than narrowing it, and the `by_user` lookup
+ * means an id nobody has a profile for signs nothing at all.
+ */
 export const avatarUrl = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ key: v.string().max(512) })
-    .action(async ({ args: { key }, ctx }): Promise<string> => {
+    .input({ userId: v.string().max(128) })
+    .action(async ({ args: { userId }, ctx }): Promise<string> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to view avatars");
         }
 
-        ctx.log.info("avatar url requested", {});
+        const profile = await ctx.db.profiles.findFirst({ where: { userId } });
 
-        if (!key.startsWith("files/avatars/")) {
-            throw new LunoraError("BAD_REQUEST", "not an avatar key");
+        if (!profile?.avatarKey) {
+            throw new LunoraError("NOT_FOUND", "that member has no avatar");
         }
 
+        ctx.log.info("avatar url requested", {});
+
         try {
-            return await ctx.storage.getSignedUrl(key, { expiresInSeconds: AVATAR_TTL_SECONDS });
+            return await ctx.storage.getSignedUrl(avatarKeyFor(userId), { expiresInSeconds: AVATAR_TTL_SECONDS });
         } catch (error) {
             throw new LunoraError("INTERNAL", "could not sign an avatar URL: object storage did not answer", { cause: error });
         }
@@ -76,6 +99,13 @@ export const save = mutation
     .mutation(async ({ args: { avatarKey, name }, ctx }): Promise<Id<"profiles">> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to edit your profile");
+        }
+
+        // The only key this caller could have uploaded to. Without this the
+        // column is a caller-written string that later reads treat as an object
+        // reference — the same hole as accepting a key outright, just stored.
+        if (avatarKey !== undefined && avatarKey !== avatarKeyFor(ctx.auth.userId)) {
+            throw new LunoraError("BAD_REQUEST", "that is not your avatar key");
         }
 
         const { id } = await ctx.db.profiles.upsert({
@@ -105,7 +135,7 @@ export const requestAvatarUpload = action
 
         // Keyed under `files/` so the worker's signed-asset route matches the
         // URL, and under the uploader's id so nobody can overwrite another's.
-        const key = `files/avatars/${ctx.auth.userId}`;
+        const key = avatarKeyFor(ctx.auth.userId);
 
         ctx.log.info("avatar upload requested", { contentType });
 

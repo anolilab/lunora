@@ -8,8 +8,8 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     documents: {
-        create: FunctionReference<"mutation", { organizationId: string; title: string; body: string }, Id<"documents">>;
-        list: FunctionReference<"query", { organizationId: string }, { _id: Id<"documents">; body: string; createdAt: number; organizationId: string; ownerId: string; title: string }[]>;
+        create: FunctionReference<"mutation", { title: string; body: string }, Id<"documents">>;
+        list: FunctionReference<"query", {}, { _id: Id<"documents">; body: string; createdAt: number; ownerId: string; title: string }[]>;
     };
 }
 

@@ -193,16 +193,14 @@ export const openApiSpec: Record<string, unknown> = {
                                 "properties": {
                                     "args": {
                                         "properties": {
-                                            "channelId": {
-                                                "type": "string"
-                                            },
-                                            "key": {
-                                                "type": "string"
+                                            "messageId": {
+                                                "description": "Id<\"messages\">",
+                                                "type": "string",
+                                                "x-lunora-table": "messages"
                                             }
                                         },
                                         "required": [
-                                            "channelId",
-                                            "key"
+                                            "messageId"
                                         ],
                                         "type": "object"
                                     },
@@ -715,12 +713,12 @@ export const openApiSpec: Record<string, unknown> = {
                                 "properties": {
                                     "args": {
                                         "properties": {
-                                            "key": {
+                                            "userId": {
                                                 "type": "string"
                                             }
                                         },
                                         "required": [
-                                            "key"
+                                            "userId"
                                         ],
                                         "type": "object"
                                     },

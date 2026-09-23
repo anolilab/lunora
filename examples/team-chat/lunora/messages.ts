@@ -80,25 +80,41 @@ export const search = query
  * An action, not a query: the URL is time-varying, so it must not live in a
  * subscription's result. The client calls this when it renders a message that
  * has an attachment.
+ *
+ * It takes the MESSAGE id, not the object key, and reads the key off the stored
+ * row. The earlier shape took both `channelId` and `key` from `args` and
+ * checked that the key started with `files/channels/${channelId}/` — a guard
+ * built entirely out of the caller's own input, which any caller satisfies by
+ * construction. It reduced to `key.startsWith("files/channels/")` and made the
+ * action a signing oracle for every attachment in the bucket, in channels the
+ * caller never opened and for uploads that were never sent. A key that comes
+ * out of a row the server looked up cannot be chosen by the caller at all, so
+ * there is nothing left to validate.
  */
 export const attachmentUrl = action
     .use(rateLimit(actionLimiter, "upload", byUser))
-    .input({ channelId: v.string().max(128), key: v.string().max(512) })
-    .action(async ({ args: { channelId, key }, ctx }): Promise<string> => {
+    .input({ messageId: v.id("messages") })
+    .action(async ({ args: { messageId }, ctx }): Promise<string> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to download");
         }
 
-        // Only keys this channel could have produced. Without the prefix check
-        // the action is an oracle for any object in the bucket.
-        if (!key.startsWith(`files/channels/${channelId}/`)) {
-            throw new LunoraError("BAD_REQUEST", "that key does not belong to this channel");
+        // Note what this is and is not. The key now comes off a row, so no
+        // caller can name an object — that hole is closed. It is NOT a
+        // membership check: the caller also picks the `shardKey`, and every
+        // channel here is readable by every signed-in user anyway. Give this app
+        // private channels and the check that the caller may read THIS channel
+        // belongs right here, before the key is resolved.
+        const message = await ctx.db.get(messageId);
+
+        if (!message?.attachmentKey) {
+            throw new LunoraError("NOT_FOUND", "no attachment on that message");
         }
 
-        ctx.log.info("attachment url requested", { channelId });
+        ctx.log.info("attachment url requested", { channelId: message.channelId });
 
         try {
-            return await ctx.storage.getSignedUrl(key, { expiresInSeconds: ATTACHMENT_TTL_SECONDS });
+            return await ctx.storage.getSignedUrl(message.attachmentKey, { expiresInSeconds: ATTACHMENT_TTL_SECONDS });
         } catch (error) {
             throw new LunoraError("INTERNAL", "could not sign a download URL: object storage did not answer", { cause: error });
         }

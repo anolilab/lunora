@@ -23,11 +23,10 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
     "documents": [
         {
             "fields": [
-                "organizationId",
                 "ownerId",
                 "createdAt"
             ],
-            "name": "by_org_owner_created",
+            "name": "by_owner_created",
             "type": "index"
         }
     ],
@@ -69,11 +68,6 @@ const LUNORA_TABLE_COLUMNS: Record<
             "name": "_creationTime",
             "optional": false,
             "type": "number"
-        },
-        {
-            "name": "organizationId",
-            "optional": false,
-            "type": "string"
         },
         {
             "name": "ownerId",
@@ -140,12 +134,12 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
-        "cacheKey": "nondeterministic_query_mutation:documents:92:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:documents:95:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in create (documents:92) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `create` is invoked from a workflow step or queue consumer that can itself replay.",
+        "detail": "`Date.now(…)` in create (documents:95) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `create` is invoked from a workflow step or queue consumer that can itself replay.",
         "facing": "INTERNAL",
         "level": "INFO",
         "metadata": {
@@ -153,7 +147,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "create",
             "file": "documents",
             "kind": "mutation",
-            "line": 92
+            "line": 95
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
@@ -176,27 +170,6 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "procedure_without_structured_event",
         "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
         "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "owner_field_from_args_not_auth:documents:87:organizationId",
-        "categories": [
-            "SECURITY"
-        ],
-        "description": "A `ctx.db` write sets an ownership/identity column (`userId`, `ownerId`, `tenantId`, …) from the handler's `args`. The caller controls who the row belongs to, so any caller can write rows owned by another user or tenant — an act-as-any-user / cross-tenant IDOR.",
-        "detail": "`insert` in `create` (documents:87) sets the ownership field `organizationId` from `args` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp `organizationId` from `ctx.auth`/`ctx.identity`, never from request input.",
-        "facing": "EXTERNAL",
-        "level": "ERROR",
-        "metadata": {
-            "exportName": "create",
-            "field": "organizationId",
-            "file": "documents",
-            "line": 87,
-            "method": "insert",
-            "visibility": "public"
-        },
-        "name": "owner_field_from_args_not_auth",
-        "remediation": "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it.",
-        "title": "Ownership field written from args, not server identity"
     }
 ];
 
@@ -288,7 +261,7 @@ const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
 };
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
-const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "192449f688c37424", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"documents\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"organizationId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_org_owner_created\": {\n          \"fields\": [\n            \"organizationId\",\n            \"ownerId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
+const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "3fe27ed714d1d6bd", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"documents\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"createdAt\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner_created\": {\n          \"fields\": [\n            \"ownerId\",\n            \"createdAt\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
