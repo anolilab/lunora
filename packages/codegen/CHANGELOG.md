@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.199...@lunora/codegen@1.0.0-alpha.200) (2026-09-23)
+
+### Tests
+
+* **do:** mark the seed fixture's shard key ([#785](https://github.com/anolilab/lunora/issues/785)) ([7d928f7](https://github.com/anolilab/lunora/commit/7d928f72daf82f8a2937c3a9a2784f7eb0b7d5d9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.145
+* **@lunora/do:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/codegen [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.198...@lunora/codegen@1.0.0-alpha.199) (2026-09-23)
 
 ### ⚠ BREAKING CHANGES
