@@ -286,7 +286,10 @@ class LunoraAuthDO {
             }
         } catch (error) {
             // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
-            console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
+            console.error(
+                "@lunora/auth: could not drop the reverted `account.issuer` column; if it is still present, sign-ups will fail until it is removed.",
+                error,
+            );
         }
     }
 
