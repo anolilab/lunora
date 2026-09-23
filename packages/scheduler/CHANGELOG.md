@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.77...@lunora/scheduler@1.0.0-alpha.78) (2026-09-23)
+
+### Bug Fixes
+
+* **scheduler:** drain due jobs concurrently so one slow job stops blocking the app ([#801](https://github.com/anolilab/lunora/issues/801)) ([067e571](https://github.com/anolilab/lunora/commit/067e571fe3f38dcd4f153d89f42952f0e956c6e4)), closes [#793](https://github.com/anolilab/lunora/issues/793)
+
 ## @lunora/scheduler [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.76...@lunora/scheduler@1.0.0-alpha.77) (2026-09-23)
 
 
