@@ -131,6 +131,11 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     return {
         env: options.env,
         event: options.event,
+        // Re-exposed, not just consumed: a body that builds its own dispatcher
+        // (the agent loop does) must dispatch through the same implementation
+        // this context's `run` uses. Omitted when absent — the key's presence
+        // would otherwise read as "the host injected `undefined`".
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         log,
         parallel: createParallel(fanOutDeps),
         params,

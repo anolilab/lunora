@@ -8,25 +8,48 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { runAgentLoop } from "../src/agent-loop";
 import { agentComponent } from "../src/component";
-import type { EnsureThreadOutcome } from "../src/types";
+import { defineAgent } from "../src/define-agent";
+import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
+import type { AgentFunctionReference, AgentRunFunction, EnsureThreadOutcome } from "../src/types";
 import type { FakeRow } from "./loop-harness";
-import { fakeDatabase } from "./loop-harness";
+import { DurableStepJournal, fakeDatabase, finalTurn, scriptedGenerate } from "./loop-harness";
 
 const setup = () => {
     const { database, rows } = fakeDatabase();
     const { functions } = agentComponent();
     const context = { auth: { userId: undefined }, db: database };
 
+    // The loop's `agents:*` refs against the REAL mutations over the same db, so
+    // a loop-level test observes the very rows the mutation tests assert on.
+    const run: AgentRunFunction = async (reference: AgentFunctionReference, arguments_?: Record<string, unknown>) => {
+        const handlers: Record<string, { handler: (context_: unknown, args: never) => unknown } | undefined> = {
+            [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage]: functions.agentAppendMessage,
+            [DEFAULT_AGENT_FUNCTION_PATHS.completeRun]: functions.agentCompleteRun,
+            [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread]: functions.agentEnsureThread,
+            [DEFAULT_AGENT_FUNCTION_PATHS.listMessages]: functions.agentMessages,
+            [DEFAULT_AGENT_FUNCTION_PATHS.patchThread]: functions.agentPatchThread,
+        };
+        const entry = handlers[reference["__lunoraRef"]];
+
+        if (!entry) {
+            throw new Error(`unexpected dispatch: ${reference["__lunoraRef"]}`);
+        }
+
+        return entry.handler(context, (arguments_ ?? {}) as never);
+    };
+
     return {
         complete: async (arguments_: Record<string, unknown>) =>
             (await functions.agentCompleteRun.handler(context, arguments_ as never)) as { dequeued?: string },
         queue: (): FakeRow[] => rows.get("agent_run_queue") ?? [],
-        start: async (instanceId?: string) =>
+        run,
+        start: async (instanceId?: string, policy: "queue" | "reject" | "replace" = "queue") =>
             (await functions.agentEnsureThread.handler(context, {
                 agent: "support",
                 key: "thread-1",
-                onConcurrentRun: "queue",
+                onConcurrentRun: policy,
                 ...(instanceId === undefined ? {} : { instanceId }),
             } as never)) as EnsureThreadOutcome,
         thread: (): FakeRow | undefined => (rows.get("agent_threads") ?? [])[0],
@@ -78,7 +101,7 @@ describe("onConcurrentRun: queue", () => {
         expect(queue()).toHaveLength(1);
     });
 
-    it("is idempotent under replay: a finished run's completion never dequeues twice", async () => {
+    it("is idempotent under replay: a finished run's completion advances the queue once", async () => {
         expect.assertions(3);
 
         const { complete, queue, start, thread } = setup();
@@ -88,11 +111,75 @@ describe("onConcurrentRun: queue", () => {
         await start("wf-c");
         await complete({ instanceId: "wf-a", key: "thread-1", status: "idle" });
 
-        // A's completion replays after ownership already moved to B. Dequeuing
-        // again here would skip B's turn entirely.
-        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+        // A's completion replays after ownership already moved to B. It reports
+        // the SAME successor — the wake is a second trip that a lost reply never
+        // made, and nothing else will send it — but consumes no further slot:
+        // taking wf-c here would skip wf-b's turn entirely.
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({ dequeued: "wf-b" });
         expect(thread()?.["instanceId"]).toBe("wf-b");
         expect(queue().map((row) => row["instanceId"])).toStrictEqual(["wf-c"]);
+    });
+
+    it("lets a run that already handed the thread on replay without being read as a second run", async () => {
+        expect.assertions(5);
+
+        const { complete, queue, start, thread } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+        await start("wf-c");
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({ dequeued: "wf-b" });
+
+        // The reply was lost, so wf-a's body replays from the top — and the
+        // bootstrap is outside `step.do`, so it re-runs for real. wf-a is now
+        // neither the owner nor queued: under "queue" it would park behind the
+        // successor it just dequeued (and its terminal dispatch with it), under
+        // "reject" the replay would fail outright.
+        await expect(start("wf-a")).resolves.toStrictEqual({ outcome: "completed" });
+        await expect(start("wf-a", "reject")).resolves.toStrictEqual({ outcome: "completed" });
+
+        // It takes nothing: the thread stays with wf-b, and wf-c keeps its slot.
+        expect(thread()).toMatchObject({ instanceId: "wf-b", status: "running" });
+        expect(queue().map((row) => row["instanceId"])).toStrictEqual(["wf-c"]);
+    });
+
+    it("re-reports nothing once the thread is no longer live", async () => {
+        expect.assertions(2);
+
+        const { complete, start, thread } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({ dequeued: "wf-b" });
+
+        // `cancel()` terminated the successor and patched the thread. wf-a's
+        // replay has nothing left to wake: the run it handed to is gone, and a
+        // cancelled thread is not waiting on anyone's handoff.
+        Object.assign(thread() ?? {}, { status: "cancelled" });
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+    });
+
+    it("stops re-reporting a successor once that successor has run for itself", async () => {
+        expect.assertions(4);
+
+        const { complete, queue, start, thread } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+        await complete({ instanceId: "wf-a", key: "thread-1", status: "idle" });
+
+        // wf-b woke and replayed its own bootstrap: it is the live owner now,
+        // and taking ownership retires wf-a's completion marker. A very late
+        // replay of wf-a must not report it again — the run it would wake is
+        // running, not parked.
+        await expect(start("wf-b")).resolves.toStrictEqual({ outcome: "continued" });
+
+        await expect(complete({ instanceId: "wf-a", key: "thread-1", status: "idle" })).resolves.toStrictEqual({});
+        expect(thread()).toMatchObject({ instanceId: "wf-b", status: "running" });
+        expect(queue()).toHaveLength(0);
     });
 
     it("hands the thread on even when the finishing run errored", async () => {
@@ -235,5 +322,76 @@ describe("onConcurrentRun: queue", () => {
         // one, so parking them would strand a run rather than order it.
         await expect(start()).rejects.toThrow("cannot queue a dispatch with no instance id");
         expect(queue()).toHaveLength(0);
+    });
+});
+
+/**
+ * The loop over those mutations, at the one boundary the mutation tests cannot
+ * reach: a run whose handoff COMMITTED and whose reply was lost. Everything the
+ * loop holds in memory is gone by the next activation, so what the replay does
+ * is decided entirely by what the previous one wrote down.
+ */
+describe("agent loop — a handoff whose reply was lost", () => {
+    it("replays past its own bootstrap and delivers the wake the first activation never sent", async () => {
+        expect.assertions(5);
+
+        const { run, start, thread } = setup();
+        const woken: { id: string; type: string }[] = [];
+        const binding = {
+            get: async (id: string) => {
+                return {
+                    sendEvent: async (event: { payload: unknown; type: string }) => {
+                        woken.push({ id, type: event.type });
+                    },
+                };
+            },
+        };
+
+        // wf-a is in flight with wf-b parked behind it.
+        await start("wf-a");
+        await start("wf-b");
+
+        let loseReply = true;
+        const lossyRun: AgentRunFunction = async (reference, arguments_) => {
+            const result = await run(reference, arguments_);
+
+            // The shard COMMITS the completion and the reply never arrives — a
+            // dispatch timeout is a retryable 503 even when the mutation landed.
+            if (loseReply && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.completeRun) {
+                loseReply = false;
+
+                throw new Error("503 dispatch timeout");
+            }
+
+            return result;
+        };
+
+        const options = {
+            agent: defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }),
+            env: { AGENT_SUPPORT: binding },
+            exportName: "support",
+            // One scripted turn for BOTH activations: a replay that re-ran the
+            // model instead of reading the journal exhausts it and throws.
+            generate: scriptedGenerate([finalTurn("done")]),
+            instanceId: "wf-a",
+            params: { input: "hello", threadKey: "thread-1" },
+            paths: DEFAULT_AGENT_FUNCTION_PATHS,
+            run: lossyRun,
+            step: new DurableStepJournal(),
+        };
+
+        await expect(runAgentLoop(options)).rejects.toThrow("503 dispatch timeout");
+
+        // Ownership moved in the mutation that committed; the wake is a separate
+        // trip the throw cut short, and nothing else sends it.
+        expect(thread()).toMatchObject({ instanceId: "wf-b", status: "running" });
+        expect(woken).toStrictEqual([]);
+
+        // The next activation of the SAME instance. It is neither the owner nor
+        // queued, so its bootstrap has to recognise it as its own replay — and
+        // its re-dispatched completion has to name the successor again, because
+        // the wake step never ran and has nothing memoized to replay.
+        await expect(runAgentLoop(options)).resolves.toMatchObject({ text: "done" });
+        expect(woken).toStrictEqual([{ id: "wf-b", type: "agent-dequeue:thread-1:wf-b" }]);
     });
 });

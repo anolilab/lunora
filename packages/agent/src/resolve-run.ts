@@ -41,8 +41,20 @@ import type { AgentRunFunction } from "./types";
  * dispatch added to the loop must hold that same property — a dedup id cannot
  * be bolted on later without a key that survives a replay of a body whose call
  * order does not.
+ *
+ * **`fetchImpl`.** Building our own runner also means the host's injected
+ * `fetch` does not come along for free: `createDispatchRunner` falls back to the
+ * global, which is the WRONG transport on a host that injected one and no
+ * transport at all where there is none — the loop then throws a bare `TypeError`
+ * before its first dispatch. The workflow context re-exposes what it was given
+ * (`ctx.fetchImpl`) and the caller threads it through here.
  */
-const resolveAgentRun = (owner: string | undefined, env: Record<string, unknown>): AgentRunFunction =>
-    createDispatchRunner({ env, label: "@lunora/agent", ...(owner === undefined ? {} : { identity: { userId: owner } }) });
+const resolveAgentRun = (owner: string | undefined, env: Record<string, unknown>, fetchImpl?: typeof fetch): AgentRunFunction =>
+    createDispatchRunner({
+        env,
+        label: "@lunora/agent",
+        ...(fetchImpl === undefined ? {} : { fetchImpl }),
+        ...(owner === undefined ? {} : { identity: { userId: owner } }),
+    });
 
 export default resolveAgentRun;

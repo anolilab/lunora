@@ -108,8 +108,10 @@ const compileAgentWorkflow = (
                 // would answer blind), and it numbers its calls as replay-dedup
                 // ids, which a body like this one — most of its dispatches sit
                 // inside memoized `step.do` callbacks — renumbers on every
-                // replay. See `resolve-run.ts`.
-                run: resolveAgentRun(context.params.owner, context.env),
+                // replay. The host's injected `fetch` rides along — a runner
+                // built here would otherwise fall back to a global that may be
+                // the wrong transport, or absent entirely. See `resolve-run.ts`.
+                run: resolveAgentRun(context.params.owner, context.env, context.fetchImpl),
                 step: context.step,
                 // The streaming seam is wired and ready, but stays dormant until a
                 // live token sink is threaded onto the run (a follow-up wires

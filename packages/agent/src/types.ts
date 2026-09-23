@@ -974,16 +974,20 @@ export interface AgentDefinition extends AgentConfig {
 /**
  * What `agentEnsureThread` reports back to the loop.
  *
- * A discriminated union rather than a bag of optional booleans: the four
- * outcomes are mutually exclusive, and the data each carries only exists for its
- * own case. `queued` has a position, `replaced` has the instance it took the
- * thread from, and the other two have nothing — encoding that as five
- * independent optional fields made every reader re-derive which combination was
- * legal.
+ * A discriminated union rather than a bag of optional booleans: the outcomes are
+ * mutually exclusive, and the data each carries only exists for its own case.
+ * `queued` has a position, `replaced` has the instance it took the thread from,
+ * and the rest have nothing — encoding that as independent optional fields made
+ * every reader re-derive which combination was legal.
+ *
+ * `completed` is the odd one: the thread was NOT (re)opened. This run already
+ * reported its outcome and is replaying because only the reply was lost, so it
+ * takes no ownership and revives nothing — it runs its body out of the step
+ * journal to re-dispatch the effects that never landed.
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).
