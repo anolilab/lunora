@@ -668,7 +668,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         logArchive: {
             level: "unsupported",
-            note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route fails closed with LOG_ARCHIVE_NOT_CONFIGURED, which the studio renders as a not-configured empty state",
+            note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route is still registered here: it answers LOG_ARCHIVE_NOT_CONFIGURED (which the studio renders as a not-configured empty state) only while the logArchive table or the R2 SQL credentials are absent. Configure both and it stops failing closed — it builds an R2 SQL client and queries Cloudflare's API over the network, which is not this host serving the archive",
         },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
         mail: {
