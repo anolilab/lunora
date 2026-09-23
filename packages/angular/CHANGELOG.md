@@ -1,3 +1,25 @@
+## @lunora/angular [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.103...@lunora/angular@1.0.0-alpha.104) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient` gains `expectIdentityResolution()`, and a client
+that resolves an identity caches no reads and replays no queued writes until a
+`/get-session` actually answers — previously only while one was in flight.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### security
+
+* **client:** close the identity gates outside the session probe ([#787](https://github.com/anolilab/lunora/issues/787)) ([e176653](https://github.com/anolilab/lunora/commit/e1766531497eeb9d097259ff3c315f924ebd0cca))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.122
+
 ## @lunora/angular [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.102...@lunora/angular@1.0.0-alpha.103) (2026-09-23)
 
 
