@@ -1386,6 +1386,28 @@ const WIDE_EVENT_NAME = "lunora.dispatch";
  */
 const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
 
+/** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` tally, and the sink they go to. */
+interface DispatchSpanEntry {
+    collector?: SpanCollector;
+    dbTally?: DatabaseTally;
+    sink?: TelemetrySink;
+}
+
+/**
+ * Whether a finished dispatch produced anything the synthetic root span would
+ * carry — so the caller can skip minting a bar for a dispatch that recorded
+ * nothing rather than filling the bounded ring with empty traces.
+ *
+ * A wide event counts: it is the span its attributes live on, so skipping the
+ * span would discard everything the handler attached. **So does a non-empty
+ * `ctx.db` tally** — `instrumentDatabase: "summary"` exists to answer "was this
+ * request database-bound", and a handler that only reads `ctx.db` (the common
+ * shape) has no other way to say so. Counting it here is what makes those
+ * counters reach a reader instead of being tallied on the hot path and dropped.
+ */
+const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
+    entry !== undefined && (entry.collector !== undefined || (entry.dbTally?.calls ?? 0) > 0);
+
 /**
  * Base class for shard Durable Objects.
  *
@@ -1884,7 +1906,7 @@ abstract class ShardDO {
      * subscription re-run) mints its own anchor and has no such boundary, so the
      * map is FIFO-capped rather than trusted to drain.
      */
-    private dispatchSpans = new Map<string, { collector?: SpanCollector; dbTally?: DatabaseTally; sink?: TelemetrySink }>();
+    private dispatchSpans = new Map<string, DispatchSpanEntry>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -6092,9 +6114,11 @@ abstract class ShardDO {
             },
             shardKey: this.runner.shardKey,
             // Parked on the dispatch entry rather than written through `ctx.span`:
-            // the counters enrich a root span that is being recorded anyway, but
-            // must never be the reason one gets recorded. Read once in
-            // `recordDispatchRootSpan`, so a query pays only integer increments.
+            // a query pays only integer increments, and the tally is read ONCE in
+            // `recordDispatchRootSpan`. A non-empty tally IS reason enough to
+            // record that root span (see `hasRootSpanContent`) — otherwise the
+            // counters were computed on the hot path of every db-touching
+            // dispatch and discarded, which is the common shape.
             tally: this.dispatchTally(anchor),
             userId: () => this.getCurrentUserId(),
         });
@@ -7063,13 +7087,10 @@ abstract class ShardDO {
             return this.errorToResponse(error);
         } finally {
             // Guard hoisted to the call site so the common case — a handler that
-            // touched neither `ctx.trace` nor `ctx.span` — is visibly a no-op here.
-            // A wide event alone is reason enough to record the root span: it is
-            // the span the attributes live on, so skipping it would silently
-            // discard everything the handler attached.
+            // produced no telemetry at all — is visibly a no-op here.
             const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
 
-            if (this.spans.hasTrace(dispatchTrace.traceId) || dispatchSpan?.collector !== undefined) {
+            if (this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)) {
                 this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
             }
 
@@ -7312,7 +7333,7 @@ abstract class ShardDO {
             // Only when the trigger actually produced telemetry — an idle alarm
             // that did nothing should not mint a bar in the studio waterfall and
             // evict a real trace from the bounded ring.
-            if (this.spans.hasTrace(anchor.traceId) || this.dispatchSpans.get(dispatchSpanKey(anchor))?.collector !== undefined) {
+            if (this.spans.hasTrace(anchor.traceId) || hasRootSpanContent(this.dispatchSpans.get(dispatchSpanKey(anchor)))) {
                 this.recordDispatchRootSpan(name, startedAt, failure, anchor);
             }
 
@@ -7363,13 +7384,16 @@ abstract class ShardDO {
         // (see `currentStmtSamples`) hit its distinct-statement cap, so the
         // query-metrics leaderboard's contribution from this dispatch is partial.
         const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
-        const collected =
-            wide?.collector === undefined
-                ? undefined
-                : {
-                      ...wide.collector.collected,
-                      attributes: { ...databaseAttributes, ...stmtSamplesAttributes, ...wide.collector.collected.attributes },
-                  };
+        const attributes = { ...databaseAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
+        // Built whenever there is anything to carry, not only when the handler
+        // opened a `ctx.span` — the auto-instrumentation counters are attributes
+        // in their own right, and gating them on the wide event's collector is
+        // what dropped them for every handler that only read `ctx.db`.
+        // With no `ctx.span` there are no `events`/`links` — those come from the
+        // wide-event collector alone — so an attribute-only collection is the
+        // whole of it, and an empty one is nothing worth carrying.
+        const withoutWideEvent = Object.keys(attributes).length === 0 ? undefined : { attributes, events: [], links: [] };
+        const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
         try {
             this.spans.push(
