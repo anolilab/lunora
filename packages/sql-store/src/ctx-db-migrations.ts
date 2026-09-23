@@ -24,7 +24,7 @@ import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
 import {
     BIGINT_KEY_LENGTH,
     bigintSqlKey,
@@ -788,6 +788,19 @@ const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, 
  * no-drift path it is a single statement that reads no rows. Only when that
  * fails does it cost one probe per column to find which are missing.
  *
+ * Every column reference is **table-qualified**, and that is what makes the
+ * probe an answer rather than a formality. workerd and D1 build SQLite with the
+ * double-quoted-string misfeature enabled, so a bare `"slug"` that resolves to
+ * no column is silently reinterpreted as a string literal and the `SELECT`
+ * succeeds — the probe reported "no drift" for every table on the only runtime
+ * this path runs on, and the `ADD COLUMN` loop below was never reached. That
+ * included {@link OCC_VERSION_COLUMN}, which the guarded-write CAS reads on every
+ * `patch`/`replace`/`delete`, so the exact failure this function exists to
+ * prevent still bit. A qualified name has no string-literal reading and raises
+ * `no such column: t.slug` on all three engines. Verified in
+ * `__tests__/workerd/global-table-drift.workerd.test.ts`; `node:sqlite` builds
+ * with `SQLITE_DQS=0`, so a Node-only suite cannot see the difference.
+ *
  * Added columns are always **nullable**, whatever the field declares: existing
  * rows have no value for a field that did not exist, and `ADD COLUMN … NOT NULL`
  * without a default is rejected outright on a non-empty table by all three
@@ -806,15 +819,18 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
             .map(([field, validator]): [string, string] => [field, globalColumnAffinity(validator, dialect)]),
     ];
 
+    // The alias the probe's column references are qualified with; see the docblock.
+    const alias = "t";
+
     const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
         try {
             await queryAll(
                 exec,
                 dialect,
                 sql`SELECT ${sql.join(
-                    columns.map((column) => columnRefSql(column)),
+                    columns.map((column) => qualifiedColumnRefSql(alias, column)),
                     sql`, `,
-                )} FROM ${sql.identifier(tableName)} LIMIT 0`,
+                )} FROM ${sql.identifier(tableName)} AS ${sql.identifier(alias)} LIMIT 0`,
             );
 
             return true;

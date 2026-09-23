@@ -203,7 +203,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "sql-store", "storage", "workflow", "x402"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -224,7 +224,7 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
+            # The matrix is a hand-typed list of 12 packages, duplicated verbatim in
             # test.yml and nightly.yml, with nothing tying either copy to the packages
             # that actually declare a `workerd` vitest project. Drop a package from one
             # and its workerd suites stop running with every check green. Each leg
