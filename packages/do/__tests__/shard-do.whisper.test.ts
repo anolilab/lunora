@@ -447,3 +447,149 @@ describe("shardDO whisper authorization", () => {
         expect(shard.calls.filter((call) => call.event.action === undefined)).toHaveLength(0);
     });
 });
+
+/**
+ * The membership cap (64 topics) does not bound authorization: a join is
+ * authorized BEFORE membership is recorded, and a send is authorized whether or
+ * not the sender is a member. Without a cap of its own, a socket naming a fresh
+ * topic per frame grows the verdict memo without bound and re-enters the
+ * authorizer — a database query — once per name.
+ */
+describe("shardDO whisper authorization cap", () => {
+    it("stops dispatching the authorizer once a socket names more distinct topics than the cap", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "flooder" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // 400 never-seen topics: each is a memo miss, so an uncapped shard would
+        // run the authorizer 400 times — well past the 64-topic membership cap.
+        for (let index = 0; index < 400; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames model one client's flood
+            await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+        }
+
+        // The dispatch count is the proof: the cap ran BEFORE the authorizer.
+        expect(shard.calls).toHaveLength(256);
+        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
+        // Refused pairs are not memoised, so the memo stopped growing at the cap.
+        expect(shard.calls.at(-1)?.event.topic).toBe("t255");
+    });
+
+    it("counts a send and a subscribe on the same topic separately, since each is its own verdict", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // 128 topics joined AND broadcast on = 256 pairs: exactly the cap, all allowed.
+        for (let index = 0; index < 128; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames on one socket, in order
+            await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await sendTo(shard, a, { data: index, topic: `t${String(index)}`, type: "whisper" });
+        }
+
+        expect(shard.calls).toHaveLength(256);
+        expect(a.frames).toHaveLength(0);
+
+        // The 257th pair is refused, and costs no dispatch.
+        await sendTo(shard, a, { topic: "one-too-many", type: "whisper_subscribe" });
+
+        expect(shard.calls).toHaveLength(256);
+    });
+
+    it("refuses a repeated over-cap topic every time, because a refusal is never memoised", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "flooder" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        for (let index = 0; index < 256; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames fill the memo to exactly the cap
+            await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+        }
+
+        expect(a.frames).toHaveLength(0);
+
+        // The same over-cap topic, five times. Memoising the refusal would bound
+        // the dispatches but NOT the memo — and it would show up here, because
+        // the second and later frames would read the cached `false` and return
+        // silently instead of refusing.
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await sendTo(shard, a, { topic: "over-cap", type: "whisper_subscribe" });
+        }
+
+        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(5);
+        // And no refusal cost a dispatch.
+        expect(shard.calls).toHaveLength(256);
+    });
+
+    it("refuses with a message that names only the socket's own ceiling", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        // Every topic would be DENIED if the authorizer ran, so a refusal that
+        // leaked the verdict would read differently from one on an allowed topic.
+        // It does not: the frame carries the cap and nothing else.
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => false });
+
+        for (let index = 0; index < 257; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames on one socket, in order
+            await sendTo(shard, a, { topic: `secret-${String(index)}`, type: "whisper_subscribe" });
+        }
+
+        const refusals = a.frames.filter((frame) => frame.type === "error");
+
+        expect(refusals).toHaveLength(1);
+        expect(shard.calls).toHaveLength(256);
+        expect(JSON.stringify(refusals[0])).not.toMatch(/secret-|allow|den|exist/iu);
+    });
+
+    /**
+     * Every test above feeds the socket one frame at a time, and a cap that
+     * merely READS the memo size passes all of them. The authorizer is awaited
+     * between the check and the write, and a Durable Object keeps delivering
+     * socket frames across a non-storage yield — so frames that arrive in one
+     * batch all see the pre-dispatch size. These two drive the frames WITHOUT
+     * awaiting between them, which is what the reservation exists for.
+     */
+    it("bounds a burst of concurrent frames, not just a sequential flood", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "flooder" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // 400 distinct topics delivered as one batch: not one of them is awaited
+        // before the next starts, so each reaches the cap check while the earlier
+        // dispatches are still in flight.
+        await Promise.all(
+            Array.from({ length: 400 }, async (_, index) => {
+                await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+            }),
+        );
+
+        expect(shard.calls).toHaveLength(256);
+        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(400 - 256);
+    });
+
+    it("collapses a burst naming one pair onto a single authorizer run", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        // The memo cannot answer a pair whose verdict has not settled yet, so
+        // without the in-flight reservation these are ten separate queries for
+        // one question.
+        await Promise.all(
+            Array.from({ length: 10 }, async () => {
+                await sendTo(shard, a, { topic: "same", type: "whisper_subscribe" });
+            }),
+        );
+
+        expect(shard.calls).toHaveLength(1);
+        expect(a.frames).toHaveLength(0);
+    });
+});

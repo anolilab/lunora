@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 145 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 146 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -655,6 +655,12 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 ### `TOO_MANY_SUBSCRIPTIONS`
 
 `429` — Too many subscriptions
+
+### `TOO_MANY_WHISPER_TOPICS`
+
+`429` — Too many whisper topics
+
+Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.
 
 ### `TRANSACTION_LIMIT_EXCEEDED`
 

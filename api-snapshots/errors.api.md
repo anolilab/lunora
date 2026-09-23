@@ -666,6 +666,11 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Too many streams";
     };
+    readonly TOO_MANY_WHISPER_TOPICS: {
+        readonly hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.";
+        readonly status: 429;
+        readonly title: "Too many whisper topics";
+    };
     readonly UNKNOWN_ADMIN_OP: {
         readonly status: 404;
         readonly title: "Unknown admin operation";

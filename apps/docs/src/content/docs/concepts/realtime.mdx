@@ -230,14 +230,22 @@ shard, so route on the topic name for the namespaces that should stay open.
 A denied frame is **dropped silently**. Neither `whisper_subscribe` nor `whisper`
 has an ack, so there is nothing to report a denial on, and adding an error frame
 would let a client probe which topics exist. Gate your UI on a query you can read
-a verdict from, not on whether whispers arrive.
+a verdict from, not on whether whispers arrive. (The per-socket cap below is the
+one refusal that does answer — it is a resource limit, decided before the
+authorizer runs, so it discloses nothing about the topic.)
 
-Two ceilings worth knowing. The verdict is memoised per socket and topic, so
-revoking access does not evict a member already joined — they keep receiving
-until the socket closes or the Durable Object hibernates. And a whisper leaves no
-durable trace, so it can neither be replayed nor audited. Anything that must stop
-the instant access is revoked, or that you need a record of, belongs behind a
-query or mutation with [RLS](/docs/concepts/rls) — not on a topic.
+Three ceilings worth knowing. The verdict is memoised per socket, action and
+topic, so revoking access does not evict a member already joined — they keep
+receiving until the socket closes or the Durable Object hibernates. That memo is
+capped at **256 distinct topic/action pairs per socket**, because the authorizer
+is a query and a client naming a fresh topic on every frame would otherwise run
+one per name: past the cap the socket is refused with `TOO_MANY_WHISPER_TOPICS`
+and the authorizer does not run. (That refusal is the one whisper frame that does
+answer — it names only the cap, never the topic or the verdict — and the memo is
+in-memory, so a reconnect starts fresh.) And a whisper leaves no durable trace,
+so it can neither be replayed nor audited. Anything that must stop the instant
+access is revoked, or that you need a record of, belongs behind a query or
+mutation with [RLS](/docs/concepts/rls) — not on a topic.
 
 ## Why no MQTT / Pub/Sub
 

@@ -84,9 +84,10 @@ const env = workerEnv as CloudflareBindings;
  * `.dev.vars` is read locally and never deployed, so a var declared only there
  * is absent from the deployed Worker; the `vars` entry is what carries it to
  * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
- * the type — `env` above is `cloudflare:workers`' `Cloudflare.Env`, which only
- * `wrangler types` populates, so the narrowing there is what makes this read
- * compile, and it yields `unknown`.
+ * the type — `env` above is the `cloudflare:workers` export narrowed to the
+ * generated `CloudflareBindings`. Unnarrowed it is `Cloudflare.Env`, which only
+ * `wrangler types` populates, so that narrowing is what makes this read compile
+ * at all, and what it yields is `unknown` — hence the check below.
  *
  * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
  * so a committed `http://localhost:…` placeholder is read only in production —
