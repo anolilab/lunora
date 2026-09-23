@@ -499,6 +499,33 @@ describe("shardDO whisper authorization cap", () => {
         expect(shard.calls).toHaveLength(256);
     });
 
+    it("refuses a repeated over-cap topic every time, because a refusal is never memoised", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "flooder" });
+        const shard = makeAuthorizedShard([a], ["whisper:authorize"], { "whisper:authorize": () => true });
+
+        for (let index = 0; index < 256; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential frames fill the memo to exactly the cap
+            await sendTo(shard, a, { topic: `t${String(index)}`, type: "whisper_subscribe" });
+        }
+
+        expect(a.frames).toHaveLength(0);
+
+        // The same over-cap topic, five times. Memoising the refusal would bound
+        // the dispatches but NOT the memo — and it would show up here, because
+        // the second and later frames would read the cached `false` and return
+        // silently instead of refusing.
+        for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await sendTo(shard, a, { topic: "over-cap", type: "whisper_subscribe" });
+        }
+
+        expect(a.frames.filter((frame) => frame.code === "TOO_MANY_WHISPER_TOPICS")).toHaveLength(5);
+        // And no refusal cost a dispatch.
+        expect(shard.calls).toHaveLength(256);
+    });
+
     it("refuses with a message that names only the socket's own ceiling", async () => {
         expect.assertions(3);
 
