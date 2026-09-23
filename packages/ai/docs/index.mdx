@@ -467,6 +467,11 @@ export const docs = defineRag({
     // Return a string to rewrite, or an array for multi-query retrieval.
     transformQuery: async (query, { conversationId }) => {
         const { text } = await generateText({
+            // A rewritten query is a phrase. Retrieval is reachable from public
+            // RPC, so leave this uncapped and every search is an uncapped
+            // generation — the same denial-of-wallet shape as an unbounded
+            // answer, one hop further back.
+            maxOutputTokens: 100,
             model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
             prompt: `Rewrite this search query to be self-contained: ${query}`,
         });
