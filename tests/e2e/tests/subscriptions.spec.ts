@@ -19,7 +19,7 @@ test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
-test("tab B sees a message from tab A within 500ms via WS subscription", async ({ browser, user }) => {
+test("tab B sees a message from tab A within 1.5s via WS subscription", async ({ browser, user }) => {
     // Seed both browser contexts with the better-auth session cookie that
     // `user.request` accumulated during signup, so both subscriptions
     // authenticate as the same user.

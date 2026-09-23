@@ -1,5 +1,5 @@
 import { lunoraQueryOptions, useConnectionStatus, useMutation, useQuery } from "@lunora/react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -20,13 +20,44 @@ const textField = (form: FormData, name: string): string => {
 
 const BOARD_ARGS = { limit: 50 } as const;
 
+/**
+ * `getRouteApi` rather than `Route.useLoaderData()`: `Route` below names `Home`
+ * in its `component:` option, so reaching back through `Route` from inside
+ * `Home` makes the two declarations mutually referential and TypeScript gives
+ * up and infers the loader data as `any`.
+ */
+const route = getRouteApi("/");
+
 const Home = (): ReactElement => {
     /**
-     * The same query, now live. On the first client render it reads the
-     * loader's cached value (same key), then the subscription attaches and
-     * every later change arrives as a push. Nothing refetches.
+     * The same query, live. `undefined` until the socket delivers its first
+     * push; from then on every change arrives as a push and nothing refetches.
      */
-    const board = useQuery(api.messages.board, BOARD_ARGS);
+    const live = useQuery(api.messages.board, BOARD_ARGS);
+
+    /**
+     * The loader's value, carried into the browser inside the HTML — what fills
+     * the gap above.
+     *
+     * The router serializes loader results for us, but the TanStack Query cache
+     * the loader wrote into is NOT serialized, so on the client `useQuery`
+     * starts from an empty cache and has nothing on its very first render. This
+     * page used to render its empty state in that gap while the server had
+     * already shipped a populated list, which React reports as "Hydration
+     * failed because the server rendered HTML didn't match the client" and
+     * answers by discarding the entire server tree — turning the SSR this
+     * example is about into pure overhead. Reading the loader's own value is
+     * what makes the first client render match the server's.
+     *
+     * The annotation is not decoration. `routeTree.gen.ts` types this route
+     * through the `Route` declared at the bottom of *this* file, so the loop
+     * collapses to `any` when read from inside it and every `board.*` below
+     * would go unchecked. Anchoring it to `live`'s own type keeps the snapshot
+     * and the live value in step by construction.
+     */
+    const initial: NonNullable<typeof live> = route.useLoaderData();
+
+    const board = live ?? initial;
     const { mutate: send, pending } = useMutation(api.messages.send);
 
     /**
@@ -68,40 +99,41 @@ const Home = (): ReactElement => {
                 </button>
             </form>
 
-            {board === undefined ? (
-                <p className="muted">Connecting…</p>
-            ) : (
-                <>
-                    <ul>
-                        {board.messages.map((message) => (
-                            <li key={message._id}>
-                                <strong>{message.author}</strong> {message.body}
-                            </li>
-                        ))}
-                        {board.messages.length === 0 && <li className="muted">Nothing yet. Write the first one.</li>}
-                    </ul>
+            {/*
+             * No loading branch. There is never a render without a board: the
+             * loader resolves one before the route commits on either side, and
+             * `live` only ever replaces it. A "Connecting…" placeholder here
+             * would only ever paint on the client, against a server that had
+             * already sent the list — which is the hydration mismatch itself.
+             */}
+            <ul>
+                {board.messages.map((message) => (
+                    <li key={message._id}>
+                        <strong>{message.author}</strong> {message.body}
+                    </li>
+                ))}
+                {board.messages.length === 0 && <li className="muted">Nothing yet. Write the first one.</li>}
+            </ul>
 
-                    <p className="muted">
-                        {board.total} message(s)
-                        {board.newestAt > 0 && (
-                            <>
-                                , newest{" "}
-                                {/*
-                                 * UTC, not `toLocaleTimeString()`. Locale and time
-                                 * zone differ between the server render and the
-                                 * browser that hydrates it, so a localised string
-                                 * is a hydration mismatch — in the one example
-                                 * whose whole point is server rendering. `<time>`
-                                 * carries the machine-readable value; localise in
-                                 * an effect if you want the reader's zone.
-                                 */}
-                                <time dateTime={new Date(board.newestAt).toISOString()}>{new Date(board.newestAt).toISOString().slice(11, 19)} UTC</time>
-                            </>
-                        )}
-                        . View source on the first paint — the list is already in the HTML.
-                    </p>
-                </>
-            )}
+            <p className="muted">
+                {board.total} message(s)
+                {board.newestAt > 0 && (
+                    <>
+                        , newest{" "}
+                        {/*
+                         * UTC, not `toLocaleTimeString()`. Locale and time zone
+                         * differ between the server render and the browser that
+                         * hydrates it, so a localised string is a hydration
+                         * mismatch — in the one example whose whole point is
+                         * server rendering. `<time>` carries the machine-readable
+                         * value; localise in an effect if you want the reader's
+                         * zone.
+                         */}
+                        <time dateTime={new Date(board.newestAt).toISOString()}>{new Date(board.newestAt).toISOString().slice(11, 19)} UTC</time>
+                    </>
+                )}
+                . View source on the first paint — the list is already in the HTML.
+            </p>
         </main>
     );
 };
