@@ -2980,8 +2980,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      *
      * Server-initiated dispatch does not call this — see
      * {@link WorkerOptions.authorizeShard} for why.
+     *
+     * `isAdmin` marks a request that already presented an admin credential. It
+     * skips the TENANT policy — `authorizeShard` and the no-callback
+     * default-deny — for the reason {@link WorkerOptions.authorizeShard}
+     * documents: an admin request carries an admin bearer, not an end-user
+     * session, so it resolves to a `null` identity that the recommended gate
+     * (`identity?.userId !== undefined`) cannot distinguish from an anonymous
+     * end user and denies. The reserved-name refusal below is NOT skipped: an
+     * admin credential does not make `foo::relay::0` a well-formed shard key.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false): Promise<void> => {
         // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
         // names, and a DO reads its own name to learn its role. A client-supplied
         // key carrying either infix therefore addresses a DO that believes it is
@@ -2991,6 +3000,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `authorizeShard`: the name is malformed whatever the policy says.
         if (shardKey.includes(RELAY_NAME_INFIX) || shardKey.includes(REPLICA_NAME_INFIX)) {
             throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+        }
+
+        if (isAdmin) {
+            return;
         }
 
         if (options.authorizeShard) {
@@ -4091,7 +4104,21 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
         const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
-        await assertShardAuthorized(identity, shardKey);
+        // The same admin exemption the RPC path applies to `__lunora_admin__:*`
+        // (see `authorizeRpcEnvelope`), and the one
+        // {@link WorkerOptions.authorizeShard} documents. Without it every app
+        // deploying the recommended gate 403s the studio's live panels: the
+        // upgrade presents an admin credential, not a session, so `identity` is
+        // `null` and the gate denies. The predicate is the one
+        // `scheduledAdminRoutes.checkWsAdmin` already uses — a browser cannot set
+        // `Authorization` on an upgrade, so the studio's short-lived sub-token
+        // rides `?token=`. Nothing is widened past the worker: the DO re-derives
+        // the credential per socket at upgrade AND on every write flush, so an
+        // admin subscription dies with a rotated token, and the only other
+        // admin-prefixed socket surface (`stream`) is refused outright there.
+        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()));
+
+        await assertShardAuthorized(identity, shardKey, adminUpgrade);
 
         // Clone the upgrade request, attaching only the resolved identity headers.
         // The original headers — crucially `Upgrade: websocket` — are preserved so

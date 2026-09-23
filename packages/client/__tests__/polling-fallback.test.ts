@@ -333,4 +333,42 @@ describe("lunoraClient polling fallback", () => {
 
         client.close();
     });
+
+    // The fallback carries no admin exclusion, and that is the right answer: a
+    // reserved `__lunora_admin__:*` subscription is an ordinary entry in the
+    // subscription registry, and the batch RPC it is re-run over exempts the
+    // admin prefix from `authorizeShard` and carries the client's auth token as
+    // the bearer the DO's admin gate wants. So a studio panel whose socket is
+    // refused degrades to a 5s poll rather than going dark — which is what makes
+    // a refused admin upgrade a degradation, not an outage.
+    it("polls a reserved admin subscription too, carrying the admin bearer", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ results: [{ body: { result: { rows: [] } }, id: 0, status: 200 }] }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("admin-bear");
+
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("__lunora_admin__:readTablePage"), { table: "messages" }, (value) => received.push(value));
+
+        await failOpens(2);
+
+        const init = fetchMock.mock.calls[0]?.[1];
+
+        expect(fetchMock.mock.calls[0]?.[0] as string).toContain("/_lunora/rpc-batch");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer admin-bear");
+        expect(received).toStrictEqual([{ rows: [] }]);
+
+        client.close();
+    });
 });

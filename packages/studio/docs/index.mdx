@@ -102,10 +102,13 @@ UI strings (`locale` / `i18n` props).
 
 Everything that reads or shapes stored state.
 
-- **Data**: _Browse and edit rows across your shard and global tables._ A
-  full-height table editor: pick a table, page through rows (table or JSON view),
-  filter, and (when `dataEditable` is on) insert, patch, and delete. It covers
-  both shard tables and `.global()` (D1-backed) tables. Three extra tools:
+- **Data**: _Browse rows across your shard and global tables, and edit the shard
+  ones._ A full-height table editor: pick a table, page through rows (table or
+  JSON view), filter, and — on **shard** tables, when `dataEditable` is on —
+  insert, patch, and delete. `.global()` (D1-backed) tables are **read-only
+  here**: the browser offers no write affordances for them, and the shard would
+  refuse one anyway (`GLOBAL_TABLE_NOT_EDITABLE`) because a global table is
+  edited through D1, not through the shard that reads it. Three extra tools:
     - **Mask preview**: a "Mask sensitive columns" toggle that previews
       redact/hash/custom output client-side and flags masked columns in the grid
       header, mirroring what [data masking](/docs/concepts/masking) does on the
@@ -210,12 +213,18 @@ schema, functions, and runtime signal.
 ## Operations
 
 The optional package-backed operational pages: scheduling, email, log
-forwarding, payments, and feature flags.
+forwarding, push notifications, payments, and feature flags.
 
 - **Scheduled**: _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/packages/scheduler)).
 - **Mail**: _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/packages/mail)).
 - **Log drains**: _Forward logs to Logpush, Tail Workers, or a webhook
   collector._
+- **Notifications**: _The registered push devices and their last delivery
+  outcome_ ([`@lunora/notify`](/docs/packages/notify)). One row per device —
+  kind, target endpoint, owning user, last register/send touch, and any delivery
+  error. Delivery secrets are stripped server-side. The store is a worker option
+  rather than shard state, so this page is a one-shot read with a manual
+  Refresh.
 - **Payments**: _Synced customers, subscriptions, and webhook events._
 - **Flags**: _Inspect feature flags and their live evaluation under a
   targeting context_ ([`@lunora/flags`](/docs/packages/flags)).
@@ -232,12 +241,28 @@ The studio reaches the backend two ways: reserved `__lunora_admin__:*` RPCs that
 admin-gated worker endpoints under `/_lunora/admin/*` for things that live
 outside the shard (scheduler, storage, functions, global tables, auth).
 
-**Both are disabled unless the server sets `LUNORA_ADMIN_TOKEN`**, and the client
-must present a matching `Authorization: Bearer` token. The components issue no
-credentials of their own. Configure the client's auth token at the host.
+The two planes are **not** gated the same way, and the difference matters when
+you deploy behind an identity provider:
+
+- The **`__lunora_admin__:*` RPCs are token-only.** `ShardDO` compares a bearer
+  against `LUNORA_ADMIN_TOKEN` and nothing else, so with no token set they are
+  disabled outright — there is no second way in.
+- The **`/_lunora/admin/*` worker endpoints** accept that same bearer _or_ a
+  per-request grant from [`adminGate`](/docs/packages/cloudflare-access) — the
+  seam `accessAdminGate(...)` plugs Cloudflare Access into. An Access-authorized
+  admin carries a `Cf-Access-Jwt-Assertion`, not a bearer, so this plane opens
+  with no token at all.
+
+Running Access alone therefore leaves the shard-served pages (data, schema,
+metrics, logs, migrations, export) dark: the worker still needs a static
+`LUNORA_ADMIN_TOKEN` to reach `ShardDO` — it is also what the cross-shard
+orchestrators mint into their forwarded calls for an Access-only request.
+
+The components issue no credentials of their own. Configure the client's auth
+token at the host.
 
 ```ts
-// worker entry — every admin surface is gated by adminToken
+// worker entry — token-only, so both planes are gated by adminToken
 createWorker({
     shardDO: env.SHARD,
     adminToken: env.LUNORA_ADMIN_TOKEN,
