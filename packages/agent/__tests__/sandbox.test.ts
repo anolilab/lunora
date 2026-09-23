@@ -169,6 +169,30 @@ describe(browserTool, () => {
 
         expect((calls[0]?.args as { kind: string }).kind).toBe("browser");
     });
+
+    it("strips a model-supplied render destination on EVERY op, not just the two that read it", async () => {
+        const tool = browserTool({ bucket: "SHOTS", root: "renders" });
+        const { calls, context } = recordingContext();
+
+        // `content` ignores the destination today, so a model-named `bucket`
+        // would only make the dispatcher resolve that env binding — inert, but
+        // the author owns the destination for every op or for none.
+        await tool.execute({ bucket: "SECRETS", op: "content", path: "../etc", root: "/" } as never, context);
+
+        expect(calls[0]?.args).toStrictEqual({ kind: "browser", op: "content" });
+
+        // And on a render op the author's destination wins outright.
+        await tool.execute({ bucket: "SECRETS", op: "screenshot", path: "../etc", root: "/", url: "https://x" } as never, context);
+
+        expect(calls[1]?.args).toStrictEqual({
+            bucket: "SHOTS",
+            kind: "browser",
+            op: "screenshot",
+            path: "t-1/call-1.png",
+            root: "renders",
+            url: "https://x",
+        });
+    });
 });
 
 describe(containerTool, () => {

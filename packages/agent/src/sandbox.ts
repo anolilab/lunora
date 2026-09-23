@@ -18,6 +18,16 @@ const SANDBOX_REF = toFunctionReference(SANDBOX_INVOKE_PATH);
 const BROWSER_RENDER_EXTENSIONS: Record<string, string> = { pdf: "pdf", screenshot: "png" };
 
 /**
+ * The render-destination fields `browserTool` pins itself. Stripped from model
+ * input before the author's are applied, so the destination is the author's for
+ * EVERY op — not just the two that read it. Without the strip, a `content` call
+ * carrying an out-of-schema `bucket` makes the dispatcher resolve whatever env
+ * binding the model named; the result is inert today, and pinning it is what
+ * keeps it inert if a later op starts reading the destination.
+ */
+const PINNED_RENDER_KEYS = new Set(["bucket", "path", "root"]);
+
+/**
  * The model-provided input to a {@link browserTool} call — a discriminated
  * union on `op` so one tool exposes every headless-browser capability.
  * @experimental
@@ -272,9 +282,11 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
                           ...(options.root === undefined ? {} : { root: options.root }),
                       };
 
+            const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
+
             return (await context.run(
                 SANDBOX_REF,
-                { ...input, ...destination, kind: "browser" },
+                { ...modelInput, ...destination, kind: "browser" },
                 { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS },
             )) as string;
         },
