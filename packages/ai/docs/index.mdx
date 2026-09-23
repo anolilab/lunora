@@ -32,8 +32,14 @@ lives on actions, not queries or mutations.
 import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action.input({ text: v.string() }).action(async ({ ctx, args: { text } }) => {
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ ctx, args: { text } }) => {
     const { text: summary } = await generateText({
+        // Both ends of the token bill are bounded: the input by `.max()` above,
+        // the completion here. An `action` is public RPC and inference is
+        // metered, so an unbounded completion is a denial-of-wallet vector — a
+        // short prompt can ask for an arbitrarily long answer, and output
+        // tokens are the expensive half.
+        maxOutputTokens: 300,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Summarize:\n\n${text}`,
     });
@@ -41,6 +47,11 @@ export const summarize = action.input({ text: v.string() }).action(async ({ ctx,
     return summary;
 });
 ```
+
+Bound every generation reachable from a public procedure, and rate-limit the
+entry point — the `ai_unbounded_generation_public` advisor lint flags the ones
+that are not. See the `ai` registry item (`lunora add ai`) for the full
+auth + rate-limit + bounds shape.
 
 `ctx.ai.model(id)` resolves a Workers AI model from the binding. Pass the
 resolved model to the AI SDK functions re-exported from `@lunora/ai`
