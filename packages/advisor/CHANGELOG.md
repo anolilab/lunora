@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.144...@lunora/advisor@1.0.0-alpha.145) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
 ## @lunora/advisor [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.143...@lunora/advisor@1.0.0-alpha.144) (2026-09-22)
 
 
