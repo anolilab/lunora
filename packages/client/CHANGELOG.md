@@ -1,3 +1,16 @@
+## @lunora/client [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.120...@lunora/client@1.0.0-alpha.121) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+* **sdks:** keep a cancelled subscription, and retry an unreadable batch slot ([#783](https://github.com/anolilab/lunora/issues/783)) ([4253052](https://github.com/anolilab/lunora/commit/42530522ca4e0437d488ce31b11778089226a81d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.154
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.133
+
 ## @lunora/client [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.119...@lunora/client@1.0.0-alpha.120) (2026-09-23)
 
 ### Bug Fixes
