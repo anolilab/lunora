@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { jsonSchema } from "ai";
 
 import { SANDBOX_INVOKE_PATH, toFunctionReference } from "./paths";
+import { SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS, SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS } from "./sandbox-budgets";
 import type { AgentToolContext, AgentToolDefinition } from "./types";
 
 /**
@@ -12,6 +13,53 @@ import type { AgentToolContext, AgentToolDefinition } from "./types";
  * (an action ctx carries both), exactly like a `functionTool`.
  */
 const SANDBOX_REF = toFunctionReference(SANDBOX_INVOKE_PATH);
+
+/**
+ * The R2 object extension for a byte-returning browser op, or `undefined` for
+ * an op that returns text and needs no destination.
+ *
+ * Keyed off the render's OWN format, not just the op: the component stores a
+ * `type: "jpeg"` screenshot with `mediaType: "image/jpeg"`, so a fixed `.png`
+ * would hand back a key whose extension contradicts the bytes — and anything
+ * that infers the format from the key (a CDN, a thumbnailer, a browser opening
+ * the object) would read it wrong.
+ */
+const browserRenderExtension = (input: BrowserToolInput): string | undefined => {
+    if (input.op === "pdf") {
+        return "pdf";
+    }
+
+    if (input.op === "screenshot") {
+        return input.type === "jpeg" ? "jpeg" : "png";
+    }
+
+    return undefined;
+};
+
+/**
+ * What a byte-returning browser op resolves to. The render is written to R2 and
+ * its key comes back — never the bytes, which would be truncated to the model's
+ * output cap and billed for nothing.
+ * @experimental
+ */
+interface BrowserRenderResult {
+    /** Size of the stored object. */
+    bytes: number;
+    /** The absolute R2 key the render was written to. */
+    key: string;
+    /** The render's content type, e.g. `image/jpeg`. */
+    mediaType: string;
+}
+
+/**
+ * The render-destination fields `browserTool` pins itself. Stripped from model
+ * input before the author's are applied, so the destination is the author's for
+ * EVERY op — not just the two that read it. Without the strip, a `content` call
+ * carrying an out-of-schema `bucket` makes the dispatcher resolve whatever env
+ * binding the model named; the result is inert today, and pinning it is what
+ * keeps it inert if a later op starts reading the destination.
+ */
+const PINNED_RENDER_KEYS = new Set(["bucket", "path", "root"]);
 
 /**
  * The model-provided input to a {@link browserTool} call — a discriminated
@@ -38,6 +86,18 @@ type ContainerToolInput = { args?: string[]; command?: string; op: "exec" } | { 
  * @experimental
  */
 interface BrowserToolOptions {
+    /**
+     * R2 binding name the byte-returning ops (`screenshot`, `pdf`) write their
+     * render to. REQUIRED for those two: a render is billed, and a tool result
+     * is capped at `MAX_TOOL_OUTPUT_CHARS`, so base64 bytes inline would be
+     * truncated mid-string and unusable by the model — paid for and thrown
+     * away. With a bucket the op returns `{ bytes, key, mediaType }` and the
+     * app serves or post-processes the object by key. `content`/`scrape`
+     * return text and need no bucket; without one, a `screenshot`/`pdf` call is
+     * refused as a tool result (never dispatched) so nothing is billed.
+     */
+    bucket?: string;
+
     /** Override the model-facing description (what the tool does). */
     description?: string;
 
@@ -50,6 +110,15 @@ interface BrowserToolOptions {
      * keep it deterministic).
      */
     needsApproval?: ((input: BrowserToolInput) => boolean) | boolean;
+
+    /**
+     * Key prefix inside {@link BrowserToolOptions.bucket} that renders are
+     * written under, isolating them from the rest of the bucket. Default: the
+     * bucket root. Each render lands at `<root>/<threadKey>/<toolCallId>.<ext>`
+     * — derived only from replay-stable identifiers, so a retried step
+     * overwrites its own object rather than accumulating one per attempt.
+     */
+    root?: string;
 }
 
 /**
@@ -199,6 +268,12 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  * `@cloudflare/playwright` `launch` peer) to `createShardDO()` — codegen never
  * injects that peer, so the browser op throws a directed error until it is wired.
  *
+ * `content`/`scrape` return text. `screenshot`/`pdf` write the render to
+ * `opts.bucket` and return `{ bytes, key, mediaType }` — never the bytes
+ * themselves, which a 4000-char tool-output cap would truncate into something
+ * unusable after paying for the render. Without a bucket those two ops are
+ * refused as a tool result and never dispatched.
+ *
  * Security: the model chooses the `url` with no allowlist, so this is an SSRF
  * surface — pass `opts.needsApproval` to gate calls a prompt-injected model
  * could aim at internal/link-local endpoints.
@@ -208,16 +283,50 @@ const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
  *
  * export const researcher = defineAgent({
  *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
- *     tools: { browser: browserTool() },
+ *     tools: { browser: browserTool({ bucket: "SANDBOX_BUCKET", root: "renders" }) },
  * });
  * ```
  * @experimental
  */
-const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, string> => {
+const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, BrowserRenderResult | string> => {
+    // An empty string is "not configured", not a binding name: `resolveBucket`
+    // would look up `env[""]`, find nothing, and throw `INTERNAL` — which is
+    // RETRYABLE, so the run would burn its whole retry budget and fail instead
+    // of returning the directed refusal below.
+    const bucket = options.bucket !== undefined && options.bucket.length > 0 ? options.bucket : undefined;
+
     return {
         description: options.description ?? DEFAULT_BROWSER_DESCRIPTION,
         // Pin `kind` LAST so out-of-schema model input can never override it.
-        execute: (input, context: AgentToolContext) => context.run(SANDBOX_REF, { ...input, kind: "browser" }) as Promise<string>,
+        execute: async (input, context: AgentToolContext) => {
+            const extension = browserRenderExtension(input);
+            // Refused HERE, as the tool's RESULT, rather than thrown: a throw
+            // out of `execute` is not a deterministic dispatch failure, so the
+            // durable step retries it to exhaustion and the run fails on a
+            // misconfiguration the model could route around. A string lets the
+            // next turn pick `content` instead — and nothing was dispatched, so
+            // no render was billed for output that could not be returned.
+            if (extension !== undefined && bucket === undefined) {
+                return `Cannot run a "${input.op}": this browser tool has no \`bucket\` configured, so the render has nowhere to go. Use "content" or "scrape" for page text, or ask the operator to pass \`browserTool({ bucket })\`.`;
+            }
+
+            const destination =
+                extension === undefined
+                    ? {}
+                    : {
+                          bucket,
+                          // Replay-stable: both identifiers are fixed for the
+                          // life of this tool call, so a retried step rewrites
+                          // the same object instead of leaking one per attempt.
+                          path: `${context.threadKey}/${context.toolCallId}.${extension}`,
+                          ...(options.root === undefined ? {} : { root: options.root }),
+                      };
+
+            const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
+
+            return (await context.run(SANDBOX_REF, { ...modelInput, ...destination, kind: "browser" }, { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS })) as
+                BrowserRenderResult | string;
+        },
         inputSchema: BROWSER_TOOL_SCHEMA,
         isLunoraAgentTool: true,
         ...(options.needsApproval === undefined ? {} : { needsApproval: options.needsApproval }),
@@ -230,6 +339,12 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
  * export). One tool exposes `fetch` (HTTP request) and `exec` (run a command);
  * the model picks via `op`. The call dispatches to the auto-registered
  * `sandbox:invoke` action, which carries `ctx.containers`.
+ *
+ * Every call is addressed to ONE instance per thread (`ctx.containers.<name>
+ * .get(threadKey)`), not a random pool member, so a multi-step session shares a
+ * filesystem — size the container's `maxInstances` for the number of live
+ * threads. See `sandbox-budgets.ts` for the time budgets and the re-execution
+ * ceiling that remains.
  *
  * By default a read-only (GET/HEAD/OPTIONS, or method-omitted) `fetch` runs
  * unattended while everything else is gated behind a human approval — an
@@ -266,9 +381,23 @@ const containerTool = (name: string, options: ContainerToolOptions = {}): AgentT
 
     return {
         description: options.description ?? DEFAULT_CONTAINER_DESCRIPTION,
-        // Pin `kind`/`name` LAST so out-of-schema model input can never override
-        // the authoritative container the author pinned.
-        execute: (input, context: AgentToolContext) => context.run(SANDBOX_REF, { ...input, kind: "container", name }) as Promise<string>,
+        // Pin `kind`/`name`/`instance` LAST so out-of-schema model input can never
+        // override the authoritative container — or the instance — the author pinned.
+        //
+        // `instance` is the THREAD's own container. The accessor's `.any()` picks
+        // a random pool member per call, so `exec("pnpm install")` followed by
+        // `exec("pnpm test")` lands on two different containers with two fresh
+        // disks — the second command runs against nothing the first produced.
+        // Addressing by thread makes a multi-step sandbox session share one
+        // filesystem, which is the only way the tool's own `exec` sequence means
+        // anything. It also costs one container instance per live thread, so a
+        // container fronting an agent wants its `maxInstances` sized for that.
+        execute: (input, context: AgentToolContext) =>
+            context.run(
+                SANDBOX_REF,
+                { ...input, instance: context.threadKey, kind: "container", name },
+                { timeoutMs: SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS },
+            ) as Promise<string>,
         inputSchema: CONTAINER_TOOL_SCHEMA,
         isLunoraAgentTool: true,
         needsApproval,
@@ -319,5 +448,5 @@ const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinitio
     };
 };
 
-export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
+export type { BrowserRenderResult, BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
 export { browserTool, containerTool, fsTool };

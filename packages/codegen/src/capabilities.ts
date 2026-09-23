@@ -119,7 +119,7 @@ const CAPABILITY_ROWS = [
     {
         appMethod: {
             configKey: "browser",
-            doc: "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`).",
+            doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.",
             method: "browser",
         },
         contextProperty: "browser",

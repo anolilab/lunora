@@ -195,6 +195,10 @@ export const answer = action.input({ q: v.string(), workspaceId: v.id("workspace
 
     // 3. Generate an answer grounded in the retrieved context.
     const { text } = await generateText({
+        // An `action` is public RPC and generation bills per output token, so
+        // cap the completion; without it an anonymous caller can drive
+        // arbitrarily long answers in a loop.
+        maxOutputTokens: 500,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Answer using only this context:\n${context}\n\nQuestion: ${q}`,
     });
