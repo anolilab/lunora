@@ -94,16 +94,26 @@ const columnsOf = (relativePath: string, table: string): string[] => {
 };
 
 const CANONICAL = "packages/payment/src/schema.ts";
-const COPY = "registry/payment/schema.ts";
+
+/**
+ * Every inline copy of the payment tables in this repo.
+ *
+ * `registry/payment/schema.ts` is what `lunora registry add payment` scaffolds;
+ * `templates/saas` declares the same tables because a template ships the
+ * composed result rather than running the item at clone time. A copy the gate
+ * does not name is a copy free to drift — which is how `priceIds` reached the
+ * canonical table and neither of these, twice.
+ */
+const COPIES = ["registry/payment/schema.ts", "templates/saas/lunora/payment/schema.ts"];
 
 /** The five tables the store reads and writes — named in both files' docstrings. */
 const TABLES = ["customers", "events", "paymentSessions", "subscriptions", "usageEvents"];
 
 describe("payment registry item mirrors the canonical tables", () => {
-    it.each(TABLES)("%s declares the same columns as @lunora/payment", (table) => {
+    it.each(COPIES.flatMap((copy) => TABLES.map((table) => [copy, table] as const)))("%s: %s declares the same columns as @lunora/payment", (copy, table) => {
         expect.assertions(1);
 
-        expect(columnsOf(COPY, table)).toStrictEqual(columnsOf(CANONICAL, table));
+        expect(columnsOf(copy, table)).toStrictEqual(columnsOf(CANONICAL, table));
     });
 
     it("reads a non-trivial column set (the scanner is not vacuously passing)", () => {

@@ -171,6 +171,7 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     next: "@lunora/react",
     nuxt: "@lunora/vue",
     "react-router": "@lunora/react",
+    saas: "@lunora/react",
     "solid-v2": "@lunora/solid",
     standalone: null,
     sveltekit: "@lunora/svelte",

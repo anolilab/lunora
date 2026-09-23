@@ -1,0 +1,226 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "ratelimit_buckets": {
+      "fields": {
+        "key": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "prev": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "ts": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "value": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_key": {
+          "fields": [
+            "key"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "saas_activity": {
+      "fields": {
+        "action": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "actorId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "meta": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "any",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "subjectId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "subjectType": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgCreatedAt": {
+          "fields": [
+            "organizationId",
+            "createdAt"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    },
+    "saas_organizations": {
+      "fields": {
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "plan": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "seats": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrganization": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": true
+        },
+        "byPlan": {
+          "fields": [
+            "plan"
+          ],
+          "unique": false
+        },
+        "bySlug": {
+          "fields": [
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "saas_projects": {
+      "fields": {
+        "archivedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "byOrgSlug": {
+          "fields": [
+            "organizationId",
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "shardBy:organizationId"
+    }
+  },
+  "version": 1
+}
