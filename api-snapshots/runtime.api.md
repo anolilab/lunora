@@ -3113,6 +3113,7 @@ interface ShardCdcOutcome {
     cursor: number;
     epoch?: string;
     error?: {
+        code: string;
         message: string;
         timedOut: boolean;
     };

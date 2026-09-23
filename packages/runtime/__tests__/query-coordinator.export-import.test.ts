@@ -271,6 +271,59 @@ describe("orchestrateCdcSync", () => {
         expect(result.shards[0]?.cursor).toBe(42);
         expect(result.shards[0]?.epoch).toBe("held-c1");
     });
+
+    it("distinguishes a forked timeline from a trimmed log and from a transient failure", async () => {
+        expect.assertions(4);
+
+        const registry = createStaticShardRegistry({ messages: ["c1", "c2", "c3"] });
+        const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry });
+
+        const spy = createShardSpy((shardKey) => {
+            if (shardKey === "c1") {
+                return Response.json({ error: { code: "CDC_TIMELINE_FORKED", message: "re-seed from a snapshot at epoch live-c1" } }, { status: 409 });
+            }
+
+            if (shardKey === "c2") {
+                return Response.json({ error: { code: "CDC_LOG_TRIMMED", message: "resume from a snapshot" } }, { status: 409 });
+            }
+
+            return Response.json({ error: { code: "INTERNAL", message: "internal error" } }, { status: 500 });
+        });
+
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: {}, defaultShardKey: null, tables: ["messages"] });
+
+        const errorFor = (shardKey: string): undefined | { code: string; message: string } => result.shards.find((shard) => shard.shardKey === shardKey)?.error;
+
+        // Three refusals that demand three different consumer responses: re-seed
+        // from a snapshot on the new timeline, re-seed from a snapshot, retry.
+        // Read off the status alone they are one indistinguishable transport
+        // failure, and the whole value of the epoch guard is the verdict it
+        // reaches the caller with.
+        expect(errorFor("c1")?.code).toBe("CDC_TIMELINE_FORKED");
+        expect(errorFor("c2")?.code).toBe("CDC_LOG_TRIMMED");
+        expect(errorFor("c3")?.code).toBe("INTERNAL");
+        // The shard's own remedy rides along with it, already `toErrorBody`-shaped
+        // on the shard side, so a connector can log something actionable.
+        expect(errorFor("c1")?.message).toContain("re-seed from a snapshot");
+    });
+
+    it("falls back to SHARD_HTTP_ERROR when a non-2xx carries no error envelope", async () => {
+        expect.assertions(3);
+
+        const registry = createStaticShardRegistry({ messages: ["c1"] });
+        const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry });
+
+        // The DO's own router answers an unrouted path with bare text, and a
+        // platform 5xx can carry no body at all. Neither is a shard verdict, so
+        // neither may be reported as one.
+        const spy = createShardSpy(() => new Response("Not found", { status: 404 }));
+
+        const result = await coordinator.orchestrateCdcSync(spy.namespace, { cursors: { c1: 7 }, defaultShardKey: null, tables: ["messages"] });
+
+        expect(result.shards[0]?.error?.code).toBe("SHARD_HTTP_ERROR");
+        expect(result.shards[0]?.error?.message).toContain("404");
+        expect(result.shards[0]?.cursor).toBe(7);
+    });
 });
 
 describe("orchestrateApplyCdc", () => {
