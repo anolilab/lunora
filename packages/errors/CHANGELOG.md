@@ -1,3 +1,15 @@
+## @lunora/errors [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.39...@lunora/errors@1.0.0-alpha.40) (2026-09-24)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a schema with a table named after a `ctx.db` writer method (`aggregate`,
+`count`, `findMany`, `rank`, `restore`, …) is now rejected at discovery. Such a schema was
+already broken at runtime; rename the table.
+
+### Bug Fixes
+
+* **codegen:** reserve every ctx.db writer method as a table name ([#807](https://github.com/anolilab/lunora/issues/807)) ([e344e62](https://github.com/anolilab/lunora/commit/e344e62f7a64252e8103d336d063c08a16de982b)), closes [#805](https://github.com/anolilab/lunora/issues/805)
+
 ## @lunora/errors [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.38...@lunora/errors@1.0.0-alpha.39) (2026-09-13)
 
 ### ⚠ BREAKING CHANGES
