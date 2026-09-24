@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.79...@lunora/scheduler@1.0.0-alpha.80) (2026-09-24)
+
+### Bug Fixes
+
+* **scheduler:** lease a claimed job instead of unindexing it ([#809](https://github.com/anolilab/lunora/issues/809)) ([72c7bff](https://github.com/anolilab/lunora/commit/72c7bff3a014b2bce1eb25866526f3279992312a)), closes [#803](https://github.com/anolilab/lunora/issues/803) [#801](https://github.com/anolilab/lunora/issues/801) [#793](https://github.com/anolilab/lunora/issues/793)
+
 ## @lunora/scheduler [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.78...@lunora/scheduler@1.0.0-alpha.79) (2026-09-24)
 
 
