@@ -1,7 +1,7 @@
 import type { Node, Type } from "ts-morph";
 
 import isAnyDegraded from "./internal/any-token";
-import { recordErasedReturn } from "./internal/erased-returns";
+import { recordErasedOutput } from "./internal/erased-returns";
 import { expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
 
 /**
@@ -53,9 +53,10 @@ const resolveStandardSchemaType = (node: Node): string | undefined => {
 
         // Same silent downgrade as the handler-return path, reported the same
         // way: the caller turns `undefined` into `unknown` and nothing else says
-        // a declared output type was dropped (issue #810).
+        // a declared output type was dropped (issue #810). Only reported for
+        // `.output(...)`; the same schema in a table or `.input(...)` is no return.
         if (expanded === undefined) {
-            recordErasedReturn(node, rendered);
+            recordErasedOutput(node, rendered);
         }
 
         return expanded;

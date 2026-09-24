@@ -31,6 +31,7 @@ import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFlagReads from "./discover/flag-reads";
 import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
 import discoverFunctions from "./discover/functions";
+import { checkpointErasedReturns } from "./discover/functions/internal/erased-returns";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverGeoIndexUsages from "./discover/geo-index-usages";
 import discoverHttpActionGuards from "./discover/http-action-guards";
@@ -422,6 +423,10 @@ const inferToFixpoint = (options: {
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
     // the files those types resolve against change. Everything else in the
     // pipeline reads syntax, not inference, and stays outside.
+    // Erasures recorded by a pass that is then re-run are stale — a later pass
+    // may render the same return — so each re-run drops the previous pass's.
+    const rewindErasedReturns = checkpointErasedReturns();
+
     let functions = discoverFunctions(project, lunoraDirectory);
     let mutators = discoverMutators(project, lunoraDirectory);
     let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -457,6 +462,7 @@ const inferToFixpoint = (options: {
         syncProjectFile(project, apiPath, apiContent);
         syncProjectFile(project, generatedFunctionsPath, functionsContent);
 
+        rewindErasedReturns();
         functions = discoverFunctions(project, lunoraDirectory);
         mutators = discoverMutators(project, lunoraDirectory);
         httpRoutes = discoverHttpRoutes(project, lunoraDirectory);

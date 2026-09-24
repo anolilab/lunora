@@ -62,6 +62,23 @@ const RECURSIVE_OUTPUT = `
         .query(async () => null as never);
 `;
 
+/**
+ * The same unreproducible schema as an ARGUMENT. `v.from(…)` resolves through one
+ * resolver wherever it appears, but an erased input is not a return type and was
+ * reported as one.
+ */
+const RECURSIVE_INPUT = `
+    import { query, v } from "@lunora/server";
+
+    interface Tree { value: string; child: Tree }
+
+    declare const treeSchema: { readonly "~standard": { readonly version: 1; readonly vendor: "probe"; readonly types?: { input: Tree; output: Tree } | undefined } };
+
+    export const takesTree = query
+        .input({ tree: v.from(treeSchema) })
+        .query(async () => "ok");
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -114,6 +131,14 @@ describe("procedure_return_type_erased", () => {
         const findings = advisoriesFor({ "declared.ts": RECURSIVE_OUTPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getDeclaredTree"]);
+    }, 300_000);
+
+    it("does not report a `v.from(…)` that erased in `.input(…)`", () => {
+        expect.assertions(1);
+
+        const findings = advisoriesFor({ "inputs.ts": RECURSIVE_INPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toStrictEqual([]);
     }, 300_000);
 
     it("stays quiet when the type IS reproducible", () => {

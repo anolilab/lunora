@@ -31,6 +31,15 @@ interface ErasedReturn {
 let erased: ErasedReturn[] = [];
 
 /**
+ * Whether the validator being parsed is a procedure's `.output(...)`. The
+ * `v.from(...)` resolver runs for table fields and `.input(...)` too, where an
+ * erasure is not a RETURN type and must not be reported as one. A flag rather
+ * than an ancestor walk because `.output(sharedSchema)` resolves an identifier:
+ * the `v.from` node then sits under a `const`, nowhere near the `.output` call.
+ */
+let parsingOutput = false;
+
+/**
  * The nearest enclosing variable binding — `export const getDoc = query…` — so
  * the report names the procedure rather than only a line. `undefined` for a
  * handler that is not bound to a name at all, which stays reportable by file and
@@ -62,6 +71,43 @@ const recordErasedReturn = (node: TsNode, rendered: string): void => {
     });
 };
 
+/**
+ * Record that a `v.from(...)` schema's output type erased — but only while
+ * {@link parseOutput} is running, since only there is it a return type.
+ */
+const recordErasedOutput = (node: TsNode, rendered: string): void => {
+    if (parsingOutput) {
+        recordErasedReturn(node, rendered);
+    }
+};
+
+/** Run `parse` over a procedure's `.output(...)` validator, so its erasures are reported. */
+const parseOutput = <T>(parse: () => T): T => {
+    const previous = parsingOutput;
+
+    parsingOutput = true;
+
+    try {
+        return parse();
+    } finally {
+        parsingOutput = previous;
+    }
+};
+
+/**
+ * Mark the buffer's current end; the returned function drops everything recorded
+ * after it. The inference fixpoint re-runs discovery until the render stops
+ * changing, and a return that erased on an early pass can render on a later one —
+ * only the final pass's erasures describe what is written.
+ */
+const checkpointErasedReturns = (): (() => void) => {
+    const mark = erased.length;
+
+    return () => {
+        erased.splice(mark);
+    };
+};
+
 /** Take everything recorded so far and reset the buffer. */
 const takeErasedReturns = (): ErasedReturn[] => {
     const taken = erased;
@@ -72,4 +118,4 @@ const takeErasedReturns = (): ErasedReturn[] => {
 };
 
 export type { ErasedReturn };
-export { recordErasedReturn, takeErasedReturns };
+export { checkpointErasedReturns, parseOutput, recordErasedOutput, recordErasedReturn, takeErasedReturns };
