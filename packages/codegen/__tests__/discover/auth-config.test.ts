@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+import { authTrustedOriginsWildcard } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -13,6 +14,16 @@ let project: Project;
 const write = (name: string, source: string): string => {
     const path = join(workdir, "lunora", name);
 
+    writeFileSync(path, source, "utf8");
+
+    return path;
+};
+
+/** Write a project-relative source file outside `lunora/` — e.g. the worker entry. */
+const writeAt = (relative: string, source: string): string => {
+    const path = join(workdir, relative);
+
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, source, "utf8");
 
     return path;
@@ -187,5 +198,31 @@ describe("discoverAuthConfig", () => {
         const found = discoverAuthConfig(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ scimOnNonTransactionalAdapter: false });
+    });
+
+    // `createAuth` is built in the worker entry by convention (the shape
+    // `examples/blog/src/server/index.ts` uses), never under `lunora/`. A
+    // `lunora/`-only walk saw no call site there, so every `auth_*` lint
+    // reported clean on a real app.
+    it("discovers a createAuth built in the worker entry, not just under lunora/", () => {
+        expect.assertions(2);
+
+        writeAt("src/server/index.ts", `export const auth = createAuth({ secret: "x", trustedOrigins: ["*"] });`);
+
+        const found = discoverAuthConfig(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ analyzable: true, exportName: "auth", file: "src/server/index", trustedOriginsWildcard: true });
+    });
+
+    it("feeds auth_trusted_origins_wildcard from a worker-entry createAuth", () => {
+        expect.assertions(2);
+
+        writeAt("src/server/index.ts", `export const auth = createAuth({ secret: "x", trustedOrigins: ["*"] });`);
+
+        const findings = authTrustedOriginsWildcard.run({ authConfigs: discoverAuthConfig(project, join(workdir, "lunora")), schema: { tables: [] } });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ name: "auth_trusted_origins_wildcard" });
     });
 });

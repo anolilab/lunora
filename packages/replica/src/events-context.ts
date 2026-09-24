@@ -44,18 +44,11 @@ export interface EventsFacade {
     append: (events: { payload: unknown; timestamp?: number; type: string }[]) => Promise<EventLogEntry[]>;
 
     /**
-     * Fetch a paginated range of entries.
-     * @returns `{ entries, hasMore }` — `hasMore` is `true` when another
-     * page exists.
+     * Fetch ONE bounded page of entries with `seq >= sinceSeq`.
+     * @returns `{ entries, truncated, cursor }` — pass `cursor` back as
+     * `sinceSeq` while `truncated` is `true` to walk the whole log.
      */
-    getRange: (fromSeq: number, limit?: number) => Promise<{ entries: EventLogEntry[]; hasMore: boolean }>;
-
-    /**
-     * Fetch all entries with `seq >= sinceSeq`.
-     *
-     * Pass `sinceSeq = 0` to fetch the entire log.
-     */
-    getSince: (sinceSeq: number) => Promise<EventLogEntry[]>;
+    getSince: (sinceSeq: number, limit?: number) => Promise<{ cursor?: number; entries: EventLogEntry[]; truncated: boolean }>;
 
     /** Return the total number of entries currently in the log. */
     getSize: () => Promise<number>;
@@ -79,7 +72,7 @@ export interface EventsContextOutput {
  * Create a middleware that attaches a typed `ctx.events` facade backed by
  * the given {@link EventLogDOClient}.
  *
- * The facade surfaces `append`, `getSince`, `getRange`, `getSize`, and
+ * The facade surfaces `append`, `getSince`, `getSize`, and
  * `getState` — every method the DO client exposes — so handlers can read
  * and write the event log without reaching for the DO stub directly.
  *

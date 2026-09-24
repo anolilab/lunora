@@ -12,6 +12,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -40,13 +41,22 @@ const trimTrailingSlashes = (value: string): string => {
 };
 
 /**
- * Non-enumerable brand stamped on every error {@link toDispatchError} builds.
- * A step body can throw an unrelated `LunoraError` that happens to share one
- * of {@link DETERMINISTIC_DISPATCH_STATUSES} (e.g. a genuine 404 from a
- * storage lookup) — the brand is what lets {@link isDeterministicDispatchFailure}
- * tell "this specific error came from a dispatch response" from "this error
- * merely has a matching status", so classification stays scoped to actual
- * dispatch failures instead of every step-body error in the allowlisted range.
+ * Non-enumerable brand stamped on an error {@link toDispatchError} reconstructed
+ * from a well-formed `{ error: { code, … } }` dispatch envelope.
+ *
+ * Two things are gated on it. First, a step body can throw an unrelated
+ * `LunoraError` that happens to share one of
+ * {@link DETERMINISTIC_DISPATCH_STATUSES} (e.g. a genuine 404 from a storage
+ * lookup) — the brand lets {@link isDeterministicDispatchFailure} tell "this
+ * came from a dispatch response" from "this merely has a matching status".
+ *
+ * Second, and the reason it is stamped on the parsed path ONLY: an unparseable
+ * body means the status did not come from the dispatch endpoint at all. An edge
+ * challenge, a WAF block or a misrouted error page answers 403/404 with HTML,
+ * and that failure is transient — the caller retries once the rule or the route
+ * is fixed. Branding it too would make {@link isDeterministicDispatchFailure}
+ * classify it on status alone and permanently dead-letter the queue batch /
+ * burn the workflow step.
  */
 const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
 
@@ -59,15 +69,20 @@ const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
 // eslint-disable-next-line no-secrets/no-secrets -- false positive: a Symbol description identifying this slot, not a credential
 const DISPATCH_MESSAGE_ID = Symbol("lunoraDispatchMessageId");
 
-/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} (and {@link DISPATCH_MESSAGE_ID}, when given) and return it. */
-const markAsDispatchFailure = (error: LunoraError, messageId?: string): LunoraError => {
-    Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
-
+/** Stamp `error` with {@link DISPATCH_MESSAGE_ID} when the caller scoped the call to one, and return it. */
+const attachMessageId = (error: LunoraError, messageId: string | undefined): LunoraError => {
     if (messageId !== undefined) {
         Object.defineProperty(error, DISPATCH_MESSAGE_ID, { value: messageId });
     }
 
     return error;
+};
+
+/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} (and {@link DISPATCH_MESSAGE_ID}, when given) and return it. */
+const markAsDispatchFailure = (error: LunoraError, messageId?: string): LunoraError => {
+    Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
+
+    return attachMessageId(error, messageId);
 };
 
 /**
@@ -94,11 +109,12 @@ const getDispatchMessageId = (error: unknown): string | undefined =>
  * attributed message (via {@link getDispatchMessageId}) instead of retrying the
  * whole batch, when the handler scoped its `ctx.run` call with a `messageId`.
  * An unparseable or unrecognized body falls back to a generic `INTERNAL`
- * carrying the HTTP status and the raw text (never deterministic, since it
- * isn't in the allowlist). `messageId`, when the caller
- * supplied one via {@link RunFunctionOptions.messageId}, is stamped onto the
- * built error via {@link markAsDispatchFailure} for {@link getDispatchMessageId}
- * to read back.
+ * carrying the HTTP status and the raw text, deliberately left UNBRANDED so it
+ * is never deterministic: a 4xx that did not carry a dispatch envelope did not
+ * come from the dispatch endpoint (an edge challenge, a WAF block, a proxy's
+ * 404 page), and those clear. `messageId`, when the caller
+ * supplied one via {@link RunFunctionOptions.messageId}, is stamped on either
+ * way for {@link getDispatchMessageId} to read back.
  */
 const toDispatchError = (label: string, status: number, rawBody: string, messageId: string | undefined): LunoraError => {
     try {
@@ -114,7 +130,7 @@ const toDispatchError = (label: string, status: number, rawBody: string, message
         // Not JSON / not the expected envelope — fall through to the generic error.
     }
 
-    return markAsDispatchFailure(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }), messageId);
+    return attachMessageId(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }), messageId);
 };
 
 /**
@@ -127,9 +143,23 @@ const toDispatchError = (label: string, status: number, rawBody: string, message
 const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 422]);
 
 /**
- * True when `error` is a {@link LunoraError} actually built by
- * {@link toDispatchError} (carrying its {@link DISPATCH_FAILURE_BRAND}) whose
- * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} — i.e. a dispatch
+ * Codes that share a deterministic STATUS but describe the dispatch
+ * INFRASTRUCTURE rather than the call. `DISPATCH_UNAUTHENTICATED` is the
+ * dispatch endpoint refusing our own signature/bearer — a missing, wrong, or
+ * rotated `LUNORA_SCHEDULER_SECRET`/`LUNORA_ADMIN_TOKEN`. It is a 403 like an
+ * RLS `FORBIDDEN`, but it says nothing about the message: retrying after the
+ * secret is fixed succeeds, so classifying it as deterministic would ack every
+ * queued message one delivery at a time and drain the queue while the operator
+ * is still fixing the credential.
+ */
+const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_UNAUTHENTICATED"]);
+
+/**
+ * True when `error` is a {@link LunoraError} {@link toDispatchError} rebuilt
+ * from a real dispatch error envelope (carrying its
+ * {@link DISPATCH_FAILURE_BRAND}) whose
+ * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} and whose `code` is not
+ * one of {@link INFRASTRUCTURE_DISPATCH_CODES} — i.e. a dispatch
  * failure a consumer (`@lunora/workflow`'s `createRunStep`, `@lunora/queue`'s
  * consumer) should treat as non-retryable rather than rethrowing for the
  * platform's default retry-on-throw. The brand check is what keeps this
@@ -140,7 +170,8 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
 const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
     isLunoraError(error) &&
     (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true &&
-    DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+    DETERMINISTIC_DISPATCH_STATUSES.has(error.status) &&
+    !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class
@@ -152,6 +183,21 @@ const toDispatchTimeoutError = (label: string, functionPath: string, timeoutMs: 
     new LunoraError("INTERNAL", `${label}: function dispatch to "${functionPath}" timed out after ${String(timeoutMs)}ms`, { status: 503 });
 
 interface DispatchRunnerOptions {
+    /**
+     * Declare that this producer has ALREADY wire-encoded `args`, so the runner
+     * forwards them verbatim instead of encoding again.
+     *
+     * Exactly one producer needs it: `createQueueWorkpool` must encode before the
+     * job enters a Cloudflare Queue, because that is its own JSON-serialising hop
+     * — a `bigint` throws at `queue.send`, long before this runner is reached. The
+     * runner then encodes a second time, and the shard decodes ONCE, so the
+     * handler receives a still-tagged array: `{ n: ["$lunora.wire$","bigint","7"] }`
+     * instead of `7n`, and a `Date` that is no longer a `Date`.
+     *
+     * Leave it unset everywhere else. A producer with no serialising hop of its
+     * own must NOT encode, or it hits the same asymmetry from the other side.
+     */
+    argsAlreadyEncoded?: boolean;
     /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
     env: Record<string, unknown>;
     /** Injectable fetch (tests); defaults to the global. */
@@ -168,14 +214,28 @@ interface DispatchRunnerOptions {
     identity?: { claims?: Record<string, unknown>; userId?: string };
     /** Package label for directed error messages, e.g. `@lunora/queue`. */
     label: string;
+
+    /**
+     * W3C `traceparent` of the work that is dispatching, forwarded so the callee
+     * JOINS this trace instead of minting a fresh one.
+     *
+     * The trigger tiers are where this matters: a queue batch or a cron fire opens
+     * its own trace (there is no inbound `traceparent` on a queue message or a cron
+     * controller), and without forwarding it every function the handler invokes was
+     * a separate, unrelated trace — the trigger span a childless root and its work
+     * a set of orphans. Absent → the callee mints its own trace, the prior
+     * behaviour and the right answer for a dispatch that belongs to nothing.
+     */
+    traceparent?: string;
 }
 
 /**
  * Build a {@link DispatchRunFunction} that invokes a Lunora function by POSTing
- * to `/_lunora/scheduler/dispatch` with the admin bearer. The parsed JSON body
- * (the function's return value) is resolved; an empty body resolves to
- * `undefined`. A non-ok response is rethrown as a {@link LunoraError} carrying
- * the dispatch endpoint's original `code`/`status`/`data` (so consumers can map
+ * to `/_lunora/scheduler/dispatch` with the admin bearer. The hop is
+ * wire-bracketed in both directions (see the `encodeArgsOrThrow` call below); an
+ * empty body resolves to `undefined`. A non-ok response is rethrown as a
+ * {@link LunoraError} carrying the dispatch endpoint's original
+ * `code`/`status`/`data` (so consumers can map
  * a deterministic 4xx to a non-retryable failure); an unparseable error body
  * falls back to `INTERNAL`. A non-empty body that is not valid JSON is a
  * malformed response (e.g. an intermediary's HTML error page) and throws an
@@ -196,6 +256,14 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
             throw new TypeError(`${label}: no fetch implementation available — pass fetchImpl or run on a platform with global fetch`);
         }
 
+        /**
+         * The args exactly as they belong on the wire: encoded here, unless the
+         * producer declared it already encoded them before its own serialising
+         * hop. See {@link DispatchRunnerOptions.argsAlreadyEncoded}.
+         */
+        const wireArgs = (): Record<string, unknown> =>
+            options.argsAlreadyEncoded === true ? (args ?? {}) : (encodeArgsOrThrow(label, function_.__lunoraRef, args ?? {}) as Record<string, unknown>);
+
         const origin = options.env.LUNORA_ORIGIN_URL;
 
         if (typeof origin !== "string" || origin.length === 0) {
@@ -210,6 +278,13 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 
         const url = `${trimTrailingSlashes(origin)}${SCHEDULER_DISPATCH_PATH}`;
         const headers: Record<string, string> = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+        // Joins the caller's trace rather than starting a new one. Read per call
+        // (not captured at construction) so a runner built once per invocation
+        // still reflects the trace it was given.
+        if (options.traceparent !== undefined && options.traceparent.length > 0) {
+            headers.traceparent = options.traceparent;
+        }
 
         // Attribute the dispatch to a verified caller when one is supplied — the
         // shard reconstructs identity from these headers independently of the
@@ -273,7 +348,22 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     // path, so a per-MESSAGE id reused across a handler's several
                     // calls would make the second call return the first's cached
                     // result. `JSON.stringify` omits the key when unset.
-                    body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, id: runOptions.dedupId, shardKey: runOptions.shardKey }),
+                    //
+                    // CANONICAL NOTE on wire-bracketing a dispatch hop — the
+                    // scheduler, the workpool and `ctx.scheduler` on an httpAction
+                    // point here rather than restate it. Plain JSON cannot carry a
+                    // `bigint` (`JSON.stringify` throws), and it flattens a
+                    // `Uint8Array` to `{"0":1,…}` and a `Date` to an ISO string. The
+                    // far end — `ShardDO` — `decodeWire`s `payload.args` and answers
+                    // `encodeWire(result)`, so BOTH ends of the hop must be bracketed
+                    // or the two halves disagree. `encodeWire`/`decodeWire` are
+                    // identity for pure-JSON values, so nothing else changes.
+                    body: JSON.stringify({
+                        args: wireArgs(),
+                        functionPath: function_.__lunoraRef,
+                        id: runOptions.dedupId,
+                        shardKey: runOptions.shardKey,
+                    }),
                     headers,
                     method: "POST",
                     signal: deadline.signal,
@@ -306,8 +396,10 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 return undefined;
             }
 
+            let parsed: unknown;
+
             try {
-                return JSON.parse(text);
+                parsed = JSON.parse(text);
             } catch {
                 // A non-empty body that isn't valid JSON can't be a function's
                 // JSON-encoded return value — it's a malformed response (an
@@ -317,6 +409,30 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     status: response.status,
                 });
             }
+
+            // The shard answers an ENVELOPE — `{ result }`, or `{ commitCursor,
+            // result }` / `{ lastMutationId, result }` for a mutation (built by the
+            // shard's `buildDispatchResponse`) — never the bare return value, which
+            // is why an unwrapped `parsed` handed every `ctx.run` caller
+            // `{ result: … }` where a workflow's `order.status` belonged.
+            //
+            // Insist on the envelope SHAPE before reading it: `null` and a bare
+            // scalar are not objects, `typeof [] === "object"` lets an array past,
+            // and an object missing the key reads `undefined` as "returned
+            // nothing". Requiring `result` costs nothing — a genuine `undefined`
+            // return is emitted as `{"result":["$lunora.wire$","undefined"]}`, with
+            // the key always present.
+            if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || !("result" in parsed)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `${label}: function dispatch returned a JSON body that is not a { result } envelope (${String(response.status)}): ${text}`,
+                    {
+                        status: response.status,
+                    },
+                );
+            }
+
+            return decodeWire((parsed as { result?: unknown }).result);
         } finally {
             deadline.dispose();
         }

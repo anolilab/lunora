@@ -55,6 +55,10 @@ module Lunora
   # changing value — WireBigInt and its tag exist for that case.
   MAX_EXACT_INTEGER = (2**53) - 1
 
+  # Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+  # non-finite epoch, +new Date(v)+ is an Invalid Date.
+  MAX_TIME_VALUE = 8.64e15
+
   # JavaScript's +undefined+, distinct from JSON null.
   #
   # As an object field it is dropped on encode (matching JSON.stringify); in an
@@ -187,7 +191,10 @@ module Lunora
       props[key.to_s] = encode_wire(item, depth + 1)
     end
 
-    encoded = [TAG, "error", value.name, value.message, props]
+    # Coerced, because decode_wire REFUSES a non-string in either slot and an
+    # encoder must not emit a frame its own decoder rejects. WireError is a
+    # Struct, so nothing stops a caller putting a number there.
+    encoded = [TAG, "error", value.name.to_s, value.message.to_s, props]
     # +cause+ rides a positional slot; absent when unset, keeping the 5-element form.
     # UNDEFINED alone means absent. Gating on nil as well conflated it with an
     # explicitly-null cause, which the reference encodes (it tests
@@ -215,10 +222,10 @@ module Lunora
     when "inf" then ::Float::INFINITY
     when "-inf" then -::Float::INFINITY
     when "bigint" then decode_bigint(value)
-    when "date" then WireDate.new(decode_wire(payload(value, "date"), depth + 1))
-    when "url" then WireUrl.new(payload_of(value, "url", ::String))
+    when "date" then decode_date(value, depth)
+    when "url" then decode_url(value)
     when "map" then decode_map(value, depth)
-    when "set" then WireSet.new(payload_of(value, "set", ::Array).map { |item| decode_wire(item, depth + 1) })
+    when "set" then decode_set(value, depth)
     when "error" then decode_error(value, depth)
     when "bytes" then decode_bytes(value)
     when "arr" then payload_of(value, "arr", ::Array).map { |item| decode_wire(item, depth + 1) }
@@ -247,6 +254,45 @@ module Lunora
     slot
   end
 
+  # An href must be ABSOLUTE — a scheme, per RFC 3986, then the rest.
+  #
+  # The reference builds a real URL, which throws on anything unparseable, while
+  # every port stored the string verbatim and accepted "not a url" — a frame
+  # that kills a JS peer's subscription and is waved through here. Reproducing
+  # WHATWG URL parsing in eight languages is not on offer (their own parsers
+  # disagree with it in the deep end), so the contract, and protocol/README.md
+  # 2.1, is the floor of it.
+  def decode_url(value)
+    href = payload_of(value, "url", ::String)
+    raise WireFormatError, "wire-codec: malformed url tag" unless href.match?(/\A[A-Za-z][A-Za-z0-9+\-.]*:/)
+
+    WireUrl.new(href)
+  end
+
+  # Epoch milliseconds, and nothing else. The payload is DECODED first (a nested
+  # +[TAG, "nan"]+ is how an invalid date travels), then type-checked: without
+  # that, +nil+ or a string became a WireDate carrying a value no arithmetic can
+  # use, which re-encoded as a legitimate-looking date tag.
+  def decode_date(value, depth)
+    epoch = decode_wire(payload(value, "date"), depth + 1)
+    raise WireFormatError, "wire-codec: malformed date tag" unless epoch.is_a?(::Numeric)
+
+    WireDate.new(time_clip(epoch))
+  end
+
+  # +new Date(epoch).getTime()+ — ECMAScript TimeClip.
+  #
+  # A Date truncates its argument toward zero, and anything non-finite or past
+  # +-8.64e15 becomes an Invalid Date, which the reference re-encodes as a NaN
+  # tag. Keeping the epoch verbatim put a date back on the wire carrying a value
+  # the reference's own Date never holds.
+  def time_clip(epoch)
+    milliseconds = epoch.to_f
+    return ::Float::NAN if milliseconds.nan? || milliseconds.infinite? || milliseconds.abs > MAX_TIME_VALUE
+
+    milliseconds.truncate
+  end
+
   def decode_bigint(value)
     raw = value[2]
     unless raw.is_a?(::String) && raw.length <= MAX_BIGINT_DIGITS && raw.match?(/\A-?\d+\z/)
@@ -254,6 +300,29 @@ module Lunora
     end
 
     WireBigInt.new(Integer(raw, 10))
+  end
+
+  # Decode a +set+ tag, collapsing duplicates the way a real Set does.
+  #
+  # The reference builds a +new Set+, which de-duplicates by SameValueZero and
+  # keeps the FIRST occurrence's position — the same rule as a Map's keys, so
+  # the same identity helper decides it. Carrying both copies re-encoded a set
+  # the reference would never emit.
+  def decode_set(value, depth)
+    items = []
+    seen = {}
+
+    payload_of(value, "set", ::Array).each do |entry|
+      item = decode_wire(entry, depth + 1)
+      identity = map_key_identity(item)
+
+      next if !identity.nil? && seen.key?(identity)
+
+      seen[identity] = true unless identity.nil?
+      items << item
+    end
+
+    WireSet.new(items)
   end
 
   # Decode a +map+ tag, refusing an entry that is not a real pair.
@@ -278,7 +347,9 @@ module Lunora
       # entries left two peers of one deployment reading a different value from
       # identical bytes.
       if !identity.nil? && seen.key?(identity)
-        pairs[seen[identity]] = [key, item]
+        # Only the VALUE. Map.prototype.set on a key already present keeps the
+        # key it holds, so a later -0 never replaces the 0 stored under it.
+        pairs[seen[identity]][1] = item
         next
       end
 
@@ -299,7 +370,10 @@ module Lunora
     when nil then "null"
     when true, false then "bool:#{key}"
     when WireBigInt then "big:#{key.value}"
-    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f}"
+    # SameValueZero holds -0 equal to 0, so a signed zero must not be its own
+    # key. `(-0.0).to_f.to_s` is "-0.0", which split the two; `+ 0.0` is the
+    # IEEE-754 identity that clears the sign of a zero and changes nothing else.
+    when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f + 0.0}"
     when ::String then "str:#{key}"
     else key.equal?(UNDEFINED) ? "undefined" : nil
     end
@@ -313,17 +387,32 @@ module Lunora
   def decode_error(value, depth)
     raise WireFormatError, "wire-codec: malformed error tag" unless value.length > 4 && value[4].is_a?(::Hash)
 
+    # Both label slots are type-CHECKED, like every other slot. Carrying a
+    # non-string through verbatim (as this port did) or substituting "" for it
+    # (as six others did) are two different wrong answers to a malformed frame.
+    raise WireFormatError, "wire-codec: malformed error tag" unless value[2].is_a?(::String) && value[3].is_a?(::String)
+
     props = decode_wire(value[4], depth + 1)
     cause = value.length > 5 ? decode_wire(value[5], depth + 1) : UNDEFINED
     WireError.new(value[2], value[3], props, cause)
   end
 
   def decode_bytes(value)
+    encoded = payload_of(value, "bytes", ::String)
+
     begin
-      data = Base64.strict_decode64(payload_of(value, "bytes", ::String))
+      data = Base64.strict_decode64(encoded)
     rescue ::ArgumentError => e
       raise WireFormatError, "wire-codec: invalid base64 in bytes tag: #{e.message}"
     end
+
+    # The payload must be CANONICAL, not merely decodable: exactly the string a
+    # conforming encoder would have written for these bytes. Re-encoding and
+    # comparing is the whole rule, and it is the same one line in every port —
+    # which matters more than whether this particular decoder already rejected
+    # each shape, since the next port will inherit its own language's leniency.
+    raise WireFormatError, "wire-codec: bytes payload is not canonical padded base64" unless Base64.strict_encode64(data) == encoded
+
     ctor = value.length > 3 ? value[3] : "Uint8Array"
     # A plain Uint8Array is a binary Ruby String and re-encodes to the
     # 2-element form; every other view keeps its constructor name.

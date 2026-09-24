@@ -13,8 +13,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import type { Plugin } from "vite";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DetectedFramework, FrameworkClass } from "../src/detect-framework";
 import {
@@ -62,16 +63,21 @@ const callResolveId = (plugin: Plugin, id: string): unknown => {
  * emitted in every non-"client" environment, so the harness defaults to `"ssr"`
  * (the real-entry path) and callers pass an explicit name when they care.
  */
-const callLoad = (plugin: Plugin, id: string, environment = "ssr"): unknown => {
+/** Warnings the plugin pushed through its context during `callLoad`. */
+const loadWarnings: string[] = [];
+
+const callLoad = async (plugin: Plugin, id: string, environment = "ssr"): Promise<unknown> => {
     const hook = plugin.load;
     const run = typeof hook === "function" ? hook : hook?.handler;
 
-    return run?.call({ environment: { name: environment } } as never, id, undefined as never);
+    // `warn` included: the plugin reports a config it could not load through the
+    // plugin context, and a stub without it turned that report into a TypeError.
+    return await run?.call({ environment: { name: environment }, warn: (message: string) => loadWarnings.push(message) } as never, id, undefined as never);
 };
 
 describe("framework-compose-plugin", () => {
     describe("isAutoComposable", () => {
-        it("is true for each known class-A framework", () => {
+        it("is true for each known class-A framework", async () => {
             expect.hasAssertions();
 
             expect(isAutoComposable(context("tanstack-start", "A"))).toBe(true);
@@ -79,7 +85,7 @@ describe("framework-compose-plugin", () => {
             expect(isAutoComposable(context("solid-start", "A"))).toBe(true);
         });
 
-        it("is false for class-B, class-C, and undetected projects", () => {
+        it("is false for class-B, class-C, and undetected projects", async () => {
             expect.hasAssertions();
 
             expect(isAutoComposable(context("sveltekit", "B"))).toBe(false);
@@ -89,7 +95,7 @@ describe("framework-compose-plugin", () => {
     });
 
     describe("resolveId / load (class A → composition)", () => {
-        it("resolves the virtual worker id for a class-A project", () => {
+        it("resolves the virtual worker id for a class-A project", async () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), context("tanstack-start", "A"));
@@ -99,52 +105,53 @@ describe("framework-compose-plugin", () => {
             expect(callResolveId(plugin, "some-other-module")).toBeUndefined();
         });
 
-        it("loads a composeWorker entry that routes _lunora to Lunora and falls through to the framework SSR handler", () => {
+        it("loads a defineApp entry that routes _lunora to Lunora and falls through to the framework SSR handler", async () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), context("react-router", "A"));
-            const source = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID);
+            const source = await callLoad(plugin, RESOLVED_LUNORA_WORKER_ID);
 
             expect(typeof source).toBe("string");
 
             const code = source as string;
 
-            // Composition is via composeWorker with an httpRouter seam — the
-            // worker that routes /_lunora/* to Lunora and everything else to the
-            // framework handler (precedence enforced inside @lunora/runtime).
-            expect(code).toContain("composeWorker(");
-            expect(code).toContain("httpRouter:");
+            // Composition is via the generated `defineApp()` builder with the
+            // framework handler on its httpRouter seam — the worker that routes
+            // /_lunora/* to Lunora and everything else to the framework handler
+            // (precedence enforced inside @lunora/runtime).
+            expect(code).toContain("defineApp()");
+            expect(code).toContain(".httpRouter(");
+            expect(code).toContain(".shard((env) => env.SHARD)");
             // React Router wiring: createRequestHandler over its virtual build.
             expect(code).toContain('from "react-router"');
             expect(code).toContain("virtual:react-router/server-build");
-            // Generated artifacts are wired in via ABSOLUTE paths (projectRoot +
+            // The generated builder is wired in via an ABSOLUTE path (projectRoot +
             // generatedDir). Virtual modules have no real filesystem path so
             // relative specifiers like "./lunora/_generated/..." can't be resolved
             // by Vite/rolldown — absolute paths work in all bundler environments.
             // baseOptions() uses projectRoot="/workspace/app", generatedDir="lunora/_generated".
-            expect(code).toContain('"/workspace/app/lunora/_generated/functions"');
-            expect(code).toContain("createShardDO()");
-            expect(code).toContain("shardDO: env.SHARD");
+            expect(code).toContain('import { defineApp } from "/workspace/app/lunora/_generated/app"');
+            expect(code).toContain("export default app;");
         });
 
-        it("emits a worker-free stub in the client environment but the real entry in the worker environment", () => {
+        it("emits a worker-free stub in the client environment but the real entry in the worker environment", async () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), context("react-router", "A"));
 
             // Browser environment: a stub with none of the worker-only runtime, so
             // an accidental client import can't pull worker code into the bundle.
-            const clientSource = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "client") as string;
+            const clientSource = (await callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "client")) as string;
 
-            expect(clientSource).not.toContain("composeWorker(");
-            expect(clientSource).not.toContain("createShardDO");
+            expect(clientSource).not.toContain("defineApp(");
+            expect(clientSource).not.toContain("ShardDO");
 
             // Worker environment (named after the worker, not "client"): the real
             // composed entry.
-            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "my-worker")).toContain("composeWorker(");
+            await expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "my-worker")).resolves.toContain("defineApp()");
         });
 
-        it("threads the plugin's `shard` option into the composed worker it loads", () => {
+        it("threads the plugin's `shard` option into the composed worker it loads", async () => {
             expect.hasAssertions();
 
             // End to end through the plugin, because the composed entry is the
@@ -152,34 +159,34 @@ describe("framework-compose-plugin", () => {
             // is precisely what hid this gap.
             const plugin = frameworkComposePlugin(baseOptions({ shard: { reactiveCache: true } }), context("tanstack-start", "A"));
 
-            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toContain('createShardDO({"reactiveCache":true})');
+            await expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).resolves.toContain(".reactiveCache(true)");
         });
 
-        it("bases the emitted imports on the resolved generated dir", () => {
+        it("bases the emitted imports on the resolved generated dir", async () => {
             expect.hasAssertions();
 
             // `generatedDir` is derived from `schemaDir`, never user-set — codegen
             // hardcodes `<schemaDir>/_generated`, so anything else pointed the
             // composed entry's imports at a directory nothing writes.
             const plugin = frameworkComposePlugin(baseOptions({ generatedDir: "server/_generated", schemaDir: "server" }), context("solid-start", "A"));
-            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
+            const code = (await callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)) as string;
 
-            expect(code).toContain('"/workspace/app/server/_generated/functions"');
+            expect(code).toContain('"/workspace/app/server/_generated/app"');
             expect(code).toContain('from "@solidjs/start/server-handler"');
         });
     });
 
     describe("no-op paths (class C and undetected must be untouched)", () => {
-        it("does not resolve or load anything for a class-C (SPA) project", () => {
+        it("does not resolve or load anything for a class-C (SPA) project", async () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), context("none", "C"));
 
             expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBeUndefined();
-            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBeUndefined();
+            await expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).resolves.toBeUndefined();
         });
 
-        it("resolves and loads the virtual worker entry even when cloudflare:false (BYO Cloudflare plugin)", () => {
+        it("resolves and loads the virtual worker entry even when cloudflare:false (BYO Cloudflare plugin)", async () => {
             expect.hasAssertions();
 
             // `cloudflare: false` means "don't add @cloudflare/vite-plugin a second
@@ -190,67 +197,67 @@ describe("framework-compose-plugin", () => {
             const plugin = frameworkComposePlugin(baseOptions({ cloudflare: false }), context("tanstack-start", "A"));
 
             expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBe(RESOLVED_LUNORA_WORKER_ID);
-            expect(typeof callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBe("string");
+            expect(typeof (await callLoad(plugin, RESOLVED_LUNORA_WORKER_ID))).toBe("string");
         });
 
-        it("does not resolve or load anything for an undetected project", () => {
+        it("does not resolve or load anything for an undetected project", async () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), {});
 
             expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBeUndefined();
-            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBeUndefined();
+            await expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).resolves.toBeUndefined();
         });
     });
 
     describe("buildWorkerEntrySource (pure)", () => {
-        it("emits a TanStack Start entry that imports the server entry namespace and composes it", () => {
+        it("emits a TanStack Start entry that imports the server entry namespace and composes it", async () => {
             expect.hasAssertions();
 
             const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
 
             expect(code).toContain('import * as ssrModule from "@tanstack/react-start/server-entry"');
-            expect(code).toContain("httpRouter: ssrModule.default");
-            expect(code).toContain("composeWorker(");
+            expect(code).toContain(".httpRouter(ssrModule.default)");
+            expect(code).toContain("defineApp()");
         });
 
-        it("omits allowUnauthenticatedShardAccess by default (shard access stays default-denied)", () => {
+        it("omits allowUnauthenticatedShardAccess by default (shard access stays default-denied)", async () => {
             expect.hasAssertions();
 
             expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).not.toContain("allowUnauthenticatedShardAccess");
         });
 
-        it("emits allowUnauthenticatedShardAccess into composeWorker when opted in", () => {
+        it("emits allowUnauthenticatedShardAccess through the worker-options escape hatch when opted in", async () => {
             expect.hasAssertions();
 
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { allowUnauthenticatedShardAccess: true });
 
-            expect(code).toContain("allowUnauthenticatedShardAccess: true,");
+            expect(code).toContain(".extend(() => ({ allowUnauthenticatedShardAccess: true }))");
         });
 
-        it("posix-ifies a Windows backslash generatedImportBase in the emitted specifiers", () => {
+        it("posix-ifies a Windows backslash generatedImportBase in the emitted specifiers", async () => {
             expect.hasAssertions();
 
             // On Windows `resolve()` yields backslash paths; embedded raw into a JS
             // string literal `\U` is an invalid unicode escape → SyntaxError, and
             // `\l`/`\a` silently vanish → unresolvable specifier. The emitter must
             // convert to forward slashes so the composed worker boots everywhere.
-            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, ["containers"]);
+            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, { classModules: ["containers"] });
 
-            expect(code).toContain('"C:/Users/dev/app/lunora/_generated/functions"');
+            expect(code).toContain('"C:/Users/dev/app/lunora/_generated/app"');
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/containers"');
             // No stray backslash survives into the emitted module source.
             expect(code).not.toContain("\\");
         });
 
-        it("throws for a framework without class-A wiring", () => {
+        it("throws for a framework without class-A wiring", async () => {
             expect.hasAssertions();
 
             // SvelteKit is class B — no class-A worker wiring exists for it.
             expect(() => buildWorkerEntrySource("sveltekit", "./lunora/_generated")).toThrow(/no class-A worker wiring/);
         });
 
-        it("does not re-export any generated class module by default", () => {
+        it("does not re-export any generated class module by default", async () => {
             expect.hasAssertions();
 
             const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
@@ -260,120 +267,236 @@ describe("framework-compose-plugin", () => {
             expect(code).not.toContain("/agents");
         });
 
-        it("re-exports the generated workflow and agent classes, not just containers", () => {
+        it("re-exports the generated workflow and agent classes, not just containers", async () => {
             expect.hasAssertions();
 
             // Regression: only `containers` was ever forwarded, so a class-A app with
             // a `defineWorkflow` (or `defineAgent`) got a `class_name` in
             // wrangler.jsonc the bundle did not export and `wrangler deploy` hard-failed.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["agents", "containers", "workflows"]);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["agents", "containers", "workflows"] });
 
             expect(code).toContain('export * from "./lunora/_generated/agents"');
             expect(code).toContain('export * from "./lunora/_generated/containers"');
             expect(code).toContain('export * from "./lunora/_generated/workflows"');
         });
 
-        it("re-exports the generated container classes when the project declares containers", () => {
+        it("re-exports the generated container classes when the project declares containers", async () => {
             expect.hasAssertions();
 
             // wrangler requires every container class_name to be exported by the
             // worker; a class-A app has no hand-written entry, so the composed one
             // must forward them.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", ["containers"]);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["containers"] });
 
             expect(code).toContain('export * from "./lunora/_generated/containers"');
         });
 
-        it("emits a bare createShardDO() when no shard config is declared", () => {
-            expect.hasAssertions();
-
-            // Byte-identical to the pre-existing output for every project that
-            // declares nothing.
-            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).toContain("export const ShardDO = createShardDO();");
-        });
-
-        it("bakes a declared shard config into the composed createShardDO() call", () => {
-            expect.hasAssertions();
-
-            // Regression: a class-A app has no worker entry, so it never calls the
-            // generated `defineApp()` builder and never reached
-            // `createShardDO(config)` — `cdc` and the whole reactive query cache
-            // were unreachable for TanStack Start / vinext / React Router /
-            // SolidStart no matter what the app wanted.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], false, false, {
-                reactiveCache: { maxEntries: 250 },
-                cdc: true,
-            });
-
-            // Keys sorted, so the emitted entry does not churn on literal ordering.
-            expect(code).toContain('export const ShardDO = createShardDO({"cdc":true,"reactiveCache":{"maxEntries":250}});');
-        });
-
-        it("imports the runtime from the granular `@lunora/runtime` by default", () => {
+        it("adds no shard-config call when none is declared", async () => {
             expect.hasAssertions();
 
             const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
 
-            expect(code).toContain('import { composeWorker } from "@lunora/runtime"');
+            expect(code).toContain(".httpRouter(ssrModule.default)\n    .build();");
         });
 
-        it("imports the runtime via the umbrella subpath when the project uses `lunorash`", () => {
+        it("bakes a declared shard config into the composed builder chain", async () => {
             expect.hasAssertions();
 
-            // A `lunorash`-only install (the starter-template default) does not expose
-            // the bare `@lunora/runtime` specifier, so the composed worker must reach
-            // the runtime through the umbrella subpath instead.
-            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", [], true);
+            // Regression: a class-A app has no worker entry, so it never called the
+            // generated `defineApp()` builder — `cdc`, the reactive query cache and
+            // the relation knobs were unreachable for TanStack Start / vinext /
+            // React Router / SolidStart no matter what the app wanted.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", {
+                classModules: [],
+                allowUnauthenticatedShardAccess: false,
+                shard: {
+                    reactiveCache: { maxEntries: 250 },
+                    relationExistsPushDown: "never",
+                    cdc: true,
+                },
+            });
 
-            expect(code).toContain('import { composeWorker } from "lunorash/runtime"');
-            expect(code).not.toContain('from "@lunora/runtime"');
-        });
-    });
-
-    describe("umbrella-aware runtime import (scaffolded project)", () => {
-        // Regression for the dev-server boot failure
-        // (`Cannot find module '@lunora/runtime' imported from 'virtual:lunora/worker'`):
-        // a `lunorash`-only install — the starter-template default — cannot resolve the
-        // bare `@lunora/runtime`, so the composed worker must reach the runtime through
-        // the umbrella subpath. This drives the REAL plugin path (`projectUsesUmbrella`
-        // reading an actual scaffolded `package.json`), exactly as a project boot would,
-        // so a regression in the detection — not just the pure emitter — is caught.
-        const dirs: string[] = [];
-
-        const scaffold = (pkg: Record<string, unknown>): string => {
-            const dir = mkdtempSync(join(tmpdir(), "lunora-compose-"));
-
-            writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
-            dirs.push(dir);
-
-            return dir;
-        };
-
-        afterAll(() => {
-            for (const dir of dirs) {
-                rmSync(dir, { force: true, recursive: true });
-            }
+            // Keys sorted, so the emitted entry does not churn on literal ordering.
+            expect(code).toContain('.cdc(true)\n    .reactiveCache({"maxEntries":250})\n    .relationExistsPushDown("never")');
         });
 
-        it("imports the runtime via `lunorash/runtime` when the scaffolded project depends on the umbrella", () => {
+        it("wires ctx.scheduler into the composed entry when the binding is declared", async () => {
+            expect.assertions(3);
+
+            // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on
+            // the worker, and a class-A app has no hand-written entry to add the
+            // re-export to — so deferred dispatch was simply unavailable there.
+            //
+            // Keyed on the generated `scheduler` module, NOT the wrangler binding:
+            // codegen writes that module off the same `hasScheduler` that decides
+            // whether the builder has a `.scheduler()` method at all, so the call
+            // cannot land on a builder that lacks it.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["scheduler"] });
+
+            expect(code).toContain(".scheduler({ namespace: (env) => env.SCHEDULER })");
+            // Forwarded by the ordinary star re-export, so the plugin hard-codes
+            // no `@lunora/scheduler` specifier of its own.
+            expect(code).toContain(`export * from "./lunora/_generated/scheduler";`);
+            // Ordered before `.httpRouter(...)`, which `.build()` follows.
+            expect(code.indexOf(".scheduler(")).toBeLessThan(code.indexOf(".httpRouter("));
+        });
+
+        it("composes nothing scheduler-shaped when the binding is absent", async () => {
+            expect.assertions(2);
+
+            // An app codegen wrote no `scheduler` module for has no scheduler, so
+            // the entry must be byte-for-byte what it was — and must NOT name a
+            // specifier the app has no dependency on.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: [] });
+
+            expect(code).not.toContain(".scheduler(");
+            expect(code).not.toContain("SchedulerDO");
+        });
+
+        describe("discovering the app hook in lunora.config.ts", () => {
+            // `buildWorkerEntrySource` is pure and covered above; this drives the
+            // `load()` hook against a real directory, which is the only place the
+            // probe itself runs. Without it the seam was verified everywhere except
+            // where it decides whether to fire.
+            let projectRoot: string;
+
+            beforeEach(() => {
+                projectRoot = mkdtempSync(join(tmpdir(), "lunora-vite-app-config-"));
+            });
+
+            afterEach(() => {
+                rmSync(projectRoot, { force: true, recursive: true });
+            });
+
+            const loadComposedEntry = async (): Promise<string> => {
+                const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
+
+                return (await callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)) as string;
+            };
+
+            it("wires the hook when the config declares one", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(projectRoot, "lunora.config.ts"), `export default { app: (app) => app };\n`, "utf8");
+
+                const code = await loadComposedEntry();
+
+                expect(code).toContain("const app = lunoraConfig.app(defineApp()");
+                // No `?? identity` fallback: it could only fire if the config
+                // changed between the host check and the bundle, and it would then
+                // boot a worker with the user's wiring silently missing.
+                expect(code).not.toContain("((builder) => builder)");
+            });
+
+            it("ignores a hook reached by a named export, which the emitted entry cannot import", async () => {
+                expect.assertions(1);
+
+                // The entry emits `import lunoraConfig from "…"`, so a hook that is
+                // not on the DEFAULT export fails the bundle with "does not provide
+                // an export named default". An earlier revision accepted it: the
+                // loader used `interopDefault`, which collapses the namespace onto
+                // the default and made the shapes indistinguishable here while the
+                // emitter still spoke only one of them.
+                writeFileSync(join(projectRoot, "lunora.config.ts"), `export const app = (builder) => builder;\n`, "utf8");
+
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+            });
+
+            it.each([
+                ["declares no app hook", `export default { target: "cloudflare" };\n`],
+                ["has an app that is not a function", `export default { app: "nope" };\n`],
+                ["throws on load", `throw new Error("boom");\n`],
+                ["does not parse", `export default { app: (app => app };\n`],
+            ])("composes without a hook when the config %s", async (_label, source) => {
+                expect.assertions(1);
+
+                // Each of these would otherwise fail the BUNDLE with "does not
+                // provide an export named …" against a virtual module — the least
+                // debuggable error this plugin can produce. The config is LOADED to
+                // decide, by the same loader the CLI uses, so a broken one degrades
+                // to the composition it had before.
+                writeFileSync(join(projectRoot, "lunora.config.ts"), source, "utf8");
+
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+            });
+
+            it("reports a config it could not load instead of dropping the hook in silence", async () => {
+                expect.assertions(2);
+
+                // The hook is worker code but is EVALUATED on the host, so an
+                // import that does not resolve there — a `cloudflare:*` module, or
+                // a tsconfig path alias, which `jiti` does not read, and which 5
+                // templates ship — throws. Swallowing that composed a worker with
+                // the user's `.auth()` / `.global()` wiring silently missing.
+                loadWarnings.length = 0;
+                writeFileSync(join(projectRoot, "lunora.config.ts"), `import { x } from "~/nope";\nexport default { app: (app) => x(app) };\n`, "utf8");
+
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+                expect(loadWarnings.join("\n")).toContain("could not be loaded");
+            });
+
+            it("composes as before when there is no config file", async () => {
+                expect.assertions(1);
+
+                await expect(loadComposedEntry()).resolves.not.toContain("lunoraConfig");
+            });
+        });
+
+        it("composes the app's own builder calls through the config's app hook", async () => {
+            expect.assertions(3);
+
+            // The seam for calls this plugin cannot derive. `.scheduler(...)` is
+            // mechanical; `.auth(...)` takes the app's better-auth options,
+            // `.global(...)` its D1 writer, `.vectors(...)` its embedder — and
+            // `resolveIdentity` is only ever set by `.auth()` / `.access()` /
+            // `.extend()`, all builder calls a class-A app had no entry to write.
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated", { appConfigModule: "/app/lunora.config.ts" });
+
+            expect(code).toContain(`import lunoraConfig from "/app/lunora.config.ts";`);
+            expect(code).toContain("const app = lunoraConfig.app(defineApp()");
+            // The framework wiring stays ours: the app's calls land BETWEEN the
+            // shard selector and `.httpRouter(...)` / `.build()`.
+            expect(code.indexOf("lunoraConfig.app(")).toBeLessThan(code.indexOf(".httpRouter("));
+        });
+
+        it("adds no blank-line churn for an app with no app config", async () => {
+            expect.assertions(2);
+
+            // The app-config import carries its own leading newline precisely so
+            // an app without the module is unchanged. Interpolating it on its own
+            // line instead left a stray blank line in every generated entry —
+            // spurious HMR and a confusing diff on an unrelated release.
+            const code = buildWorkerEntrySource("tanstack-start", "/app/lunora/_generated");
+
+            expect(code).toContain(`import { defineApp } from "/app/lunora/_generated/app";\n\nconst app = defineApp()`);
+            expect(code).not.toContain("\n\n\n");
+        });
+
+        it("forwards every generated class module as a star re-export", async () => {
+            expect.assertions(1);
+
+            // `@lunora/config`'s wrangler validator DECIDES which classes this
+            // entry exports by reading these modules off `GENERATED_CLASS_MODULES`
+            // (which it owns — this plugin re-exports it). A `class_name` outside
+            // that set is reported as unbundlable, so "one star re-export per
+            // module the project has" is the contract between the two, and it is
+            // only visible in the emitted source.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: [...GENERATED_CLASS_MODULES] });
+
+            expect(GENERATED_CLASS_MODULES.every((module) => code.includes(`export * from "./lunora/_generated/${module}"`))).toBe(true);
+        });
+
+        it("imports nothing but the framework handler and the generated builder", async () => {
             expect.hasAssertions();
 
-            const projectRoot = scaffold({ dependencies: { lunorash: "^1.0.0" }, name: "umbrella-app" });
-            const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
-            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
+            // The composed entry used to import `@lunora/runtime` (or `lunorash/runtime`)
+            // directly, which a `lunorash`-only install could not resolve under the
+            // scoped specifier. Going through `_generated/app` — whose own imports
+            // codegen already writes umbrella-aware — removes the question entirely.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
 
-            expect(code).toContain('import { composeWorker } from "lunorash/runtime"');
-            expect(code).not.toContain('from "@lunora/runtime"');
-        });
-
-        it("imports the granular `@lunora/runtime` when the scaffolded project uses scoped packages", () => {
-            expect.hasAssertions();
-
-            const projectRoot = scaffold({ dependencies: { "@lunora/server": "^1.0.0" }, name: "granular-app" });
-            const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
-            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
-
-            expect(code).toContain('import { composeWorker } from "@lunora/runtime"');
+            expect(code).not.toContain("@lunora/runtime");
+            expect(code).not.toContain("lunorash/runtime");
         });
     });
 });

@@ -72,16 +72,6 @@ describe("createDoAuthWiring", () => {
             await expect(authHandler(new Request("https://example.test/api/auth/get-session"))).resolves.toBeDefined();
         });
 
-        it("normalizes a trailing slash on the base path", async () => {
-            expect.assertions(2);
-
-            const { namespace } = createNamespace(() => new Response("served"));
-            const { authHandler } = createDoAuthWiring({ basePath: "/api/auth/", internalSecret: SECRET, namespace });
-
-            await expect(authHandler(new Request("https://example.test/api/auth/get-session"))).resolves.toBeDefined();
-            await expect(authHandler(new Request("https://example.test/api/authorize"))).resolves.toBeUndefined();
-        });
-
         it("leaves a non-auth route alone, so the Lunora worker still handles it", async () => {
             expect.assertions(2);
 
@@ -93,14 +83,14 @@ describe("createDoAuthWiring", () => {
             expect(requests).toHaveLength(0);
         });
 
-        it("honours a custom base path", async () => {
+        it("forwards only the fixed base path, so a lookalike prefix stays with the app", async () => {
             expect.assertions(2);
 
             const { namespace } = createNamespace(() => new Response("served"));
-            const { authHandler } = createDoAuthWiring({ basePath: "/auth", internalSecret: SECRET, namespace });
+            const { authHandler } = createDoAuthWiring({ internalSecret: SECRET, namespace });
 
-            await expect(authHandler(new Request("https://example.test/auth/sign-in/email"))).resolves.toBeDefined();
-            await expect(authHandler(new Request("https://example.test/api/auth/sign-in/email"))).resolves.toBeUndefined();
+            await expect(authHandler(new Request("https://example.test/api/auth/sign-in/email"))).resolves.toBeDefined();
+            await expect(authHandler(new Request("https://example.test/api/authorize"))).resolves.toBeUndefined();
         });
 
         it("reports no response when the namespace binding is absent", async () => {

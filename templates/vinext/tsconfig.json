@@ -16,5 +16,5 @@
             "~/*": ["./app/*"]
         }
     },
-    "include": ["app/**/*", "lunora/**/*", "vite.config.ts", "next.config.ts"]
+    "include": ["app/**/*", "lunora/**/*", "vite.config.ts", "next.config.ts", "lunora.config.ts"]
 }

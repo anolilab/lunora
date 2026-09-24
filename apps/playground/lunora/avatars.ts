@@ -18,8 +18,8 @@ const limits = { uploadAvatar: { kind: "token bucket", period: 60_000, rate: 20 
  */
 export const uploadAvatar = action
     .input({
-        contentType: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
-        key: v.string().check((value) => value.length <= 256, { message: "must be at most 256 characters", schema: { maxLength: 256 } }),
+        contentType: v.string().max(128),
+        key: v.string().max(256),
     })
     .use(dbRateLimit(limits, "uploadAvatar", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .action(async ({ args, ctx }): Promise<{ key: string; url: string }> => {

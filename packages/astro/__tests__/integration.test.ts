@@ -63,6 +63,43 @@ describe("lunora() Astro integration", () => {
             expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/worker\.ts" not found/u);
         });
 
+        it("names the rename when the default entry is missing but the OLD default is there", () => {
+            expect.assertions(3);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            mkdirSync(join(directory, "src"));
+            writeFileSync(join(directory, "src", "worker.ts"), 'import { withLunora } from "@lunora/astro";\nexport default withLunora(astroWorker, {});\n');
+
+            const warn = vi.fn<(message: string) => void>();
+            // No `serverEntry`: the project predates the default's move off
+            // `src/worker.ts` and composes correctly at the old path. A bare
+            // "not found" here is both wrong about the cause and unactionable,
+            // and it fires on EVERY build.
+            const integration = lunora();
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/default server entry is now "src\/server\.ts"/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/src\/worker\.ts/u);
+        });
+
+        it("still reports a plain not-found when neither the new nor the old default exists", () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora();
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/server entry "src\/server\.ts" not found/u);
+        });
+
         it("falls back to console.warn when the caller supplies no logger at all", () => {
             expect.assertions(2);
 
@@ -99,7 +136,7 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` or `\.buildFrameworkWorker\(\.\.\.\)` call/u);
         });
 
         it("is silent when serverEntry exists and calls withLunora", () => {
@@ -109,6 +146,28 @@ describe("lunora() Astro integration", () => {
             writeFileSync(
                 join(directory, "worker.ts"),
                 'import { withLunora } from "@lunora/astro";\nexport default withLunora(astroWorker, (env) => ({ shardDO: env.SHARD }));\n',
+            );
+
+            const warn = vi.fn<(message: string) => void>();
+            const integration = lunora({ serverEntry: "worker.ts" });
+            const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            hook(contextFor(directory, warn));
+
+            expect(warn).not.toHaveBeenCalled();
+        });
+
+        it("is silent when serverEntry composes with the generated builder's .buildFrameworkWorker()", () => {
+            expect.assertions(1);
+
+            // The scaffolded template — and every other class-B template — composes
+            // with `defineApp().…buildFrameworkWorker(host)`, not the standalone
+            // `withLunora` helper. Recognising only `withLunora(` made a correctly
+            // composed worker warn "subscriptions will silently 404" on every build.
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+            writeFileSync(
+                join(directory, "worker.ts"),
+                'import { handle } from "@astrojs/cloudflare/handler";\nconst app = defineApp().shard((env) => env.SHARD).buildFrameworkWorker(handle);\nexport default app;\n',
             );
 
             const warn = vi.fn<(message: string) => void>();
@@ -137,7 +196,67 @@ describe("lunora() Astro integration", () => {
             hook(contextFor(directory, warn));
 
             expect(warn).toHaveBeenCalledTimes(1);
-            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` call/u);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/couldn't find a `withLunora\(\.\.\.\)` or `\.buildFrameworkWorker\(\.\.\.\)` call/u);
+        });
+
+        it("warns when the only composition call sits in a comment or a string literal", () => {
+            expect.assertions(6);
+
+            // A raw-text scan is satisfied by any occurrence of the name — so a
+            // commented-out call, or one quoted inside a string/template
+            // literal, suppressed the warning while `/_lunora/*` stayed
+            // unrouted. Each of these entries composes nothing.
+            const decoys = [
+                "// export default withLunora(astroWorker, () => ({}));\nexport default astroWorker;\n",
+                "/* buildFrameworkWorker(host) */\nexport default astroWorker;\n",
+                'const hint = "call withFrameworkWorker(worker) in src/server.ts";\nexport default astroWorker;\n',
+                "const hint = `wrap it: withLunora(astroWorker, factory)`;\nexport default astroWorker;\n",
+            ];
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-astro-"));
+
+            for (const [index, source] of decoys.entries()) {
+                const entry = `decoy-${String(index)}.ts`;
+
+                writeFileSync(join(directory, entry), source);
+
+                const warn = vi.fn<(message: string) => void>();
+                const integration = lunora({ serverEntry: entry });
+                const hook = integration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+                hook(contextFor(directory, warn));
+
+                expect(warn).toHaveBeenCalledTimes(1);
+            }
+
+            // …and a real call inside a template literal's `${…}` is still code,
+            // so it must NOT warn: the interpolation is not part of the string.
+            const live = vi.fn<(message: string) => void>();
+
+            // Assembled rather than written inline: a literal `${` inside a plain
+            // string is itself a lint error, and the point here is that this text
+            // reaches the file as a real interpolation.
+            writeFileSync(join(directory, "live.ts"), `export default \`\${withLunora(astroWorker, () => ({}))}\`;\n`);
+
+            const liveIntegration = lunora({ serverEntry: "live.ts" });
+            const liveHook = liveIntegration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            liveHook(contextFor(directory, live));
+
+            expect(live).not.toHaveBeenCalled();
+
+            // A regex literal containing a `"` must not derail the scan into
+            // reading the rest of the file as a string and losing the real call.
+            const afterRegex = vi.fn<(message: string) => void>();
+
+            writeFileSync(join(directory, "regex.ts"), 'const quote = /["]/u;\nexport default withLunora(astroWorker, () => ({}));\n');
+
+            const regexIntegration = lunora({ serverEntry: "regex.ts" });
+            const regexHook = regexIntegration.hooks["astro:config:done"] as (context: ConfigDoneHookArgument) => void;
+
+            regexHook(contextFor(directory, afterRegex));
+
+            expect(afterRegex).not.toHaveBeenCalled();
         });
 
         it("prints a wiring snippet that actually resolves and runs", () => {

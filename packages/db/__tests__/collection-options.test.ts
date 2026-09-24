@@ -1,3 +1,4 @@
+import type { SubscriptionError } from "@lunora/client";
 import { createCollection } from "@tanstack/db";
 import { describe, expect, it, vi } from "vitest";
 
@@ -393,6 +394,39 @@ describe("lunoraCollectionOptions (shape source)", () => {
 
         expect(order).toStrictEqual(["dropped"]);
     });
+
+    it("leaves `loading` (with an onError) when the client's shape handle is inert — a cross-tab follower", async () => {
+        expect.assertions(3);
+
+        // A `crossTabSync` FOLLOWER tab: `subscribeShape` returns an inert
+        // handle that never invokes `onRows` and never errors. Without the
+        // client reporting it, `markReady()` is unreachable and the collection
+        // spins forever.
+        const { client } = makeClient();
+        const errors: SubscriptionError[] = [];
+
+        (client as unknown as { subscribeShape: ReturnType<typeof vi.fn> }).subscribeShape.mockImplementation(
+            (_shape: unknown, _onRows: unknown, options?: { onError?: (error: SubscriptionError) => void }) => {
+                options?.onError?.({ code: "NOT_IMPLEMENTED", message: "shape subscriptions are not available on a cross-tab follower" });
+
+                return () => undefined;
+            },
+        );
+
+        const options = lunoraCollectionOptions({
+            client,
+            onError: (error) => errors.push(error),
+            shape: { name: "channelMessages" },
+        });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        expect(collection.status).not.toBe("loading");
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.code).toBe("NOT_IMPLEMENTED");
+    });
 });
 
 /**
@@ -555,7 +589,7 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
         const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
         const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
-            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number; rowsFollow?: boolean }) => void;
         };
 
         const order: string[] = [];
@@ -563,9 +597,10 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const pendingB = options.checkpoints.awaitMutationId(6).then(() => order.push("B"));
 
         // A fixed client fires `onCheckpoint` with the FRAME's own watermark
-        // (5 — this frame reflects only A's commit) before `onRows` — see
+        // (5 — this frame reflects only A's commit) before `onRows`, stamped
+        // `rowsFollow` because this frame's rows are about to land — see
         // `handleDataMessage`'s ordering.
-        onCheckpoint?.({ checkpoint: 12, mutationId: 5 });
+        onCheckpoint?.({ checkpoint: 12, mutationId: 5, rowsFollow: true });
         onRows([{ _creationTime: 0, _id: "a", text: "A" }]);
 
         await Promise.resolve();
@@ -584,6 +619,54 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         void pendingA;
         // eslint-disable-next-line no-void -- see above
         void pendingB;
+    });
+
+    it("a settled frame's watermark must not be consumed by a later unstamped data frame", async () => {
+        expect.assertions(2);
+
+        // `handleSettledMessage` fires `onCheckpoint` with NO matching `onRows`
+        // (the value didn't change, so the server suppressed the data frame).
+        // The stash is per-FRAME state, so it has to be scoped to a checkpoint
+        // that actually has rows behind it — otherwise the settled frame's
+        // watermark sits there until some unrelated later frame carrying no
+        // `lastMutationId` of its own consumes it, and the gate resolves at that
+        // stale value instead of falling back to the RPC-ack compensator. The
+        // overlay then hangs until `@lunora/db`'s 3s bounded fallback fires and
+        // blames a dropped shape poke — the wrong subsystem entirely.
+        const { client } = makeClient();
+        const watermark = (client as unknown as { confirmedMutationWatermark: ReturnType<typeof vi.fn> }).confirmedMutationWatermark;
+
+        watermark.mockReturnValue(9);
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
+        const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number; rowsFollow?: boolean }) => void;
+        };
+
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(9).then(() => order.push("resolved"));
+
+        // A `settled` frame: checkpoint only, no rows behind it.
+        onCheckpoint?.({ checkpoint: 12, mutationId: 4 });
+        await Promise.resolve();
+
+        expect(order).toStrictEqual([]);
+
+        // A later frame from an un-upgraded server (or a follower's cross-tab
+        // data broadcast) carrying no watermark of its own. It must fall back to
+        // the RPC-ack compensator (9), not eat the settled frame's stale 4.
+        onRows([{ _creationTime: 0, _id: "a", text: "A" }]);
+
+        await pending;
+
+        expect(order).toStrictEqual(["resolved"]);
     });
 
     it("a genuinely-zero frame watermark does not permanently disable the RPC-ack fallback (thermos H1)", async () => {
@@ -607,7 +690,7 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
         const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
         const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
-            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number; rowsFollow?: boolean }) => void;
         };
 
         // The first (seed) frame: nothing confirmed yet for this client.
@@ -660,7 +743,7 @@ describe("lunoraCollectionOptions (list source) — data-frame watermark race (p
         const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
         const onRows = subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void;
         const { onCheckpoint } = (subscribeMock.mock.calls[0]?.[3] ?? {}) as {
-            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+            onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number; rowsFollow?: boolean }) => void;
         };
 
         // While still leader: a real frame-carried watermark arrives and

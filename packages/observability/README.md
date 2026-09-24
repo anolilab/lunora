@@ -19,14 +19,12 @@ None of it is Cloudflare-specific. It reads and writes through the SQL handle th
 
 That mattered in practice: anything wanting request logs or metrics had to depend on the Cloudflare Durable Object package to get them. The dependency now runs `@lunora/do` → `@lunora/observability` → `@lunora/shard-engine`, so a second host consumes this directly rather than inheriting a provider-bound edge.
 
-`@lunora/do` re-exports every symbol it previously exposed from these modules, so existing imports and the codegen-emitted surface are unchanged.
-
 ## Host-specific values are injected, not baked in
 
 Three details are Cloudflare's rather than this package's, so the host passes them:
 
 - **AI model** — `explainIssue(binding, args, { defaultModel })`. `DEFAULT_EXPLAIN_ISSUE_MODEL` is a Workers AI id, exported so the Cloudflare host has a name to pass rather than a string literal.
-- **Query batch size** — `readIssueStates(sql, hashes, { hashQueryBatch })`. `DEFAULT_HASH_QUERY_BATCH` is 100, the Durable Object SQLite bound-parameter cap; a host with a different cap passes its own.
+- **Query batch size** — hashes are read in batches of `DEFAULT_HASH_QUERY_BATCH` (100), the Durable Object SQLite bound-parameter cap. `readIssueStates` takes it as a `{ hashQueryBatch }` option, but neither the function nor the constant is on the package barrel and the in-package reader passes no options, so the batch is fixed at 100 until a host with a different cap needs it threaded through.
 - **Span projections** — the exported types `HostSpanLike`, `HostTracingLike` and `HostTracingResolver`. Named for the role, not the provider; Cloudflare's `enterSpan` callback argument is one shape that satisfies them. The host injects its tracer through the `TracerDeps` option fields `fuseHostSpans?: boolean` and `resolveHostTracing?: HostTracingResolver` — those are option names, not exported values, and the resolver itself lives in the host (`@lunora/do`'s `shard-do.ts` guards a dynamic `import("cloudflare:workers")`).
 
 ## Importing it

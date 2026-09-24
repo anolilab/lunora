@@ -37,6 +37,24 @@
  * So the facade is installed for every dispatch that can host a mutation handler,
  * and every one of those dispatches flushes. The alternative — a queue nothing
  * drains — is the worse failure: it leaks silently, with no error to find.
+ *
+ * ## Why the queue needs windows, not one list per dispatch
+ *
+ * One list per facade — which is what this was — makes "the dispatch ended" the
+ * only thing the flush knows, and that is the wrong question for a queue a NESTED
+ * transaction can write to. An action that composes `ctx.runMutation` shares its
+ * `ctx`, so the sub-mutation's keys land in the action's list; when that
+ * sub-mutation ROLLED BACK the action swallowed the error, returned, and its
+ * flush deleted the objects anyway — with the rows that point at them still
+ * there. That is precisely the loss this module exists to prevent, and the
+ * deferred-schedule buffer next door already had the shape that prevents it.
+ *
+ * So a queue is a stack of windows over one flushable list: {@link
+ * beginDeferredDeletes} opens a window around a transaction, the keys queued
+ * while it is the innermost open one are ITS keys, and its settle either hands
+ * them to the window that will commit on its behalf (or, with none, to the
+ * flushable list) or drops them. Keys queued with no window open — an action's
+ * own `deleteAfterCommit` — are flushable immediately, as before.
  */
 
 /** One queued deletion: the bucket facade to call, and the key on it. */
@@ -44,6 +62,22 @@ interface PendingDelete {
     key: string;
     /** The storage facade the key belongs to — the default one, or a `bucket(name)` sub-facade. */
     storage: { delete?: (key: string) => Promise<void> };
+}
+
+/** One open deferral window: the keys queued while it was the innermost open one. */
+interface DeleteWindow {
+    /** Cleared by the window's own settle, so {@link enclosingWindow} skips it once its transaction has resolved. */
+    open: boolean;
+    /** The window that was innermost when this one opened — the transaction whose commit this one rides. */
+    parent: DeleteWindow | undefined;
+    pending: PendingDelete[];
+}
+
+interface DeleteQueue {
+    /** Keys that belong to no open transaction — what {@link flushDeferredDeletes} drains. */
+    flushable: PendingDelete[];
+    /** The innermost window still open, or `undefined` when a queued key is flushable at once. */
+    innermost: DeleteWindow | undefined;
 }
 
 /**
@@ -54,7 +88,25 @@ interface PendingDelete {
  * serializes the context. Keying externally also means the facade a handler sees
  * is exactly the storage surface and nothing else.
  */
-const queues = new WeakMap<object, PendingDelete[]>();
+const queues = new WeakMap<object, DeleteQueue>();
+
+/**
+ * The nearest window up the chain that has not settled yet, if any.
+ *
+ * Recomputed rather than popped for the reason the deferred-schedule buffer
+ * recomputes it: windows settle in whatever order their transactions resolve,
+ * which is not necessarily the order they opened — an action need not await the
+ * `ctx.runMutation` it composed.
+ */
+const enclosingWindow = (from: DeleteWindow | undefined): DeleteWindow | undefined => {
+    let candidate = from;
+
+    while (candidate !== undefined && !candidate.open) {
+        candidate = candidate.parent;
+    }
+
+    return candidate;
+};
 
 /** The slice of a function context the flush needs: the facade to drain, and somewhere to report. */
 interface DeferredDeleteContext {
@@ -70,7 +122,7 @@ interface DeferredDeleteContext {
  * @param storage the bucket-aware facade from `asBucketStorage`
  */
 export const withDeferredDeletes = (storage: unknown): unknown => {
-    const pending: PendingDelete[] = [];
+    const queue: DeleteQueue = { flushable: [], innermost: undefined };
 
     const wrap = (target: unknown): unknown => {
         const inner = (target ?? {}) as Record<string, unknown> & { bucket?: (name: string) => unknown };
@@ -89,7 +141,10 @@ export const withDeferredDeletes = (storage: unknown): unknown => {
                 // Queued against `inner`, not against this wrapper: the delete is
                 // performed later through the object that owns it, so `this` is
                 // whatever that implementation expects rather than the facade.
-                pending.push({ key, storage: inner as PendingDelete["storage"] });
+                //
+                // Into the window that is innermost RIGHT NOW, so the key is
+                // dropped if — and only if — THAT transaction rolls back.
+                (queue.innermost?.pending ?? queue.flushable).push({ key, storage: inner as PendingDelete["storage"] });
             },
         };
 
@@ -105,12 +160,67 @@ export const withDeferredDeletes = (storage: unknown): unknown => {
             facade.bucket = (name: string): unknown => wrap(inner.bucket?.(name));
         }
 
-        queues.set(facade, pending);
+        queues.set(facade, queue);
 
         return facade;
     };
 
     return wrap(storage);
+};
+
+/**
+ * Open a deferral window on `context.storage` and return its settle function.
+ *
+ * Call it around a transaction, then settle with `true` once the commit has
+ * landed — the keys queued inside become flushable — or `false` when it rolled
+ * back, which DROPS them. An R2 delete cannot be undone, so a key whose queuing
+ * transaction never committed must never reach {@link flushDeferredDeletes}: the
+ * row that points at the object is still there.
+ *
+ * The window owns the keys queued while IT was the innermost open one, so a
+ * rollback drops those and nothing else; on a commit an enclosing window takes
+ * them over, which is how a `ctx.runMutation` inside an open transaction hands
+ * its keys to the span that actually commits them.
+ *
+ * Synchronous, and it never throws: it only moves entries between lists, and it
+ * runs on the rollback path of a dispatch that is already failing.
+ *
+ * A context whose storage was never wrapped gets an inert settle, so a caller
+ * needs no branch.
+ * @param context the dispatch context whose `storage` carries the queue
+ */
+export const beginDeferredDeletes = (context: unknown): ((committed: boolean) => void) => {
+    const { storage } = (context ?? {}) as DeferredDeleteContext;
+    const queue = typeof storage === "object" && storage !== null ? queues.get(storage) : undefined;
+
+    if (!queue) {
+        return (): void => {};
+    }
+
+    const opened: DeleteWindow = { open: true, parent: queue.innermost, pending: [] };
+
+    queue.innermost = opened;
+
+    // Idempotent without a guard: the settle empties `pending`, so a second call
+    // has nothing to hand off and nothing to drop.
+    return (committed: boolean): void => {
+        opened.open = false;
+
+        if (queue.innermost === opened) {
+            queue.innermost = enclosingWindow(opened.parent);
+        }
+
+        const draining = opened.pending.splice(0);
+
+        if (!committed || draining.length === 0) {
+            return;
+        }
+
+        // SQLite-in-DO has no savepoints: a nested dispatch shares the enclosing
+        // BEGIN/COMMIT span, so its keys are not safe to delete until that span
+        // commits either.
+        (enclosingWindow(opened.parent)?.pending ?? queue.flushable).push(...draining);
+    };
 };
 
 /** How a flush ended, so a caller can assert on it without this module owning a logger. */
@@ -122,8 +232,13 @@ export interface DeferredDeleteFlushResult {
 }
 
 /**
- * Delete everything queued on `context.storage`, draining the queue as it goes,
- * and report each failure through `context.log`.
+ * Delete everything queued on `context.storage` that belongs to no open
+ * transaction, draining the queue as it goes, and report each failure through
+ * `context.log`.
+ *
+ * Keys still inside an OPEN window are left where they are: their transaction
+ * has not resolved, so whether they may be deleted is not yet known. Settling
+ * that window (see {@link beginDeferredDeletes}) is what makes them flushable.
  *
  * Draining first means a second flush of the same dispatch is a no-op rather than
  * a second round of deletes.
@@ -138,11 +253,11 @@ export const flushDeferredDeletes = async (context: unknown): Promise<DeferredDe
     const { log, storage } = (context ?? {}) as DeferredDeleteContext;
     const queue = typeof storage === "object" && storage !== null ? queues.get(storage) : undefined;
 
-    if (!queue || queue.length === 0) {
+    if (!queue || queue.flushable.length === 0) {
         return { attempted: 0, failures: [] };
     }
 
-    const draining = queue.splice(0);
+    const draining = queue.flushable.splice(0);
 
     // `allSettled`, so one unreachable key cannot strand the rest of the batch.
     // Deletes are independent and idempotent, and a batch is whatever one write

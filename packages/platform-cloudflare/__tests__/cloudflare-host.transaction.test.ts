@@ -66,6 +66,46 @@ const gate = (): { aborted: boolean; blockConcurrencyWhile: <R>(closure: () => P
 };
 
 describe("cloudflare shard host transaction", () => {
+    it("holds blockConcurrencyWhile for the whole closure, which is what defers a concurrent dispatch", async () => {
+        expect.assertions(2);
+
+        // The Cloudflare answer to `@lunora/platform`'s "never lets a task
+        // outside a mutation observe its uncommitted writes" conformance leg.
+        // This host contributes nothing to that guarantee itself — it is the
+        // input gate, and the gate only covers what `blockConcurrencyWhile`
+        // spans. A `runSerialized` that ran bare, or released before the
+        // closure settled, would let workerd deliver the next `fetch` mid
+        // transaction and read rows that are about to roll back, with no test
+        // between it and production. The Node and reference hosts have no such
+        // gate and refuse the read instead; both answers keep the guarantee.
+        const spans: string[] = [];
+        const host = createShardHost({
+            blockConcurrencyWhile: async <R>(closure: () => Promise<R>): Promise<R> => {
+                spans.push("gate-open");
+
+                try {
+                    return await closure();
+                } finally {
+                    spans.push("gate-closed");
+                }
+            },
+            storage: {},
+        } as never);
+
+        const result = await host.runSerialized(async () => {
+            spans.push("closure-start");
+
+            await Promise.resolve();
+
+            spans.push("closure-end");
+
+            return "done";
+        });
+
+        expect(result).toBe("done");
+        expect(spans).toStrictEqual(["gate-open", "closure-start", "closure-end", "gate-closed"]);
+    });
+
     it("rethrows the handler's own error instance, not the platform's flattened copy", async () => {
         expect.assertions(2);
 

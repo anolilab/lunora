@@ -18,6 +18,7 @@ import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
@@ -460,7 +461,53 @@ describe("lunora backup --bucket", () => {
         });
 
         // Unverifiable must not read as verified.
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(logs.some((line) => line.includes("carries no recorded checksum"))).toBe(true);
+    });
+
+    describe("destination flags that do not apply", () => {
+        it("refuses --prefix without --bucket instead of silently listing the local directory", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+
+            // `--prefix` names a key prefix inside an R2 bucket; a local directory
+            // has none. Ignored, `backup list --prefix archive/` listed
+            // `.lunora-backups` and reported "no backups found" for an archive that
+            // was there all along. The worker-answered verbs (`retention`/`prune`)
+            // already refuse a destination flag that does not apply to them.
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                prefix: "archive/",
+                subcommand: "list",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(logs.some((line) => line.includes("--prefix applies only to an R2 destination"))).toBe(true);
+            expect(logs.some((line) => line.includes("no backups found"))).toBe(false);
+        });
+
+        it("refuses --dir alongside --bucket rather than ignoring one of them", async () => {
+            expect.assertions(2);
+
+            const { logger, logs } = capturingLogger();
+
+            const result = await runBackupCommand({
+                bucket: "default",
+                cwd: workDir,
+                dir: "somewhere-local",
+                fetchImpl: createWorkerDouble().fetchImpl,
+                logger,
+                subcommand: "list",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(logs.some((line) => line.includes("--dir applies only to a local destination"))).toBe(true);
+        });
     });
 });

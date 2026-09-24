@@ -194,13 +194,27 @@ export interface PdfOptions extends NavigateOptions {
  */
 export interface LunoraBrowserOptions {
     /**
-     * Strict host allowlist. When set (non-empty), a navigation URL is refused
-     * unless its hostname exactly matches one of these entries (case-insensitive,
+     * Strict host allowlist. When set, a navigation URL is refused unless its
+     * hostname exactly matches one of these entries (case-insensitive,
      * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
      * that fully closes DNS rebinding: a public hostname that resolves to a
      * private/metadata IP can still be pinned out if it isn't on the list. Set it
-     * whenever you pass client-controlled URLs to the browser. Leave it unset (the
-     * default) to keep the previous behavior (only the string-based SSRF guard).
+     * whenever you pass client-controlled URLs to the browser.
+     *
+     * **`allowedHosts: []` allows NOTHING.** An empty list is a configured
+     * allowlist with no members, so every navigation, redirect hop and http(s)
+     * sub-resource is refused with a `FORBIDDEN` naming the empty list — it is
+     * never read as "no allowlist configured". To run without an allowlist, omit
+     * the option; that is the guarded default described below. (The allowlist arm
+     * is not relaxed by {@link LunoraBrowserOptions.allowPrivateTargets}, so an
+     * empty list refuses private targets too.)
+     *
+     * Leaving it unset (the default) is NOT unguarded: it turns
+     * {@link LunoraBrowserOptions.resolveDns} on, so every host is resolved over
+     * DoH and refused if it maps to a private address. Setting an allowlist —
+     * empty or not — turns that re-check off by default (the allowlist is the
+     * stronger guard, and may deliberately name an internal host); `resolveDns:
+     * true` forces both.
      */
     allowedHosts?: string[];
 
@@ -228,9 +242,14 @@ export interface LunoraBrowserOptions {
     /**
      * The `@cloudflare/playwright` `launch` function. Injected rather than
      * imported at module top so the optional peer dep stays out of the bundle
-     * for non-browser apps and tests can pass a double. The generated worker
-     * passes the real function; omitting it makes the helper throw on first use
-     * with a clear "install `@cloudflare/playwright`" error.
+     * for non-browser apps and tests can pass a double.
+     *
+     * The APP passes the real function, not codegen: the generated shard builds
+     * `ctx.browser` from a `config.browser` thunk and falls back to a throwing
+     * stub, so `createShardDO({ browser: (env) => createBrowser({ binding:
+     * env.BROWSER, launch }) })` is what wires it. Omitting `launch` makes the
+     * helper throw on first use with a clear "install `@cloudflare/playwright`"
+     * error.
      */
     launch?: BrowserLaunchLike;
 
@@ -250,7 +269,8 @@ export interface LunoraBrowserOptions {
      * re-resolves independently), and if the DoH lookup itself fails it falls
      * back to the string guard rather than allowing a resolved private IP.
      *
-     * Configuring `allowedHosts` turns it OFF by default: an exact-origin
+     * Configuring `allowedHosts` at all — an empty list included, since that
+     * refuses every navigation outright — turns it OFF by default: an exact-origin
      * allowlist is the stronger guard and may deliberately name an internal host
      * (reachable over a Tunnel / private-network binding) that a resolved-address
      * check would refuse. Set this explicitly to `true` to run both, or to
@@ -313,9 +333,14 @@ export interface Browser {
      * `fn` (e.g. for multi-page flows or APIs not surfaced here).
      *
      * The browser is **always closed** when `fn` resolves or throws — unless
-     * `keepAlive` is set, which holds the session open for that many seconds so
-     * a later {@link Browser.connect} can re-attach. Do not retain references to
-     * the browser past the callback either way.
+     * `keepAlive` is a number of seconds **between 10 and 600**, which holds the
+     * session open for that long so a later {@link Browser.connect} can
+     * re-attach. `0`, a negative value and `NaN` all mean "do not keep alive"
+     * and take the always-close path (a held session is billed, so the
+     * ambiguous values fall to the safe side); a positive value outside the
+     * 10–600s window Browser Rendering accepts throws `BAD_REQUEST` rather than
+     * being sent on for the provider to refuse. Do not retain references to the
+     * browser past the callback either way.
      */
     launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: { keepAlive?: number }) => Promise<T>;
 

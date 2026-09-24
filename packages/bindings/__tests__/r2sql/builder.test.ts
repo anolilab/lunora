@@ -39,7 +39,24 @@ describe("select builder SQL", () => {
                 .where(sql`region = ${"North"}`)
                 .where("total > 0", sql`status = ${200}`)
                 .toSQL(),
-        ).toBe("SELECT * FROM s.orders WHERE region = 'North' AND total > 0 AND status = 200");
+        ).toBe("SELECT * FROM s.orders WHERE (region = 'North') AND (total > 0) AND (status = 200)");
+    });
+
+    it("parenthesises each condition so a fragment carrying OR still binds as one conjunct", () => {
+        expect.assertions(2);
+
+        // `AND` binds tighter than `OR`, so joining raw fragments with a bare
+        // ` AND ` re-parses `a OR b` + `c` as `a OR (b AND c)` — a filter that
+        // matches rows the caller excluded. Every in-repo caller happens to pass
+        // `=`/`IN`/`LIKE`, which is why it stayed latent on the public
+        // `ctx.r2sql` surface.
+        expect(from("s.orders").where("region = 'N' OR region = 'S'").where("total > 0").toSQL()).toBe(
+            "SELECT * FROM s.orders WHERE (region = 'N' OR region = 'S') AND (total > 0)",
+        );
+
+        expect(
+            from("s.orders").select("region", "COUNT(*) AS n").groupBy("region").having("COUNT(*) > 10 OR SUM(total) > 100").having("COUNT(*) < 1000").toSQL(),
+        ).toBe("SELECT region, COUNT(*) AS n FROM s.orders GROUP BY region HAVING (COUNT(*) > 10 OR SUM(total) > 100) AND (COUNT(*) < 1000)");
     });
 
     it("renders joins", () => {

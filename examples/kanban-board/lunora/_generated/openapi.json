@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "title": {
                         "type": "string"
@@ -155,7 +154,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -211,7 +209,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"tasks\">",
@@ -300,7 +297,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"tasks\">",
@@ -364,7 +360,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"tasks\">",

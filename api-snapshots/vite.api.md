@@ -30,18 +30,6 @@ interface ClassAWiring {
 type CloudflarePluginOptions = Record<string, unknown>;
 ```
 
-### `DEV_WORKER_ENV_VALUE` (const)
-
-```ts
-const DEV_WORKER_ENV_VALUE = "development";
-```
-
-### `DEV_WORKER_ENV_VAR` (const)
-
-```ts
-const DEV_WORKER_ENV_VAR = "WORKER_ENV";
-```
-
 ### `DetectedFramework` (type)
 
 Re-exported from `@lunora/config` — signature tracked at its source.
@@ -56,19 +44,11 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GENERATED_CLASS_MODULES` (const)
 
-```ts
-const GENERATED_CLASS_MODULES: readonly [
-    "agents",
-    "containers",
-    "workflows"
-];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GeneratedClassModule` (type)
 
-```ts
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `LUNORA_API_UPDATED_EVENT` (const)
 
@@ -199,6 +179,17 @@ interface ViteRemotePlan {
 const WORKER_STARTUP_HINT: string;
 ```
 
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    shard?: LunoraShardConfig;
+}
+```
+
 ### `augmentWorkerStartupError` (const)
 
 ```ts
@@ -218,7 +209,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, useUmbrella?: boolean, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, composition?: WorkerEntryComposition) => string;
 ```
 
 ### `checkLunoraProxy` (const)
@@ -237,15 +228,6 @@ const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 
 ```ts
 const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
-```
-
-### `createCommandProbe` (const)
-
-```ts
-const createCommandProbe: () => {
-    isServe: () => boolean;
-    plugin: Plugin;
-};
 ```
 
 ### `detectFramework` (const)
@@ -322,16 +304,10 @@ const proxyCheckPlugin: () => Plugin;
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
-### `remoteBindingsCleanupPlugin` (const)
+### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsCleanupPlugin: (cleanup: () => void) => Plugin;
-```
-
-### `remoteBindingsConfigPlugin` (const)
-
-```ts
-const remoteBindingsConfigPlugin: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
@@ -343,13 +319,7 @@ const resolveOverlayOption: (overlay: LunoraPluginOptions["overlay"]) => false |
 ### `studioPlugin` (const)
 
 ```ts
-const studioPlugin: () => Plugin;
-```
-
-### `withDevWorkerEnv` (const)
-
-```ts
-const withDevWorkerEnv: (options: CloudflarePluginOptions, isServe: () => boolean) => CloudflarePluginOptions;
+const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ```
 
 ### `withRemoteBindings` (const)
@@ -368,4 +338,18 @@ const withWorkerStartupHint: (plugins: ReadonlyArray<Plugin>) => Plugin[];
 
 ```ts
 const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `LunoraPluginContext` (interface)
+
+```ts
+interface LunoraPluginContext {
+    framework?: FrameworkDetection;
+}
 ```

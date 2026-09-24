@@ -39,10 +39,19 @@
  *   churn without a snapshot update. Adding/removing the tag IS a gated change.
  * - Internal `import("./packem_shared/…-<hash>.js")` specifiers inside type text
  *   are rewritten to `import("~internal")` so packem chunk-hash churn is inert.
+ * - A `const`/`let` read out of `.ts`/`.tsx` source rather than a `.d.ts` prints
+ *   the type the checker infers for it, not its initializer — see
+ *   `printDeclaration`.
+ * - A type a printed signature REFERENCES but that the package does not itself
+ *   export is printed too, in a per-package `Referenced internal declarations`
+ *   appendix — otherwise it appears by name and is declared nowhere, and its
+ *   members can change under the signature without moving a byte here. See
+ *   `collectInternalReferences`.
  * - Exports are sorted by name; subpaths lexicographically with `.` first.
  */
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -92,13 +101,14 @@ const UNTRACKED_MARKER = "signature not tracked";
  * `react`, `angular`, `solid`, `solid-v2`, `svelte`, `vue` — because the
  * registry copies every one of them verbatim into consumer projects, so an
  * ungated port is a breaking change shipping to users with no record of it.
- * Fidelity per port is whatever a plain TS program can resolve: `core` and
- * `angular` are `.ts` and pin full signatures; `.tsx` components (`react`,
- * `solid`, `solid-v2`) and `.vue`/`.svelte` SFCs resolve no further than the
- * export, so those pin name + kind and catch an added/removed/renamed screen
- * rather than a changed prop. Deliberate: teaching the program to resolve
- * `.tsx` would inline every component's whole JSX body into the snapshot and
- * fail the gate on implementation churn.
+ * Fidelity per port is whatever a plain TS program can resolve: `core`,
+ * `angular`, `react`, `solid` and `solid-v2` pin full signatures — the `.tsx`
+ * ports because `jsx` is set on the program, which is what makes their props
+ * interfaces reachable, and `printDeclaration` rather than the resolver is what
+ * keeps the component bodies out. `.vue`/`.svelte` SFCs still resolve no
+ * further than the export, so those pin name + kind and catch an
+ * added/removed/renamed screen rather than a changed prop: reading them needs
+ * the framework's own compiler, not a TS program.
  */
 /*
  * TIER_1/TIER_2/TIER_3 are hand-typed directory lists, and a package in none of
@@ -362,8 +372,48 @@ const normalizeText = (text) => {
     return collapsed.join("\n").trim();
 };
 
-/** Print one declaration of an exported symbol as normalized text. */
-const printDeclaration = (decl) => {
+/**
+ * The type {@link printDeclaration} prints for this declaration instead of its
+ * source text, or `undefined` when it prints the source text.
+ *
+ * Its own function because {@link collectInternalReferences} has to follow
+ * exactly the declarations that branch prints: re-deriving the condition there
+ * is how the two drift apart and a printed type names something the walk never
+ * looked for.
+ */
+const inferredType = (checker, decl) => {
+    if (decl.getSourceFile().isDeclarationFile || !ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) {
+        return undefined;
+    }
+
+    const symbol = checker.getSymbolAtLocation(decl.name);
+
+    return symbol ? checker.getTypeOfSymbolAtLocation(symbol, decl) : undefined;
+};
+
+/**
+ * Print one declaration as normalized text.
+ *
+ * A `const`/`let` in a `.d.ts` already IS its signature. The same declaration in
+ * `.ts`/`.tsx` source — which a source-shipping package ships instead of a build,
+ * see `collectEntries` — carries its implementation, and an implementation is not
+ * public API: printing it buries the signature and fails the gate on every
+ * refactor. So print the type the checker infers for it. This is the rule
+ * {@link isPrintableInternal} already applies to the appendix, stated once and
+ * used in both places.
+ *
+ * A class is excluded, not overlooked: the type of a class VALUE is the useless
+ * `typeof C`, and the members that are its surface are already in the printed
+ * declaration. Its method bodies come along with them — the one place a body
+ * still reaches the snapshot, unchanged by this and only in `auth-ui/angular`.
+ */
+const printDeclaration = (checker, decl) => {
+    const inferred = inferredType(checker, decl);
+
+    if (inferred) {
+        return normalizeText(`${kindOfDeclaration(decl)} ${decl.name.text}: ${checker.typeToString(inferred, decl, ts.TypeFormatFlags.NoTruncation)};`);
+    }
+
     let node = decl;
 
     // A variable declaration alone loses its `const`/`let` keyword — print the
@@ -375,6 +425,201 @@ const printDeclaration = (decl) => {
     const printed = printer.printNode(ts.EmitHint.Unspecified, node, node.getSourceFile());
 
     return normalizeText(printed.replaceAll(/^export\s+/gm, "").replaceAll(/^declare\s+/gm, ""));
+};
+
+/** Stable identity for a declaration: which file, and where in it. */
+const declarationKey = (decl) => `${decl.getSourceFile().fileName}:${decl.pos}`;
+
+/**
+ * Declaration kinds the internal-reference appendix prints.
+ *
+ * The split is by whether printing the declaration can drag an IMPLEMENTATION
+ * into the snapshot. A type declaration IS its signature, and `printDeclaration`
+ * renders a `const`/`let` as `const x: T;` from the checker wherever it lives —
+ * so both print from any file. A class or a function outside a `.d.ts` carries
+ * its body, and inlining that would fail the gate on every refactor, so those
+ * are admitted only from a declaration file.
+ *
+ * A variable was in the `.d.ts`-only group until `printDeclaration` learned to
+ * infer, which made the restriction wrong rather than cautious: in a
+ * source-shipping package (`auth-ui`, see `collectEntries`)
+ * `export type Config = typeof internalConfig;` printed `typeof internalConfig`
+ * with the declaration nowhere, so changing that object's shape moved no bytes.
+ */
+const BODY_FREE_KINDS = new Set([
+    ts.SyntaxKind.EnumDeclaration,
+    ts.SyntaxKind.InterfaceDeclaration,
+    ts.SyntaxKind.TypeAliasDeclaration,
+    ts.SyntaxKind.VariableDeclaration,
+]);
+const DECLARATION_FILE_KINDS = new Set([ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.FunctionDeclaration]);
+
+const isPrintableInternal = (decl) =>
+    // Anonymous (a default-exported function) has no name to head a section with.
+    Boolean(decl.name && ts.isIdentifier(decl.name)) &&
+    (BODY_FREE_KINDS.has(decl.kind) || (decl.getSourceFile().isDeclarationFile && DECLARATION_FILE_KINDS.has(decl.kind)));
+
+/** The name node a type-position reference resolves through, if this node is one. */
+const referencedTypeName = (node) => {
+    if (ts.isTypeReferenceNode(node)) {
+        return node.typeName;
+    }
+
+    if (ts.isExpressionWithTypeArguments(node)) {
+        return node.expression;
+    }
+
+    if (ts.isTypeQueryNode(node)) {
+        return node.exprName;
+    }
+
+    if (ts.isImportTypeNode(node)) {
+        return node.qualifier;
+    }
+
+    return undefined;
+};
+
+/**
+ * Every declaration a printed signature REFERENCES that this package owns but
+ * does not export — transitively, de-duplicated.
+ *
+ * `printDeclaration` prints the exported symbol's own declaration and nothing
+ * else, so a referenced type appears in the snapshot by NAME and is declared
+ * nowhere. `interface RestExposure { cache?: RestCachePolicy; rest?: boolean }`
+ * is referenced twice by `runtime.api.md` and declared zero times: adding a
+ * required member to it, or renaming `rest`, breaks every `expose: {…}` caller
+ * while the snapshot bytes do not move and the gate stays green. 403 such
+ * declarations across the 55 packages were unpinned that way, and none is now.
+ *
+ * Own package only. A referenced type from a sibling `@lunora/*` is pinned by
+ * that package's own snapshot, and one from `node_modules` is a dependency's
+ * concern — the same rule `resolveExport`'s foreign handling already applies.
+ *
+ * Two walks, because a declaration has two ways to name a type. Syntax covers
+ * what it WRITES. {@link inferredType} declarations write nothing useful — the
+ * AST of `export const state = createState()` is a call expression, while the
+ * printed line is `const state: State;` — so those are followed through the
+ * checker as well; see `visitType`.
+ */
+const collectInternalReferences = (checker, ownPrefix, roots, exportedKeys) => {
+    const found = new Map();
+    const queue = [...roots];
+    const walked = new Set(roots.map((decl) => declarationKey(decl)));
+
+    const enqueue = (symbol) => {
+        for (const decl of symbol?.declarations ?? []) {
+            const key = declarationKey(decl);
+
+            if (!walked.has(key) && !exportedKeys.has(key) && decl.getSourceFile().fileName.startsWith(ownPrefix) && isPrintableInternal(decl)) {
+                walked.add(key);
+                found.set(key, decl);
+                queue.push(decl);
+            }
+        }
+    };
+
+    /**
+     * Follow a checker type along the same spine `typeToString` prints.
+     *
+     * A NAMED type prints as its name and nothing more, so enqueue it and stop:
+     * its own declaration is where the members live, and the syntax walk covers
+     * that once it is queued. This is also what bounds the traversal — every
+     * path ends at a name or an intrinsic. An ANONYMOUS type is expanded inline
+     * by the printer, so its constituents, signatures, members and index
+     * signatures are all visible in the printed text and are followed too.
+     * Type arguments are followed either way: `Promise<Internal>` prints
+     * `Internal` while stopping at `Promise`.
+     */
+    const visitType = (type, seen) => {
+        if (type === undefined || seen.has(type)) {
+            return;
+        }
+
+        seen.add(type);
+
+        for (const argument of type.aliasTypeArguments ?? []) {
+            visitType(argument, seen);
+        }
+
+        // eslint-disable-next-line no-bitwise
+        if (type.flags & ts.TypeFlags.Object) {
+            for (const argument of checker.getTypeArguments(type)) {
+                visitType(argument, seen);
+            }
+        }
+
+        for (const constituent of type.types ?? []) {
+            visitType(constituent, seen);
+        }
+
+        const symbol = type.aliasSymbol ?? type.getSymbol();
+
+        if ((symbol?.declarations ?? []).some((decl) => decl.name && ts.isIdentifier(decl.name))) {
+            enqueue(symbol);
+
+            return;
+        }
+
+        for (const signature of [...type.getCallSignatures(), ...type.getConstructSignatures()]) {
+            for (const parameter of signature.getParameters()) {
+                visitType(checker.getTypeOfSymbol(parameter), seen);
+            }
+
+            visitType(signature.getReturnType(), seen);
+        }
+
+        for (const property of type.getProperties()) {
+            visitType(checker.getTypeOfSymbol(property), seen);
+        }
+
+        for (const indexInfo of checker.getIndexInfosOfType(type)) {
+            visitType(indexInfo.type, seen);
+        }
+    };
+
+    while (queue.length > 0) {
+        const current = queue.pop();
+
+        const visit = (node) => {
+            const nameNode = referencedTypeName(node);
+
+            if (nameNode) {
+                let symbol = checker.getSymbolAtLocation(nameNode);
+
+                // eslint-disable-next-line no-bitwise
+                if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+                    try {
+                        symbol = checker.getAliasedSymbol(symbol);
+                    } catch {
+                        /* keep the alias symbol */
+                    }
+                }
+
+                enqueue(symbol);
+            }
+
+            ts.forEachChild(node, visit);
+        };
+
+        visit(current);
+        visitType(inferredType(checker, current), new Set());
+    }
+
+    // Sorted by name then body, never by file: packem spells a shared chunk
+    // `x.d-<hash>.d.ts`, so any file-derived order would churn the snapshot on
+    // an unrelated rebuild — the same hazard `normalizeText` rewrites inline
+    // import specifiers for. Identical (name, body) pairs collapse, which is
+    // what a chunk copied into two subpath bundles produces.
+    const printed = new Map();
+
+    for (const decl of found.values()) {
+        const entry = { kind: kindOfDeclaration(decl), name: decl.name.getText(), text: printDeclaration(checker, decl) };
+
+        printed.set(`${entry.name}\u0000${entry.kind}\u0000${entry.text}`, entry);
+    }
+
+    return [...printed.values()].sort((a, b) => (a.name === b.name ? (a.text < b.text ? -1 : 1) : a.name < b.name ? -1 : 1));
 };
 
 /**
@@ -438,7 +683,7 @@ const resolveExport = (checker, pkgDirName, symbol) => {
  * `pinnedTo`, when set, is the OTHER subpath of this same package that prints
  * these exact declarations in full — see {@link chooseOwners}.
  */
-const renderExport = (info, pinnedTo) => {
+const renderExport = (checker, info, pinnedTo) => {
     const header = `### \`${info.name}\` (${info.kind})`;
 
     if (info.experimental) {
@@ -457,7 +702,9 @@ const renderExport = (info, pinnedTo) => {
         return `${header}\n\nRe-exported from \`${pinnedTo}\` — signature tracked in that section.`;
     }
 
-    const bodies = [...new Set(info.declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(decl))))];
+    const bodies = [
+        ...new Set(info.declarations.map((decl) => (ts.isSourceFile(decl) ? `/* module namespace re-export */` : printDeclaration(checker, decl)))),
+    ];
 
     return `${header}\n\n\`\`\`ts\n${bodies.join("\n\n")}\n\`\`\``;
 };
@@ -550,7 +797,7 @@ const renderPackage = (program, checker, covered) => {
                     .map((info) => {
                         const owner = owners.get(info.key);
 
-                        return renderExport(info, owner && owner.subpathName !== subpathName ? owner.subpathName : undefined);
+                        return renderExport(checker, info, owner && owner.subpathName !== subpathName ? owner.subpathName : undefined);
                     })
                     .join("\n\n")
                     .split("\n"),
@@ -558,6 +805,37 @@ const renderPackage = (program, checker, covered) => {
         }
 
         sections.push(lines.join("\n"));
+    }
+
+    // Roots are the declarations that PRINT in full above. An `@experimental`
+    // export deliberately pins name + kind only, and a foreign re-export is
+    // pinned at its source — neither has a signature here for a referenced type
+    // to change the meaning of, so neither drags one in.
+    const roots = [];
+
+    for (const { exports } of entriesWithExports) {
+        for (const info of exports) {
+            if (!info.experimental && !info.isForeign) {
+                roots.push(...info.declarations.filter((decl) => !ts.isSourceFile(decl)));
+            }
+        }
+    }
+
+    const exportedKeys = new Set(entriesWithExports.flatMap(({ exports }) => exports).flatMap(({ declarations }) => declarations.map(declarationKey)));
+    const internal = collectInternalReferences(checker, `${pkgDir}${sep}`, roots, exportedKeys);
+
+    if (internal.length > 0) {
+        sections.push(
+            [
+                "## Referenced internal declarations",
+                "",
+                "Not exported, and reachable only through a signature above. Their members",
+                "are part of that signature's meaning, so a change here is a change to the",
+                "public API and is gated as one. Listed once per package, sorted by name.",
+                "",
+                internal.map(({ kind, name, text }) => `### \`${name}\` (${kind})\n\n\`\`\`ts\n${text}\n\`\`\``).join("\n\n"),
+            ].join("\n"),
+        );
     }
 
     // Spread as lines, so `header` stays one-line-per-element and the sentence
@@ -578,6 +856,46 @@ const renderPackage = (program, checker, covered) => {
     ].join("\n");
 
     return `${header}\n${sections.join("\n\n")}\n`;
+};
+
+/**
+ * A compiler host that can actually read the standard library.
+ *
+ * `ts-morph` vendors its compiler as one bundled file and ships the `lib.*.d.ts`
+ * texts inside it, so the path its `getDefaultLibFilePath` reports is not a file
+ * on disk. The default host reads nothing there and the program loads ZERO lib
+ * files: `Set`, `Array`, `Promise` and every other global resolve to `any`. That
+ * was invisible while every signature was printed from its source text, and is
+ * not once `printDeclaration` asks the checker to infer one — `new Set([…])`
+ * pinned as `any` records nothing. The `typescript` package next door is the
+ * classic 6.x build with the real lib files, and only its `lib/` is used here,
+ * never its API — see the note on the `ts-morph` import.
+ */
+const compilerHost = (options) => {
+    const libDir = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "lib");
+    const host = ts.createCompilerHost(options);
+
+    host.getDefaultLibLocation = () => libDir;
+    host.getDefaultLibFileName = (forOptions) => join(libDir, ts.getDefaultLibFileName(forOptions));
+
+    return host;
+};
+
+/**
+ * `jsx` is what lets a `.tsx` module load at all: without it the resolver finds
+ * the file and the program then refuses it, so every export of it is an
+ * unresolved specifier with no signature and no type reference to follow — 244
+ * of `auth-ui`'s were pinned by name and kind alone that way, and the props
+ * interfaces they reference by nothing. Keeping the component bodies out of the
+ * snapshot is `printDeclaration`'s job, not the resolver's.
+ */
+const PROGRAM_OPTIONS = {
+    jsx: ts.JsxEmit.Preserve,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ESNext,
 };
 
 const snapshotFileName = (dir) => `${dir}.api.md`;
@@ -610,13 +928,8 @@ const buildAll = () => {
     }
 
     const program = ts.createProgram({
-        options: {
-            module: ts.ModuleKind.ESNext,
-            moduleResolution: ts.ModuleResolutionKind.Bundler,
-            noEmit: true,
-            skipLibCheck: true,
-            target: ts.ScriptTarget.ESNext,
-        },
+        host: compilerHost(PROGRAM_OPTIONS),
+        options: PROGRAM_OPTIONS,
         rootNames: allEntries,
     });
     const checker = program.getTypeChecker();

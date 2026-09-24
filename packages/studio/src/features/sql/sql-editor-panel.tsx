@@ -2,6 +2,8 @@ import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { explainQueryPlan } from "../../../../../shared/sql-readonly";
+import { classifyOne, splitStatements } from "../../../../../shared/sql-split-statements";
 import type { SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
@@ -14,7 +16,6 @@ import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
 import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
-import { classifyOne, splitStatements } from "./split-statements";
 import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import SqlResultsPane from "./sql-results-pane";
@@ -147,7 +148,12 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // `SELECT 2` that simply ran, which is the opposite of what asking for a
         // plan means. Gated as one, a script the operator asks to explain is
         // refused with the same message the editor's own diagnostic shows.
-        const statements = mode === "explain" ? classifyOne(`EXPLAIN QUERY PLAN ${draft}`, 0) : splitStatements(draft);
+        //
+        // `explainQueryPlan` rather than a bare template: a draft that already
+        // leads with `EXPLAIN` (which the gate allows) would otherwise be
+        // double-prefixed into `EXPLAIN QUERY PLAN EXPLAIN …` — a syntax error
+        // on a statement Run executes happily.
+        const statements = mode === "explain" ? classifyOne(explainQueryPlan(draft), 0) : splitStatements(draft);
         const runs: ScriptRun[] = [];
 
         for (const statement of statements) {

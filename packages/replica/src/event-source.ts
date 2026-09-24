@@ -267,11 +267,23 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
                     this.#state = reduced;
                 }
 
-                this.log.append(entry.type, entry.payload, entry.tableDiffs, {
+                // `timestamp` is pinned to the source entry's, for the same
+                // reason `applyEvent` pins it to the candidate's (REPLICA-07):
+                // without it `EventLog#append` stamps `Date.now()`, so a replay
+                // rewrote history to the moment it ran and a timestamp-dependent
+                // reducer could never be re-derived from the replayed log.
+                const appended = this.log.append(entry.type, entry.payload, entry.tableDiffs, {
                     clientId: entry.clientId,
                     sessionId: entry.sessionId,
                     parentSeqNum: entry.parentSeqNum,
+                    timestamp: entry.timestamp,
                 });
+
+                // Same notification `applyEvent` emits, for the same entries:
+                // `events()` streams off this event, so without it every entry a
+                // replay appended was invisible to a live generator — which the
+                // method contract promises to yield.
+                this.emitter.emit("state-changed", { state: this.#state, entry: appended });
             } catch (error) {
                 this.emitter.emit("replay-error", {
                     entry,

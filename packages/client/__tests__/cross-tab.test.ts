@@ -845,11 +845,33 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             const internals = client as unknown as {
                 connections: Map<
                     string,
-                    { connectTimer?: unknown; heartbeatTimer?: unknown; reconnectTimer?: unknown; socket?: { close: () => void }; wsState?: string }
+                    {
+                        connectTimer?: unknown;
+                        heartbeatTimer?: unknown;
+                        polling?: { stop: () => void };
+                        reconnectTimer?: unknown;
+                        resubscribePending?: Map<string, unknown>;
+                        resubscribeQueue?: unknown[];
+                        socket?: { close: () => void };
+                        wsState?: string;
+                    }
                 >;
             };
 
-            internals.connections.set("", { connectTimer, heartbeatTimer, reconnectTimer: undefined, socket: { close: socketClose }, wsState: "open" });
+            internals.connections.set("", {
+                connectTimer,
+                heartbeatTimer,
+                // Teardown stops the polling fallback unconditionally (it is a
+                // required field on a real connection), so the double carries one.
+                polling: { stop: () => {} },
+                reconnectTimer: undefined,
+                // Same reason as `polling`: teardown clears the paced-resubscribe
+                // queue unconditionally, so the double carries both halves of it.
+                resubscribePending: new Map(),
+                resubscribeQueue: [],
+                socket: { close: socketClose },
+                wsState: "open",
+            });
 
             const conn = internals.connections.get("");
 
@@ -1346,6 +1368,38 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             // cannot find a `SubscriptionState` for `key` and drops the broadcast.
             expect(seen).toHaveLength(1);
             expect(seen[0]).toStrictEqual({ rows: [1, 2] });
+
+            leader.close();
+        } finally {
+            client.close();
+        }
+    });
+
+    it("reports a follower's inert subscribeShape through onError instead of failing silently", async () => {
+        expect.assertions(2);
+
+        // The handle a follower gets back is inert by design (shape pokes are
+        // not in the leader→follower broadcast set). Silence there is what hangs
+        // `@lunora/db`'s shape-backed collection in `loading` forever: its
+        // `markReady()` is reachable only from `onRows` or `onError`, and the
+        // inert handle fires neither.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: {} }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL });
+
+        try {
+            const leader = new BroadcastChannel(clientChannel(client));
+
+            leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await delay(30);
+
+            const errors: SubscriptionError[] = [];
+
+            client.subscribeShape({ name: "todos" }, () => undefined, { onError: (error) => errors.push(error) });
+
+            await delay(10);
+
+            expect(errors).toHaveLength(1);
+            expect(errors[0]?.code).toBe("NOT_IMPLEMENTED");
 
             leader.close();
         } finally {

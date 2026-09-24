@@ -7,7 +7,7 @@ import type { InboundEmail } from "../src/inbound/parse";
 /** A parsed message fixture used by the handler tests (parsing is covered separately). */
 const fixture: InboundEmail = {
     attachments: [],
-    authentication: { dkim: null, dkimDomain: null, dmarc: null, dmarcDomain: null, spf: null, spfDomain: null },
+    authentication: { dkim: [], dmarc: [], spf: [] },
     from: "alice@example.com",
     headers: { subject: "Hi" },
     messageId: "<m-1@example.com>",
@@ -196,6 +196,51 @@ describe("createInboundEmailHandler", () => {
         consoleError.mockRestore();
     });
 
+    it("proceeds only on true/undefined — every other answer is a rejection", async () => {
+        expect.assertions(6);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        // A hook is typed `boolean | void`, but it runs across an untyped boundary
+        // (a JS project, a hook that forgot a branch and fell out of a `switch`).
+        // A gate that only recognises literal `false` admits every one of these into
+        // the privileged dispatch.
+        for (const answer of [null, 0, ""]) {
+            const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+            const message = fakeMessage();
+            const handler = createInboundEmailHandler({
+                dispatch,
+                parse: async () => fixture,
+                verify: () => answer as unknown as boolean,
+            });
+
+            // eslint-disable-next-line no-await-in-loop -- one independent handler run per answer
+            await handler(message, {}, undefined);
+
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        }
+
+        consoleError.mockRestore();
+    });
+
+    it("still proceeds for a void hook that rejects by throwing", async () => {
+        expect.assertions(1);
+
+        const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+        const handler = createInboundEmailHandler({
+            dispatch,
+            parse: async () => fixture,
+            verify: () => {
+                // A `(): void` hook that returns nothing is the documented "proceed".
+            },
+        });
+
+        await handler(fakeMessage(), {}, undefined);
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
     it("calls a custom onError for a dispatch failure — for observability — then still rejects", async () => {
         expect.assertions(4);
 
@@ -300,6 +345,65 @@ describe("dispatchToLunoraFunction", () => {
 
         expect(envelope).toMatchObject({ functionPath: "inbound:onEmail", shardKey: "__root__" });
         expect(envelope.args).toMatchObject({ from: "alice@example.com", subject: "Hi" });
+    });
+
+    /**
+     * Mirrors the generated shard's `handleRpc` visibility gate: an `internal`
+     * target answers `FUNCTION_NOT_FOUND` unless the dispatch is marked system
+     * (`x-lunora-system: "1"`) — the marker a client RPC can never carry.
+     */
+    const stubVisibilityGatedShard = (visibility: "internal" | "public") => {
+        type GatedFetch = (url: string, init?: { headers?: Record<string, string> }) => Promise<{ json: () => Promise<unknown>; ok: boolean }>;
+
+        const fetch = vi.fn<GatedFetch>(async (_url, init) => {
+            const denied = visibility === "internal" && init?.headers?.["x-lunora-system"] !== "1";
+
+            return {
+                json: async () => (denied ? { error: { code: "FUNCTION_NOT_FOUND", message: "function not registered: inbound:onEmail" } } : { result: "ok" }),
+                ok: true,
+            };
+        });
+
+        return {
+            fetch,
+            shard: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: (name: string) => `id:${name}`,
+            },
+        };
+    };
+
+    it("marks the dispatch a trusted system call, not an anonymous bearer RPC", async () => {
+        expect.assertions(2);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
+
+        expect(init.headers["x-lunora-system"]).toBe("1");
+        expect(init.headers.authorization).toBe("Bearer secret");
+    });
+
+    it("reaches an internal target, and still reaches a public one", async () => {
+        expect.assertions(2);
+
+        const context = { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() };
+        const internalShard = stubVisibilityGatedShard("internal");
+        const publicShard = stubVisibilityGatedShard("public");
+
+        await expect(dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard: internalShard.shard })(fixture, context)).resolves.toBeUndefined();
+        await expect(dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard: publicShard.shard })(fixture, context)).resolves.toBeUndefined();
     });
 
     it("base64-encodes binary attachment content so it survives JSON serialisation", async () => {

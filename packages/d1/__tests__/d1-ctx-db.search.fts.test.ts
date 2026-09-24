@@ -77,6 +77,11 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
             // pages through it; the canned rows stand in for a table that
             // already held data when the search index was declared.
             { pattern: /^SELECT name FROM sqlite_master WHERE type = 'table' AND name = \?$/u, rows: () => [{ name: "docs" }] },
+            // "Does the table hold rows?" — a `staged` index is only skipped by
+            // the migration pass when it does; over an empty table the pass
+            // walks it (finding nothing) so the index records coverage instead
+            // of refusing every search forever.
+            { pattern: /^SELECT 1 FROM "docs" LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },
             { pattern: /^SELECT \* FROM "docs" ORDER BY/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
             { pattern: /RETURNING "id"$/u, rows: () => (matchRows.length > 0 ? [{ id: matchRows[0]?.id }] : [{ id: "d1" }]) },
             { pattern: /WHERE "id" = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) },

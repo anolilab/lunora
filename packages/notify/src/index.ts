@@ -46,6 +46,7 @@ export type {
     NotifyLogger,
     NotifyMetrics,
     NotifySkipReason,
+    PushOwner,
     PushPayload,
     PushSubscriptionDevice,
     PushSubscriptionLike,

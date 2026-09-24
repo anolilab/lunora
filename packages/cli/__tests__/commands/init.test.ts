@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isTemplate, resolveTemplateFlag, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -165,6 +166,62 @@ describe("lunora init", () => {
             // Optional native builds a scaffold doesn't need are listed as denied
             // (so pnpm neither prompts nor requires a C/C++ toolchain).
             expect(workspace).toContain("'ssh2': false");
+        });
+
+        it("writes the allowBuilds allowlist for --yes, which never reaches the install offer", async () => {
+            expect.assertions(3);
+
+            // The allowlist used to be written INSIDE the install offer, after
+            // `confirm()` returned true — so `--yes`, a non-TTY (CI, an agent) and
+            // "No" at the prompt each produced a project whose very next step,
+            // `pnpm install`, exits 1 with `ERR_PNPM_IGNORED_BUILDS: esbuild,
+            // workerd, …`. It belongs to the scaffold, not to the offer.
+            //
+            // A bare lock file above the target pins `detectPackageManager` to
+            // pnpm without making the parent a workspace root (`isWorkspaceRoot`
+            // reads `pnpm-workspace.yaml` / a `workspaces` field, not a lock file),
+            // so the monorepo skip below stays out of the way.
+            writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "yes-app",
+                templateType: "tanstack-start-react",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+
+            const workspace = readFileSync(join(workdir, "yes-app", "pnpm-workspace.yaml"), "utf8");
+
+            expect(workspace).toContain("'workerd': true");
+            expect(workspace).toContain("'cpu-features': false");
+        });
+
+        it("writes no pnpm-workspace.yaml into a scaffold inside a monorepo", async () => {
+            expect.assertions(2);
+
+            // The workspace ROOT owns `allowBuilds` there — the new package is not
+            // a member yet, so its install has to run from the root (which is what
+            // the next-steps hint says). A second `pnpm-workspace.yaml` here would
+            // make the scaffold a workspace root of its own and break `workspace:`
+            // resolution for it.
+            writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+            writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "nested-app",
+                templateType: "tanstack-start-react",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "nested-app", "pnpm-workspace.yaml"))).toBe(false);
         });
 
         it("does not install when the user declines the offer", async () => {
@@ -472,7 +529,7 @@ describe("lunora init", () => {
         });
 
         it("next template scaffolds app router + two-worker entries", async () => {
-            expect.assertions(12);
+            expect.assertions(13);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -491,9 +548,13 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "app", "layout.tsx"))).toBe(true);
             expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
-            // Two-worker split: Next SSR worker config + standalone Lunora worker.
+            // Two-worker split. The ROOT `wrangler.jsonc` is the LUNORA worker — that is
+            // where `lunora verify|deploy|dev` look, and they require the SHARD binding —
+            // and the Next SSR worker config sits beside it, passed to every OpenNext
+            // command with `--config`.
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
-            expect(existsSync(join(target, "wrangler.lunora.jsonc"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.opennext.jsonc"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain('"class_name": "ShardDO"');
             expect(existsSync(join(target, "lunora", "server.ts"))).toBe(true);
 
             const pkg = readFileSync(join(target, "package.json"), "utf8");
@@ -566,7 +627,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("not empty");
         });
 
@@ -583,7 +644,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             // cwd itself must not have been scaffolded into (e.g. no package.json dropped in workdir)
             expect(existsSync(join(workdir, "package.json"))).toBe(false);
@@ -602,7 +663,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("refusing an empty project name");
             expect(existsSync(join(workdir, "   "))).toBe(false);
         });
@@ -624,6 +685,73 @@ describe("lunora init", () => {
             expect(existsSync(join(workdir, "  padded-app  "))).toBe(false);
         });
 
+        it("fails instead of reporting success when the template directory holds no files", async () => {
+            expect.assertions(3);
+
+            // A template subdirectory that exists but is empty — what a bad
+            // `--ref` / `--source` / template-name typo produces remotely, since
+            // giget drops every entry outside the requested subdir without
+            // throwing. This used to copy 0 files and exit 0 with
+            // "Project initialized!" over an empty project directory.
+            const emptySource = join(workdir, "empty-templates");
+
+            mkdirSync(join(emptySource, "tanstack-start-react"), { recursive: true });
+
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: emptySource,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "hollow",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+            expect(errors.join("\n")).toContain("no files");
+            expect(existsSync(join(workdir, "hollow"))).toBe(false);
+        });
+
+        it("refuses a project name wrangler will reject as a worker name", async () => {
+            expect.assertions(3);
+
+            // wrangler's own `isValidName` is /^$|^[a-z0-9_][a-z0-9-_]*$/ and a
+            // hard error, so `MyApp` scaffolds fine and then fails every
+            // `wrangler dev` / `deploy` on the substituted `name` field.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "MyApp",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(errors.join("\n")).toContain("my-app");
+            expect(existsSync(join(workdir, "MyApp"))).toBe(false);
+        });
+
+        it("does not let a $-pattern in the name corrupt {{name}} substitution", async () => {
+            expect.assertions(2);
+
+            // `String.replaceAll` interprets `$&` / `$'` in a STRING replacement,
+            // so a name carrying one used to splice the matched text back in.
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "app-$&-x",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(errors.join("\n")).toContain("lowercase");
+        });
+
         it("--from with missing template reports a helpful error", async () => {
             expect.assertions(2);
 
@@ -637,7 +765,7 @@ describe("lunora init", () => {
                 templateType: "tanstack-start-react",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
@@ -708,6 +836,97 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // {{name}} is substituted into the app manifest.
             expect(appJson).toContain('"slug": "expo-app"');
+        });
+    });
+
+    describe("scaffold cleanup", () => {
+        // A local template root the test fully controls, so a copy can be made
+        // to fail part-way without touching the real templates.
+        const writeLocalTemplate = (): string => {
+            const root = join(workdir, "local-templates", "tanstack-start-react");
+
+            mkdirSync(root, { recursive: true });
+            writeFileSync(join(root, "a.txt"), "first\n", "utf8");
+            writeFileSync(join(root, "z.txt"), "second\n", "utf8");
+
+            return join(workdir, "local-templates");
+        };
+
+        it("removes a partially-written scaffold when the copy throws part-way", async () => {
+            expect.assertions(2);
+
+            // `copyTemplate` writes sequentially and can throw after earlier
+            // writes (a read error on a later template file here; ENOSPC / EMFILE
+            // in the wild). The exception propagated out of `runInitCommand` with
+            // the half-written target still on disk, and the retry — with the
+            // cause fixed — was then refused with "target directory not empty".
+            const from = writeLocalTemplate();
+
+            chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o000);
+
+            const target = join(workdir, "broken-app");
+
+            try {
+                await expect(
+                    runInitCommand({ cwd: workdir, from, logger: silentLogger(), name: "broken-app", templateType: "tanstack-start-react" }),
+                    // The read failure is surfaced, not swallowed — cleanup runs
+                    // on the way out and the original cause still reaches the user.
+                ).rejects.toThrow(/EACCES|permission denied/iu);
+
+                expect(existsSync(target)).toBe(false);
+            } finally {
+                chmodSync(join(from, "tanstack-start-react", "z.txt"), 0o600);
+            }
+        });
+
+        it("keeps a completed scaffold when something after the copy throws", async () => {
+            expect.assertions(2);
+
+            // The other half of the same guard: once the copy is done the project
+            // is real, so a throw from anything AFTER it (the success logging
+            // here) must abort the command WITHOUT deleting the finished
+            // scaffold. Cleanup covers an interrupted copy, not a completed one.
+            const from = writeLocalTemplate();
+            const logger = {
+                ...silentLogger(),
+                success: () => {
+                    throw new Error("logging blew up");
+                },
+            };
+
+            await expect(runInitCommand({ cwd: workdir, from, logger, name: "kept-app", templateType: "tanstack-start-react" })).rejects.toThrow(
+                /logging blew up/u,
+            );
+
+            expect(existsSync(join(workdir, "kept-app", "a.txt"))).toBe(true);
+        });
+
+        it("refuses a target that is a symlink, without following it", async () => {
+            expect.assertions(3);
+
+            // `existsSync` follows symlinks, so `cwd/<name>` pointing at an empty
+            // directory elsewhere passed the emptiness check and became the
+            // scaffold target — writes landed outside `cwd`, and the cleanup
+            // path (which empties a pre-existing target back out) would delete
+            // files there that this run never wrote.
+            const outside = join(workdir, "outside");
+
+            mkdirSync(outside, { recursive: true });
+            symlinkSync(outside, join(workdir, "linked-app"), "dir");
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: writeLocalTemplate(),
+                logger: silentLogger(),
+                name: "linked-app",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
+            // Nothing was written through the link…
+            expect(readdirSync(outside)).toHaveLength(0);
+            // …and the link itself is still the user's to deal with.
+            expect(lstatSync(join(workdir, "linked-app")).isSymbolicLink()).toBe(true);
         });
     });
 

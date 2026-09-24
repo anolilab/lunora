@@ -2,6 +2,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
 
 /** The lifecycle of a stream the composable is observing. */
@@ -17,6 +18,13 @@ interface UseStreamResult<T> {
 }
 
 interface UseStreamOptions {
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The chunks already received are kept and the socket re-attaches to the same
+     * run, so a dropped connection mid-generation continues instead of surfacing
+     * `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
@@ -30,6 +38,7 @@ interface UseStreamOptions {
  *
  * `args` may be a plain value, `ref`, or getter; resolving it to `"skip"` keeps
  * the composable mounted without opening a stream (mirrors `useSubscription`).
+ * Nothing opens during SSR either — the stream attaches after hydration.
  * The Vue counterpart to React's `useStream`, re-expressed with refs.
  */
 const useStream = <F extends FunctionReference<"stream">>(
@@ -57,7 +66,11 @@ const useStream = <F extends FunctionReference<"stream">>(
             chunks.value = [];
             error.value = undefined;
 
-            if (currentArgs === "skip") {
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onCleanup` (see
+            // `use-presence.ts`'s guard rationale) — a stream opened there is
+            // held for the life of the server process. Leave the refs inert.
+            if (currentArgs === "skip" || !isBrowser()) {
                 status.value = "idle";
 
                 return;
@@ -66,7 +79,7 @@ const useStream = <F extends FunctionReference<"stream">>(
             status.value = "streaming";
 
             let active = true;
-            const iterable = client.stream(function_, currentArgs, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
+            const iterable = client.stream(function_, currentArgs, { durable: options.durable, maxBuffer: options.maxBuffer, shardKey: options.shardKey });
             const cancelIterable = (): void => {
                 iterable.cancel();
             };

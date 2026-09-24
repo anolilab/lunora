@@ -97,6 +97,23 @@ const unresolvableQualifiers = (root: string, rendered: ReadonlyArray<string>): 
     return unresolved;
 };
 
+/**
+ * The terminal types of the builder chains, declared locally so a probe file
+ * RESOLVES inside a fixture workdir that has no `node_modules`. The
+ * dropped-procedure check is type-level, and against an unresolvable
+ * `@lunora/server` every type is `any` — so a probe that imports the real
+ * package tests the unavailable path, never the check. Only the terminal
+ * identities are mirrored; `__tests__/discover/unregistered-procedures.test.ts`
+ * covers the per-kind detail.
+ */
+const PROBE_BUILDERS = `export interface RegisteredFunction<A, R, Kind extends "query" | "mutation" | "action"> {
+    handler: (context: unknown, args: A) => R;
+    kind: Kind;
+}
+export type RegisteredQuery<A, R> = RegisteredFunction<A, R, "query">;
+export declare const probeQuery: { input<A>(validators: A): { query<R>(handler: (options: { args: A }) => R): RegisteredQuery<A, Awaited<R>> } };
+`;
+
 let workdir: string;
 
 describe("run-codegen", () => {
@@ -168,6 +185,32 @@ export default defineSchema({
             // …but an app enumerating its own tables never has to mention it.
             expect(result.generated.dataModel).toContain('AppTableName = "nodes"');
             expect(result.generated.dataModel).not.toContain('AppTableName = "nodes" | "ratelimit_buckets"');
+        });
+
+        it("rejects two http-stream route files whose namespaces collide", () => {
+            expect.assertions(1);
+
+            // `renderHttpStreamsRef` groups streaming routes by `sanitizeNamespace(file)`
+            // into both the `HttpStreamsRef` interface and the `httpStreams` object
+            // literal, but http routes were never fed to the collision assert — so
+            // `feed-a.ts` + `feed_a.ts` emitted the key `feed_a` twice (TS2300 in the
+            // interface, TS1117 in the literal) inside generated code, with nothing
+            // naming either source file. That is the exact failure the assert exists
+            // to replace.
+            writeFileSync(
+                join(workdir, "lunora", "feed-a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const feed = httpRoute.get("/api/a").stream(async function* () { yield "a"; });
+                `,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "feed_a.ts"),
+                `import { httpRoute } from "@lunora/server";
+                 export const other = httpRoute.get("/api/b").stream(async function* () { yield "b"; });
+                `,
+            );
+
+            expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/both map to the http-stream namespace "feed_a"/u);
         });
 
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
@@ -458,7 +501,10 @@ export default defineSchema({
         it("imports base packages through the lunorash umbrella subpaths when the project depends on `lunorash`", () => {
             expect.assertions(9);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-app" }),
+            );
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -522,14 +568,46 @@ export const sendMessage = defineMutator({
                 // The cross-shard-join guard is imported + called against the compiled predicate.
                 expect(result.generated.shard).toContain("assertShapeShardable");
                 expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
-                // The shape predicate is AND-merged with the table's RLS read base-where:
-                // a module-scope registry is built from the function table, the helper is
-                // imported, and the resolver composes it before the shardability guard.
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));");
-                expect(result.generated.shard).toContain("buildRlsReadRegistry, composeShapeReadWhere");
-                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
-                expect(result.generated.shard).toContain("composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY,");
+                // The shape predicate is AND-merged with the read policies the SHAPE
+                // declares (`defineShape({ use })`, pre-indexed by `defineShape` into
+                // `shape.rlsRegistry`), before the shardability guard.
+                expect(result.generated.shard).toContain("composeShapeReadWhere(shape.rlsRegistry,");
+                // NOT a project-wide registry. Folding in every registered function's
+                // read policies unions them, and a single allow-all policy inside an
+                // admin-only procedure then unrestricted every shape on that table.
+                expect(result.generated.shard).not.toContain("buildRlsReadRegistry");
+                // No read policy anywhere in the project ⇒ nothing for a shape to
+                // replicate around, so the boot-time guard is not stamped either.
+                expect(result.generated.shard).not.toContain("assertShapesDeclareReadPolicies");
+            });
+
+            it("stamps the boot-time guard when a shape's table is governed on read but the shape names no use()", () => {
+                expect.assertions(2);
+
+                writeShapes();
+                // A query tenant-scopes `messages` on read. The shape above declares no
+                // `use`, so its registry is empty and it would replicate the channel
+                // filter alone — every tenant's rows, silently. Codegen hands the runtime
+                // the governed tables; `@lunora/server` holds the verdict, because only
+                // the registry knows whether `use` was written.
+                writeFileSync(
+                    join(workdir, "lunora", "guarded.ts"),
+                    `import { query, rls } from "@lunora/server";
+export const listMessages = query
+    .use(rls([{ on: "read", table: "messages", when: ({ auth }) => ({ tenantId: auth.userId }) }]))
+    .query(async () => []);
+`,
+                    "utf8",
+                );
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredDeletes, beginDeferredSchedules");
+                expect(result.generated.shard).toContain(
+                    'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
+                );
+                /* eslint-enable no-secrets/no-secrets */
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {
@@ -570,7 +648,10 @@ export const sendMessage = defineMutator({
                 expect.assertions(9);
 
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
+                );
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -598,7 +679,7 @@ export const sendMessage = defineMutator({
                 writeShapes();
                 writeFileSync(
                     join(workdir, "package.json"),
-                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
                 );
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
@@ -628,7 +709,10 @@ export const sendMessage = defineMutator({
 
                 // Feature present: shapes + @lunora/db → collections.ts is written to disk.
                 writeShapes();
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/db": "*" }, name: "db-app" }));
+                writeFileSync(
+                    join(workdir, "package.json"),
+                    JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
+                );
                 runCodegen({ lint: false, projectRoot: workdir });
 
                 expect(existsSync(collectionsPath)).toBe(true);
@@ -636,7 +720,7 @@ export const sendMessage = defineMutator({
                 // Feature removed: drop the @lunora/db dependency. The emitter now
                 // returns "" and the prior file must be deleted, not left dangling
                 // (it imports @lunora/db, which the app no longer installs).
-                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "db-app" }));
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "db-app" }));
 
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
@@ -978,7 +1062,10 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
         it("routes ctx.flags imports through the lunorash umbrella when the project depends on `lunorash`", () => {
             expect.assertions(4);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-flags-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-flags-app" }),
+            );
             writeFileSync(
                 join(workdir, "lunora", "flags.ts"),
                 `import { defineFlags } from "lunorash/flags";
@@ -1042,7 +1129,10 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
         it("wires ctx.notify (every ctx) even under the lunorash umbrella — @lunora/notify is an add-on, never remapped", () => {
             expect.assertions(3);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", lunorash: "*" }, name: "umbrella-notify-app" }));
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-notify-app" }),
+            );
             writeFileSync(
                 join(workdir, "lunora", "notify.ts"),
                 `import { defineNotify, webPushFromEnv } from "@lunora/notify";
@@ -1138,6 +1228,130 @@ export default crons;
             expect(result.generated.shard).toContain('"vectors": false');
         });
 
+        it("wires the vector introspector on exactly the condition studioFeatures.vectors gates the nav on", () => {
+            expect.assertions(6);
+
+            // A visible tab with no backend: `studioFeatures.vectors` was true for
+            // every vector-indexed app (and for any app merely depending on
+            // `@lunora/bindings`), while `defineApp().build()` wired no
+            // `vectorIntrospector` at all — so the Vectors page and the home
+            // screen's "Vectorize Indexes" card both answered 400
+            // `VECTORS_NOT_CONFIGURED`. The two must move together.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `{ "name": "vectorish", "dependencies": { "@lunora/bindings": "*", "@lunora/d1": "*", "@lunora/storage": "*" } }`,
+                "utf8",
+            );
+
+            const withoutIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            // A bare `@lunora/bindings` dependency (installed for `ctx.kv` /
+            // `ctx.images`) declares no index, so there is no registry to serve and
+            // the tab stays hidden rather than failing open into an error.
+            expect(withoutIndex.generated.shard).toContain('"vectors": false');
+            expect(withoutIndex.generated.app).not.toContain("vectorIntrospector");
+            expect(withoutIndex.generated.shard).toContain('"kv": true');
+
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),
+});
+
+export default schema;
+`,
+                "utf8",
+            );
+
+            const withIndex = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(withIndex.generated.shard).toContain('"vectors": true');
+            expect(withIndex.generated.app).toContain("options.vectorIntrospector = createVectorAdminIntrospector({");
+            // The index map is the app's own `.vectors(...)` selector, not a re-scan
+            // of `env` — an arbitrary binding name still resolves to its logical index.
+            expect(withIndex.generated.app).toContain("indexes: this.shardExtras.vectors(env as unknown as Record<string, unknown>),");
+        });
+
+        it("adds a worker entry's static backupCron and crons keys to the wrangler trigger set", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({
+    backupCron: "0 3 * * *",
+    crons: { "*/15 * * * *": async () => {} },
+});
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
+import { internal } from "./_generated/api.js";
+const crons = cronJobs();
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+export default crons;
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Declared crons lead, in the order `emitWranglerCronTriggers` renders
+            // them; entry-derived expressions append.
+            expect(result.cronTriggers).toStrictEqual(["0 * * * *", "0 3 * * *", "*/15 * * * *"]);
+            // Neither entry expression names a dispatchable job — `createWorker`
+            // runs those itself — so the generated dispatcher map must not grow one.
+            expect(result.generated.crons).toContain('"0 * * * *"');
+            expect(result.generated.crons).not.toContain("0 3 * * *");
+            expect(result.generated.crons).not.toContain("*/15 * * * *");
+        });
+
+        it("leaves a computed backupCron out of the trigger set, for the ownership record to preserve", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import { createWorker } from "@lunora/runtime";
+
+export default createWorker({ backupCron: process.env.NIGHTLY_CRON });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Out of reach for any AST scan, which is why `package.json`'s
+            // `lunora.crons` ownership record stays: `reconcileWranglerCrons` keeps
+            // an entry that is in neither the generated set nor that record — see
+            // `@lunora/config`'s reconcile-crons tests.
+            expect(result.cronTriggers).toStrictEqual([]);
+        });
+
+        it("reads a backupCron out of an `.extend()` callback's returned literal", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                `import app from "../../lunora/_generated/app.js";
+
+export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.cronTriggers).toStrictEqual(["0 4 * * *"]);
+        });
+
         it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 
@@ -1151,7 +1365,11 @@ export default crons;
 
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "*" }, devDependencies: { "@lunora/seed": "workspace:*" }, name: "demo" }),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    devDependencies: { "@lunora/seed": "workspace:*" },
+                    name: "demo",
+                }),
                 "utf8",
             );
 
@@ -1337,6 +1555,22 @@ export default crons;
 
             // Args are required when the function declares any, typed against dataModel.
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
+        });
+
+        it("routes a mutation reached through createCaller into the caller's transaction", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // `createCaller(ctx).ns.someMutation()` used to invoke the handler
+            // directly, so a mutation composed this way from an action or a stream
+            // got none of what `ctx.runMutation` gets: no BEGIN/COMMIT span, no
+            // deferred schedules, no deferred-delete flush. Its writes autocommitted
+            // one row at a time and its `ctx.scheduler` calls dispatched at once, so
+            // a mid-handler throw left the earlier writes durable and the job
+            // already enqueued.
+            expect(result.generated.functions).toContain('if (registered.kind === "mutation") {');
+            expect(result.generated.functions).toContain("await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
@@ -1576,7 +1810,11 @@ export default crons;
         it("threads package.json version into info.version of both OpenAPI and OpenRPC docs", () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*" }, name: "test-app", version: "1.2.3" }), "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "test-app", version: "1.2.3" }),
+                "utf8",
+            );
 
             const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
             const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
@@ -1827,7 +2065,8 @@ export const cached = query.input({ key: v.string() }).query(async ({ args, ctx 
             const result = runCodegen({ projectRoot: workdir });
 
             // The method, the config-type alias, and the pass-through state are all emitted…
-            expect(result.generated.app).toContain('public kv(factory: NonNullable<ShardConfig["kv"]>): this');
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted type signature, not a credential
+            expect(result.generated.app).toContain('public kv(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["kv"]>>): this');
             expect(result.generated.app).toContain("type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;");
             expect(result.generated.app).toContain("private readonly shardExtras: Partial<ShardConfig> = {};");
             expect(result.generated.app).toContain("...this.shardExtras,");
@@ -1853,7 +2092,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             // The fluent builder method + its config-type pass-through are emitted…
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
-            expect(result.generated.app).toContain('public x402(factory: NonNullable<ShardConfig["x402"]>): this');
+            expect(result.generated.app).toContain('public x402(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["x402"]>>): this');
             // …the typed rail rides the ActionCtx…
             expect(result.generated.server).toContain("readonly x402: X402Pay;");
             // …and the value is attached only inside the action-only `if (isAction)` block.
@@ -1865,7 +2104,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*", "@lunora/storage": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1884,7 +2123,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/auth": "*", "@lunora/d1": "*", "@lunora/storage": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1921,7 +2160,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // Depending on @lunora/svelte surfaces the framework terminal + the runtime composer import.
             writeFileSync(
                 join(workdir, "package.json"),
-                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/svelte": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
                 "utf8",
             );
 
@@ -1958,6 +2197,32 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
             // the lifecycleHookPaths override.
             expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js"');
             expect(result.generated.shard).toContain("protected override lifecycleHookPaths(event:");
+        });
+
+        it("registers an onWhisper export as an internal QUERY in the whisper manifest", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "whisper.ts"),
+                `import { onWhisper } from "@lunora/server";
+export const authorize = onWhisper(async (ctx, event) => { void ctx; return event.topic.startsWith("room:"); });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain('"whisper:authorize":');
+            expect(result.generated.functions).toContain('whisper: ["whisper:authorize"]');
+
+            // A query, NOT a mutation: `handleRpc` transaction-wraps a mutation, so
+            // misclassifying the authorizer would open a write span on every topic
+            // join — and would let an authorization check write.
+            expect(result.generated.api).toContain('authorize: FunctionReference<"query"');
+
+            // Internal: the namespace lands AFTER the `InternalApiTypes` opener, i.e.
+            // in the server-only surface rather than the client-facing `api`.
+            expect(result.generated.api.indexOf("whisper: {")).toBeGreaterThan(result.generated.api.indexOf("InternalApiTypes"));
         });
 
         it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
@@ -2571,13 +2836,12 @@ export default executeTrigger;
             // 'getUserSettings' does not exist", reading as a naming mistake
             // rather than a dropped function. This check is type-level, so the
             // indirection that causes the bug cannot hide it.
+            writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
             writeFileSync(
                 join(workdir, "lunora", "settings.ts"),
-                `import type { RegisteredQuery } from "@lunora/server";
+                `import { probeQuery } from "./builders.js";
 
-import { query } from "./_generated/server.js";
-
-const makeGetter = (): RegisteredQuery<{}, string> => query.input({}).query(async () => "x");
+const makeGetter = () => probeQuery.input({}).query(async () => "x");
 
 export const getUserSettings = makeGetter();
 `,
@@ -2588,7 +2852,54 @@ export const getUserSettings = makeGetter();
 
             expect(finding).toBeDefined();
             expect(finding?.detail).toContain("`getUserSettings`");
-            expect(finding?.remediation).toContain("Assign the builder chain directly");
+            expect(finding?.remediation).toContain("query.input({ … }).query(handler)");
+        });
+
+        it("says so when it cannot type-check `lunora/` at all, rather than reporting a clean bill of health", () => {
+            expect.assertions(2);
+
+            // A builder chain importing the real `@lunora/server`, in a tmpdir
+            // with no `node_modules` and no `tsconfig.json`: registered
+            // syntactically, unreadable by type. The shared fixture cannot
+            // stand in for this — its procedures use the bare factory form,
+            // whose type is `any` even in a healthy install, so it would prove
+            // the wrong thing. `__tests__/discover/unregistered-procedures.test.ts`
+            // covers the resolving side, including that this stays quiet there.
+            writeFileSync(
+                join(workdir, "lunora", "probe.ts"),
+                `import { query } from "@lunora/server";
+
+export const probeListed = query.input({}).query(async () => "x");
+`,
+            );
+            const result = runCodegen({ projectRoot: workdir });
+            const finding = result.advisories.find((entry) => entry.name === "procedure_type_check_unavailable");
+
+            expect(finding?.detail).toContain("Type resolution for `lunora/` is unavailable");
+            expect(finding?.remediation).toContain("tsconfig.json");
+        });
+
+        it("keeps the type-check finding out of the generated shard while still returning it", () => {
+            expect.assertions(2);
+
+            // `_generated/shard.ts` is committed for the examples, and this
+            // finding describes the machine codegen ran on — so regenerating
+            // against a cold `dist/` must not write it into a tracked file.
+            // Asserted on the output rather than by sharing the name constant
+            // with the filter: the risk is the filter silently stopping to
+            // match, and only the emitted bytes prove it still does.
+            writeFileSync(
+                join(workdir, "lunora", "probe.ts"),
+                `import { query } from "@lunora/server";
+
+export const probeListed = query.input({}).query(async () => "x");
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.advisories.map((entry) => entry.name)).toContain("procedure_type_check_unavailable");
+            expect(result.generated.shard).not.toContain("procedure_type_check_unavailable");
         });
 
         it("flags a procedure exported by a separate export statement, under its exported name", () => {
@@ -2601,13 +2912,12 @@ export const getUserSettings = makeGetter();
             // dropped from is an ordinary builder chain with nothing to look at.
             // `export { a as b }` is addressed by callers as `b`, so `b` is what
             // the finding has to name.
+            writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
             writeFileSync(
                 join(workdir, "lunora", "settings.ts"),
-                `import type { RegisteredQuery } from "@lunora/server";
+                `import { probeQuery } from "./builders.js";
 
-import { query } from "./_generated/server.js";
-
-const listSettings: RegisteredQuery<{}, string> = query.input({}).query(async () => "x");
+const listSettings = probeQuery.input({}).query(async () => "x");
 
 export { listSettings as listUserSettings };
 `,
@@ -2774,7 +3084,10 @@ export default schema;
             expect(existsSync(join(workdir, "lunora", "_generated", "app.ts"))).toBe(false);
 
             // Declaring it clears the gate.
-            writeFileSync(manifest, JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }));
+            writeFileSync(
+                manifest,
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }),
+            );
 
             expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
         });
@@ -3458,6 +3771,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('"type": "id"');
         });
 
+        it("carries each foreign key's declared onDelete onto its column", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [
+                            { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" },
+                            { field: "editorId", kind: "one", name: "editor", onDelete: "restrict", references: "_id", table: "users" },
+                            // No declared action — the column must stay silent rather
+                            // than inherit a sibling's.
+                            { field: "reviewerId", kind: "one", name: "reviewer", references: "_id", table: "users" },
+                        ],
+                        searchIndexes: [],
+                        shape: {
+                            authorId: { kind: "id", tableName: "users" },
+                            editorId: { kind: "id", tableName: "users" },
+                            reviewerId: { kind: "id", tableName: "users" },
+                        },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const columns = JSON.parse(/const LUNORA_TABLE_COLUMNS[^=]+= (?<json>\{.*?\n\});/su.exec(emitShard({ schema }))?.groups?.["json"] ?? "{}") as {
+                posts: { name: string; onDelete?: string }[];
+            };
+            const byName = new Map(columns.posts.map((column) => [column.name, column.onDelete]));
+
+            expect(byName.get("authorId")).toBe("cascade");
+            expect(byName.get("editorId")).toBe("restrict");
+            expect(byName.get("reviewerId")).toBeUndefined();
+        });
+
         it("flags a v.storage() column with isStorage: true", () => {
             expect.assertions(1);
 
@@ -3488,9 +3840,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
-            expect(output).toContain(
-                "Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>",
-            );
+            expect(output).toContain('onDelete?: "cascade" | "restrict" | "set null";');
         });
 
         it("names the members of a string-literal union so the row editor can offer them", () => {
@@ -3658,7 +4008,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // ctx.vectors + the auto-propagation write hook are assembled in buildCtx.
             expect(output).toContain("vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;");
             expect(output).toContain("onWrite = createVectorSyncHook(");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
             expect(output).toContain("vectors,");
         });
 
@@ -3688,7 +4038,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
             expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
             // The read side (`ctx.vectors`) must stay just as bare as the write side.
-            expect(output).toContain("vectors = createContextVectors(lunora);");
+            expect(output).toContain("vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
             expect(output).not.toContain("currentShardKey");
@@ -3734,10 +4084,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // which ones are tenant-partitioned (a root-instance call against
             // any other listed index stays namespace-less, unaffected).
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
@@ -3775,10 +4125,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("lists only the sharded table's index in shardedIndexNames for a MIXED schema (one sharded, one root-scoped vectorized table)", () => {
@@ -3822,7 +4172,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
         });
 

@@ -45,8 +45,10 @@ const PROJECT_MIN_WEIGHT = 1;
 const FAILING_FLOOR = 50;
 
 /**
- * Penalty applied when a lint that declares no explicit `weight` fires, keyed by
- * the finding's severity. A definite problem costs more than an advisory nudge;
+ * Penalty applied when a lint fires, keyed by the finding's severity. Severity
+ * is the only input: a lint carries no per-lint weight of its own, so two rules
+ * at the same level cost the same. A definite problem costs more than an
+ * advisory nudge;
  * the ladder is deliberately coarse (5 distinct ERROR rules, or 10 WARN rules,
  * take a procedure from clean to zero). The ladder is keyed on `Level` rather than
  * a single flat penalty because our lints already carry a calibrated severity.

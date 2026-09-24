@@ -1,19 +1,42 @@
-import { cpSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, mkdtempSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { CodegenResult } from "../src/index";
 
+/** `packages/codegen/__tests__/fixtures` — where both the fixtures and their scratch workdirs live. */
+const fixturesDirectory = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
 /**
- * Copy a fixture's `lunora/` app into a scratch workdir, leaving the committed
- * `_generated/` behind. Discovery already skips `_generated/`, but keeping it out
- * of the workdir makes that independence structural rather than assumed: a golden
- * can never quietly become an input to the run that reproduces it.
+ * Copy a fixture's `lunora/` app into a fresh scratch workdir, leaving the
+ * committed `_generated/` behind. Discovery already skips `_generated/`, but
+ * keeping it out of the workdir makes that independence structural rather than
+ * assumed: a golden can never quietly become an input to the run that reproduces
+ * it.
+ *
+ * The workdir is created **beside the fixtures**, not in `os.tmpdir()`.
+ * `createCodegenProject` walks up from the app for a `tsconfig.json` and falls
+ * back to an isolated ts-morph project when it finds none, and module resolution
+ * needs a `node_modules` up the same chain. An `os.tmpdir()` workdir has neither,
+ * so every cross-module type the emitter asks for came back `any` and the goldens
+ * recorded `unknown` where a real project infers `Id<"notes">` / `Doc_notes[]` —
+ * byte-equality then locked the degraded inference in, and a regression that
+ * erased a return type showed up as no diff at all. Under `fixtures/` the walk-up
+ * finds `packages/codegen/tsconfig.json` and the workspace `node_modules`, which
+ * is what a scaffolded app has.
+ *
+ * `.workdir-*` is gitignored so a run killed before its cleanup cannot fail the
+ * repo-clean check in `scripts/check-generated-files.mjs`.
  */
-const copyFixtureApp = (fixtureRoot: string, workdir: string): void => {
+const makeFixtureWorkdir = (fixtureRoot: string): string => {
+    const workdir = mkdtempSync(join(fixturesDirectory, ".workdir-"));
+
     cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), {
         filter: (source) => !source.includes("_generated"),
         recursive: true,
     });
+
+    return workdir;
 };
 
 /**
@@ -23,11 +46,18 @@ const copyFixtureApp = (fixtureRoot: string, workdir: string): void => {
  * `simple` is the broad one (most tables, most add-ons); its golden sits under
  * `expected/` because nothing compiles it.
  *
- * `delta-sync` keeps its golden where a real project keeps it — `lunora/_generated`
- * — because it IS compiled: emitted code says `import schema from "../schema.js"`,
- * which only resolves from inside the app tree it was written for. Discovery
- * skips `_generated/`, so the committed output never feeds back into the run
- * that regenerates it.
+ * `delta-sync` and `hyperdrive-shape` keep their goldens where a real project
+ * keeps them — `lunora/_generated` — because they ARE compiled: emitted code says
+ * `import schema from "../schema.js"`, which only resolves from inside the app
+ * tree it was written for. Discovery skips `_generated/`, so the committed output
+ * never feeds back into the run that regenerates it.
+ *
+ * `hyperdrive-shape` is `delta-sync` with the `.global()` table moved to the
+ * Hyperdrive backend. The two backends emit different code in exactly the places
+ * the shape overrides live, and only the D1 spelling was ever compiled — which is
+ * how `readGlobalChangedTables` came to hand the narrower Hyperdrive thunk an
+ * inline object literal carrying a `bookmark` it does not declare, emitting a
+ * `shard.ts` that fails `tsc` for every Hyperdrive-global app with a shape.
  *
  * It exists because feature coverage here is per-emission-gate, not per-line:
  * the local-first sync overrides (`resolveShape`, `readGlobalShapeRows`,
@@ -44,6 +74,7 @@ const copyFixtureApp = (fixtureRoot: string, workdir: string): void => {
 const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string]> = [
     ["simple", "expected/_generated"],
     ["delta-sync", "lunora/_generated"],
+    ["hyperdrive-shape", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */
@@ -62,4 +93,4 @@ const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["gener
     ["openrpc.ts", "openRpcModule"],
 ];
 
-export { copyFixtureApp, GOLDEN_FIXTURES, GOLDEN_OUTPUTS };
+export { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir };

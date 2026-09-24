@@ -34,6 +34,22 @@ describe("readBackRelationCounts", () => {
         expect(relations[0]?.counts.u2).toBe(1);
     });
 
+    it("addresses a doc field whose name contains a double quote", () => {
+        expect.assertions(1);
+
+        // A JSON path is not a SQL identifier: doubling `"` (the identifier
+        // rule) emits `$."say""hi"`, which SQLite resolves to nothing and reads
+        // back as NULL, so every count silently came out empty. `$."say\"hi"`
+        // — the JSON string escape, from `shared/json-path-segment.ts` — reads
+        // the value.
+        sql.exec(`CREATE TABLE "notes" (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        sql.exec(`INSERT INTO "notes" (id, _creationTime, "__doc__") VALUES (?, 0, ?)`, "n1", JSON.stringify({ 'say"hi': "u1" }));
+
+        const { relations } = readBackRelationCounts(sql, { ids: ["u1"], relations: [{ column: 'say"hi', table: "notes" }] });
+
+        expect(relations[0]?.counts.u1).toBe(1);
+    });
+
     it("omits parents with no children rather than reporting zero rows", () => {
         expect.assertions(1);
 

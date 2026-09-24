@@ -1,10 +1,10 @@
 import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Everyone here is signed in, so limits are keyed by user rather than by IP —
@@ -14,7 +14,7 @@ const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 /** Root-scoped, so no shard key: this is the list you read before you know which channel you want. */
-export const list = query.query(async ({ ctx }): Promise<Doc<"channels">[]> => {
+export const list = query.query(async ({ ctx }): Promise<Document_<"channels">[]> => {
     if (!ctx.auth.userId) {
         return [];
     }
@@ -35,11 +35,16 @@ export const create = mutation
             throw new LunoraError("UNAUTHENTICATED", "sign in to create a channel");
         }
 
+        // `split("-").filter(Boolean).join("-")` rather than a trailing
+        // `replaceAll(/^-+|-+$/gu, "")`: the alternation-of-quantifiers form is what a
+        // ReDoS scanner flags, and this also collapses interior runs in the same pass.
         const slug = name
             .trim()
             .toLowerCase()
             .replaceAll(/[^a-z0-9-]+/gu, "-")
-            .replaceAll(/^-+|-+$/gu, "");
+            .split("-")
+            .filter(Boolean)
+            .join("-");
 
         if (!slug) {
             throw new LunoraError("BAD_REQUEST", "channel name must contain a letter or a digit");

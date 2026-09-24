@@ -62,6 +62,16 @@ const signupMutationWithoutDisposableGating: Lint = {
                 continue;
             }
 
+            // `emailGateMiddleware` gates an address selected off the args, so a
+            // procedure that declares none cannot action this lint — a B2B
+            // `members.add(userId, role)` or `organizations.create(name, slug)`
+            // writes a membership row with no email anywhere in sight. Only an
+            // explicit `false` skips: an older feeder leaves the field undefined,
+            // and this lint stays fail-closed on unknown.
+            if (procedure.hasEmailArg === false) {
+                continue;
+            }
+
             findings.push(
                 emit(signupMutationWithoutDisposableGating, {
                     cacheKey: `signup_mutation_without_disposable_gating:${procedure.file}:${procedure.exportName}`,

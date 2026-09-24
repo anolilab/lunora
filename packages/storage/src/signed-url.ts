@@ -139,6 +139,15 @@ export const buildSignedUrl = async (
         throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: bucketName must not be empty");
     }
 
+    // Same reason, and the same guard `createStorage`'s `validateKey` applies to
+    // every other key that enters storage: an empty key mints a URL whose
+    // pathname is the bare origin, which `verifySignedUrl` then validates and
+    // hands the serving route as `key: ""`. `buildSignedUrl` is exported, so a
+    // caller reaching it directly is the one path that never met `validateKey`.
+    if (args.key === "") {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key must not be empty");
+    }
+
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
     const sig = await signCanonical(args.secret, canonicalize(method, host, args.bucketName, args.key, exp, contentType));

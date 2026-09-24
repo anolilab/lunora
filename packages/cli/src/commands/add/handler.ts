@@ -6,19 +6,20 @@ import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { TextPrompt } from "../../util/tui-prompts";
 import { tuiSelect, tuiText } from "../../util/tui-prompts";
-import { runAddCommand } from "../registry";
 import { isCustomRegistrySource } from "../registry/apply";
+import { runAddCommand } from "../registry/commands";
 import type { RegistryManifest } from "../registry/types";
 import { deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName } from "./auth-database";
 import type { FeatureItem, NormalizedFeature } from "./features";
 import {
     AUTH_PROVIDER_OPTIONS,
     AUTH_UI_OPTIONS,
+    AUTH_UI_REACT_NATIVE_REFUSAL,
     DEFAULT_AUTH_ITEM,
     DEFAULT_AUTH_UI_ITEM,
     detectAuthUiItem,
@@ -67,6 +68,8 @@ interface AddFeatureOptions {
 
 interface AddFeatureResult {
     code: number;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Registry items applied (for tests / callers). May be a bare passthrough name. */
     items: ReadonlyArray<string>;
 }
@@ -293,14 +296,14 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     if (feature === undefined) {
         options.logger.error("add requires a feature or registry item. Usage: lunora add <auth|email|storage|crons|presence|…>");
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     // Must be inside a Lunora project: a `lunora/` source dir + a wrangler config.
     if (!existsSync(join(cwd, "lunora")) || findWranglerFile(cwd) === undefined) {
         options.logger.error("add: not a Lunora project here (need a lunora/ directory and a wrangler.jsonc). Run `lunora init` first.");
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     // Every auth-UI port renders DOM. On React Native the React payload would
@@ -308,11 +311,9 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     // shipping `div`s into a Metro bundle. `auth` (the server half) is
     // unaffected and `@lunora/react-native/auth` covers the client half.
     if (feature.kind === "auth-ui" && isReactNativeProject(readProjectDependencies(cwd))) {
-        options.logger.error(
-            "add: auth-ui has no React Native port — the screens render DOM elements and a stylesheet, which Metro has nothing to mount. Build the screens with React Native primitives against the same better-auth client (`@lunora/react-native/auth`); `lunora add auth` still installs the server half.",
-        );
+        options.logger.error(`add: ${AUTH_UI_REACT_NATIVE_REFUSAL}`);
 
-        return { code: 1, items: [] };
+        return { code: EXIT_CODE.USAGE, items: [] };
     }
 
     const items = await resolveFeatureItems(feature, options);
@@ -380,20 +381,13 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     return { code: result.code, items };
 };
 
+/** The `--format json` payload: the registry items the feature resolved to. */
+interface AddFeatureData {
+    items: ReadonlyArray<string>;
+}
+
 /** `lunora add <feature>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
-    const formatError = validateOutputFormat("add", options.format);
-
-    if (formatError !== undefined) {
-        logger.error(formatError);
-
-        return { code: 1 };
-    }
-
-    // In `--format json` mode every human/progress line goes to stderr so
-    // stdout carries only the serialized structured result.
-    const effectiveLogger = loggerForFormat(options.format, logger);
-
+const execute: CommandHandler<AddOptions> = defineHandler<AddOptions, AddFeatureData>(async ({ argument, cwd, logger, options }) => {
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,
         bucket: options.bucket,
@@ -401,7 +395,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         db: options.db,
         feature: argument[0],
         from: options.from,
-        logger: effectiveLogger,
+        logger,
         mailTo: options.mailTo,
         provider: options.provider,
         ref: options.ref,
@@ -409,12 +403,10 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         yes: options.yes === true,
     });
 
-    if (isJsonFormat(options.format)) {
-        printJson({ code: result.code, items: result.items });
-    }
-
-    return { code: result.code };
+    // `code` is the envelope's, not the payload's: two fields answering the same
+    // question is how they end up disagreeing.
+    return { code: result.code, data: { items: result.items }, ...(result.error === undefined ? {} : { error: result.error }) };
 });
 
 export { execute, runAddFeature };
-export type { AddFeatureOptions, AddFeatureResult };
+export type { AddFeatureData, AddFeatureOptions, AddFeatureResult };

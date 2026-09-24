@@ -59,7 +59,9 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
             create: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "refund" });
 
-                return { id: "ref_1" };
+                // `status` is required on Polar's `Refund`; the adapter reads it to tell a settled
+                // refund from a `pending` one it must not book yet.
+                return { id: "ref_1", status: "succeeded" };
             },
         },
         subscriptions: {
@@ -245,18 +247,21 @@ describe("polar adapter", () => {
     });
 
     it("ingests usage as an event keyed on the external customer id", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const created: Record<string, unknown>[] = [];
         const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
 
         await adapter.reportUsage?.({ featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
 
-        const events = created[0]?.events as { externalCustomerId?: string; metadata?: Record<string, unknown>; name?: string }[];
+        const events = created[0]?.events as { externalCustomerId?: string; externalId?: string; metadata?: Record<string, unknown>; name?: string }[];
 
         expect(events[0]?.name).toBe("api_calls");
         expect(events[0]?.externalCustomerId).toBe("user_1");
         expect(events[0]?.metadata).toMatchObject({ value: 3 });
+        // Polar dedupes ingestion on `externalId`, so the engine's idempotency key has to travel on
+        // it — otherwise a retried usage forward meters (and bills) the same units twice.
+        expect(events[0]?.externalId).toBe("usage_1");
     });
 
     it("rejects a bad signature", async () => {
@@ -347,7 +352,7 @@ describe("polar adapter", () => {
     });
 
     it("refunds the full order total (no amount given), reading it from orders.get", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
@@ -363,6 +368,8 @@ describe("polar adapter", () => {
         expect((call?.args[0] as { amount?: number; orderId?: string }).orderId).toBe("ord_1");
         // Polar has no partial-refund state on this path — pin the actual (always "refunded") result.
         expect(session.state).toBe("refunded");
+        // Polar's `Refund.id` — the same id `refund.created` carries, so the facade's marker matches.
+        expect(session.refundId).toBe("ref_1");
     });
 
     it("refunds an explicit amount without querying orders.get, still landing on state=refunded", async () => {
@@ -400,11 +407,121 @@ describe("polar adapter", () => {
         expect(action.type).toBe("subscription.past_due");
     });
 
+    it("normalizes a refund.created webhook, keeping the refund id apart from the order id", async () => {
+        expect.assertions(3);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" }, type: "refund.created" });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_ref", timestamp, sign("evt_ref", timestamp, payload)), payload });
+
+        // The event object IS the refund: `order_id` is the session it refunds, `id` is the refund
+        // itself. Confusing the two would key the sync layer's marker lookup on the wrong value.
+        expect(action.sessionId).toBe("ord_1");
+        expect(action.refundId).toBe("ref_1");
+        expect(action.amount?.minorUnits).toBe(300n);
+    });
+
+    it("reads the order's refunded total instead of inferring zero for a partial refund (regression)", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+
+        // Polar's `Order` carries `refundedAmount`. Inferring it from the status alone reported ZERO
+        // refunded for every partially refunded order, and reconcile writes that: the next
+        // `refundPayment({ sessionId })` then computes the remainder as the whole captured amount.
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return { currency: "usd", id: "ord_1", refundedAmount: 4000, status: "partially_refunded", totalAmount: 10_000 };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("ord_1");
+
+        expect(session.refundedAmount.minorUnits).toBe(4000n);
+        expect(session.capturedAmount.minorUnits).toBe(10_000n);
+        expect(session.state).toBe("partially_refunded");
+    });
+
+    it("still reports a full refund when the order omits refundedAmount (older API / partial double)", async () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return { currency: "usd", id: "ord_1", status: "refunded", totalAmount: 2500 };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getPaymentStatus("ord_1").then((session) => session.refundedAmount.minorUnits)).resolves.toBe(2500n);
+    });
+
+    it("does not book a refund.created that is still pending (regression)", async () => {
+        expect.assertions(1);
+
+        // Polar sends `refund.created` "regardless of status" (its own SDK says so), and `RefundStatus`
+        // is pending | succeeded | failed | canceled. Booking a pending one leaves the ledger claiming a
+        // refund the customer never got — and the facade's over-refund guard then blocks issuing it.
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "pending" },
+            type: "refund.created",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_pend", timestamp, sign("evt_pend", timestamp, payload)), payload });
+
+        expect(action.type).toBe("unhandled");
+    });
+
+    it("books the refund on the refund.updated that settles it (regression)", async () => {
+        expect.assertions(3);
+
+        // `refund.updated` is the only event carrying the pending → succeeded step, so without it a
+        // refund that starts pending would never reach the ledger at all.
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" },
+            type: "refund.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_upd", timestamp, sign("evt_upd", timestamp, payload)), payload });
+
+        expect(action.type).toBe("payment.refunded");
+        expect(action.sessionId).toBe("ord_1");
+        expect(action.amount?.minorUnits).toBe(300n);
+    });
+
+    it("reports an unsettled refunds.create as pending so the facade holds its ledger back (regression)", async () => {
+        expect.assertions(2);
+
+        const client = makeClient();
+
+        (client as { refunds: { create: unknown } }).refunds = {
+            create: async () => {
+                return { id: "ref_1", status: "pending" };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "ord_1" });
+
+        // A refund that later FAILS reverses nothing, so an optimistic write would over-state the
+        // refunded total for good — and block every later legitimate refund through the facade's guard.
+        expect(session.pending).toBe(true);
+        expect(session.state).toBe("captured");
+    });
+
     it("rejects a fractional webhook amount as a payment error, not a raw RangeError (regression)", async () => {
         expect.assertions(1);
 
         const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
-        const payload = JSON.stringify({ data: { amount: 25.5, currency: "usd", id: "ref_1", order_id: "ord_1" }, type: "refund.created" });
+        const payload = JSON.stringify({
+            data: { amount: 25.5, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" },
+            type: "refund.created",
+        });
         const timestamp = String(Math.floor(Date.now() / 1000));
 
         // `BigInt(25.5)` would throw a bare RangeError straight through the adapter boundary.

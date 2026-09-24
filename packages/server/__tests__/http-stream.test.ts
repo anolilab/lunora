@@ -204,3 +204,75 @@ describe("httpRoute stream() mid-stream cancel", () => {
         expect(errors).not.toHaveBeenCalled();
     });
 });
+
+describe("httpRoute.stream — .output() is enforced per chunk", () => {
+    it("parses every chunk through the declared output validator", async () => {
+        expect.assertions(1);
+
+        // `applyOutput`'s contract: "Every result-parsing site (RPC, REST, any
+        // future transport) must route through this helper". SSE was the one that
+        // did not — `.output()` was accepted, type-checked against, and then
+        // silently discarded, so a chunk went straight to `JSON.stringify`.
+        const route = httpRoute
+            .get("/tick")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* okGen() {
+                yield { id: "a" };
+                yield { id: "b" };
+            });
+
+        const response = await dispatch(route, "GET", "/tick", new Request("https://x.example/tick"));
+        const { events } = await readSse(response);
+
+        expect(events.filter((entry) => entry.event === "message").map((entry) => entry.data)).toEqual([{ id: "a" }, { id: "b" }]);
+    });
+
+    it("a chunk that violates the output schema becomes an error frame, not raw data", async () => {
+        expect.assertions(2);
+
+        const route = httpRoute
+            .get("/bad")
+            .output(v.object({ id: v.string() }))
+            .stream(async function* badGen() {
+                yield { id: "ok" };
+                yield { id: 42 } as unknown as { id: string };
+            });
+
+        const response = await dispatch(route, "GET", "/bad", new Request("https://x.example/bad"));
+        const { events } = await readSse(response);
+
+        // The good chunk still shipped; the violating one is a redacted error
+        // frame (an output mismatch is a server contract bug → INTERNAL, so
+        // `toErrorBody` redacts the message) rather than `data: {"id":42}`.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "error"]);
+        expect(events[0]?.data).toEqual({ id: "ok" });
+    });
+});
+
+describe("httpRoute.stream — the wire codec brackets every data frame", () => {
+    it("ships a Date, a bigint and a NaN as wire tags instead of flattening or killing the stream", async () => {
+        expect.assertions(3);
+
+        const route = httpRoute.get("/rich").stream(async function* richGen() {
+            yield { at: new Date(1_700_000_000_000) };
+            yield { balance: 9_007_199_254_740_993n };
+            yield { ratio: Number.NaN };
+        });
+
+        const response = await dispatch(route, "GET", "/rich", new Request("https://x.example/rich"));
+        const { events } = await readSse(response);
+
+        // Raw `JSON.stringify` flattened the Date to an ISO string and `NaN` to
+        // `null` — both still typed as the declared chunk type on the client —
+        // and threw outright on the bigint, killing the stream mid-flight with a
+        // redacted "Internal error" frame.
+        expect(events.map((entry) => entry.event)).toEqual(["message", "message", "message", "complete"]);
+        expect(events.slice(0, 3).map((entry) => entry.data)).toEqual([
+            { at: ["$lunora.wire$", "date", 1_700_000_000_000] },
+            { balance: ["$lunora.wire$", "bigint", "9007199254740993"] },
+            { ratio: ["$lunora.wire$", "nan"] },
+        ]);
+        // The terminal sentinels stay plain — the client reads them without decoding.
+        expect(events.at(-1)?.data).toEqual({});
+    });
+});

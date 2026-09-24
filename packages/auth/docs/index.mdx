@@ -45,11 +45,21 @@ request and a falsy value otherwise, so you fall through to the Lunora worker fo
 everything else:
 
 ```ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+
+// `ensureMigrated` needs the RAW binding: better-auth migrates only through its
+// Kysely adapter and throws on `lunoraD1Adapter`. This second, migration-only
+// instance never resolves its `$context`, so the dev-runner hang the adapter
+// exists to avoid doesn't apply to it.
+//
+// Built ONCE and retained. `ensureMigrated` single-flights on the options object
+// it is handed, so a `createAuth({...})` built inside `fetch` is a fresh key on
+// every request and the migration re-runs on each one.
+const migrationAuth = createAuth({ ...options, database: env.DB });
 
 export default {
     async fetch(request, env, ctx) {
-        await ensureMigrated(auth);
+        await ensureMigrated(migrationAuth);
 
         const response = await handleAuthRequest(auth, request);
         if (response) return response;
@@ -58,6 +68,53 @@ export default {
     },
 };
 ```
+
+Retaining that instance is what keeps the migration to once per isolate.
+better-auth's migrator emits a bare `CREATE TABLE`, so two concurrent runs
+against a fresh database leave the loser with `table user already exists` — and
+since this sits ahead of the router, that 500s every route, not just
+`/api/auth/*`. `defineApp().auth(...)` handles it for you.
+
+## Schema drift fails by name, not by 500
+
+`lunoraD1Adapter` builds its SQL from better-auth's own field list, and the tables it
+writes into are created somewhere else — by `ensureMigrated` / `compileMigrationsSql`,
+or by `authTables(options)` in your `lunora/schema.ts` plus `lunora migrate`. When the
+two halves drift, the adapter used to emit SQL against columns that were not there.
+
+So both adapters compare them. Before the first write — better-auth awaits the check in
+its router **ahead of the rate limiter**, which is the first thing that writes on any
+request, `get-session` included — the tables your plugin list needs are read back out of
+the database and diffed against it. A mismatch throws better-auth's own
+`SchemaMismatchError`, naming what is wrong:
+
+```
+Database schema mismatch
+
+  Missing tables
+    apikey
+
+  Missing columns
+    account.accountId
+```
+
+Both of those are real: `apikey` is what an `apiKey()` in the plugin list needs and
+nothing declared, and `accountId` is better-auth's spelling of the column NextAuth calls
+`providerAccountId`. Neither is visible by reading `schema.ts` — the first because
+nothing in it is _wrong_, only absent.
+
+Practical notes:
+
+- **The database is the authority**, not your schema file. A table you declared but never
+  migrated is reported exactly like one you never declared.
+- **One sweep per isolate.** The check is lazy, cached, and shared across concurrent
+  requests; `ensureMigrated` invalidates it, so a migration's fix is picked up without a
+  redeploy.
+- **`_creationTime` is not drift.** Tables from `authTables(...)` carry Lunora's
+  framework column, which better-auth never writes and the store fills in for it.
+- **Opt out** with `advanced: { database: { validateSchema: false } }` — better-auth's own
+  switch. `lunoraAuthAdapter(store)` over a custom store registers no check either: an
+  `AuthStore` is opaque CRUD with nothing to introspect.
 
 ## Read `ctx.auth` in functions
 
@@ -106,6 +163,27 @@ expiry, 15-minute rotation), and `longLived` (30-day expiry, daily rotation).
 The underlying fields are `expiresIn`, `updateAge`, `freshAge`,
 `disableSessionRefresh`, and `cookieCache`; see better-auth's `session` option
 for the full list.
+
+### The session cookie cache is on by default
+
+`createAuth` fills `session.cookieCache` with `{ enabled: true, maxAge: 60 }`
+whenever the caller does not set it — on **every** wiring, not just the DO
+scaffold. Sessions are then served from the signed cookie instead of a database
+read, which is what keeps `ctx.auth` off the hot path.
+
+<Callout type="warn">
+    **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default.)** A sign-out on another device, a ban, a session deletion, or a role
+    change is not seen until the cached cookie expires, because nothing in the request path reads the `session` row while the cache is warm. Turn it off where
+    that window is unacceptable:
+
+    ```ts
+    createAuth({ secret: env.AUTH_SECRET, database: lunoraD1Adapter(env.DB), session: { cookieCache: { enabled: false } } });
+    ```
+
+    Any explicit `cookieCache` you pass is forwarded verbatim — `enabled: false` is never re-enabled, and a shorter `maxAge` shortens the window rather than
+    removing it. `sessionPresets.strict` sets its own.
+
+</Callout>
 
 ## OAuth providers
 
@@ -289,10 +367,14 @@ Both `PATCH` and `DELETE` answer `204` with no body; re-read the resource with `
 you need the resulting state.
 
 The IdP drives these endpoints with `PUT`, `PATCH`, and `DELETE`. Lunora's dispatch is
-method-agnostic and runs auth ahead of function routing, so those pass straight
-through. Auth routes bypass the runtime's request-body limits (the caps in
-`body-readers.ts` apply to Lunora's own routes, not to `/api/auth/*`), so a very large
-SCIM payload is bounded by the platform, not by Lunora.
+method-agnostic and runs auth ahead of function routing, so those pass straight through.
+
+The runtime's **1 MiB body cap applies to `/api/auth/*` as well**: a `POST` or `PUT`
+declaring a `Content-Length` above it is answered `413` before better-auth sees the
+request, so size a SCIM bulk request under 1 MiB and page it if it does not fit. Past
+that header pre-check nothing in Lunora reads or caps the auth body — the streaming
+readers in `body-readers.ts` are only on Lunora's own routes — so a chunked request
+declaring no length is bounded by the platform, not by Lunora.
 
 ### SCIM's database requirement, and `lunoraDoAdapter`
 
@@ -360,6 +442,40 @@ emails**, duplicate session tokens, and duplicates across all twelve of SCIM's u
 fields. If you hand-roll this, emit the indexes; or call `authDoSchemaStatements(options)`
 and execute what it returns.
 
+### Upgrading a database created before better-auth 1.7.3
+
+better-auth 1.7.0 added a **required** `account.issuer` column and 1.7.3 reverted it
+([better-auth#11153](https://github.com/better-auth/better-auth/pull/11153)). The revert
+only stopped better-auth _writing_ the column — it does not remove one that already
+exists, and neither does better-auth's own migrator. So a database first created while
+`@better-auth/core` 1.7.0–1.7.2 was installed still has `issuer text NOT NULL`, and
+**every sign-up and account link fails** with:
+
+```
+NOT NULL constraint failed: account.issuer
+```
+
+`@lunora/auth` clears this for you: a Durable Object does it on its next cold start, and
+D1 does it inside `ensureMigrated()`. Both are best-effort and skip a column your own
+config declares, so an `account.additionalFields.issuer` of your own is never touched.
+
+If you pre-apply the schema at deploy time (`compileMigrationsSql` +
+`wrangler d1 execute`) rather than calling `ensureMigrated()`, run the cleanup once
+yourself. Drop the indexes first — SQLite refuses to drop an indexed column:
+
+```sql
+SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'account';
+-- then, for each index whose SQL mentions "issuer":
+DROP INDEX IF EXISTS "account_issuer_accountId_uidx";
+ALTER TABLE "account" DROP COLUMN "issuer";
+```
+
+`legacyIssuerCleanupStatements(accountTable, indexNames)` builds exactly those statements
+if you would rather generate them. On Postgres or MySQL behind `@lunora/hyperdrive`, drop
+the constraint instead of the column — `ALTER TABLE account ALTER COLUMN issuer DROP NOT
+NULL` — per better-auth's
+[1.7 upgrade guide](https://www.better-auth.com/docs/guides/1-7-upgrade-guide).
+
 ### What DO mode does not give you
 
 `ctx.authApi`, sign-in, sessions, SCIM, and the studio's **audit feed** all work: the
@@ -371,9 +487,10 @@ the auth tables directly from the worker, which DO storage does not permit, so i
 reports "not configured" rather than returning empty data.
 
 Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
-Enable better-auth's `session.cookieCache` to serve most of them from the signed cookie
-instead, accepting a staleness window on revocation. The `vis generate lunora-auth-do`
-scaffold turns it on by default for that reason.
+`createAuth` already serves most of them from the signed cookie instead: `session.cookieCache`
+is filled with `{ enabled: true, maxAge: 60 }` unless you set it, so a revoked session keeps
+authenticating for up to 60 seconds here as everywhere else — see
+[the session cookie cache](#the-session-cookie-cache-is-on-by-default).
 
 ### Scaffolding it
 
@@ -642,8 +759,9 @@ export const signUp = mutation.input({ email: v.string(), password: v.string() }
     ```
 
     `ctx.args` is typed from the input validator declared **so far**, so `.use()` placed before `.input()` sees an empty `args` and the selector will not
-    type-check. It is a frozen shallow copy taken after validation — middleware cannot rewrite what the handler then receives, and the gate never sees input
-    that has not crossed the validator.
+    type-check. It is a frozen **shallow** copy taken after validation, so a middleware cannot rebind a top-level field the handler then reads, and the gate
+    never sees input that has not crossed the validator. Shallow is literal: nested objects and arrays are the same references the handler gets, so
+    `ctx.args.profile.email = …` from a middleware does reach it. Don't rely on `ctx.args` for deep immutability.
 
     Calling `assertEmailAllowed` in the handler, as above, stays equally valid — prefer it when the check depends on something the handler computes.
 
@@ -690,8 +808,12 @@ const signIns = await readAuthAuditLog(executor, { event: "sign-in", limit: 100 
 ```
 
 Each row captures the actor (id + email), event type, client IP/User-Agent,
-timestamp, and outcome. The free-form `detail` payload is scrubbed with
-`@visulima/redact` before it is persisted, so a token/password that leaks into an
-event's context never reaches the durable table. The trail lives in the reserved
+timestamp, and outcome. The built-in better-auth hook records only the request
+path in `detail` — deliberately, since the surrounding better-auth context is
+where credentials live. `detail` is free-form for entries you append yourself
+with `appendAuthAuditEntry`, and every payload is scrubbed with
+`@visulima/redact` before it is persisted (pass `redactDetail: false` to opt
+out), so a token or password that leaks into one never reaches the durable
+table. The trail lives in the reserved
 `__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
 configurable via `retention` and defaults to unbounded.

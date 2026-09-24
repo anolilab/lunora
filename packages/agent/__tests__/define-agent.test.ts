@@ -7,6 +7,7 @@ import { defineSkill } from "../src/skill";
 const MODEL_PATTERN = /model/u;
 const MAX_TURNS_PATTERN = /maxTurns/u;
 const VOICE_MAX_TURNS_PATTERN = /`voice\.maxTurns` must be a positive integer/u;
+const APPROVAL_TIMEOUT_PATTERN = /`approvalTimeout` must resolve to a positive duration/u;
 const TOOL_NAME_PATTERN = /tool name/u;
 const DESCRIPTION_PATTERN = /description/u;
 const EXECUTE_PATTERN = /execute/u;
@@ -39,6 +40,19 @@ describe(defineAgent, () => {
                 },
             }),
         ).toThrow(TOOL_NAME_PATTERN);
+    });
+
+    it("rejects an approvalTimeout that resolves to no wait at all", () => {
+        // `Math.min(0, MAX)` is `0`, so `step.waitForEvent` elapses on the spot
+        // and EVERY gated tool is auto-rejected as "approval timed out" before a
+        // human can see the marker. Same policy as `maxTurns`: a bogus value
+        // throws at declaration time rather than silently misbehaving per call.
+        expect(() => defineAgent({ approvalTimeout: 0, model: "m" })).toThrow(APPROVAL_TIMEOUT_PATTERN);
+        expect(() => defineAgent({ approvalTimeout: -1000, model: "m" })).toThrow(APPROVAL_TIMEOUT_PATTERN);
+        expect(() => defineAgent({ approvalTimeout: Number.NaN, model: "m" })).toThrow(APPROVAL_TIMEOUT_PATTERN);
+        // The string form goes through the same duration grammar, so it is bounded here too.
+        expect(() => defineAgent({ approvalTimeout: "0 seconds", model: "m" })).toThrow(APPROVAL_TIMEOUT_PATTERN);
+        expect(defineAgent({ approvalTimeout: "2 hours", model: "m" }).approvalTimeout).toBe("2 hours");
     });
 
     it("derives class, binding and workflow names from the export name", () => {

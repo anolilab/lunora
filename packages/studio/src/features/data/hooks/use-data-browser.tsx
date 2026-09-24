@@ -57,13 +57,23 @@ const facetValueText = (value: unknown): string => {
 
 /**
  * Hydrate the filter bar from URL/saved-query {@link FilterClause}s. The inverse
- * of `toFilterClauses`: the bar's value is always a string (it re-coerces numbers
- * on the wire), so every clause value is stringified back. Objects can't appear
- * on a real clause value, but are JSON-encoded defensively.
+ * of `toFilterClauses`: the bar's value is always a string, so every clause value
+ * is stringified back for display. Objects can't appear on a real clause value,
+ * but are JSON-encoded defensively.
+ *
+ * The clause's own value is pinned as the row's `literal` so the round-trip is
+ * exact — a shared link's `zip eq "12345"` must not come back as the number
+ * `12345` just because its display text parses as one. Editing the row clears
+ * the pin (see `EditableFilter.literal`).
  */
 const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter[] =>
     clauses.map((clause) => {
-        return { column: clause.column, operator: clause.operator, value: clause.value === undefined ? "" : facetValueText(clause.value) };
+        return {
+            column: clause.column,
+            ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
+            operator: clause.operator,
+            value: clause.value === undefined ? "" : facetValueText(clause.value),
+        };
     });
 
 /** Translate a single-sort `orderBy` into the TanStack sorting state the grid renders. */
@@ -263,6 +273,15 @@ interface DataBrowserModel {
     /** Toggle a column into / out of the facet sidebar (fetches its summary when turned on). */
     toggleFacet: (column: string) => void;
     total: number;
+
+    /**
+     * Whether {@link DataBrowserModel.total} is the COUNT the server returned, or
+     * still the first-load lower bound derived from the loaded page. A destructive
+     * confirmation must not quote the lower bound — the page is 50 rows and the
+     * delete is the whole predicate — so the buttons drop the number until this
+     * is `true`.
+     */
+    totalKnown: boolean;
     viewMode: "json" | "table";
     writeError: null | string;
     /** Outcome line for the last completed bulk op — how many rows it actually wrote. */
@@ -775,12 +794,14 @@ const useDataBrowser = ({
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
     // the view to those rows. Reuses the same `EditableFilter` machinery as the
-    // filter bar (its value is a string until coerced on the wire). Replaces any
+    // filter bar, but pins the facet's OWN value as the row's literal: the text
+    // is only what the box displays, and re-deriving a value from it is what let
+    // a facet's count disagree with the rows the click returned. Replaces any
     // existing clause for the same column so repeated clicks don't stack.
     const facetFilter = (column: string, value: unknown): void => {
-        const text = facetValueText(value);
+        const row: EditableFilter = { column, literal: [value], operator: "eq", value: facetValueText(value) };
 
-        setFilters((current) => [...current.filter((clause) => clause.column !== column), { column, operator: "eq", value: text }]);
+        setFilters((current) => [...current.filter((clause) => clause.column !== column), row]);
         setOffset(0);
     };
 
@@ -860,8 +881,14 @@ const useDataBrowser = ({
     };
 
     // Commit every staged cell edit as a per-row patch (the writer merges the
-    // changed fields into the existing doc), then reload the page and clear the
-    // buffer. Sequential so a failure pins the offending row.
+    // changed fields into the existing doc), then reload the page. Sequential so
+    // a failure pins the offending row.
+    //
+    // Each row leaves the buffer as ITS OWN patch lands, never all of them after
+    // the loop: the writer commits per row, so a failure on row k had already
+    // written rows 1..k-1 — clearing at the end never ran, and the panel went on
+    // showing an old→new diff for changes that were already on disk. The refetch
+    // runs on both paths for the same reason.
     const commitStaged = async (): Promise<void> => {
         if (selectedTable === null) {
             return;
@@ -874,15 +901,16 @@ const useDataBrowser = ({
             for (const [id, columns] of Object.entries(stagedEdits.staged)) {
                 // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
                 (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
+                // `columns` is what this patch actually wrote — pass it so a cell
+                // the operator restaged while the write was in flight survives.
+                stagedEdits.drop(id, columns);
             }
-
-            stagedEdits.clear();
-            setEditingCell(null);
-            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         }
 
+        setEditingCell(null);
+        pageQuery.refetch();
         setCommitting(false);
     };
 
@@ -1002,15 +1030,25 @@ const useDataBrowser = ({
 
         let written = 0;
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower a `try` with a `finalizer`; the `finally` is load-bearing here (a partial destructive write is already committed server-side on BOTH exits, so the grid must refresh under the message either way) and folding it into the two arms would duplicate it
         try {
             const drained = await drainBulkOp({
                 args,
                 maxBatches: MAX_BULK_BATCHES,
                 openCursor,
-                query: async (batchArgs) => (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult,
+                // Counted HERE rather than from the result: a batch's rows are on disk
+                // the moment its call resolves, and the drain's own accumulator dies
+                // with the throw. Counting at the transport is what makes the failure
+                // path's "at least N" a real lower bound instead of a constant 0.
+                query: async (batchArgs) => {
+                    const result = (await client.query(reference, batchArgs, callOptions(debouncedShard))) as BulkRowOpResult;
+
+                    written += result.count;
+
+                    return result;
+                },
             });
 
-            written = drained.written;
             bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
             if (drained.outcome === "cap-hit") {
@@ -1076,12 +1114,22 @@ const useDataBrowser = ({
     // `offset + rows shown` — so a page with rows never briefly reads "0 of 0".
     // The count resolves alongside the page on first load and stays cached across
     // paging, so this fallback is a brief first-load transient only.
-    const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
+    const countTotal = countQuery.data?.total;
+    const totalKnown = countTotal !== undefined;
+    const total = countTotal ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
 
     // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
-    const hasPredicate = search !== "" || filters.length > 0;
-    const hasNext = page !== null && offset + page.rows.length < total;
+    // Measured through `toFilterClauses`, the same transform the request uses:
+    // a filter row the operator has added but not yet given a column to is
+    // DROPPED there, so counting raw `filters.length` offered "Delete N matching"
+    // over the whole table and then sent `filters: []`, which the server refuses.
+    const hasPredicate = search !== "" || toFilterClauses(filters).length > 0;
+    // With the COUNT still pending, `total` is exactly `offset + rows.length`, so
+    // comparing against it always says "no next page" and freezes the pager on
+    // page one. A full page is the only next-page evidence available until the
+    // real count lands.
+    const hasNext = page !== null && (totalKnown ? offset + page.rows.length < total : page.rows.length === pageSize);
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
@@ -1289,6 +1337,7 @@ const useDataBrowser = ({
         tablesError,
         toggleFacet,
         total,
+        totalKnown,
         viewMode,
         writeError,
         writeNotice,

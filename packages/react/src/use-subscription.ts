@@ -2,6 +2,7 @@
 
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
+import { LunoraError } from "@lunora/errors";
 import { useEffect, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
@@ -12,6 +13,11 @@ import type { UseQueryOptions, UseSubscriptionResult } from "./types";
  * Subscribe to a real-time stream from the server. Unlike `useQuery`, this
  * hook does not issue an initial HTTP fetch — it only delivers values that
  * the server pushes over the WS.
+ *
+ * A server-pushed error lands on `error` as a `LunoraError` carrying the
+ * server's `code` (a bare `Error` only when the server sent no code), so
+ * consumers can branch on the error kind; `onError` receives the raw
+ * `SubscriptionError` in addition.
  */
 const useSubscription = <F extends FunctionReference>(
     function_: F,
@@ -23,6 +29,14 @@ const useSubscription = <F extends FunctionReference>(
 
     const skipped = args === "skip";
     const serialized = skipped ? "skip" : stableWireKey(args);
+
+    // The subscribe effect keys off the serialized args, so an inline `onError`
+    // must not change its identity — read the latest handler through a ref.
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
 
     // Latest subscribe inputs. The dependency array keys off `fn.__lunoraRef`
     // and the serialized args, which already capture every meaningful change;
@@ -70,7 +84,12 @@ const useSubscription = <F extends FunctionReference>(
                     setState({ data: value, error: undefined });
                 },
                 onError: (error) => {
-                    const normalized = new Error(error.message);
+                    // Preserve the server-supplied `code` (matching Vue/Svelte's
+                    // subscription primitives) so consumers can branch on the
+                    // error kind instead of only seeing a flat message.
+                    const normalized = error.code === undefined ? new Error(error.message) : new LunoraError(error.code, error.message);
+
+                    onErrorRef.current?.(error);
 
                     queueMicrotask(() => {
                         if (!cancelled) {

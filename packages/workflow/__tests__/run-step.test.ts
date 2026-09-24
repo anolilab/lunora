@@ -8,6 +8,7 @@ import type { NativeNonRetryableErrorConstructor } from "../src/errors";
 import { isNonRetryableError, NonRetryableError } from "../src/errors";
 import { createRunStep } from "../src/run-step";
 import type {
+    RunFunctionOptions,
     WorkflowLogger,
     WorkflowRunFunction,
     WorkflowStepConfigLike,
@@ -51,6 +52,7 @@ const make = (overrides?: { nonRetryableErrorClass?: NativeNonRetryableErrorCons
     const run = vi.fn<WorkflowRunFunction>(async () => undefined);
     const runStep = createRunStep({
         env: { BUCKET: "bucket" },
+        instanceId: "inst-1",
         log: noopLog,
         nonRetryableErrorClass: overrides?.nonRetryableErrorClass,
         run,
@@ -290,8 +292,13 @@ describe("createRunStep", () => {
             handler: async (ctx) => {
                 expect(ctx.attempt).toBe(3);
                 expect(ctx.env).toEqual({ BUCKET: "bucket" });
-                expect(ctx.run).toBe(run);
                 expect(ctx.step.name).toBe("probe");
+
+                // `ctx.run` is the dedup-pinned wrapper, not the bare runner —
+                // it delegates each call with this step's replay-dedup id.
+                await ctx.run({ __lunoraRef: "a:b" });
+
+                expect(run).toHaveBeenCalledWith({ __lunoraRef: "a:b" }, undefined, { dedupId: "inst-1#step0.1" });
 
                 return "done";
             },
@@ -318,7 +325,7 @@ describe("createRunStep", () => {
     it("forwards a rollback handler to native do and maps its context", async () => {
         expect.assertions(4);
 
-        const { calls, run, runStep } = make();
+        const { calls, runStep } = make();
         const rollback = vi.fn<(context: unknown) => Promise<undefined>>(async (_context: unknown) => undefined);
         const publish = defineStep("publish", {
             args: { key: v.string() },
@@ -350,7 +357,9 @@ describe("createRunStep", () => {
             error: failure,
             log: noopLog,
             output: "published",
-            run,
+            // The dedup-pinned wrapper over `run`, not the runner itself — its own
+            // ids are pinned by the "pins the rollback's own ids" case below.
+            run: expect.any(Function),
         });
     });
 
@@ -433,5 +442,120 @@ describe("durable step names", () => {
         await expect(runStep(greet, {}, { name: "lunora:spawn:x" })).rejects.toThrow(/reserved/);
         await expect(runStep(reserved, {})).rejects.toThrow(/reserved/);
         expect(calls).toStrictEqual([]);
+    });
+});
+
+/**
+ * A fake native step that re-invokes the callback `attempts` times, the way
+ * Cloudflare retries a failing step body IN PLACE — the workflow body is not
+ * replayed between attempts. Returns the last attempt's result.
+ */
+const makeRetryingStep = (attempts: number): WorkflowStepLike =>
+    ({
+        do: async (name: string, a: unknown, b?: unknown) => {
+            const callback = (typeof a === "function" ? a : b) as (context: WorkflowStepContextLike) => Promise<unknown>;
+            let last: unknown;
+
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- attempts are sequential by definition
+                last = await callback({ attempt, config: {}, step: { count: 1, name } });
+            }
+
+            return last;
+        },
+        sleep: vi.fn<(name: string, duration: number | string) => Promise<void>>(),
+        sleepUntil: vi.fn<(name: string, timestamp: Date | number) => Promise<void>>(),
+        waitForEvent: vi.fn<(name: string, options: { timeout?: number | string; type: string }) => Promise<{ payload: Readonly<unknown>; type: string }>>(),
+    }) as unknown as WorkflowStepLike;
+
+/** The `dedupId` each recorded `ctx.run` call carried, in call order. */
+const dedupIds = (run: ReturnType<typeof vi.fn>): (string | undefined)[] =>
+    (run.mock.calls as unknown as [unknown, unknown, RunFunctionOptions | undefined][]).map((call) => call[2]?.dedupId);
+
+describe("createRunStep — replay-dedup ids", () => {
+    it("re-issues the same dedup id on a retried attempt, so the mutation applies once", async () => {
+        expect.assertions(1);
+
+        // The shard dedups a dispatch on `(identity, mutationId)`, and every
+        // server-initiated dispatch shares the one `"system:"` identity — so this
+        // id is the only thing standing between a retried step body and a second
+        // charge.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: makeRetryingStep(2) });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+
+                return "ok";
+            },
+        });
+
+        await runStep(charge, {});
+
+        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0.1"]);
+    });
+
+    it("gives each step call, and each call inside it, a distinct id — including two calls of one step name", async () => {
+        expect.assertions(1);
+
+        // Two ids that collide are worse than none: the shard answers the second
+        // call with the FIRST one's cached result and never executes it.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: makeRetryingStep(1) });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+                await context.run({ __lunoraRef: "payments:receipt" });
+
+                return "ok";
+            },
+        });
+
+        await runStep(charge, {});
+        await runStep(charge, {});
+
+        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0.2", "inst-1#step1.1", "inst-1#step1.2"]);
+    });
+
+    it("pins the rollback's own ids — stable across a retried rollback, distinct from the forward step", async () => {
+        expect.assertions(1);
+
+        // A rollback is a second durable replay with its own retry budget, so the
+        // refund it issues needs the same treatment the forward call gets. It must
+        // NOT reuse the forward call's id either, or the refund would dedup against
+        // the charge and silently never run.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const fake = makeFakeStep();
+        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: fake.step });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+
+                return "ok";
+            },
+            rollback: async (context) => {
+                await context.run({ __lunoraRef: "payments:refund" });
+            },
+        });
+
+        await runStep(charge, {});
+
+        const rollback = fake.calls[0]?.rollback?.rollback;
+        const rollbackContext = (attempt: number) => {
+            return {
+                ctx: { attempt, config: {}, step: { count: 1, name: "charge" } },
+                error: new Error("later step failed"),
+                output: "ok",
+                stepName: "charge",
+            };
+        };
+
+        await rollback?.(rollbackContext(1));
+        await rollback?.(rollbackContext(2));
+
+        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0rollback.1", "inst-1#step0rollback.1"]);
     });
 });

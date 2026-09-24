@@ -71,7 +71,7 @@ interface AgentProgressEvent {
 ```ts
 interface AgentThreadRecord {
     createdAt?: number;
-    error?: string;
+    error?: null | string;
     instanceId?: string;
     messageCount?: number;
     owner?: string;
@@ -173,6 +173,7 @@ interface CreateAgentChatOptions {
     api: CreateAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -186,6 +187,7 @@ interface CreateAgentChatOptions {
 interface CreateAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: Accessor<Error | undefined>;
     messages: Accessor<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -200,6 +202,7 @@ interface CreateAgentChatResult {
 interface CreateAgentOptions {
     api: CreateAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: MaybeAccessor<string>;
@@ -211,6 +214,7 @@ interface CreateAgentOptions {
 ```ts
 interface CreateAgentResult {
     cancel: () => Promise<void>;
+    error: Accessor<Error | undefined>;
     pending: Accessor<boolean>;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: Accessor<AgentThreadStatus | undefined>;
@@ -282,6 +286,7 @@ interface CreateAgentToolEventsResult {
 ```ts
 interface CreateInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -290,6 +295,7 @@ interface CreateInfiniteQueryOptions {
 
 ```ts
 interface CreateInfiniteQueryResult<T> {
+    error: Accessor<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Accessor<boolean>;
     isFetchingNextPage: Accessor<boolean>;
@@ -304,6 +310,7 @@ interface CreateInfiniteQueryResult<T> {
 ```ts
 interface CreatePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -312,6 +319,7 @@ interface CreatePaginatedQueryOptions {
 
 ```ts
 interface CreatePaginatedQueryResult<T> {
+    error: Accessor<SubscriptionError | undefined>;
     isLoading: Accessor<boolean>;
     loadMore: (numberItems: number) => void;
     results: Accessor<T[]>;
@@ -327,6 +335,7 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -336,6 +345,7 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
 
 ```ts
 interface CreatePresenceResult<L extends ListPresentReference> {
+    error: () => SubscriptionError | undefined;
     present: () => ReturnOf<L> | undefined;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -377,6 +387,7 @@ interface CreateRateLimitResult {
 
 ```ts
 interface CreateStreamOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -592,6 +603,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: Accessor<AuthStatus>;
     token: Accessor<string | null>;
     user: Accessor<User | null>;
 }
@@ -735,6 +747,7 @@ const createStream: <F extends FunctionReference<"stream">>(function_: F, args: 
 
 ```ts
 const createSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip" | Accessor<ArgsOf<F> | "skip">, options?: {
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }) => CreateSubscriptionResult<ReturnOf<F>>;
 ```
@@ -748,7 +761,9 @@ const createVoiceAgent: (options: CreateVoiceAgentOptions) => CreateVoiceAgentRe
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => Accessor<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Accessor<T>;
 ```
 
 ### `useLunora` (const)
@@ -912,3 +927,170 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `createUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AgentApprovalReference` (type)
+
+```ts
+type AgentApprovalReference = FunctionReference<"mutation", {
+    decision: "approve" | "reject";
+    instanceId: string;
+    note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentLiveStreamReference` (type)
+
+```ts
+type AgentLiveStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AgentMessagesReference` (type)
+
+```ts
+type AgentMessagesReference = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentMessagesReference$1` (type)
+
+```ts
+type AgentMessagesReference$1 = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentThreadReference` (type)
+
+```ts
+type AgentThreadReference = FunctionReference<"query", {
+    key: string;
+}, Record<string, unknown> | undefined>;
+```
+
+### `AgentTokenStreamReference` (type)
+
+```ts
+type AgentTokenStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AuthGate` (type)
+
+```ts
+type AuthGate = (props: AuthGateProps) => SolidElement;
+```
+
+### `AuthGateProps` (interface)
+
+```ts
+interface AuthGateProps {
+    children: SolidChildren;
+}
+```
+
+### `CreateMicrophone` (type)
+
+```ts
+type CreateMicrophone = (config: MicrophoneConfig) => Promise<VoiceMicrophone>;
+```
+
+### `CreateSocket` (type)
+
+```ts
+type CreateSocket = (url: string) => VoiceSocket;
+```
+
+### `CreateSpeaker` (type)
+
+```ts
+type CreateSpeaker = (config: {
+    audioFormat: VoiceAudioFormat;
+}) => VoiceSpeaker;
+```
+
+### `MaybeAccessor` (type)
+
+```ts
+type MaybeAccessor<T> = Accessor<T> | T;
+```
+
+### `MicrophoneConfig` (interface)
+
+```ts
+interface MicrophoneConfig {
+    interruptChunks: number;
+    interruptThreshold: number;
+    isTurnActive: () => boolean;
+    onAudio: (pcm: Uint8Array) => void;
+    onInterrupt: () => void;
+    onLevel: (rms: number) => void;
+    onSilence: () => void;
+    silenceDurationMs: number;
+    silenceThreshold: number;
+}
+```
+
+### `SolidChildrenArray` (interface)
+
+```ts
+interface SolidChildrenArray extends Array<SolidChildren> {
+}
+```
+
+### `SolidElement` (type)
+
+```ts
+type SolidElement = any;
+```
+
+### `VoiceMicrophone` (interface)
+
+```ts
+interface VoiceMicrophone {
+    setMuted: (muted: boolean) => void;
+    stop: () => void;
+}
+```
+
+### `VoiceSocket` (interface)
+
+```ts
+interface VoiceSocket {
+    binaryType: string;
+    close: () => void;
+    onclose: ((event: unknown) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onmessage: ((event: {
+        data: unknown;
+    }) => void) | null;
+    onopen: ((event: unknown) => void) | null;
+    readonly readyState: number;
+    send: (data: ArrayBufferView | ArrayBufferLike | string) => void;
+}
+```
+
+### `VoiceSpeaker` (interface)
+
+```ts
+interface VoiceSpeaker {
+    enqueue: (audio: Uint8Array) => void;
+    interrupt: () => void;
+    stop: () => void;
+}
+```

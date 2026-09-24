@@ -143,10 +143,9 @@ const parseIndexes = (initializer: PropertyAssignment): SchemaIndex[] => {
 /** Read the columns of a `defineTable({ ... })` shape, validator text included. */
 const parseColumns = (initializer: PropertyAssignment): SchemaColumn[] => {
     const columns: SchemaColumn[] = [];
-    const defineTableCall = initializer
-        .getInitializer()
-        ?.getDescendantsOfKind(SyntaxKind.CallExpression)
-        .find((call) => call.getExpression().getText() === "defineTable");
+    const initializerNode = initializer.getInitializer();
+    const defineTableCall =
+        initializerNode === undefined ? undefined : collectCalls(initializerNode).find((call) => call.getExpression().getText() === "defineTable");
     const tableShape = defineTableCall?.getArguments()[0];
 
     if (tableShape?.getKind() !== SyntaxKind.ObjectLiteralExpression) {

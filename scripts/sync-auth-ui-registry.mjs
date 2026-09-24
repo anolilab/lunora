@@ -43,6 +43,34 @@ const FRAMEWORKS = [
     { item: "auth-ui-angular", view: "angular" },
 ];
 
+/**
+ * Directories under `packages/auth-ui/src/` that are not a framework view. An
+ * explicit list rather than a marker-file heuristic, for the same reason the SDK
+ * scripts use one: a marker SKIPS what it does not match, so a seventh port that
+ * forgot it would be absent from both this list and FRAMEWORKS — no drift, and
+ * silently never mirrored into `registry/`.
+ */
+const NON_VIEW_SRC_DIRS = new Set(["core", "emails", "styles"]);
+
+const declaredViews = new Set(FRAMEWORKS.map(({ view }) => view));
+const viewDrift = readdirSync(SRC, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !NON_VIEW_SRC_DIRS.has(entry.name) && !declaredViews.has(entry.name))
+    .map((entry) => entry.name);
+
+if (viewDrift.length > 0) {
+    process.stderr.write(
+        `packages/auth-ui/src holds ${String(viewDrift.length)} view director(y|ies) with no FRAMEWORKS row, so \`lunora add auth-ui\`
+` +
+            `would never distribute them and this gate would stay green: ${viewDrift.join(", ")}
+` +
+            `Add a { item, view } row in scripts/sync-auth-ui-registry.mjs, create registry/<item>/registry.json, and
+` +
+            `teach detectAuthUiItem (packages/cli/src/commands/add/features.ts) to pick it.
+`,
+    );
+    process.exit(1);
+}
+
 // Item-local files that are hand-authored (not synced from src) — kept as-is and
 // still listed in files[].
 const HAND_AUTHORED = new Set(["registry.json", "README.md", "client.ts"]);

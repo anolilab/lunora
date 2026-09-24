@@ -83,7 +83,7 @@ export interface ReconnectOptions {
 }
 
 /** Which durable-storage operation failed, passed to {@link OfflineQueueOptions.onPersistenceError}. */
-export type PersistenceOperation = "append" | "clear" | "load" | "remove";
+export type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 
 /** Context handed to a persistence-error handler. */
 export interface PersistenceErrorContext {
@@ -123,6 +123,22 @@ export interface OfflineQueueOptions {
  */
 export interface PersistedMutation {
     args: Record<string, unknown>;
+
+    /**
+     * The CDC cursor this write was composed against, persisted so a replay —
+     * including one after a reload, days later — is still judged against what its
+     * author could actually see. Consumed only by `.dropStalePatches()` tables.
+     *
+     * Persisting it is the entire point of the feature. Re-deriving a baseline at
+     * replay time would read the cursor the client has ADVANCED to while the write
+     * sat in the queue, which is the newer state the write must be compared
+     * against — so the stale write would always look fresh and always clobber.
+     *
+     * Absent on records written by older client versions, and on a client with no
+     * live subscription to take a cursor from; both replay with no baseline, which
+     * applies the write unchanged.
+     */
+    baselineSeq?: number;
 
     /**
      * The client id that queued this write, persisted so a replay after a reload
@@ -174,6 +190,23 @@ export interface PersistenceAdapter {
     load: () => Promise<PersistedMutation[]>;
     /** Remove a mutation by id once it has been replayed (resolved or rejected). */
     remove: (id: string) => Promise<void>;
+
+    /**
+     * Overwrite an already-persisted mutation IN PLACE, keeping its position in
+     * FIFO order. Used when a queued write's identity stamp is rewritten after a
+     * sign-in / sign-out.
+     *
+     * Must be atomic: a `remove` + `append` pair has a window where a process
+     * stop leaves the mutation in no durable store at all, and the in-memory
+     * entry has already advanced, so a reload loses the write outright. It also
+     * moved the record to the BACK of the queue, replaying it out of the order
+     * it was issued in. Implementations do the whole swap under one transaction
+     * (or one serialized blob write).
+     *
+     * A mutation whose id is not present is left alone — the record was drained
+     * concurrently and re-inserting it would replay a settled write.
+     */
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 
 /**
@@ -183,6 +216,23 @@ export interface PersistenceAdapter {
  */
 export interface OutboxMutation {
     args: Record<string, unknown>;
+
+    /**
+     * The CDC cursor this write was composed against — see
+     * {@link PersistedMutation.baselineSeq}, whose contract this mirrors.
+     *
+     * A sink MUST persist it and hand it back unchanged on replay. This is the
+     * canonical statement of that rule for the durable path; every other site
+     * that carries the field points here. Re-deriving one at replay time reads
+     * the cursor the client has since advanced to — the newer state the write is
+     * supposed to be judged against — so a stale write always looks fresh and
+     * always clobbers.
+     *
+     * `undefined` when the client has no live subscription to take a cursor from,
+     * which replays the write unchanged.
+     */
+    baselineSeq?: number;
+
     /** Stable per-client id; pairs with {@link OutboxMutation.mutationId} as `idempotencyKey`. */
     clientId: string;
     functionPath: string;
@@ -192,6 +242,19 @@ export interface OutboxMutation {
     identity: string | null;
     /** Monotonic per-client mutation id, backing the server `__client_watermark`. */
     mutationId: number;
+
+    /**
+     * Roll this write's optimistic patch back. The sink's owner invokes it when
+     * the replay reaches a PERMANENT verdict (a coded rejection, an identity
+     * drop) — never on a transient failure it will retry, and never on success.
+     *
+     * Without it a rejected replay leaves its predicted value on screen until an
+     * unrelated frame or a reload: the client drops the layer when it hands the
+     * write over (it cannot cursor-confirm through this path) and has no other
+     * signal that the write died. Absent when the write carried no optimistic
+     * update, and safe to ignore — a sink that never calls it behaves as before.
+     */
+    onRejected?: () => void;
     shardKey?: string;
 }
 
@@ -210,6 +273,18 @@ export interface OutboxSink {
      * the caller can surface back-pressure to the issuing mutation.
      */
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+
+    /**
+     * Whether the sink still holds writes that have not replayed. The client
+     * consults this before sending a fresh mutation live, so a new write can
+     * never overtake an older one the sink is still holding (a write deferred
+     * because its identity isn't re-confirmed yet is held indefinitely, with
+     * nothing for the client's flush barrier to wait on).
+     *
+     * Optional: a sink that cannot answer never engages the ordering gate, so
+     * such a sink behaves exactly as before.
+     */
+    pending?: () => boolean;
 }
 
 /**
@@ -219,10 +294,30 @@ export interface OutboxSink {
  */
 export interface CachedQuery {
     /**
+     * Token-hash fingerprint of the bearer the value was cached under, when the
+     * entry was written by the identity the client currently advertises.
+     *
+     * The second half of the identity gate, and the half that makes the cache
+     * usable at all for a bearer-token app. `identity` settles on the resolved
+     * subject (`subj:<id>`) once the session resolves, but on the NEXT reload
+     * every adapter can only offer the stored token first — the subject arrives
+     * a round trip later, and offline it never arrives at all. Matching the
+     * credential the entry was written under is what lets the seed happen before
+     * (or without) that round trip. Absent when signed out, or when the value
+     * arrived over a socket authenticated as someone else.
+     */
+    credential?: string;
+
+    /**
      * Issuing identity fingerprint (same shape the offline queue stamps). A
      * cached value only hydrates when it matches the current identity, so a
-     * signed-out cache never leaks into a new session. `null` = cached while
-     * signed out.
+     * signed-out cache never leaks into a new session.
+     *
+     * `null` = cached by a client that had no subject to name — an app with no
+     * auth at all, or one the server answered "no session" to. It is never
+     * written while a session resolve is in flight, because a `null` written
+     * there belongs to a user the client was about to name, and every
+     * unidentified session would match it.
      */
     identity: string | null;
 
@@ -363,6 +458,7 @@ export interface LunoraClientOptions {
      * use shapes, whispers, streams, or connection context.
      */
     crossTabSync?: boolean;
+
     fetch?: typeof fetch;
 
     /**
@@ -375,10 +471,17 @@ export interface LunoraClientOptions {
     heartbeatIntervalMs?: number;
 
     /**
-     * When `true` and a `queryCache` is active, framework hooks (React, Vue, …)
-     * wait for the durable cache to finish hydrating before their first render
-     * with an enabled subscription, so users see cached data instead of an
-     * undefined flash before the socket round-trip. Defaults to `false`.
+     * When `true` and a `queryCache` is active, React's `useQuery` holds its
+     * TanStack query disabled until the durable cache has finished loading
+     * (`whenReady()`), so its first enabled render can seed the cached value
+     * instead of issuing an HTTP read that the cache would immediately
+     * overwrite. Defaults to `false`.
+     *
+     * It is ONLY React's `useQuery` that defers — the Vue, Svelte, Solid and
+     * Angular hooks subscribe at mount regardless of this flag, and so does
+     * React's own subscription registry. They do not need the gate: a
+     * subscription opened before the load completes is seeded by the load
+     * itself, so a cached value reaches the first subscriber either way.
      *
      * Requires `queryCache` to be set (not `false`); silently ignored otherwise.
      */
@@ -421,6 +524,32 @@ export interface LunoraClientOptions {
      * breaking deploy you're protecting against — not purely speculatively.
      */
     persistenceVersion?: string;
+
+    /**
+     * HTTP polling fallback for live queries on a network that refuses WebSocket
+     * upgrades (a corporate proxy, a captive portal).
+     *
+     * One-shot `query`/`mutation`/`action` calls already ride HTTP POST, so such a
+     * network does not break them — it breaks reactivity, and only that. After a
+     * run of connect attempts that never reach `open`, the client re-runs each
+     * subscribed query over the batch-RPC endpoint on an interval and reports
+     * `"polling"` from the client's `connectionStatus()`.
+     *
+     * It is a degradation, not a second transport: shapes (`@lunora/db`
+     * collections), durable streams and whispers have no request/response form to
+     * re-run and stay unavailable until a socket opens. Freshness is bounded by
+     * the interval, and each tick costs a full re-run of every subscribed query.
+     *
+     * Defaults to polling every 5s after 3 consecutive failed opens. Set
+     * `intervalMs: 0` to disable it and keep the historical behaviour (live
+     * queries simply stop moving).
+     */
+    pollingFallback?: {
+        /** Consecutive connect attempts that must fail to reach `open` first. Default 3; `0` disables. */
+        afterFailedAttempts?: number;
+        /** Poll cadence in ms. Default 5000; `0` disables. */
+        intervalMs?: number;
+    };
 
     /**
      * Durable store for the read cache (Pillar 2). When active, query results

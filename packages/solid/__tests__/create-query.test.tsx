@@ -50,7 +50,7 @@ describe(createQuery, () => {
         const fake = createFakeClient();
         const [channelId, setChannelId] = createSignal("channel:a");
 
-        render(
+        const { container } = render(
             () => {
                 const data = createQuery(listRef, () => {
                     return { channelId: channelId() };
@@ -65,14 +65,53 @@ describe(createQuery, () => {
         expect(fake.subscriptions[0]?.args).toStrictEqual({ channelId: "channel:a" });
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
 
+        fake.subscriptions[0]?.push(["from-a"]);
+
+        expect(container.textContent).toBe(JSON.stringify(["from-a"]));
+
         // Change the reactive args: the old subscription must be torn down and a
-        // fresh one opened for the new args.
+        // fresh one opened for the new args — and the old args' value must not
+        // render under the new args until the new subscription's first frame.
         setChannelId("channel:b");
+
+        expect(container.textContent).toBe("loading");
 
         expect(fake.subscriptions).toHaveLength(2);
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
         expect(fake.subscriptions[1]?.args).toStrictEqual({ channelId: "channel:b" });
         expect(fake.subscriptions[1]?.unsubscribed).toBe(false);
+    });
+
+    it("does not re-subscribe when the args accessor re-emits equal content", () => {
+        // A dependency that feeds the args accessor without changing what it
+        // produces — `Math.min(limit, 10)` clamps 15 and 20 to the same 10.
+        const fake = createFakeClient();
+        const [limit, setLimit] = createSignal(15);
+
+        const { container } = render(
+            () => {
+                const data = createQuery(listRef, () => {
+                    return { channelId: "channel:a", limit: Math.min(limit(), 10) };
+                });
+
+                return <pre>{data() === undefined ? "loading" : JSON.stringify(data())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        expect(fake.subscriptions).toHaveLength(1);
+
+        fake.subscriptions[0]?.push(["from-a"]);
+
+        expect(container.textContent).toBe(JSON.stringify(["from-a"]));
+
+        setLimit(20);
+
+        // The produced args are byte-identical, so the live subscription must be
+        // left alone — no teardown, no re-open, and no blanking of the list.
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
+        expect(container.textContent).toBe(JSON.stringify(["from-a"]));
     });
 
     it("forwards onError so a server-pushed subscription error reaches the caller", () => {

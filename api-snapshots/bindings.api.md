@@ -116,23 +116,6 @@ const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClie
 
 ## `@lunora/bindings/images`
 
-### `DrawOverlay` (interface)
-
-```ts
-interface DrawOverlay {
-    bottom?: number;
-    composite?: ImageCompositeMode;
-    height?: number;
-    left?: number;
-    opacity?: number;
-    repeat?: "x" | "y" | boolean;
-    right?: number;
-    top?: number;
-    url: string;
-    width?: number;
-}
-```
-
 ### `ImageCompositeMode` (type)
 
 ```ts
@@ -285,7 +268,6 @@ interface TransformOptions {
     blur?: number;
     brightness?: number;
     contrast?: number;
-    draw?: DrawOverlay[];
     fit?: "aspect-crop" | "contain" | "cover" | "crop" | "pad" | "scale-down" | "scale-up" | "squeeze";
     flip?: "h" | "hv" | "v";
     gamma?: number;
@@ -764,6 +746,12 @@ const fn: {
 };
 ```
 
+### `ident` (const)
+
+```ts
+const ident: (name: string) => string;
+```
+
 ### `isSql` (const)
 
 ```ts
@@ -798,6 +786,12 @@ const renderOrderTerm: (term: OrderTerm) => string;
 
 ```ts
 const sql: (strings: TemplateStringsArray, ...values: unknown[]) => Sql;
+```
+
+### `tableRef` (const)
+
+```ts
+const tableRef: (ref: string) => string;
 ```
 
 ### `toText` (const)
@@ -1112,4 +1106,66 @@ const createVectorSyncHook: (options: {
 
 ```ts
 const createVectors: (options: LunoraVectorsOptions) => LunoraVectors;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CreateContextVectorsOptions` (interface)
+
+```ts
+interface CreateContextVectorsOptions {
+    deferAfterCommit?: (work: () => Promise<void>) => Promise<void>;
+    namespace?: string;
+    shardedIndexNames?: ReadonlyArray<string>;
+}
+```
+
+### `KvKeyEntryLike` (interface)
+
+```ts
+interface KvKeyEntryLike {
+    expiration?: number;
+    metadata?: unknown;
+    name: string;
+}
+```
+
+### `KvKeyListResultLike` (interface)
+
+```ts
+interface KvKeyListResultLike {
+    cursor?: string;
+    keys: KvKeyEntryLike[];
+    listComplete: boolean;
+}
+```
+
+### `KvNamespaceSummaryLike` (interface)
+
+```ts
+interface KvNamespaceSummaryLike {
+    binding: string;
+}
+```
+
+### `KvValueResultLike` (interface)
+
+```ts
+interface KvValueResultLike {
+    metadata: unknown;
+    value: null | string;
+}
+```
+
+### `SetMember` (interface)
+
+```ts
+interface SetMember {
+    operator?: string;
+    query: Queryable<unknown>;
+}
 ```

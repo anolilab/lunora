@@ -23,6 +23,7 @@
  * exercisable through the existing protected `executeSubscription`, `recordChangedTable`,
  * `webSocketMessage`, and `fetch` seams exposed by ShardDO.
  */
+import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -190,6 +191,23 @@ const subscribeSocket = (shard: SubscriptionRefreshShard, ws: FakeWebSocket, sub
         query: { args: {}, functionPath },
         type: "subscribe",
     });
+
+/**
+ * A shard whose `messages:denied` subscription throws on its FIRST call — the
+ * seed. Stands in for what the generated `executeSubscription` really does:
+ * re-validate the args and run the procedure's auth/RLS middleware, any of
+ * which can reject (an anonymous socket on an `authQuery`, a bad argument, a
+ * handler `NOT_FOUND`).
+ */
+class SeedThrowShard extends SubscriptionRefreshShard {
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        if (functionPath === "messages:denied") {
+            return Promise.reject(new LunoraError("UNAUTHORIZED", "sign in to watch this query"));
+        }
+
+        return super.executeSubscription(functionPath, args);
+    }
+}
 
 /**
  * Shared by both the isolation test and the DO-01 counter/log test: a shard
@@ -463,10 +481,11 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     // ("messages:broken") will throw on re-execution during refresh. The other
     // ("messages:list") is healthy and ordered AFTER the broken one.
     //
-    // To avoid the broken subscription throwing during the seed call, we arrange
-    // for it to return null (no initial push), then throw only on subsequent
-    // calls (during refresh). This ensures the throw happens in refreshSubscriptions
-    // rather than in the initial subscribe seed path.
+    // The broken subscription returns null on its first call (no initial push)
+    // and throws only on subsequent ones, so the throw lands in
+    // refreshSubscriptions rather than the seed. A throw in the SEED is its own
+    // failure mode with its own contract — see "a subscription whose seed
+    // throws" below.
     //
     // New behavior (after this fix): a throwing subscription is caught per-sub
     // and the iteration continues. Assertions:
@@ -883,5 +902,56 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // The socket still converged on the latest value (a frame was delivered).
         expect(subFrames(ws, "sub-A").length).toBeGreaterThan(1);
+    });
+
+    // -------------------------------------------------------------------------
+    // A SEED THAT THROWS FAILS ONE SUBSCRIPTION, NOT THE SOCKET
+    //
+    // The seed dispatches the real handler, so it can reject. Under the WS
+    // hibernation API a throw out of `webSocketMessage` is a fatal-channel
+    // error: the runtime tears the socket down, taking every OTHER live
+    // subscription on it — and the client, which already saw this subscribe's
+    // `ack` (which resets its reconnect backoff), reconnects, resubscribes and
+    // throws again at the initial delay for the life of the page.
+    // -------------------------------------------------------------------------
+    it("a subscription whose seed throws fails only itself, never the socket", async () => {
+        expect.assertions(5);
+
+        const shard = new SeedThrowShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        // A healthy subscription registered FIRST — it must survive the failure.
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }], tables: new Set(["messages"]) });
+        await subscribeSocket(shard, ws, "sub-healthy", "messages:list");
+
+        const before = ws.sent.length;
+
+        await expect(subscribeSocket(shard, ws, "sub-denied", "messages:denied")).resolves.toBeUndefined();
+
+        const frames = ws.sent.slice(before).map((line) => JSON.parse(line) as Record<string, unknown>);
+
+        // The thrown `LunoraError`'s own code reaches the client, not a redacted
+        // internal one — it is a deliberate, developer-facing refusal.
+        expect(frames).toContainEqual({
+            code: "UNAUTHORIZED",
+            error: { code: "UNAUTHORIZED", message: "sign in to watch this query" },
+            id: "sub-denied",
+            type: "error",
+        });
+        // Deregistered, so the next write flush does not re-run it.
+        expect(Object.keys(ws.attachment?.subs ?? {})).toEqual(["sub-healthy"]);
+
+        // ...and the socket is still live: the healthy sibling still refreshes.
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+
+        const healthyBefore = subFrames(ws, "sub-healthy").length;
+
+        await shard.writeRpc();
+
+        expect(subFrames(ws, "sub-healthy").length).toBeGreaterThan(healthyBefore);
+        expect(subFrames(ws, "sub-denied")).toHaveLength(0);
     });
 });

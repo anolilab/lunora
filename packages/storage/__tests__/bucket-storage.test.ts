@@ -59,4 +59,25 @@ describe("createBucketStorage", () => {
 
         expect(() => storage.bucket("nope")).toThrow(/no bucket registered for "nope"/);
     });
+
+    // The map is a plain object, so a truthiness check resolved these to an
+    // inherited Object.prototype member: `bucket("constructor")` returned an
+    // empty spread of `Function` — no `download`/`delete`, but a `bucketName`
+    // tag `storageRules` would go on to match rules against.
+    it.each(["constructor", "toString", "valueOf", "__proto__", "hasOwnProperty"])("throws on the prototype key %s", (name) => {
+        expect.assertions(1);
+
+        const storage = createBucketStorage({ default: fakeBucket("default") });
+
+        // A plain string arg is a substring match, so no regex escaping of `__proto__`.
+        expect(() => storage.bucket(name)).toThrow(`no bucket registered for "${name}"`);
+    });
+
+    it("rejects a prototype key named as the explicit default", () => {
+        expect.assertions(1);
+
+        expect(() => createBucketStorage({ files: fakeBucket("files") }, { default: "constructor" })).toThrow(
+            /default bucket "constructor" is not in the bucket map/,
+        );
+    });
 });

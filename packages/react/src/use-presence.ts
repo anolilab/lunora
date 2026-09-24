@@ -1,6 +1,6 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { randomSessionId } from "../../../shared/random-session-id";
@@ -57,6 +57,13 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` freezes at its last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id (one row
      * per tab). Pass a user/connection id to control deduping.
      */
@@ -66,6 +73,8 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 }
 
 interface UsePresenceResult<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: SubscriptionError | undefined;
     /** The present members for the room, as `listPresent` returns them. `undefined` until the first push. */
     present: ReturnOf<L> | undefined;
     /** This mount's session id (generated when not supplied). */
@@ -90,6 +99,15 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const generatedSessionId = useMemo(() => options.sessionId ?? randomSessionId(), [options.sessionId]);
 
     const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
+    const [error, setError] = useState<SubscriptionError | undefined>(undefined);
+
+    // The subscribe effect keys on the query ref + room + shard, so an inline
+    // `onError` must not change its identity — read the latest through a ref.
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
 
     // Latest awareness data, read at heartbeat time so `setData` never resets the
     // interval or re-subscribes.
@@ -183,19 +201,29 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             (value) => {
                 if (!cancelled) {
                     setPresent(value);
+                    setError(undefined);
                 }
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    if (!cancelled) {
+                        setError(subscriptionError);
+                    }
+
+                    onErrorRef.current?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
 
         return () => {
             cancelled = true;
             unsubscribe();
         };
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `client` is provider-stable (swapping it remounts the provider subtree).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `onErrorRef` is a stable ref carrying the latest handler. `client` is provider-stable (swapping it remounts the provider subtree).
     }, [client, listPresent.__lunoraRef, roomId, shardKey]);
 
-    return { present, sessionId: generatedSessionId, setData };
+    return { error, present, sessionId: generatedSessionId, setData };
 };
 
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };

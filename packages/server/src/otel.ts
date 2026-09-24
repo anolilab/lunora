@@ -31,9 +31,11 @@
  * `nodejs_compat`, and `@lunora/do` deliberately avoids ALS for that reason —
  * the same reason `ctx.trace` threads its parent explicitly instead of keeping
  * an ambient stack. So this bridge implements the `Tracer` surface faithfully
- * and parents spans to the DISPATCH rather than to a dynamically-scoped
- * "current" span: nesting is flatter than a full SDK would give, but every span
- * lands in the right trace, with the right timings, and none are lost. See
+ * and parents each span to the `Context` its caller THREADED (falling back to
+ * the dispatch when none was), never to a dynamically-scoped "current" span:
+ * nesting is flatter than a full SDK would give for a library that relies on
+ * ambient context, but every span lands in the right trace, under the parent it
+ * was told about, with the right timings, and none are lost. See
  * {@link createOtelTracer} for the precise semantics.
  *
  * `@opentelemetry/api` is a PEER dependency: it keeps a module-global registry,
@@ -52,7 +54,7 @@ import type {
     TimeInput,
     Tracer,
 } from "@opentelemetry/api";
-import { SpanKind, SpanStatusCode, TraceFlags } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode, trace as otelTrace, TraceFlags } from "@opentelemetry/api";
 
 import type { LunoraTracer, SpanHandle } from "./types";
 
@@ -344,31 +346,54 @@ class BridgeSpan implements Span {
  * decision, and export through the same OTLP sink. Nothing in the runtime has to
  * know they came from a third-party library.
  *
- * **Parenting.** Every span is parented to the DISPATCH, not to a dynamically
- * scoped "current" span, because tracking the latter across `await`s needs
- * `AsyncLocalStorage` — unavailable in the Durable Object profile (see the
- * module doc). `startActiveSpan` therefore runs its callback with the new span
- * passed in, exactly as the interface requires, but does NOT make it ambient:
- * `trace.getActiveSpan()` inside that callback still reports whatever the global
- * provider says. A library that threads the span it is handed (the common case,
- * and what the AI SDK does) nests correctly; one that relies on ambient context
- * gets a flat trace instead of a nested one — flatter, never wrong, never lost.
+ * **Parenting.** The parent is read from the `Context` the caller threads —
+ * `startSpan(name, options, ctx)` parents to `trace.getSpanContext(ctx)` when it
+ * names a span in THIS trace — and falls back to the dispatch when no Context is
+ * passed (or it carries a span from a different trace, which would be a lie to
+ * parent to). What the bridge does NOT do is track a dynamically scoped "current"
+ * span, because that needs `AsyncLocalStorage` — unavailable in the Durable
+ * Object profile (see the module doc). `startActiveSpan` therefore runs its
+ * callback with the new span passed in, exactly as the interface requires, but
+ * does NOT make it ambient: `trace.getActiveSpan()` inside that callback still
+ * reports whatever the global provider says. A library that threads its `Context`
+ * or the span it is handed (the common case, and what the AI SDK does) nests
+ * correctly; one that relies on ambient context gets a flat trace instead of a
+ * nested one — flatter, never wrong, never lost.
+ *
+ * **Ids and sampling.** The `SpanContext` returned by `startSpan` is the one the
+ * span is RECORDED under: the id is minted here and handed to `ctx.trace` as its
+ * span identity, so a `traceparent` a library builds from it names a span that
+ * actually reaches the collector. `traceFlags` carries the trace's settled
+ * sampling verdict rather than a hardcoded SAMPLED, so a sampled-out trace is not
+ * announced downstream as kept.
  * @param context Any Lunora function context (`QueryCtx` / `MutationCtx` / `ActionCtx`).
  * @param options See {@link OtelTracerOptions}.
  */
 const createOtelTracer = (context: LunoraTraceContext, options: OtelTracerOptions = {}): Tracer => {
     const { namePrefix = "" } = options;
 
-    const startSpan = (name: string, spanOptions?: OtelSpanOptions, _context?: Context): Span => {
+    const startSpan = (name: string, spanOptions?: OtelSpanOptions, parentContext?: Context): Span => {
         // The trace is fixed by the dispatch; only the span id is new. It is
         // minted here rather than read back from `ctx.trace` because `startSpan`
         // is synchronous and callers may read `spanContext()` immediately — e.g.
-        // to build a `traceparent` for an outbound call.
-        const parent = context.span.spanContext();
+        // to build a `traceparent` for an outbound call. It is then handed to
+        // `ctx.trace` as the span's identity, so the id announced here is the id
+        // the collector receives instead of a second, private one.
+        const dispatch = context.span.spanContext();
+        // The threaded `Context` names the parent when it carries one from THIS
+        // trace. A span from another trace is not a parent — parenting to it would
+        // invent an edge that does not exist — so that falls back to the dispatch,
+        // exactly like an absent Context.
+        const threaded = parentContext === undefined ? undefined : otelTrace.getSpanContext(parentContext);
+        const parentSpanId = threaded?.traceId === dispatch.traceId ? threaded.spanId : dispatch.spanId;
+        const spanId = randomHex(8);
         const ids: SpanContext = {
-            spanId: randomHex(8),
-            traceFlags: TraceFlags.SAMPLED,
-            traceId: parent.traceId,
+            spanId,
+            // The trace's settled verdict, not a hardcoded SAMPLED: announcing a
+            // sampled-out trace as sampled makes every downstream tier record
+            // spans the collector will only ever hold the middle of.
+            traceFlags: (dispatch.sampled ?? true) ? TraceFlags.SAMPLED : TraceFlags.NONE,
+            traceId: dispatch.traceId,
         };
         const span = new BridgeSpan(ids);
 
@@ -408,6 +433,7 @@ const createOtelTracer = (context: LunoraTraceContext, options: OtelTracerOption
                               }),
                           }),
                 },
+                { parentSpanId, spanId },
             )
             .catch(() => {
                 // Expected on the ERROR-status path; the span is already recorded.
@@ -419,10 +445,14 @@ const createOtelTracer = (context: LunoraTraceContext, options: OtelTracerOption
     return {
         startActiveSpan: (name: string, ...rest: unknown[]) => {
             // The interface has three overloads; the callback is always last, and
-            // the two optional arguments are positional in a fixed order.
+            // the two optional arguments are positional in a fixed order —
+            // `(options, context, fn)`. The Context is threaded through so a
+            // caller that scoped its parent explicitly still nests, which is the
+            // only nesting available without an ambient span stack.
             const callback = rest.at(-1) as (span: Span) => unknown;
             const spanOptions = typeof rest[0] === "object" && rest[0] !== null ? (rest[0] as OtelSpanOptions) : undefined;
-            const span = startSpan(name, spanOptions);
+            const parentContext = rest.length > 2 ? (rest[1] as Context | undefined) : undefined;
+            const span = startSpan(name, spanOptions, parentContext);
 
             // No ambient activation — see the parenting note above. The span IS
             // handed to the callback, which is what the overload contract

@@ -11,8 +11,9 @@ interface Env extends Record<string, unknown> {
  * builder. It owns `/_lunora/*` (RPC + WebSocket realtime) and the `ShardDO`
  * class. In the single-worker setup, `@lunora/nuxt` mounts this app *inside*
  * Nitro (aliasing it to `#lunora/app` and forwarding the `/_lunora/**` route to
- * its `fetch`), and `exports.cloudflare.ts` re-exports `ShardDO` onto the same
- * Cloudflare worker entry — so Nuxt SSR + Lunora ship as one deploy.
+ * its `fetch`), and the project-root `worker.ts` wrapper (`wrangler.jsonc`'s
+ * `main`) re-exports `ShardDO` alongside Nitro's SSR handler — so Nuxt SSR +
+ * Lunora ship as one deploy.
  *
  * `default` is the app (its `fetch` entrypoint); `ShardDO` is the bound Durable
  * Object class.

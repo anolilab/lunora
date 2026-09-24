@@ -1,27 +1,26 @@
 import type { AdvisorFailOpenGuard } from "../../fail-open-guards";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { matchesNamePhrase } from "../helpers";
 
 /**
- * Auth/payment-sensitive flow tokens. A guard on a procedure whose export name or
- * rate-limit `name` normalizes to one of these is the narrow, high-precision
- * subset where fail-open is dangerous — a limiter outage on a sign-in / OTP /
- * checkout endpoint becomes a brute-force or abuse window.
+ * Auth/payment-sensitive flow phrases. A guard on a procedure whose export name
+ * or rate-limit `name` contains one of these as a WORD is the narrow,
+ * high-precision subset where fail-open is dangerous — a limiter outage on a
+ * sign-in / OTP / checkout endpoint becomes a brute-force or abuse window.
+ *
+ * Matched through {@link matchesNamePhrase} rather than as substrings: a
+ * substring scan flags `updatePresets` (`reset`), `snapshotPrune` and
+ * `listSlotProfiles` (`otp`), which is exactly the noise a lint documenting
+ * itself as high-precision must not produce. The one-word spellings sit beside
+ * the camelCase ones because they tokenize differently (`loginHandler` shares no
+ * word with `logIn`).
  */
-const SENSITIVE_TOKENS = ["signin", "signup", "login", "register", "reset", "password", "otp", "verify", "payment", "checkout"];
-
-/** Normalize an identifier to lowercase alphanumerics so `sign-in` / `signIn` / `sign_in` all reduce to `signin`. */
-const normalize = (value: string): string => value.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "");
-
-/** Whether a normalized identifier contains any sensitive-flow token. */
-const matchesSensitiveToken = (value: string): boolean => {
-    const normalized = normalize(value);
-
-    return SENSITIVE_TOKENS.some((token) => normalized.includes(token));
-};
+const SENSITIVE_PHRASES = ["signin", "signIn", "signup", "signUp", "login", "logIn", "register", "reset", "password", "otp", "verify", "payment", "checkout"];
 
 /** Whether either the guarded procedure's export name or its rate-limit `name` looks auth/payment-sensitive. */
-const guardsSensitiveFlow = (row: AdvisorFailOpenGuard): boolean => matchesSensitiveToken(row.exportName) || matchesSensitiveToken(row.limitName);
+const guardsSensitiveFlow = (row: AdvisorFailOpenGuard): boolean =>
+    matchesNamePhrase(row.exportName, SENSITIVE_PHRASES) || matchesNamePhrase(row.limitName, SENSITIVE_PHRASES);
 
 /**
  * Flags a `rateLimit`/`dbRateLimit`/`verifyTurnstileMiddleware` guard configured
@@ -37,8 +36,8 @@ const guardsSensitiveFlow = (row: AdvisorFailOpenGuard): boolean => matchesSensi
  * Runs only when the codegen feeder supplies fail-open-guard evidence
  * (`context.failOpenGuards`); a runtime caller flags nothing. Deliberately narrow
  * — fires only when the options literal provably set `failOpen: true` AND the
- * guarded procedure's export name or rate-limit `name` matches an auth/payment
- * token, keeping the false-positive rate low. One finding per guard.
+ * guarded procedure's export name or rate-limit `name` carries an auth/payment
+ * WORD, keeping the false-positive rate low. One finding per guard.
  */
 const ratelimitMiddlewareFailOpen: Lint = {
     categories: ["SECURITY"],

@@ -692,13 +692,16 @@ describe("lunoraClient", () => {
             // The value changed, so the data callback fires...
             expect(received).toEqual([[{ _id: "m1" }]]);
             // ...and the frame's own watermark ALSO reaches onCheckpoint, same
-            // tail as a `settled` frame.
-            expect(checkpoints).toEqual([{ checkpoint: 10, mutationId: 5 }]);
+            // tail as a `settled` frame — but stamped `rowsFollow`, which a
+            // rowless `settled` frame is not. That flag is what lets `@lunora/db`
+            // stash the watermark for the rowset landing right behind it, without
+            // a settled frame's watermark going stale in the same slot.
+            expect(checkpoints).toEqual([{ checkpoint: 10, mutationId: 5, rowsFollow: true }]);
 
             // A later frame with a LOWER watermark must never move it backwards.
             socket.receive({ cursor: 11, data: [{ _id: "m2" }], epoch: "e1", id: sub.id, lastMutationId: 3, type: "data" });
 
-            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 5 });
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 5, rowsFollow: true });
 
             client.close();
         });
@@ -1873,10 +1876,8 @@ describe("lunoraClient", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
             const persistence = createInMemoryPersistence();
 
-            // A write durably queued by a prior, signed-in session. Its stamp is
-            // a fingerprint that cannot match this fresh, unauthenticated client
-            // (whose current identity is `null`).
-            await persistence.append({ args: { title: "user-a" }, functionPath: "posts:create", identity: "12:userastamp", id: "m1" });
+            // A write durably queued by a prior session signed in as user-a.
+            await persistence.append({ args: { title: "user-a" }, functionPath: "posts:create", identity: "subj:user-a", id: "m1" });
 
             const client = new LunoraClient({
                 fetch: fetchMock,
@@ -1884,6 +1885,11 @@ describe("lunoraClient", () => {
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
             });
+
+            // A genuinely DIFFERENT user is signed in. (Signed-out is not that
+            // case: it is the state of every reload before the app's session
+            // resolves, and holds instead — see the offline-lifecycle suite.)
+            client.setAuthToken("token-b", "user-b");
 
             await flushMicrotasks();
             latestSocket().open();
@@ -2011,10 +2017,13 @@ describe("lunoraClient", () => {
                 client.setAuthToken("user-b-token");
             };
 
-            // Reconnect and flush.
+            // Reconnect and flush. Bounded rather than `runAllTimersAsync`: the
+            // rotation to identity B is a genuine identity change, so the client
+            // now closes the socket B inherited from A and reconnects — and a
+            // reconnect loop against a mock that never opens has no last timer.
             await vi.advanceTimersByTimeAsync(20);
             latestSocket().open();
-            await vi.runAllTimersAsync();
+            await vi.advanceTimersByTimeAsync(200);
 
             // Both writes replayed — in ONE batch, under identity A's auth header
             // (never user-b, even though the token rotated mid-flight).
@@ -2265,6 +2274,86 @@ describe("lunoraClient", () => {
             await client.mutation(fnRef("c:get"), {}, { optimistic: () => 9 });
 
             expect(received).toEqual([0, 9]);
+        });
+
+        it("a per-call optimistic does not reach a query registered under a different reference", async () => {
+            expect.assertions(2);
+
+            // The targeting rule, pinned: `optimistic` patches the subscription
+            // registered under the WRITE's own (ref, args, shard) and nothing else.
+            // The shape apps actually have — a `messages:send` mutation and a
+            // `messages:list` query — shares neither, so there is nothing to patch.
+            // `optimisticUpdate` (below) is the option for that shape.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            await client.mutation(
+                fnRef("messages:send"),
+                { channelId: "c1", text: "hi" },
+                { optimistic: (current) => [...((current as unknown[]) ?? []), { _id: "tmp" }] },
+            );
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+
+            // Same reference, different args: also no match — the args are part of
+            // the key, so a list-wide patch can't ride a per-row write either.
+            await client.mutation(fnRef("messages:list"), { channelId: "c2" }, { optimistic: () => ["wrong channel"] });
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+        });
+
+        it("optimisticUpdate patches the list query a send mutation targets (the documented shape)", async () => {
+            expect.assertions(2);
+
+            // Distinct refs AND distinct args, which is what every doc and example
+            // shows: `messages:send({ channelId, text })` appending to the
+            // `messages:list({ channelId })` a component is watching.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "FORBIDDEN", message: "nope" } }, { status: 403 }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            const draft = { _id: "tmp", text: "hi" };
+
+            await expect(
+                client.mutation(
+                    fnRef("messages:send"),
+                    { channelId: "c1", text: "hi" },
+                    {
+                        optimisticUpdate: (store, args) => {
+                            const current = store.getQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }) as
+                                undefined | unknown[];
+
+                            store.setQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }, [...(current ?? []), draft]);
+                        },
+                    },
+                ),
+            ).rejects.toMatchObject({ message: "nope" });
+
+            // Painted on the list immediately, then rolled back when the server said no.
+            expect(received).toEqual([[{ _id: "m1" }], [{ _id: "m1" }, draft], [{ _id: "m1" }]]);
         });
 
         it("stacked optimistic mutations: an older failure rebases the newer pending write onto the base", async () => {
@@ -2749,6 +2838,27 @@ describe("lunoraClient", () => {
             expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
         });
 
+        // The admin routes PROXY the SchedulerDO's stored records byte for byte,
+        // and `ctx.scheduler.runAt` stores `encodeWire(args)`. The proxy cannot
+        // decode on the way through — it re-serializes with `JSON.stringify`,
+        // which throws on the very `bigint` the encode exists to carry — so the
+        // decode belongs here, at the consumer, where `createScheduler.list()`
+        // does it for a shard-side reader.
+        it("decodes record args on the admin list reads so they match what was scheduled", async () => {
+            expect.assertions(2);
+
+            const args = { amount: 1234n, when: new Date(0) };
+            const stored = { args: encodeWire(args), enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2000 };
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ records: [stored] }));
+
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            client.setAuthToken("tkn");
+
+            await expect(client.listScheduledJobs()).resolves.toStrictEqual([{ ...stored, args }]);
+            await expect(client.listDeadJobs()).resolves.toStrictEqual([{ ...stored, args }]);
+        });
+
         it("listDeadJobs walks every page rather than stopping at the first", async () => {
             expect.assertions(3);
 
@@ -3111,6 +3221,28 @@ describe("lunoraClient", () => {
             expect(init.method).toBe("GET");
         });
 
+        it("reports an admin non-2xx whose error slot is not an object as a transport failure", async () => {
+            expect.assertions(4);
+
+            // §4.2: only an OBJECT `error` slot is an envelope. The admin path
+            // narrowed the BODY and then indexed the slot unchecked, so a
+            // proxy's `{"error": null}` page raised a `TypeError` — and
+            // `{"error": "..."}` an `Error` with no `code` — past every handler
+            // an admin caller wrote.
+            for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ error: slot }, { status: 502 }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                });
+
+                // eslint-disable-next-line no-await-in-loop -- one client per slot shape; the shapes are the table
+                await expect(client.listFunctions()).rejects.toMatchObject({ code: "INTERNAL" });
+
+                client.close();
+            }
+        });
+
         it("listFunctions defaults to an empty array when functions are absent", async () => {
             expect.assertions(1);
 
@@ -3454,6 +3586,85 @@ describe("lunoraClient", () => {
     });
 
     describe("lunoraClient — scheduled-jobs subscription", () => {
+        // The live push carries the same stored records the HTTP list does, so it
+        // decodes on the same terms — otherwise a panel showed tagged tuples the
+        // instant a job changed and real values on the next poll.
+        it("decodes record args on a pushed job list", () => {
+            expect.assertions(1);
+
+            const args = { amount: 1234n };
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+                wsToken: "adm1n",
+            });
+
+            const seen: unknown[] = [];
+            const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs[0]?.args));
+
+            latestSocket().open();
+            latestSocket().receive({
+                records: [{ args: encodeWire(args), enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2 }],
+                type: "jobs",
+            });
+
+            expect(seen).toStrictEqual([args]);
+
+            unsubscribe();
+        });
+
+        it("surfaces a decode failure instead of discarding it as a non-JSON frame", () => {
+            expect.assertions(3);
+
+            // The `try` here is documented as covering the JSON PARSE, but it
+            // used to wrap the decode and the consumer callback too — with an
+            // empty body. So a `decodeWire` throw on a malformed tag was
+            // discarded in total silence and the operator's live job list just
+            // stopped updating, with nothing logged and nothing thrown.
+            //
+            // Narrowed to the parse, the failure now reaches
+            // `openManagedSocket`'s last-resort frame-handler catch, which
+            // reports it. The socket deliberately stays up: one bad frame must
+            // not take the listener down.
+            const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            try {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ result: null }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                    wsToken: "adm1n",
+                });
+
+                const seen: unknown[] = [];
+                const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs[0]?.args));
+
+                latestSocket().open();
+                latestSocket().receive({
+                    records: [{ args: ["$lunora.wire$", "bigint", "not-a-number"], enqueuedAt: 1, functionPath: "billing:settle", id: "j1", scheduledFor: 2 }],
+                    type: "jobs",
+                });
+
+                expect(errors).toHaveBeenCalledWith("[lunora] server frame handler threw", expect.any(RangeError));
+                // The consumer is not handed a half-decoded list.
+                expect(seen).toStrictEqual([]);
+
+                // A well-formed frame still lands afterwards — the subscription
+                // survives the bad one rather than going quiet for good.
+                latestSocket().receive({
+                    records: [{ args: encodeWire({ amount: 7n }), enqueuedAt: 1, functionPath: "billing:settle", id: "j2", scheduledFor: 2 }],
+                    type: "jobs",
+                });
+
+                expect(seen).toStrictEqual([{ amount: 7n }]);
+
+                unsubscribe();
+            } finally {
+                errors.mockRestore();
+            }
+        });
+
         it("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
             expect.assertions(4);
 
@@ -3994,7 +4205,7 @@ describe("lunoraClient", () => {
             await expect(client.getCurrentUser()).resolves.toBeNull();
         });
 
-        it("returns null when the fetch rejects", async () => {
+        it("rejects when the fetch rejects — unreachable is not signed out", async () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
@@ -4005,7 +4216,9 @@ describe("lunoraClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await expect(client.getCurrentUser()).resolves.toBeNull();
+            // Folding this into `null` made it indistinguishable from "the server
+            // says you have no session" — see `auth-gate-contract.test.ts`.
+            await expect(client.getCurrentUser()).rejects.toThrow("offline");
         });
 
         it("honours a custom authBasePath", async () => {
@@ -4064,6 +4277,84 @@ describe("lunoraClient", () => {
             const sub = firstSub(socket);
 
             expect(sub.query.sinceSeq).toBe(7);
+        });
+
+        it("seeds the subscription that already exists when the cache load lands", async () => {
+            expect.assertions(3);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Every framework adapter subscribes SYNCHRONOUSLY at mount — before
+            // the constructor's hydration microtask + async adapter resolve.
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            expect(received).toEqual([]);
+
+            await flushMicrotasks();
+
+            // The load reaches the subscription that is already open.
+            expect(received).toEqual([{ count: 42 }]);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // …and its cursor still rides the subscribe frame, which only goes
+            // out once the socket opens.
+            expect(firstSub(socket).query.sinceSeq).toBe(7);
+        });
+
+        it("never replays a cached value over a newer live value on a remount", async () => {
+            expect.assertions(2);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const unsubscribe = client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            await flushMicrotasks();
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            socket.receive({ cursor: 9, data: { count: 99 }, id: sub.id, type: "data" });
+
+            // The component unmounts (React drops the client state at refCount 0)
+            // and remounts — navigate away and back.
+            unsubscribe();
+
+            const remounted: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => remounted.push(d));
+
+            expect(remounted).toEqual([]);
+
+            const resubscribe = wireFrames(latestSocket()).at(-1);
+
+            expect(resubscribe?.query.sinceSeq).toBeUndefined();
         });
 
         it("drops a cached read whose identity does not match the current session", async () => {
@@ -4750,7 +5041,7 @@ describe("lunoraClient", () => {
 
     describe("lunoraClient — the read cache is stamped with the delivering socket's identity", () => {
         it("does not write the previous user's rows under the new user's identity after a switch", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const cache = createInMemoryQueryCache();
             const puts: CachedQuery[] = [];
@@ -4784,20 +5075,25 @@ describe("lunoraClient", () => {
 
             const subId = firstSub(socket).id as string;
 
-            // The user switches. Nothing closes user A's socket — the WS credential
-            // is pinned in the upgrade URL and only `setWsToken` bounces it.
+            // The user switches. A's socket is retired — `close()` flips
+            // `readyState` synchronously but its EVENT lands a turn later, so
+            // the connection still points at it for the rest of this one.
             client.setAuthToken("token-b", "user-b");
 
             expect(client.currentIdentity()).not.toBe(identityA);
+            expect(socket.readyState).toBe(3);
 
-            // ...and it keeps delivering user A's rows.
+            // A frame A's socket had already put on the wire lands in that gap.
             socket.receive({ cursor: 1, data: ["a-row"], id: subId, type: "data" });
 
             // `close()` flushes the debounced cache writes.
             client.close();
             await flushMicrotasks();
 
-            expect(puts.map((entry) => entry.identity)).toStrictEqual([identityA]);
+            // Refused outright, so it is neither stamped `subj:user-b` (which
+            // would hydrate A's row into B's next session) nor written under
+            // A's stamp — a retired socket's frame is not a read of anyone's.
+            expect(puts).toStrictEqual([]);
         });
     });
 

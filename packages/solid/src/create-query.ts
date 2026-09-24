@@ -4,7 +4,7 @@ import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
 import { useLunora } from "./context";
-import { trackedEffect } from "./solid-compat";
+import { trackedArgsEffect } from "./reactive-args";
 
 export interface CreateQueryOptions {
     /**
@@ -28,7 +28,8 @@ export interface CreateQueryOptions {
  *
  * `args` may be a plain value or an accessor; passing an accessor makes the
  * subscription reactive — when the args change the old subscription is torn down
- * (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or an
+ * (via `onCleanup`), the accessor resets to `undefined`, and a fresh one opens for
+ * the new args. Pass `"skip"` (or an
  * accessor returning `"skip"`) to short-circuit: no network call, no socket.
  *
  * ```tsx
@@ -52,14 +53,19 @@ export const createQuery = <F extends FunctionReference>(
 
     const resolveArgs = (): ArgsOf<F> | "skip" => (typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">)() : args);
 
-    // `trackedEffect(resolveArgs, …)` re-runs the body whenever the args
-    // accessor changes, tearing down the previous subscription (the returned
+    // `trackedArgsEffect(resolveArgs, …)` re-runs the body whenever the args'
+    // CONTENT changes, tearing down the previous subscription (the returned
     // disposer) before opening the next. A static (non-accessor) `args` resolves
-    // once and never re-runs. The skip-handling, subscribe, and cleanup are
-    // owned by the shared `@lunora/client/query` state machine; this binds it to
-    // a Solid signal. The `() => …` setter forms keep Solid from mistaking a
-    // function-valued server result for an updater.
-    trackedEffect(resolveArgs, (current) => {
+    // once and never re-runs, and an accessor that re-runs but produces equal
+    // args leaves the live subscription alone. The skip-handling, subscribe, and
+    // cleanup are owned by the shared `@lunora/client/query` state machine; this
+    // binds it to a Solid signal. The `() => …` setter forms keep Solid from
+    // mistaking a function-valued server result for an updater.
+    trackedArgsEffect(resolveArgs, (current) => {
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        setValue(() => undefined as ReturnOf<F> | undefined);
+
         const unsubscribe = createQuerySubscription<F>(
             client,
             function_,

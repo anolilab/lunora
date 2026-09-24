@@ -189,7 +189,12 @@ export const buildMysqlExec = (connection: Mysql2Execute): SqlExec => {
         all: async (sql, params) => {
             const [rows] = await connection.execute(sql, params);
 
-            return rows as Record<string, unknown>[];
+            // mysql2 hands back a `ResultSetHeader`, not a row array, for a
+            // statement that returns no rows. Normalised to `[]` here the same
+            // way `fromMysql2` (`create-hyperdrive.ts`) does — two adapters over
+            // one driver that disagreed on the same shape is how one of them
+            // ends up handing a caller a non-array it will index into.
+            return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
         },
         batch: async (statements) => {
             await Promise.all(statements.map((statement) => connection.execute(statement.sql, statement.params)));

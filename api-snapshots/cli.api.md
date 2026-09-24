@@ -19,8 +19,8 @@ interface AddCommandOptions {
     cwd?: string;
     diff?: boolean;
     dryRun?: boolean;
+    format?: OutputFormat;
     from?: string;
-    json?: boolean;
     list?: boolean;
     logger: Logger;
     names: ReadonlyArray<string>;
@@ -36,9 +36,8 @@ interface AddCommandOptions {
 ### `AddCommandResult` (interface)
 
 ```ts
-interface AddCommandResult {
+interface AddCommandResult extends CommandResult<RegistryCommandData> {
     bindings: ReadonlyArray<string>;
-    code: number;
     deps: ReadonlyArray<string>;
     skipped: ReadonlyArray<string>;
     written: ReadonlyArray<string>;
@@ -114,9 +113,10 @@ interface DeployCommandOptions {
     cwd?: string;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
+    emitBindings?: string;
     env?: string;
     fetchImpl?: FetchLike;
-    format?: string;
+    format?: OutputFormat;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
@@ -192,6 +192,7 @@ interface DevCommandOptions {
     findFreePort?: (preferred: number) => Promise<number>;
     flavor?: DevFlavor;
     hasIpv6Loopback?: () => boolean;
+    inspectorPort?: number;
     jsonLogs?: boolean;
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -242,12 +243,37 @@ interface DiffEntry {
 }
 ```
 
+### `EXIT_CODE` (const)
+
+```ts
+const EXIT_CODE: {
+    readonly SUCCESS: 0;
+    readonly FAILURE: 1;
+    readonly USAGE: 2;
+    readonly AUTH: 3;
+    readonly PERMISSION: 4;
+    readonly NOT_FOUND: 5;
+    readonly CONFLICT: 6;
+    readonly RATE_LIMITED: 7;
+    readonly UNAVAILABLE: 8;
+    readonly MISSING_DEPENDENCY: 9;
+    readonly CANCELLED: 130;
+};
+```
+
+### `ExitCode` (type)
+
+```ts
+type ExitCode = (typeof EXIT_CODE)[keyof typeof EXIT_CODE];
+```
+
 ### `ExportCommandOptions` (interface)
 
 ```ts
 interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
+    format?: OutputFormat;
     logger: Logger;
     out?: string;
     prod?: boolean;
@@ -260,9 +286,8 @@ interface ExportCommandOptions {
 ### `ExportCommandResult` (interface)
 
 ```ts
-interface ExportCommandResult {
+interface ExportCommandResult extends CommandResult<ExportCommandData> {
     bytes: number;
-    code: number;
     rows: number;
 }
 ```
@@ -290,6 +315,7 @@ interface ImportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     file: string;
+    format?: OutputFormat;
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
@@ -307,9 +333,8 @@ interface ImportCommandOptions {
 ### `ImportCommandResult` (interface)
 
 ```ts
-interface ImportCommandResult {
+interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
-    code: number;
     inserted: number;
 }
 ```
@@ -408,6 +433,7 @@ interface MigrateGenerateCommandOptions {
 interface MigrateGenerateCommandResult {
     code: number;
     empty: boolean;
+    error?: string;
     migrationFile: string;
 }
 ```
@@ -505,6 +531,7 @@ interface RunCommandOptions {
     claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
+    format?: OutputFormat;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -519,6 +546,7 @@ interface RunCommandOptions {
 interface RunCommandResult {
     body: unknown;
     code: number;
+    error?: string;
     requestUrl: string;
 }
 ```
@@ -667,6 +695,24 @@ const defaultSpawner: Spawner;
 
 ```ts
 const diffSnapshots: (previous: SchemaSnapshot | undefined, next: SchemaSnapshot) => SchemaDiff;
+```
+
+### `exitCodeForCode` (const)
+
+```ts
+const exitCodeForCode: (code: string) => ExitCode;
+```
+
+### `exitCodeForError` (const)
+
+```ts
+const exitCodeForError: (error: unknown) => ExitCode;
+```
+
+### `exitCodeForStatus` (const)
+
+```ts
+const exitCodeForStatus: (status: number | undefined) => ExitCode;
 ```
 
 ### `insertSchemaExtension` (const)
@@ -828,4 +874,509 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 
 ```ts
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ApiSpec` (type)
+
+```ts
+type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
+```
+
+### `AuthUiItem` (type)
+
+```ts
+type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-solid-v2" | "auth-ui-svelte" | "auth-ui-vue";
+```
+
+### `CatalogItem` (interface)
+
+```ts
+interface CatalogItem {
+    description?: string;
+    name: string;
+}
+```
+
+### `CiProvider` (type)
+
+```ts
+type CiProvider = "github" | "gitlab";
+```
+
+### `CodegenCommandData` (interface)
+
+```ts
+interface CodegenCommandData {
+    advisories: ReadonlyArray<{
+        detail: string;
+        level: Finding["level"];
+        name: string;
+        remediation: string;
+    }>;
+    cronTriggers: ReadonlyArray<string>;
+    failedAdvisories: number;
+    outputDirectory: string;
+}
+```
+
+### `CodegenCommandOptions` (interface)
+
+```ts
+interface CodegenCommandOptions {
+    apiSpec?: ApiSpec;
+    cwd?: string;
+    format?: OutputFormat;
+    logger: Logger;
+    strictAdvisories?: boolean;
+    target?: string;
+}
+```
+
+### `CodegenCommandResult` (interface)
+
+```ts
+interface CodegenCommandResult extends CodegenCommandData {
+    code?: number;
+    error?: string;
+}
+```
+
+### `CodegenWatcherHandle` (interface)
+
+```ts
+interface CodegenWatcherHandle {
+    close: () => Promise<void>;
+    ready: Promise<void>;
+    watchAvailable: boolean;
+}
+```
+
+### `CodegenWatcherOptions` (interface)
+
+```ts
+interface CodegenWatcherOptions {
+    apiSpec?: CodegenOptions["apiSpec"];
+    debounceMs?: number;
+    jsonLogs?: boolean;
+    logger: Logger;
+    lunoraDirectory?: string;
+    projectRoot: string;
+    spawner?: Spawner;
+    target?: string;
+}
+```
+
+### `CommandResult` (interface)
+
+```ts
+interface CommandResult<TData> {
+    code: number;
+    data?: TData;
+    delegated?: boolean;
+    error?: string;
+}
+```
+
+### `DevFlavor` (type)
+
+```ts
+type DevFlavor = "framework-worker" | "vite" | "wrangler";
+```
+
+### `DevRemotePlan` (interface)
+
+```ts
+interface DevRemotePlan {
+    bindings: string[];
+    cleanup: () => void;
+    enabled: boolean;
+    reason?: string;
+}
+```
+
+### `DockerProbe` (type)
+
+```ts
+type DockerProbe = () => boolean;
+```
+
+### `EntrypointReexport` (interface)
+
+```ts
+interface EntrypointReexport {
+    comment?: string;
+    module: string;
+}
+```
+
+### `ExportCommandData` (interface)
+
+```ts
+interface ExportCommandData {
+    bytes: number;
+    out: string;
+    rows: number;
+    tables?: string[];
+}
+```
+
+### `FeatureApply` (interface)
+
+```ts
+interface FeatureApply {
+    label: string;
+    names: ReadonlyArray<string>;
+    transformManifest?: OfferTransformManifest;
+}
+```
+
+### `FeatureItem` (type)
+
+```ts
+type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
+```
+
+### `HealthFetch` (type)
+
+```ts
+type HealthFetch = (url: string) => Promise<{
+    ok: boolean;
+    status: number;
+}>;
+```
+
+### `IMPORT_SOURCE_NAMES` (const)
+
+```ts
+const IMPORT_SOURCE_NAMES: readonly [
+    "firebase",
+    "supabase"
+];
+```
+
+### `ImportCommandData` (interface)
+
+```ts
+interface ImportCommandData {
+    file: string;
+    inserted: number;
+    summary: ImportSummary;
+}
+```
+
+### `ImportRowError` (interface)
+
+```ts
+interface ImportRowError {
+    code: string;
+    line: number;
+    message: string;
+    table: string;
+}
+```
+
+### `ImportShardFailure` (interface)
+
+```ts
+interface ImportShardFailure {
+    message: string;
+    shardKey: string;
+    timedOut: boolean;
+}
+```
+
+### `ImportSourceName` (type)
+
+```ts
+type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
+```
+
+### `ImportSummary` (interface)
+
+```ts
+interface ImportSummary {
+    conflicts: number;
+    errors: ImportRowError[];
+    failed?: ImportShardFailure[];
+    inserted: Record<string, number>;
+    received: number;
+    storage?: {
+        ambiguous: StorageRemapReport["ambiguous"];
+        ambiguousTotal: number;
+        blobs: number;
+        rewritten: number;
+        unmigrated: StorageRemapReport["unmigrated"];
+        unmigratedTotal: number;
+    };
+    warnings?: string[];
+}
+```
+
+### `IndexItem` (interface)
+
+```ts
+interface IndexItem extends CatalogItem {
+    title?: string;
+}
+```
+
+### `LintToolOfferDeps` (interface)
+
+```ts
+interface LintToolOfferDeps {
+    apply: (tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
+    detected: ReadonlyArray<LintTool>;
+    interactive: boolean;
+    logger: Logger;
+    multiSelect: (message: string, choices: ReadonlyArray<LintToolOption>, settings?: {
+        defaults?: ReadonlyArray<LintTool>;
+    }) => Promise<LintTool[]>;
+}
+```
+
+### `LintToolOption` (interface)
+
+```ts
+interface LintToolOption {
+    description: string;
+    label: string;
+    value: LintTool;
+}
+```
+
+### `ListRemoteSecretsInputs` (interface)
+
+```ts
+interface ListRemoteSecretsInputs {
+    cwd: string;
+    env?: string;
+    runner?: SecretListRunner;
+    temporary?: boolean;
+}
+```
+
+### `ListRemoteSecretsResult` (interface)
+
+```ts
+interface ListRemoteSecretsResult {
+    error?: string;
+    names: ReadonlyArray<string>;
+    ok: boolean;
+}
+```
+
+### `OfferDeps` (interface)
+
+```ts
+interface OfferDeps {
+    applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    interactive: boolean;
+    logger: Logger;
+    multiSelect: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: StackFeature;
+    }>, settings?: {
+        defaults?: ReadonlyArray<StackFeature>;
+    }) => Promise<StackFeature[]>;
+    preselected?: ReadonlyArray<StackFeature>;
+    projectName: string;
+    resolveAuthUiItem?: () => string | undefined;
+    select: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: FeatureItem;
+    }>, settings?: {
+        default?: FeatureItem;
+    }) => Promise<FeatureItem | undefined>;
+    text: (message: string, settings?: {
+        default?: string;
+        placeholder?: string;
+    }) => Promise<string>;
+}
+```
+
+### `OfferTransformManifest` (type)
+
+```ts
+type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
+```
+
+### `OutputFormat` (type)
+
+```ts
+type OutputFormat = "json" | "pretty";
+```
+
+### `PailLogger` (interface)
+
+```ts
+interface PailLogger {
+    debug: (message: string) => void;
+    error: (message: string) => void;
+    info: (message: string) => void;
+    success: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
+### `PreDeployCommand` (type)
+
+```ts
+type PreDeployCommand = "build" | "deploy" | "prepare";
+```
+
+### `ReadinessProbe` (type)
+
+```ts
+type ReadinessProbe = (origin: string, signal?: AbortSignal) => Promise<boolean>;
+```
+
+### `RegistryCommandData` (interface)
+
+```ts
+interface RegistryCommandData {
+    items: ReadonlyArray<CatalogItem | RegistryPlanItem>;
+}
+```
+
+### `RegistryEnvVariable` (interface)
+
+```ts
+interface RegistryEnvVariable {
+    description?: string;
+    name: string;
+    secret?: boolean;
+    value?: string;
+}
+```
+
+### `RegistryPlanItem` (interface)
+
+```ts
+interface RegistryPlanItem {
+    bindings: {
+        path: string;
+        value: unknown;
+    }[];
+    deps: string[];
+    devDependencies: string[];
+    entrypointReexports: {
+        comment?: string;
+        module: string;
+    }[];
+    envVars: {
+        name: string;
+        secret?: boolean;
+        value?: string;
+    }[];
+    files: {
+        merge: RegistryFile["merge"];
+        to: string;
+    }[];
+    name: string;
+    requires: ReadonlyArray<string>;
+    title?: string;
+}
+```
+
+### `SecretListRunner` (type)
+
+```ts
+type SecretListRunner = (command: string, args: ReadonlyArray<string>, cwd: string) => Promise<SecretListRunnerResult>;
+```
+
+### `SecretListRunnerResult` (interface)
+
+```ts
+interface SecretListRunnerResult {
+    code: number;
+    stderr: string;
+    stdout: string;
+}
+```
+
+### `StackFeature` (type)
+
+```ts
+type StackFeature = "ai" | "auth" | "auth-ui" | "backup" | "browser" | "cloudflare-access" | "crons" | "email" | "flags" | "hyperdrive" | "payment" | "presence" | "queue" | "storage" | "workflow";
+```
+
+### `StorageRemapReport` (interface)
+
+```ts
+interface StorageRemapReport {
+    ambiguous: UnresolvedStorageReference[];
+    rewritten: number;
+    unmigrated: UnresolvedStorageReference[];
+}
+```
+
+### `StudioServerHandle` (interface)
+
+```ts
+interface StudioServerHandle {
+    close: () => Promise<void>;
+    url: string;
+}
+```
+
+### `StudioServerOptions` (interface)
+
+```ts
+interface StudioServerOptions {
+    apiSpec?: CodegenOptions["apiSpec"];
+    cwd: string;
+    host?: string;
+    logger?: {
+        warnOnce?: (message: string) => void;
+    };
+    port: number;
+    workerOrigin: string;
+}
+```
+
+### `UnresolvedStorageReference` (interface)
+
+```ts
+interface UnresolvedStorageReference {
+    column: string;
+    storageId: string;
+    table: string;
+}
+```
+
+### `WorkerProcess` (interface)
+
+```ts
+interface WorkerProcess {
+    exited: Promise<number>;
+    kill: (signal: NodeJS.Signals) => void;
+}
+```
+
+### `WorkerSpawner` (type)
+
+```ts
+type WorkerSpawner = (descriptor: SpawnDescriptor & {
+    tag: string;
+}, logger: Logger) => WorkerProcess;
+```
+
+### `startCodegenWatch` (const)
+
+```ts
+const startCodegenWatch: (options: CodegenWatcherOptions) => CodegenWatcherHandle;
+```
+
+### `startStudioServer` (const)
+
+```ts
+const startStudioServer: (options: StudioServerOptions) => Promise<StudioServerHandle>;
 ```

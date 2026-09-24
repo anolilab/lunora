@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "text": {
                         "type": "string"
@@ -135,7 +134,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {},
                     "required": [],
                     "type": "object"
@@ -191,7 +189,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"todos\">",
@@ -255,7 +252,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "id": {
                         "description": "Id<\"todos\">",

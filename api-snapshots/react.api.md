@@ -77,7 +77,7 @@ interface AgentProgressEvent {
 ```ts
 interface AgentThreadRecord {
     createdAt?: number;
-    error?: string;
+    error?: null | string;
     instanceId?: string;
     messageCount?: number;
     owner?: string;
@@ -394,6 +394,7 @@ interface UseAgentChatOptions {
     api: UseAgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -407,6 +408,7 @@ interface UseAgentChatOptions {
 interface UseAgentChatResult {
     approve: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
@@ -421,6 +423,7 @@ interface UseAgentChatResult {
 interface UseAgentOptions {
     api: UseAgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -432,6 +435,7 @@ interface UseAgentOptions {
 ```ts
 interface UseAgentResult {
     cancel: () => Promise<void>;
+    error: Error | undefined;
     pending: boolean;
     run: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
@@ -503,6 +507,7 @@ interface UseAgentToolEventsResult {
 ```ts
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+    status: AuthStatus;
     token: string | null;
     user: User | null;
 }
@@ -570,6 +575,7 @@ interface UseImpersonateResult {
 ```ts
 interface UseInfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -578,6 +584,7 @@ interface UseInfiniteQueryOptions {
 
 ```ts
 interface UseInfiniteQueryResult<T> {
+    error: SubscriptionError | undefined;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
@@ -616,6 +623,7 @@ type UseOrganizationsOptions = AdminAuthQueryOptions;
 ```ts
 interface UsePaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -624,6 +632,7 @@ interface UsePaginatedQueryOptions {
 
 ```ts
 interface UsePaginatedQueryResult<T> {
+    error: SubscriptionError | undefined;
     isLoading: boolean;
     loadMore: (numberItems: number) => void;
     results: T[];
@@ -647,6 +656,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -656,6 +666,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 
 ```ts
 interface UsePresenceResult<L extends ListPresentReference> {
+    error: SubscriptionError | undefined;
     present: ReturnOf<L> | undefined;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -691,6 +702,12 @@ interface UseRateLimitResult {
     reset: () => void;
     retryAfter: number;
 }
+```
+
+### `UseSignUpInvitationsOptions` (type)
+
+```ts
+type UseSignUpInvitationsOptions = AdminAuthQueryOptions;
 ```
 
 ### `UseStreamOptions` (interface)
@@ -818,7 +835,9 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>) => T;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `isConflictError` (const)
@@ -991,7 +1010,9 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `usePreloadedQuery` (const)
 
 ```ts
-const usePreloadedQuery: <T>(preloaded: Preloaded<T>) => T;
+const usePreloadedQuery: <T>(preloaded: Preloaded<T>, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => T;
 ```
 
 ### `usePresence` (const)
@@ -1010,6 +1031,12 @@ const useQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "s
 
 ```ts
 const useRateLimit: (config: RateLimitConfig, options?: UseRateLimitOptions) => UseRateLimitResult;
+```
+
+### `useSignUpInvitations` (const)
+
+```ts
+const useSignUpInvitations: (options?: UseSignUpInvitationsOptions) => AdminAuthListResult<Record<string, unknown>>;
 ```
 
 ### `useStream` (const)
@@ -1098,6 +1125,7 @@ interface Subscription {
     readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
@@ -1327,3 +1355,179 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdminAuthQueryOptions` (interface)
+
+```ts
+interface AdminAuthQueryOptions {
+    enabled?: boolean;
+    pageSize?: number;
+}
+```
+
+### `AgentApprovalReference` (type)
+
+```ts
+type AgentApprovalReference = FunctionReference<"mutation", {
+    decision: "approve" | "reject";
+    instanceId: string;
+    note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentLiveStreamReference` (type)
+
+```ts
+type AgentLiveStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AgentMessagesReference` (type)
+
+```ts
+type AgentMessagesReference = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentMessagesReference$1` (type)
+
+```ts
+type AgentMessagesReference$1 = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentThreadReference` (type)
+
+```ts
+type AgentThreadReference = FunctionReference<"query", {
+    key: string;
+}, Record<string, unknown> | undefined>;
+```
+
+### `AgentTokenStreamReference` (type)
+
+```ts
+type AgentTokenStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AuthGateProps` (interface)
+
+```ts
+interface AuthGateProps {
+    children: ReactNode;
+}
+```
+
+### `CallOptions` (type)
+
+```ts
+type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+```
+
+### `CreateMicrophone` (type)
+
+```ts
+type CreateMicrophone = (config: MicrophoneConfig) => Promise<VoiceMicrophone>;
+```
+
+### `CreateSocket` (type)
+
+```ts
+type CreateSocket = (url: string) => VoiceSocket;
+```
+
+### `CreateSpeaker` (type)
+
+```ts
+type CreateSpeaker = (config: {
+    audioFormat: VoiceAudioFormat;
+}) => VoiceSpeaker;
+```
+
+### `MicrophoneConfig` (interface)
+
+```ts
+interface MicrophoneConfig {
+    interruptChunks: number;
+    interruptThreshold: number;
+    isTurnActive: () => boolean;
+    onAudio: (pcm: Uint8Array) => void;
+    onInterrupt: () => void;
+    onLevel: (rms: number) => void;
+    onSilence: () => void;
+    silenceDurationMs: number;
+    silenceThreshold: number;
+}
+```
+
+### `RedirectButtonOwnProps` (interface)
+
+```ts
+interface RedirectButtonOwnProps {
+    "aria-label"?: string;
+    children?: ReactNode;
+    className?: string;
+    disabled?: boolean;
+    onError?: (error: Error) => void;
+    title?: string;
+}
+```
+
+### `Setter` (type)
+
+```ts
+type Setter<T> = (value: T) => void;
+```
+
+### `VoiceMicrophone` (interface)
+
+```ts
+interface VoiceMicrophone {
+    setMuted: (muted: boolean) => void;
+    stop: () => void;
+}
+```
+
+### `VoiceSocket` (interface)
+
+```ts
+interface VoiceSocket {
+    binaryType: string;
+    close: () => void;
+    onclose: ((event: unknown) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onmessage: ((event: {
+        data: unknown;
+    }) => void) | null;
+    onopen: ((event: unknown) => void) | null;
+    readonly readyState: number;
+    send: (data: ArrayBufferView | ArrayBufferLike | string) => void;
+}
+```
+
+### `VoiceSpeaker` (interface)
+
+```ts
+interface VoiceSpeaker {
+    enqueue: (audio: Uint8Array) => void;
+    interrupt: () => void;
+    stop: () => void;
+}
+```

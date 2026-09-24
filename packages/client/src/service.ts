@@ -39,8 +39,9 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import type { ArgsOf, FunctionReference, ReturnOf, RpcResponseBody } from "./types";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { errorEnvelopeOf } from "./replay";
+import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
 /**
  * The wire endpoint every Lunora Worker serves. Matches `createWorker`'s RPC
@@ -129,23 +130,14 @@ const callBinding = async (
 ): Promise<unknown> => {
     const path = reference.__lunoraRef;
 
-    // Wire-encoded, exactly as `LunoraClient` encodes its own RPC args: plain
-    // JSON cannot carry `bigint`, typed arrays, `NaN`, or ±Infinity, and a
-    // service binding is the same wire as the HTTP path. Skipping this would let
-    // a `bigint` argument arrive silently wrong.
-    let body: string;
-
-    try {
-        body = JSON.stringify({
-            args: encodeWire(args ?? {}),
-            functionPath: path,
-            ...(options?.shardKey === undefined ? {} : { shardKey: options.shardKey }),
-        });
-    } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-
-        throw new TypeError(`@lunora/client/service: cannot encode args for '${path}' — ${reason}`, error instanceof Error ? { cause: error } : undefined);
-    }
+    // Wire-encoded, exactly as `LunoraClient` encodes its own RPC args: a service
+    // binding is the same wire as the HTTP path, so skipping this would let a
+    // `bigint` argument arrive silently wrong.
+    const body = JSON.stringify({
+        args: encodeArgsOrThrow("@lunora/client/service", path, args ?? {}),
+        functionPath: path,
+        ...(options?.shardKey === undefined ? {} : { shardKey: options.shardKey }),
+    });
 
     // Deliberately only `content-type`. The HTTP client also sends
     // `x-lunora-mutation-id`, `x-lunora-client-id`, a bearer token and a D1
@@ -189,10 +181,16 @@ const callBinding = async (
         );
     }
 
-    const envelope = parsed as RpcResponseBody;
+    const payload = parsed as { error?: unknown; result?: unknown };
+    // The BODY was narrowed above and the `error` SLOT inside it was not, so a
+    // proxy's `{"error": null}` page threw `TypeError: Cannot read properties of
+    // null` and `{"error": "bad gateway"}` an `Error` with no `.code`. Only an
+    // OBJECT is an envelope (`protocol/README.md` §4.2); anything else falls
+    // through to the status below, exactly as a body with no `error` key does.
+    const envelope = errorEnvelopeOf(payload);
 
-    if ("error" in envelope) {
-        throw reconstructError(envelope.error);
+    if (envelope !== undefined) {
+        throw reconstructError(envelope);
     }
 
     if (!response.ok) {
@@ -201,7 +199,7 @@ const callBinding = async (
         });
     }
 
-    return decodeWire(envelope.result);
+    return decodeWire(payload.result);
 };
 
 /**

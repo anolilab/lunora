@@ -51,9 +51,11 @@ carrying each subscription's resume cursor.
 
 ### A live query is a `Stream`
 
-The row that is the reason this port exists. `watch` subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing the widget disposes
-the subscription and there is no `dispose()` override to forget:
+The row that is the reason this port exists. Each listener opens its own
+subscription, which starts when it listens and is torn down when it cancels, so
+disposing the widget disposes exactly its own subscription and there is no
+`dispose()` override to forget — at the price of one server subscription, and one
+re-execution per write, for every listener:
 
 ```dart
 StreamBuilder<Object?>(
@@ -126,7 +128,9 @@ Each follows from what this transport is rather than from taste, and
   methods you implement over `shared_preferences`, `sqflite`, Drift or a plain
   file; the sibling ports take a synchronous adapter. `MemoryPersistence` ships
   for tests. With no adapter the queue survives a dropped socket but not a
-  restart.
+  restart. A `PersistedMutation`'s `args` are the WIRE form, so an adapter only
+  ever has to move JSON — a queued write carrying a `BigInt`, bytes or a date is
+  already encoded by the time it reaches you, and decoded again on hydrate.
 - **Connectivity is reported per shard.** `setConnected(true, shardKey: …)`
   flushes only that shard's writes, so one shard reconnecting cannot replay
   another's down a connection that cannot reach it. Omit `shardKey` for the

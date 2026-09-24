@@ -47,6 +47,10 @@ const (
 	// CodeOfflineWriteUnencodable marks a queued write whose arguments cannot be
 	// wire-encoded, so no replay of it can ever reach the server.
 	CodeOfflineWriteUnencodable = "OFFLINE_WRITE_UNENCODABLE"
+	// CodeOfflineWriteUndecodable marks a restored record whose args are not
+	// readable as wire values — the store was corrupted, or written by an
+	// incompatible build.
+	CodeOfflineWriteUndecodable = "OFFLINE_WRITE_UNDECODABLE"
 )
 
 // DefaultMaxQueuedMutations bounds the queue when no capacity is configured.
@@ -167,8 +171,25 @@ type QueuedMutation struct {
 }
 
 // Record is the durable form. Callback fields are deliberately not persisted.
-func (m *QueuedMutation) Record(version string) map[string]any {
-	record := map[string]any{"args": m.Args, "functionPath": m.FunctionPath, "id": m.ID}
+//
+// args is the WIRE form, not the native one. A real adapter serialises — a file,
+// a SQLite text column, a preferences store — and the native form carries the
+// codec's own wrappers, so a queued write with a BigInt, Bytes, Date or Map
+// argument either fails to serialise (and is reported "queued" while nothing
+// durable was written) or serialises as whatever the adapter makes of an opaque
+// struct and replays after a restart with CORRUPTED args.
+//
+// Encoding here also fails for args outside the codec entirely, which Enqueue
+// reports as the failed append it is — the write stays in memory with its real
+// args and settles terminally on the next flush, never persisted as a
+// substitute.
+func (m *QueuedMutation) Record(version string) (map[string]any, error) {
+	encoded, err := EncodeWire(argsOrEmpty(m.Args))
+	if err != nil {
+		return nil, fmt.Errorf("offline mutation args cannot be wire-encoded: %w", err)
+	}
+
+	record := map[string]any{"args": encoded, "functionPath": m.FunctionPath, "id": m.ID}
 
 	if m.ClientID != "" {
 		record["clientId"] = m.ClientID
@@ -190,7 +211,7 @@ func (m *QueuedMutation) Record(version string) map[string]any {
 		record["version"] = version
 	}
 
-	return record
+	return record, nil
 }
 
 // mutationFromRecord rebuilds a queued write from durable storage.
@@ -200,8 +221,18 @@ func (m *QueuedMutation) Record(version string) map[string]any {
 // settled listeners are its only report. A missing identity key restores as absent (a legacy
 // record); a stored null restores as signed out — the distinction the identity
 // gate turns on.
-func mutationFromRecord(record map[string]any) *QueuedMutation {
-	entry := &QueuedMutation{Args: record["args"]}
+//
+// It fails when the stored args are not wire values, and never substitutes: a
+// record hydrated as empty args replays SUCCESSFULLY with the wrong arguments,
+// which is corruption rather than failure. Hydrate settles such a record
+// terminally instead.
+func mutationFromRecord(record map[string]any) (*QueuedMutation, error) {
+	args, err := DecodeWire(record["args"])
+	if err != nil {
+		return nil, err
+	}
+
+	entry := &QueuedMutation{Args: args}
 
 	if id, ok := record["id"].(string); ok {
 		entry.ID = id
@@ -227,7 +258,7 @@ func mutationFromRecord(record map[string]any) *QueuedMutation {
 		}
 	}
 
-	return entry
+	return entry, nil
 }
 
 var randomIDCounter atomic.Uint64
@@ -336,7 +367,16 @@ func (q *OfflineQueue) Enqueue(entry *QueuedMutation) []Discarded {
 	q.items = append(q.items, entry)
 
 	if q.options.Persistence != nil {
-		q.report("append", q.options.Persistence.Append(entry.Record(q.options.Version)), entry.ID)
+		// An args set the codec refuses is reported as the append it PREVENTED. The
+		// write stays in memory carrying its real args and settles terminally on
+		// the next flush; persisting a substitute would replay a different write
+		// than the caller made.
+		record, err := entry.Record(q.options.Version)
+		if err != nil {
+			q.report("append", err, entry.ID)
+		} else {
+			q.report("append", q.options.Persistence.Append(record), entry.ID)
+		}
 	}
 
 	evicted := q.evictOverflow()
@@ -374,6 +414,8 @@ func (q *OfflineQueue) Hydrate() ([]string, []Discarded, error) {
 
 	restored := make([]*QueuedMutation, 0, len(persisted))
 
+	var undecodable []Discarded
+
 	for _, record := range persisted {
 		id, _ := record["id"].(string)
 		if seen[id] {
@@ -389,14 +431,33 @@ func (q *OfflineQueue) Hydrate() ([]string, []Discarded, error) {
 			continue
 		}
 
-		restored = append(restored, mutationFromRecord(record))
+		entry, err := mutationFromRecord(record)
+		if err != nil {
+			// Purged and REPORTED, never replayed with substitute args: a record
+			// whose args do not decode has no correct replay, and sending it with an
+			// empty argument object would commit a different write than the one the
+			// caller made.
+			q.report("remove", q.options.Persistence.Remove(id), id)
+
+			functionPath, _ := record["functionPath"].(string)
+			shardKey, _ := record["shardKey"].(string)
+			undecodable = append(undecodable, Discarded{
+				Code:    CodeOfflineWriteUndecodable,
+				Entry:   &QueuedMutation{FunctionPath: functionPath, ID: id, ShardKey: shardKey},
+				Message: "offline mutation restored from storage cannot be wire-decoded: " + err.Error(),
+			})
+
+			continue
+		}
+
+		restored = append(restored, entry)
 	}
 
 	q.items = append(restored, q.items...)
 
 	// A store holding more than MaxItems (the cap was lowered between sessions,
 	// or writes piled up across restarts) must not bypass it.
-	evicted := q.evictOverflow()
+	evicted := append(undecodable, q.evictOverflow()...)
 
 	q.notifySize()
 

@@ -2,6 +2,8 @@
 
 require "securerandom"
 
+require_relative "wire"
+
 module Lunora
   # The oldest write was dropped because the queue is at capacity.
   OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
@@ -13,6 +15,9 @@ module Lunora
   CLIENT_CLOSED = "CLIENT_CLOSED"
   # The write's args cannot be wire-encoded, so no replay of it can ever succeed.
   OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE"
+  # A restored record's args are not readable as wire values — the store was
+  # corrupted, or written by an incompatible build.
+  OFFLINE_WRITE_UNDECODABLE = "OFFLINE_WRITE_UNDECODABLE"
 
   # The coded errors a replay must NOT treat as the server's final word.
   #
@@ -21,6 +26,13 @@ module Lunora
   # lose it to a transient condition. Every other coded error IS a verdict:
   # replaying it would only re-trigger the same failure, a poison-message loop.
   TRANSIENT_ERROR_CODES = %w[SHARD_ERROR SHARD_UNAVAILABLE].freeze
+
+  # Codes that say "not now" rather than "no". A rate-limited replay is the one
+  # verdict a durable queue must never honour: the write is perfectly valid and
+  # the server is asking for it later, so dropping it loses data for being
+  # punctual. The delay comes from the envelope's +data.retryAfterMs+ (see
+  # protocol/fixtures/rpc.json's +responseError.with-data+).
+  RATE_LIMIT_ERROR_CODES = %w[RATE_LIMITED TOO_MANY_REQUESTS].freeze
 
   # The stamp of a record that carries no identity at all.
   #
@@ -80,8 +92,19 @@ module Lunora
     def awaited? = live_awaiter == true
 
     # The durable form. Callback fields are deliberately not persisted.
+    #
+    # +args+ is the WIRE form, not the native one. A real adapter serialises — a
+    # file, a SQLite text column, a preferences store — and the native form
+    # carries the codec's own wrappers, so a queued write with a WireBigInt,
+    # WireBytes, WireDate or WireMap argument either fails to serialise (and is
+    # reported "queued" while nothing durable was written) or serialises as
+    # whatever the adapter makes of an opaque Struct and replays after a restart
+    # with CORRUPTED args. Encoding here also raises for args outside the codec
+    # entirely, which +OfflineQueue#enqueue+ reports through +on_persistence_error+
+    # as the failed append it is — the write stays in memory with its real args
+    # and settles terminally on the next flush, never persisted as a substitute.
     def to_record(version = nil)
-      record = { "args" => args, "functionPath" => function_path, "id" => id }
+      record = { "args" => Lunora.encode_wire(args.nil? ? {} : args), "functionPath" => function_path, "id" => id }
       record["clientId"] = client_id unless client_id.nil?
       record["identity"] = identity unless identity == Lunora::ABSENT_IDENTITY
       record["shardKey"] = shard_key unless shard_key.nil?
@@ -95,9 +118,14 @@ module Lunora
     # did not survive the restart. A missing "identity" key restores as
     # ABSENT_IDENTITY (a legacy record) while a stored null restores as nil
     # (queued signed out) — the distinction the identity gate turns on.
+    #
+    # Raises WireFormatError when the stored args are not wire values. Never
+    # substitutes: a record hydrated as empty args replays SUCCESSFULLY with the
+    # wrong arguments, which is corruption rather than failure.
+    # +OfflineQueue#hydrate+ settles such a record terminally instead.
     def self.from_record(record)
       new(
-        args: record["args"],
+        args: Lunora.decode_wire(record["args"]),
         client_id: record["clientId"],
         function_path: record["functionPath"],
         id: record["id"],
@@ -250,6 +278,7 @@ module Lunora
       # where Set is not yet autoloaded.
       seen = @items.to_h { |item| [item.id, true] }
       restored = []
+      undecodable = []
 
       @persistence.load.each do |record|
         id = record["id"]
@@ -262,14 +291,28 @@ module Lunora
           next
         end
 
-        restored << QueuedMutation.from_record(record)
+        begin
+          restored << QueuedMutation.from_record(record)
+        rescue StandardError => e
+          # Purged and REPORTED, never replayed with substitute args: a record
+          # whose args do not decode has no correct replay, and sending it with
+          # an empty argument object would commit a DIFFERENT write than the one
+          # the caller made.
+          persist("remove", id) { @persistence.remove(id) }
+          undecodable << Discarded.new(
+            QueuedMutation.new(function_path: record["functionPath"], id: id, live_awaiter: false,
+                               shard_key: record["shardKey"]),
+            OFFLINE_WRITE_UNDECODABLE,
+            "offline mutation restored from storage cannot be wire-decoded: #{e.message}"
+          )
+        end
       end
 
       @items.unshift(*restored)
 
       # A store holding more than max_items (the cap was lowered between
       # sessions, or writes piled up across restarts) must not bypass it.
-      evicted = evict_overflow
+      evicted = undecodable + evict_overflow
       notify_size
 
       # Shard keys are read AFTER eviction, from the entries that actually

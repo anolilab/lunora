@@ -327,3 +327,19 @@ const ratelimitPlugin: <Context = unknown>(limiter: LimiterResolver<Context>) =>
 ```ts
 const tokenBudget: <Names extends string>(limiter: RateLimiter<Names>, name: Names) => TokenBudget;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `DatabaseStoreLocation` (interface)
+
+```ts
+interface DatabaseStoreLocation {
+    index?: string;
+    keyField?: string;
+    table?: string;
+}
+```

@@ -3,7 +3,8 @@
  *
  * Several files in this repo are written by a script and committed:
  * `labeler-config.yml`, each package's `__assets__/package-og.svg` + README block,
- * `apps/docs/src/data/packages.ts`, and every example's `lunora/_generated` tree.
+ * `apps/docs/src/data/packages.ts`, the error-code reference in
+ * `apps/docs/src/content/docs/errors.mdx`, and every example's `lunora/_generated` tree.
  * Nothing re-ran the generators in CI and compared, so a committed output could
  * drift from what the generator produces and no gate noticed.
  *
@@ -18,12 +19,15 @@
  * working tree's dirty set BEFORE running the generators and compares it AFTER.
  * Only paths the generators actually touched are reported, so the check is
  * runnable mid-change and stays correct without a hand-maintained list of output
- * paths (a generator added later is covered automatically).
+ * paths (a generator added later is covered automatically). The snapshot pairs each
+ * dirty path with a digest of its CONTENT — the status code alone cannot tell an
+ * already-modified output that a generator then rewrote from one it left alone.
  *
  * Run: node scripts/check-generated-files.mjs
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,6 +114,9 @@ const GENERATORS = [
     ["node", ["scripts/generate-labeler-config.js"]],
     ["node", ["scripts/generate-package-og-images.js"]],
     ["node", ["apps/docs/scripts/generate-packages.js"]],
+    // `--experimental-strip-types` because it imports `packages/errors/src/catalog.ts`
+    // directly; the flag is still required on the 22.15 this job pins.
+    ["node", ["--experimental-strip-types", "apps/docs/scripts/generate-error-reference.js"]],
     // Its own declared `codegen` script, not a hand-rolled CLI call: that is the
     // script discovery keys on, and it is what the workspace actually runs, so a
     // flag added there is honoured here instead of silently diverging.
@@ -294,6 +301,73 @@ if (unbuilt.length > 0) {
     process.exit(1);
 }
 
+/**
+ * The third half: the CI job in FRONT of this script has to run at all.
+ *
+ * `lint.yml` gates `generated-files` on the `generated_files` path filter in
+ * `.github/file-filters.yml`. That filter listed `packages/codegen/**` and
+ * nothing else from the emitter's closure — so a PR editing only an advisor
+ * lint's remediation text (which every example's `shard.ts` embeds verbatim)
+ * matched no filter, the job was skipped, `Check Lint Run` went green, and all
+ * 13 examples drifted for the next unrelated codegen PR to trip over. A gate
+ * that never runs is indistinguishable from a gate that passes.
+ *
+ * Parsed with a line scan rather than a YAML dependency: the block is a flat
+ * list of quoted globs, and the failure mode of a wrong parse here is a false
+ * alarm on a file no other job reads.
+ */
+const uncoveredByFilter = () => {
+    const filtersPath = join(rootDir, ".github/file-filters.yml");
+    const lines = readFileSync(filtersPath, "utf8").split("\n");
+    const start = lines.findIndex((line) => line.startsWith("generated_files:"));
+
+    if (start === -1) {
+        return ["<no `generated_files:` key in .github/file-filters.yml>"];
+    }
+
+    const globs = new Set();
+
+    for (const line of lines.slice(start + 1)) {
+        // The block ends at the next top-level key; blanks and comments are skipped.
+        if (/^\S/.test(line) && line.trim() !== "") {
+            break;
+        }
+
+        const match = /^\s+-\s+"(.+)"\s*$/.exec(line);
+
+        if (match) {
+            globs.add(match[1]);
+        }
+    }
+
+    return [...emitterClosure()].filter((dir) => !globs.has(`${dir}/**`)).sort();
+};
+
+const unfiltered = uncoveredByFilter();
+
+if (unfiltered.length > 0) {
+    console.error(`❌ ${unfiltered.length} package(s) behind \`lunora codegen\` are not in the \`generated_files\` path filter:`);
+    console.error("");
+
+    for (const dir of unfiltered) {
+        console.error(`   ${dir}`);
+    }
+
+    console.error("");
+    console.error("   A PR touching only those paths skips the `generated-files` job entirely and its");
+    console.error("   required check reports green while the examples drift. Add them:");
+    console.error("");
+
+    for (const dir of unfiltered) {
+        console.error(`     - "${dir}/**"`);
+    }
+
+    console.error("");
+    console.error("   to `generated_files` in .github/file-filters.yml.");
+
+    process.exit(1);
+}
+
 const stale = staleFromDirtySources();
 
 if (stale.length > 0) {
@@ -316,18 +390,65 @@ if (stale.length > 0) {
 /** A generator as you would re-run it by hand, `cd`-prefixed when it runs inside a workspace. */
 const describe = (command, args, cwd) => `${cwd === undefined ? "" : `cd ${cwd} && `}${command} ${args.join(" ")}`;
 
-/** `path -> status` for every file git considers dirty (modified, added, untracked, …). */
+/**
+ * `path -> status + content digest` for every file git considers dirty (modified,
+ * added, untracked, …).
+ *
+ * The digest, not just the status code: a file already modified before the sweep
+ * still reports the same two-character code after a generator rewrites it, so keying
+ * on the code alone reported NO drift for exactly the outputs most likely to have
+ * some — the ones you are mid-edit on. CI's tree is clean, so this only ever went
+ * wrong locally, which is worse rather than better: local is where this check is
+ * meant to be runnable mid-change.
+ *
+ * Digest rather than the bytes: some generated trees run to megabytes and the two
+ * snapshots are held simultaneously.
+ *
+ * `-z` rather than the default text format, for two reasons that both end in a
+ * silently empty digest. A RENAME prints as `XY <old> -> <new>`, so the whole
+ * arrow expression was taken as the path, nothing could be read at it, and both
+ * snapshots stored the same empty digest — a renamed generated file that a
+ * generator then rewrote reported NO drift, which is exactly the file most
+ * likely to have some. And a path with a space or a non-ASCII byte is C-quoted
+ * in the text format, which `readFileSync` cannot open either. `-z` NUL-separates
+ * the records, never quotes, and puts a rename's new path first with the old one
+ * as its own trailing field.
+ */
 const dirtySet = () => {
-    const raw = execFileSync("git", ["status", "--porcelain=v1"], { cwd: rootDir, encoding: "utf8" });
+    const raw = execFileSync("git", ["status", "--porcelain=v1", "-z"], { cwd: rootDir, encoding: "utf8" });
+    const records = raw.split("\0");
     const entries = new Map();
 
-    for (const line of raw.split("\n")) {
-        if (line.trim() === "") {
+    for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+
+        if (record === "") {
             continue;
         }
 
-        // `XY <path>` — the status code is the first two columns.
-        entries.set(line.slice(3).trim(), line.slice(0, 2));
+        // `XY <path>` — the status code is the first two columns, then one space.
+        const status = record.slice(0, 2);
+        const path = record.slice(3);
+
+        // A rename/copy carries its SOURCE path as the next field. Skip it: the
+        // file that exists — and that a generator would rewrite — is this one.
+        if (status.startsWith("R") || status.startsWith("C")) {
+            index += 1;
+        }
+
+        let digest = "";
+
+        try {
+            digest = createHash("sha256")
+                .update(readFileSync(join(rootDir, path)))
+                .digest("hex");
+        } catch {
+            // A deletion has no file to read; the status code alone carries the
+            // change for those.
+            digest = "";
+        }
+
+        entries.set(path, `${status}:${digest}`);
     }
 
     return entries;

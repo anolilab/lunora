@@ -37,10 +37,25 @@ const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undef
     return Object.keys(result).length > 0 ? result : undefined;
 };
 
-/** Normalize a provider's tool-call list onto the loop's {@link AgentToolCall} shape. */
-const mapToolCalls = (calls: ReadonlyArray<{ input: unknown; toolCallId: string; toolName: string }>): AgentToolCall[] =>
+/**
+ * Normalize a provider's tool-call list onto the loop's {@link AgentToolCall} shape.
+ *
+ * The `invalid` flag has to survive the mapping. When the model's arguments fail
+ * a tool's input schema — or do not parse as JSON at all — the AI SDK marks the
+ * call `invalid: true`, refuses to execute it itself, and still lists it in
+ * `result.toolCalls` with `input` set to the RAW value it could not validate.
+ * Dropping the flag here made the loop run `tool.execute` on that raw value: a
+ * wrong-typed object, or the unparsed string spread into `{ 0: "{", 1: '"' … }`.
+ */
+const mapToolCalls = (calls: ReadonlyArray<{ error?: unknown; input: unknown; invalid?: boolean; toolCallId: string; toolName: string }>): AgentToolCall[] =>
     calls.map((call) => {
-        return { id: call.toolCallId, input: call.input, name: call.toolName };
+        const base = { id: call.toolCallId, input: call.input, name: call.toolName };
+
+        if (call.invalid !== true) {
+            return base;
+        }
+
+        return { ...base, invalid: call.error instanceof Error ? call.error.message : String(call.error) };
     });
 
 /**

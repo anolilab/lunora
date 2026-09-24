@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { errorMessage } from "../lib/internal";
 
@@ -19,8 +19,14 @@ export type SpecFetchState<T> = { kind: "empty" } | { kind: "error"; message: st
  * panel. `classify` maps a resolved spec to the `ready`/`empty` terminal states
  * (each panel detects its own "empty" sentinel — no `paths` vs no `methods`).
  *
- * `fetcher` and `classify` must be stable (a `useCallback`-wrapped client call
- * and a module-level classifier) so the effect doesn't re-fetch every render.
+ * Neither callback needs to be referentially stable, and the effect is keyed so
+ * that it cannot be: `classify` mints a fresh state object, so the settled fetch
+ * always re-renders the caller. Keying the effect on the callbacks' identities
+ * therefore turned an inline `() => client.fetchOpenApi()` — what both call sites
+ * pass — into an unbounded refetch loop, held back only by the build's React
+ * Compiler pass, which is configured to bail silently and does not run in tests.
+ * The effect reads them through effect events instead, so only `inlineSpec` keys
+ * it and a caller cannot get this wrong.
  */
 export const useAdminSpec = function <T>(
     inlineSpec: unknown,
@@ -31,6 +37,9 @@ export const useAdminSpec = function <T>(
     // `loading` and the effect below resolves it.
     const [fetched, setFetched] = useState<SpecFetchState<T>>({ kind: "loading" });
 
+    const fetchSpec = useEffectEvent(async (): Promise<unknown> => fetcher());
+    const classifyFetched = useEffectEvent((spec: unknown): SpecFetchState<T> => classify(spec));
+
     useEffect(() => {
         // An inline spec is authoritative and handled synchronously below — skip the fetch.
         if (inlineSpec !== undefined) {
@@ -39,10 +48,10 @@ export const useAdminSpec = function <T>(
 
         let cancelled = false;
 
-        fetcher()
+        fetchSpec()
             .then((spec) => {
                 if (!cancelled) {
-                    setFetched(classify(spec));
+                    setFetched(classifyFetched(spec));
                 }
 
                 return spec;
@@ -56,7 +65,7 @@ export const useAdminSpec = function <T>(
         return () => {
             cancelled = true;
         };
-    }, [classify, fetcher, inlineSpec]);
+    }, [inlineSpec]);
 
     return inlineSpec === undefined ? fetched : classify(inlineSpec);
 };

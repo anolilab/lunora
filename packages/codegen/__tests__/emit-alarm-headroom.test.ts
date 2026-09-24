@@ -48,8 +48,10 @@ describe("emitShard — runShardWrite alarm headroom (plan 207)", () => {
         expect(shard).toContain("const writer = this.adminWriter();");
         // Every by-id op pins its table, so an id belonging to a different table
         // cannot be located and mutated through this one (`locateRowById` probes
-        // every non-global table when unpinned).
-        expect(shard).toContain('await writer.delete(args.id ?? "", args.table);');
+        // every non-global table when unpinned). The delete also forwards `hard`,
+        // which only the BULK arm sets — a single-row `writeRow` delete leaves it
+        // unset and so keeps a `.softDelete()` table's tombstone behaviour.
+        expect(shard).toContain('await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });');
         // `TransactionHeadroomTracker` is a TYPE-only reference here — it must
         // already be in the generated file's import list (buildDoTypeImports),
         // not a new runtime import this override would need.
@@ -68,12 +70,12 @@ describe("emitShard — handleRpc dispatch-race fix (plan 207 step 3)", () => {
         // `handleRunAs` (which mint no tracker) omit it and fall through to
         // `buildCtx`'s own `options.headroom ?? this.transactionHeadroom()`.
         expect(shard).toContain(
-            "public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>",
+            "public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>",
         );
         // `trusted` rides alongside it (an `onShardInit` hook has no caller
         // identity, so RLS has no user to scope to) — the assertion here is that
         // `headroom` is still threaded BY VALUE rather than falling back to the
         // shared field, which is what this suite exists to protect.
-        expect(shard).toContain('const ctx = this.buildCtx({ functionPath, headroom, scope, trusted: registered.lifecycle === "init" });');
+        expect(shard).toContain('const ctx = this.buildCtx({ bookmarks, functionPath, headroom, scope, trusted: registered.lifecycle === "init" });');
     });
 });

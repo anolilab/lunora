@@ -28,8 +28,19 @@ import { RELATION_EXISTS_KEY } from "./where-types";
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
 type FieldRefSql<T> = (field: string) => T;
 
-/** Maps a JS value to its bound storage form (boolean → 1/0, etc.). */
-type SerializeValue = (value: unknown) => unknown;
+/**
+ * Maps a JS value to its bound storage form (boolean → 1/0, etc.).
+ *
+ * `field` is the column the value is being compared against, because on a
+ * column-per-field store the storage form is not a pure function of the value:
+ * a number written to a `v.any()`/`v.union()`/`v.from()` column is stored in a
+ * self-describing marked form (that column is TEXT on every engine, which would
+ * otherwise coerce `42` to `"42.0"` with no type left to reverse it with). A
+ * kind-blind binding then bound a bare `42` against a marked column and matched
+ * nothing — every `where` and every keyset cursor over such a column. The
+ * document-blob stores ignore the argument; their storage form IS value-only.
+ */
+type SerializeValue = (value: unknown, field: string) => unknown;
 
 interface WhereSqlStrategy<T = SQL> {
     /**
@@ -111,8 +122,8 @@ const isOperatorObject = (value: unknown): value is FieldOperators => {
  * literally, so a client-supplied `%` or `a%b%c%…` is just text rather than a
  * live pattern.
  */
-const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
-    const term = fragments.value(strategy.serialize(value));
+const compileContains = <T>(field: string, reference: T, value: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
+    const term = fragments.value(strategy.serialize(value, field));
 
     return strategy.containsExpr ? strategy.containsExpr(reference, term) : fragments.contains(reference, term);
 };
@@ -131,6 +142,7 @@ const compileContains = <T>(reference: T, value: unknown, strategy: WhereSqlStra
  * needs no `undefined` awareness at all.
  */
 const compileComparator = <T>(
+    field: string,
     reference: T,
     operator: string,
     comparator: string,
@@ -156,7 +168,7 @@ const compileComparator = <T>(
         return fragments.constant(false);
     }
 
-    return fragments.binary(reference, comparator, strategy.serialize(value));
+    return fragments.binary(reference, comparator, strategy.serialize(value, field));
 };
 
 /**
@@ -202,7 +214,7 @@ const compileInList = <T>(
         return fragments.constant(keyword === "NOT IN");
     }
 
-    const serialized = items.map((item) => strategy.serialize(item));
+    const serialized = items.map((item) => strategy.serialize(item, field));
     const negated = keyword === "NOT IN";
 
     return strategy.inList ? strategy.inList(reference, serialized, negated) : fragments.inList(reference, serialized, negated, IN_LIST_DEFAULT_BUDGET);
@@ -231,11 +243,11 @@ const compileFieldOperators = <T>(field: string, reference: T, operators: FieldO
         const comparator = BINARY_COMPARATORS[operator];
 
         if (comparator) {
-            clauses.push(compileComparator(reference, operator, comparator, value, strategy, fragments));
+            clauses.push(compileComparator(field, reference, operator, comparator, value, strategy, fragments));
         } else if (operator === "isNull") {
             clauses.push(fragments.nullCheck(reference, !value));
         } else if (operator === "contains") {
-            clauses.push(compileContains(reference, value, strategy, fragments));
+            clauses.push(compileContains(field, reference, value, strategy, fragments));
         } else {
             clauses.push(compileInList(field, reference, operator === "in" ? "IN" : "NOT IN", value, strategy, fragments));
         }
@@ -256,7 +268,7 @@ const compileField = <T>(field: string, value: unknown, strategy: WhereSqlStrate
         return [fragments.nullCheck(reference, false)];
     }
 
-    return [fragments.binary(reference, "=", strategy.serialize(value))];
+    return [fragments.binary(reference, "=", strategy.serialize(value, field))];
 };
 
 /**

@@ -17,7 +17,21 @@ import type { ControllerContext } from "./config";
 import type { Localization } from "./localization";
 import { mapAuthError } from "./map-error";
 import { createStore } from "./store";
-import type { FieldState, FormActions, FormController, FormState } from "./types";
+import type { FieldState, FlowStatus, FormActions, FormController, FormState } from "./types";
+
+/**
+ * The status an edit leaves behind.
+ *
+ * Editing after a terminal state returns the form to idle (clearing the banner
+ * with it) — except while a submit is in flight, where "idle" would re-enable
+ * the button and let a second request out. Exported because the bespoke
+ * controllers alongside this engine (`email-otp.ts`) have to answer the same
+ * question, and the exception is the part that gets dropped when it is
+ * re-typed: in the OTP flow a second `sendVerificationOtp` invalidates the code
+ * the first one mailed, so a user correcting a typo mid-request is left holding
+ * a code that no longer works.
+ */
+const statusAfterEdit = (status: FlowStatus): FlowStatus => (status === "submitting" ? "submitting" : "idle");
 
 /** What a successful `submit` returns to drive the success state + navigation. */
 interface FormSubmitResult {
@@ -102,15 +116,13 @@ const createFormController = <TField extends string>(context: ControllerContext,
     const setField = (name: TField, value: string): void => {
         edited.add(name);
 
-        // Editing after a terminal state returns the form to idle and clears the
-        // top-level banner; the edited field's own error clears too.
         const current = state();
 
         store.set({
             ...current,
             fields: { ...current.fields, [name]: { ...current.fields[name], error: undefined, value } },
             formError: undefined,
-            status: current.status === "submitting" ? "submitting" : "idle",
+            status: statusAfterEdit(current.status),
             successMessage: undefined,
         });
     };
@@ -263,4 +275,4 @@ const createFormController = <TField extends string>(context: ControllerContext,
 };
 
 export type { FieldSpec, FormControllerOptions, FormSubmitResult };
-export { createFormController };
+export { createFormController, statusAfterEdit };

@@ -18,13 +18,19 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { DatabaseWriterLike } from "./schema-types";
+import { findRelated } from "./relation-graph";
+import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
 
 /**
  * Well-known symbol the guard hangs the unwrapped writer off of. `Symbol.for`
  * (the cross-realm global registry) lets `@lunora/server`'s RLS middleware read
  * it WITHOUT importing this module — both sides reference the same registered
  * symbol by key, dodging a `server → do` dependency.
+ *
+ * The property is NON-ENUMERABLE, which is load-bearing: every consumer that
+ * re-publishes the guarded writer does so with a spread, and an enumerable
+ * escape hatch travels with it (see the `Object.defineProperty` call in
+ * {@link guardWriter}).
  */
 const RLS_UNWRAP_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-unwrap");
 
@@ -149,12 +155,14 @@ const guardShardSweep = (
 type WriterGating =
     /** By-id write/read: the owning table is resolved from the id, then gated (`guardById`). */
     | "id-gated"
-    /** Table-first, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
+    /** Table-name-first too, but overridden inline rather than by the uniform loop — its key must exist (as `undefined`) even when the base has no implementation. */
     | "inline-table-gated"
+    /** First argument is the table name AND the one uniform loop below gates it. Says how the method is gated, not what its arguments look like — `inline-table-gated` methods also take the table first. */
+    | "loop-gated"
+    /** Re-bound over the GUARDED writer, so every table it reaches is gated by that writer's own methods rather than by anything here (`related`). */
+    | "rebound"
     /** Whole-shard sweep: every table in range is gated (`guardShardSweep`). */
     | "sweep-gated"
-    /** First argument is the table name: gated by the one uniform table-level check below. */
-    | "table-first"
     /** Deliberately NOT gated — see the reason on each entry. */
     | "ungated";
 
@@ -172,53 +180,133 @@ type WriterGating =
  * `"ungated"` entries are an explicit allowlist WITH a reason, never an
  * omission: each one either touches no rows or is a pure string helper.
  */
-const WRITER_METHOD_GATING: Readonly<Record<keyof DatabaseWriterLike, WriterGating>> = {
-    aggregate: "table-first",
+const WRITER_METHOD_GATING = {
+    aggregate: "loop-gated",
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
     /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
     cdcChangedTables: "ungated",
-    count: "table-first",
+    count: "loop-gated",
     delete: "id-gated",
-    deleteAll: "table-first",
+    deleteAll: "loop-gated",
     deleteMany: "id-gated",
     deleteWhere: "inline-table-gated",
-    findFirst: "table-first",
-    findFirstOrThrow: "table-first",
-    findMany: "table-first",
+    findFirst: "loop-gated",
+    findFirstOrThrow: "loop-gated",
+    findMany: "loop-gated",
     get: "id-gated",
-    groupBy: "table-first",
-    insert: "table-first",
-    insertMany: "table-first",
-    insertManyUnsafe: "table-first",
+    groupBy: "loop-gated",
+    insert: "loop-gated",
+    insertMany: "loop-gated",
+    insertManyUnsafe: "loop-gated",
     lookupById: "id-gated",
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
     patch: "id-gated",
     patchMany: "id-gated",
     patchWhere: "inline-table-gated",
-    query: "table-first",
-    rank: "table-first",
-    rankBefore: "table-first",
-    rankPage: "table-first",
-    rankPageRows: "table-first",
+    query: "loop-gated",
+    rank: "loop-gated",
+    rankBefore: "loop-gated",
+    rankPage: "loop-gated",
+    rankPageRows: "loop-gated",
+
+    /**
+     * A traversal, so its table set is DISCOVERED as it walks rather than named
+     * in an argument — gating `arguments[0]` would gate the start node and let
+     * the hops out of it reach anything. Re-bound below over the guarded writer
+     * instead, so every hop is a `findMany` this map already gates.
+     */
+    related: "rebound",
+
+    /**
+     * Schema-derived metadata, not a read: the edge set `related` walks. It
+     * names tables but reaches no row, and the reads it drives are gated as
+     * `related`'s own entry describes.
+     */
+    relationEdges: "ungated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
     system: "ungated",
     wipeShard: "sweep-gated",
-};
+} as const satisfies Readonly<Record<keyof DatabaseWriterLike, WriterGating>>;
 
 /**
- * Every method whose FIRST argument is the table name, gated by one uniform
- * table-level check — DERIVED from {@link WRITER_METHOD_GATING} so the two can
- * never drift. Includes the optional members (`deleteAll`, `rankBefore`,
- * `rankPageRows`) — a base without them simply isn't overridden, so they stay
- * absent on the guarded writer exactly as the `...raw` spread left them.
+ * Every method the uniform table-level loop below gates — DERIVED from
+ * {@link WRITER_METHOD_GATING} so the two can never drift. Includes the optional
+ * members (`deleteAll`, `rankBefore`, `rankPageRows`) — a base without them
+ * simply isn't overridden, so they stay absent on the guarded writer exactly as
+ * the `...raw` spread left them.
+ *
+ * Named for the GATING, not for the argument shape. `deleteWhere`/`patchWhere`
+ * also take the table name first and are gated too, just inline rather than in
+ * the loop — so a set called "table-first methods" that excluded them reads as
+ * an arity fact and gets reused as one. (`@lunora/observability`'s
+ * `database-telemetry.ts` keeps its own, genuinely arity-based set for span
+ * naming; the two answer different questions and must not be shared.)
  */
-const TABLE_FIRST_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entries(WRITER_METHOD_GATING)
-    .filter(([, gating]) => gating === "table-first")
+const LOOP_GATED_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "loop-gated")
     .map(([name]) => name as keyof DatabaseWriterLike);
+
+/** Every method gated by re-binding — DERIVED, for the reason {@link REBINDERS} gives. */
+type ReboundMethod = {
+    [K in keyof typeof WRITER_METHOD_GATING]: (typeof WRITER_METHOD_GATING)[K] extends "rebound" ? K : never;
+}[keyof typeof WRITER_METHOD_GATING];
+
+/** Builds the guarded replacement for one `"rebound"` method. */
+type Rebinder = (guarded: Record<string, unknown>, relationEdges: ReadonlyArray<RelationEdge>) => (...args: never[]) => unknown;
+
+/**
+ * The replacement each `"rebound"` method gets, keyed by method name.
+ *
+ * `Record<ReboundMethod, Rebinder>` is the exhaustiveness control for this
+ * gating mode, and it is the half that was missing. {@link LOOP_GATED_METHODS}
+ * is derived from {@link WRITER_METHOD_GATING} so the two can never drift, but
+ * `"rebound"` had no derived counterpart — the install was hard-coded for
+ * `related` alone. A second `"rebound"` entry therefore compiled, fell out of
+ * the loop-gated filter, got no rebinder, and arrived on the guarded writer
+ * UNGATED through the `...raw` spread below: exactly the bypass that spread's
+ * own comments warn about. Now a new `"rebound"` entry widens `ReboundMethod`
+ * and fails to compile until it has a rebinder here.
+ */
+const REBINDERS: Readonly<Record<ReboundMethod, Rebinder>> = {
+    /**
+     * Re-bound, not delegated: `findRelated` holds no SQL, so running it over
+     * `guarded` makes every hop a `findMany` / `lookupById` the uniform loop
+     * already gates. Delegating to `base.related` instead would walk through the
+     * writer's own unguarded closure.
+     */
+    related:
+        (guarded, relationEdges) =>
+        (...args: never[]) => {
+            const [start, options] = args as unknown as [RelatedStart, RelatedOptions | undefined];
+
+            return findRelated(guarded as unknown as Parameters<typeof findRelated>[0], relationEdges, start, options);
+        },
+};
+
+/** The `"rebound"` method names, derived exactly as {@link LOOP_GATED_METHODS} is. */
+const REBOUND_METHODS: ReadonlyArray<ReboundMethod> = Object.entries(WRITER_METHOD_GATING)
+    .filter(([, gating]) => gating === "rebound")
+    .map(([name]) => name as ReboundMethod);
+
+/**
+ * Install every `"rebound"` gate on an already-loop-gated `guarded`.
+ *
+ * A base without the method (the `.global()` twin has no `related`) is left
+ * alone, so it stays absent on the guarded writer exactly as the `...raw` spread
+ * left it — the same rule the loop-gated optional members follow.
+ */
+const installReboundMethods = (guarded: Record<string, unknown>, base: GuardableWriter, relationEdges: ReadonlyArray<RelationEdge>): void => {
+    for (const name of REBOUND_METHODS) {
+        if (typeof (base as unknown as Record<string, unknown>)[name] === "function") {
+            // eslint-disable-next-line no-param-reassign -- the guarded writer is built by mutation, as above
+            guarded[name] = REBINDERS[name](guarded, relationEdges);
+        }
+    }
+};
 
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
@@ -234,7 +322,13 @@ const TABLE_FIRST_METHODS: ReadonlyArray<keyof DatabaseWriterLike> = Object.entr
 // would reject the real writer and erase its extra members (`normalizeId`, …)
 // from the return type. Instead we keep `W` opaque — preserving the caller's
 // concrete type through the return — and reach the guardable surface via a cast.
-const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds): W => {
+const guardWriter = <W>(
+    raw: W,
+    schema: GuardableSchema,
+    tableOfId: TableOfId,
+    tablesOfIds?: TablesOfIds,
+    relationEdges: ReadonlyArray<RelationEdge> = [],
+): W => {
     if (schema.rlsMode !== "required") {
         return raw;
     }
@@ -321,8 +415,6 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
 
     const guarded: Record<PropertyKey, unknown> = {
         ...(raw as Record<string, unknown>),
-        [RLS_UNWRAP_SYMBOL]: raw,
-
         delete: async (id: string, expectedTable?: string, options?: { hard?: boolean }) => {
             await guardById(id, expectedTable);
 
@@ -397,7 +489,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
         },
     };
 
-    // One uniform gate for every table-name-first method, `insertManyUnsafe`
+    // One uniform gate for every loop-gated method, `insertManyUnsafe`
     // and `deleteAll` included — "unsafe" skips validators/triggers, NOT the
     // guard, and the `...raw` spread must never expose a destructive raw
     // method unguarded. A batch (`insertMany`) needs only this one table-level
@@ -405,7 +497,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
     // by the delegated writer.
     const methods = base as unknown as Record<string, ((...args: unknown[]) => unknown) | undefined>;
 
-    for (const name of TABLE_FIRST_METHODS) {
+    for (const name of LOOP_GATED_METHODS) {
         const method = methods[name];
 
         if (typeof method === "function") {
@@ -416,6 +508,8 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
             };
         }
     }
+
+    installReboundMethods(guarded, base, relationEdges);
 
     if (base.wipeShard) {
         const { wipeShard } = base;
@@ -434,8 +528,18 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, t
         };
     }
 
+    // NON-ENUMERABLE on purpose. `@lunora/server`'s `rls()` middleware builds its
+    // wrapped writer with `{ ...ctx.db }`, and an enumerable escape hatch rides
+    // that spread: the wrapper ended up re-publishing the UNGUARDED writer, so a
+    // second `.use(rls(...))` step recovered it, wrapped that instead of the first
+    // wrapper, and silently dropped step one's filter. Defined after the literal
+    // rather than in it because an object literal's computed symbol key is always
+    // enumerable. Direct property reads (the middleware's own lookup, the test
+    // harness's `rawDatabase`) are unaffected.
+    Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw, writable: false });
+
     return guarded as unknown as W;
 };
 
-export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS, WRITER_METHOD_GATING };
+export { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError, WRITER_METHOD_GATING };
 export type { WriterGating };

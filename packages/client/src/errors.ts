@@ -12,9 +12,34 @@
  * costs no extra bundle.
  */
 import type { LunoraErrorCode } from "@lunora/errors";
-import { ERROR_CATALOG } from "@lunora/errors";
+import { ERROR_CATALOG, LunoraError } from "@lunora/errors";
 
 const KNOWN_ERROR_CODES = new Set<string>(Object.keys(ERROR_CATALOG));
+
+/**
+ * A failure the SERVER reached no verdict on: the response carried no
+ * `{ error }` envelope at all — no `fetch` implementation, a non-JSON body from
+ * a proxy, a bare 5xx gateway page.
+ *
+ * The distinction matters because a durable write must be re-queued rather than
+ * dropped, and `code` cannot carry it: these arrive as `INTERNAL`, which is also
+ * what a server that DID reach a verdict sends. It used to be a `Symbol` stamped
+ * on with `Object.assign` and read back through a `Record<symbol, unknown>`
+ * cast, so the one classifier that knew the convention was the only reader that
+ * could ever see it. As a kind, every reader can: `error instanceof
+ * TransportError`.
+ *
+ * Still `INTERNAL` on the wire, so nothing that switches on `code` changes.
+ *
+ * `data` carries the structured payload such an error can still have — the
+ * `{ retryAfterMs }` a `Retry-After` on the unreadable response named, which
+ * {@link getRetryAfterMs} reads back and the outbox paces its retry on.
+ */
+class TransportError extends LunoraError {
+    public constructor(message: string, data?: unknown) {
+        super("INTERNAL", message, { data });
+    }
+}
 
 /** Error code the server uses for optimistic-concurrency conflicts (HTTP 409). */
 const CONFLICT_ERROR_CODE = "CONFLICT";
@@ -76,6 +101,6 @@ const getRetryAfterMs = (error: unknown): number | undefined => {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
-export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError };
+export { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError, TransportError };
 
 export { type LunoraErrorCode } from "@lunora/errors";

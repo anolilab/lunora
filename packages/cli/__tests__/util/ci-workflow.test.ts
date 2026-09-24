@@ -16,10 +16,11 @@ const silentLogger = (): { infos: string[]; logger: Logger } => {
 };
 
 /**
- * Byte-for-byte snapshot of the pnpm-only templates this file replaced —
- * captured from the pre-change source. `buildContent(provider, "pnpm")` must
- * keep producing exactly this, unchanged, now that four managers share the
- * one parameterized template.
+ * The full pnpm output, pinned line by line — originally to prove the
+ * four-manager parameterization changed no bytes, and now as the readable
+ * record of what a scaffolded pipeline actually runs. The one deliberate
+ * departure from that first capture is `pnpm/action-setup`'s `version`, which
+ * the action requires when the project declares no `packageManager`.
  */
 const ORIGINAL_PNPM_GITHUB = `name: Deploy
 
@@ -50,6 +51,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: latest
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -69,6 +72,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: latest
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -135,11 +140,25 @@ describe("ci-workflow", () => {
         expect(isCiProvider("circle")).toBe(false);
     });
 
-    it("the pnpm output is byte-for-byte unchanged by the four-manager parameterization", () => {
+    it("pins the whole pnpm output for both providers, line by line", () => {
         expect.assertions(2);
 
         expect(buildContent("github", "pnpm")).toBe(ORIGINAL_PNPM_GITHUB);
         expect(buildContent("gitlab", "pnpm")).toBe(ORIGINAL_PNPM_GITLAB);
+    });
+
+    it("gives pnpm/action-setup a version, which it requires without a packageManager field", () => {
+        expect.assertions(2);
+
+        // The action's `version` input is optional ONLY when the project's
+        // package.json carries `packageManager`, and no Lunora template writes
+        // one — so the bare step failed the very first CI run of every
+        // scaffolded pnpm project, in its setup step.
+        const github = buildContent("github", "pnpm");
+
+        expect(github).toContain("      - uses: pnpm/action-setup@v4\n        with:\n          version: latest\n");
+        // Both jobs (deploy + preview) get it, not just the first.
+        expect(github.match(/pnpm\/action-setup@v4\n {8}with:\n {10}version: latest\n/gu) ?? []).toHaveLength(2);
     });
 
     it("github writes .github/workflows/deploy.yml with the secret references", () => {

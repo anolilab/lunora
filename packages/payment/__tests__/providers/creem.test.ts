@@ -214,28 +214,83 @@ describe("creem adapter", () => {
     });
 
     it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        // A real `RefundEntity`: `transaction` is required, `checkout` is optional but present on a
+        // refund of a checkout — so the fixture carries BOTH and the key choice is unambiguous.
         const payload = JSON.stringify({
             eventType: "refund.created",
             id: "evt_refund",
             object: {
+                checkout: { id: "ch_1" },
                 id: "rf_1",
                 metadata: { referenceId: "user_1" },
                 refund_amount: 1500,
                 refund_currency: "EUR",
+                // Required on `RefundEntity`; only a settled refund books money.
+                status: "succeeded",
                 transaction: { id: "tx_1" },
             },
         });
         const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
 
         // The amount/currency come from `refund_amount`/`refund_currency`, and the session keys back to
-        // the original `transaction.id` — not the refund's own id (which the old field reads produced).
+        // the CHECKOUT id — that is what `checkout.completed` wrote as the row id and what
+        // `getPaymentStatus` retrieves. `transaction.id` is a different object's id and would orphan.
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(1500n);
         expect(action.amount?.currency).toBe("EUR");
-        expect(action.sessionId).toBe("tx_1");
+        expect(action.sessionId).toBe("ch_1");
+        // The refund's own id still travels, on `refundId` — a same-amount dashboard refund must not
+        // consume a marker meant for another refund.
+        expect(action.refundId).toBe("rf_1");
+    });
+
+    it("does not book a refund.created that is still pending (regression)", async () => {
+        expect.assertions(2);
+
+        // `RefundEntity.status` is pending | requiresAction | succeeded | failed | canceled, and Creem
+        // documents the first two as non-terminal processing states. Booking one leaves the ledger
+        // claiming a refund the customer never got, which the facade's over-refund guard then makes
+        // unissuable.
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        for (const status of ["pending", "requiresAction"]) {
+            const payload = JSON.stringify({
+                eventType: "refund.created",
+                id: `evt_refund_${status}`,
+                object: { checkout: { id: "ch_1" }, id: "rf_1", refund_amount: 1500, refund_currency: "EUR", status, transaction: { id: "tx_1" } },
+            });
+            // eslint-disable-next-line no-await-in-loop -- two fixtures, read serially for a clearer failure
+            const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+            expect(action.type).toBe("unhandled");
+        }
+    });
+
+    it("keys a dashboard refund to the checkout row a checkout.completed created (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const checkoutBody = JSON.stringify({
+            eventType: "checkout.completed",
+            id: "evt_checkout",
+            object: { id: "ch_1", order: { amount: 1500, currency: "EUR", status: "paid" } },
+        });
+        const captured = await adapter.parseWebhook({ headers: headersFor(sign(checkoutBody)), payload: checkoutBody });
+
+        const refundBody = JSON.stringify({
+            eventType: "refund.created",
+            id: "evt_refund_2",
+            object: { checkout: "ch_1", id: "rf_2", refund_amount: 1500, refund_currency: "EUR", status: "succeeded", transaction: { id: "tx_2" } },
+        });
+        const refunded = await adapter.parseWebhook({ headers: headersFor(sign(refundBody)), payload: refundBody });
+
+        // Same key on both events, or the refund orphans and the row stays `captured` forever.
+        // `checkout` also arrives as a bare id string on some deliveries — `idOf` handles both.
+        expect(refunded.sessionId).toBe(captured.sessionId);
+        expect(refunded.sessionId).toBe("ch_1");
     });
 
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {

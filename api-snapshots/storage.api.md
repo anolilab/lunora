@@ -124,6 +124,7 @@ interface SignedUrlOptions {
 
 ```ts
 interface Storage {
+    readonly bucketName: string;
     createMultipartUpload: (key: string, options?: {
         contentType?: string;
         customMetadata?: Record<string, string>;
@@ -148,12 +149,12 @@ interface Storage {
         truncated?: boolean;
     }>;
     resumeMultipartUpload: (key: string, uploadId: string) => R2MultipartUploadLike;
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    store: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;
     }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    upload: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;
@@ -309,4 +310,16 @@ const createR2UploadStorage: (options: R2UploadStorageOptions & {
 
 ```ts
 const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `UploadHandlerOptions` (type)
+
+```ts
+type UploadHandlerOptions = ConstructorParameters<typeof Tus>[0];
 ```

@@ -11,6 +11,8 @@
  * @experimental
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import { isBareIdentifier } from "../../../../shared/bare-identifier";
 
 /**
@@ -78,9 +80,26 @@ const assertSafeIdentifier = (name: string, label: string): string => {
     return name;
 };
 
-/** Cosine similarity of two equal-length vectors; `0` when either has no magnitude. */
+/**
+ * Cosine similarity of two equal-length vectors; `0` when either has no magnitude.
+ *
+ * Unequal widths are an ERROR, not a score of 0. Returning 0 made a dimension
+ * mismatch invisible in the worst possible way: every row in the namespace tied
+ * at 0, so the ranking degenerated to table order and `query` returned the first
+ * `topK` rows — unrelated passages, with no error, straight into the model's
+ * context. That is what changing an index's `embeddingModel` without reindexing
+ * looked like from the outside.
+ */
 const cosineSimilarity = (left: ReadonlyArray<number>, right: ReadonlyArray<number>): number => {
-    if (left.length !== right.length || left.length === 0) {
+    if (left.length !== right.length) {
+        throw new LunoraError(
+            "RAG_DIMENSION_MISMATCH",
+            `@lunora/ai/rag: the stored vectors are ${String(right.length)}-dimension but the query embedding is ${String(left.length)}-dimension — ` +
+                "they were written by a different embedding model. Restore the previous `embeddingModel`, or reindex this namespace (bump `embeddingModelVersion`)",
+        );
+    }
+
+    if (left.length === 0) {
         return 0;
     }
 

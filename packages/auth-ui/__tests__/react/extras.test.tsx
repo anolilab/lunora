@@ -7,6 +7,7 @@ import {
     AuthUIProvider,
     ConsentCard,
     ErrorToaster,
+    ForgotPasswordCard,
     OrganizationLogoCard,
     ResetPasswordCard,
     ResetPasswordOtpCard,
@@ -306,5 +307,35 @@ describe("twoFactorCard backup-code toggle", () => {
         await waitFor(() => {
             expect(verifyTotp).toHaveBeenCalledWith(expect.objectContaining({ code: "123456" }));
         });
+    });
+});
+
+describe("in-card links follow viewPaths, not redirects.signIn", () => {
+    /*
+     * The two are different questions. `redirects.signIn` is "where does a guard
+     * send an unauthenticated user", which an app legitimately points at its own
+     * gate route carrying a `?returnTo` — following it from a card's own "Back
+     * to sign in" would take the user out of the auth screens instead of one
+     * card back.
+     */
+    it("keeps a card's own back-link on the mounted sign-in screen", () => {
+        expect.assertions(2);
+
+        render(
+            <AuthUIProvider
+                authClient={stubClient()}
+                discover={false}
+                nav={{ navigate: vi.fn(), replace: vi.fn() }}
+                redirects={{ signIn: "/gate?returnTo=%2Fapp" }}
+                viewPaths={{ base: "/auth" }}
+            >
+                <ForgotPasswordCard />
+            </AuthUIProvider>,
+        );
+
+        const link = screen.getByRole("link", { name: "Back to sign in" });
+
+        expect(link.getAttribute("href")).toBe("/auth/sign-in");
+        expect(link.getAttribute("href")).not.toBe("/gate?returnTo=%2Fapp");
     });
 });

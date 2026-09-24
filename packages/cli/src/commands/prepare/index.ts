@@ -20,6 +20,21 @@ const prepareCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        // Both forms declared explicitly, for the reason `lunora deploy` spells
+        // out at its identical pair: letting cerebro synthesize the positive
+        // flag clones the `no-*` description and gives it a `defaultValue`, so
+        // `strictAdvisories` is never `undefined` and the CI-vs-local fallback
+        // in `resolveStrictAdvisories` never runs.
+        {
+            description: "Fail on ERROR-level codegen advisories even locally (the gate already defaults to on in CI)",
+            name: "strict-advisories",
+            type: Boolean,
+        },
+        {
+            description: "Don't fail on ERROR-level codegen advisories (the gate defaults to on in CI, off locally). Never downgrades platform diagnostics.",
+            name: "no-strict-advisories",
+            type: Boolean,
+        },
         TARGET_OPTION,
         {
             description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
@@ -34,6 +49,7 @@ export { prepareCommand };
 export type PrepareOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
+    "strict-advisories": boolean | undefined;
     target: string | undefined;
     "update-schema-baseline": boolean | undefined;
 }>;

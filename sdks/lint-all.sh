@@ -4,7 +4,7 @@
 # Same shape as `run-all.sh`: independent toolchains, per-language exit-status
 # files rather than output grepping, and only a failing language prints a log.
 #
-#   ./sdks/lint-all.sh            # all seven
+#   ./sdks/lint-all.sh            # all eight
 #   ./sdks/lint-all.sh go rust    # a subset
 #
 # WHAT IS CHECKED: the hand-written transports, their suites, and the consumer
@@ -28,8 +28,8 @@ set -uo pipefail
 
 REQUIRE_TOOLS="${SDK_LINT_REQUIRE_TOOLS:-0}"
 
-# The swift-format minor these Swift sources are formatted against. Six of the
-# seven linters are pinned by the workflow's install step; swift-format ships no
+# The swift-format minor these Swift sources are formatted against. Seven of the
+# eight linters are pinned by the workflow's install step; swift-format ships no
 # installable artifact, so its pin lives here — see the `swift)` leg.
 #
 # Overridable because the same release reports two different versions: the copy
@@ -52,10 +52,10 @@ done
 
 ALL=(python go ruby rust swift java kotlin dart)
 
-# ALL is hardcoded here, again in `generated-check.sh`, and a third time as the
-# CI matrix in `.github/workflows/test.yml` — so a ninth SDK missed in any one of
-# them is silently never checked by that gate. Reconcile against what is actually
-# on disk, which is the only copy that cannot be forgotten.
+# ALL is hardcoded here, again in `generated-check.sh`, again in `run-all.sh`, and
+# a fourth time as the CI matrix in `.github/workflows/test.yml` — so a ninth SDK
+# missed in any one of them is silently never checked by that gate. Reconcile
+# against what is actually on disk, which is the only copy that cannot be forgotten.
 # Everything under sdks/ is a port unless it is listed here. An explicit ignore
 # list rather than a marker-file heuristic: a marker SKIPS what it does not
 # match, so a new port that forgot the marker is absent from both this list and
@@ -77,7 +77,7 @@ done
 sdk_drift="$(comm -3 <(printf '%s\n' "${ALL[@]}" | sort) <(printf '%s\n' "${DISCOVERED[@]}" | sort))"
 if [ -n "$sdk_drift" ]; then
     printf 'sdks/lint-all.sh ALL and sdks/ disagree (left column: listed but absent; right: present but unlisted):\n%s\n' "$sdk_drift" >&2
-    printf 'Update ALL here, ALL in sdks/generated-check.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
+    printf 'Update ALL here, ALL in sdks/generated-check.sh and sdks/run-all.sh, and the sdk-conformance matrix in .github/workflows/test.yml.\n' >&2
     exit 2
 fi
 
@@ -213,7 +213,7 @@ lint_suite() {
             }
 
             # A different minor is a different rule set, which is exactly what
-            # the other six pins prevent. The runner image's default Xcode moves
+            # the other seven pins prevent. The runner image's default Xcode moves
             # on GitHub's schedule, so this drift is real and must be loud.
             local swift_format_drifted=0
             local swift_format_note="swift-format $swift_format_version"

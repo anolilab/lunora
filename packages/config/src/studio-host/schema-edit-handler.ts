@@ -18,13 +18,14 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
 
 import join from "../path";
 import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../schema-edit/mutate";
 import type { ParseSchemaResult, SchemaTable } from "../schema-edit/parse";
 import { parseSchema } from "../schema-edit/parse";
+import { runStudioCodegen } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
 /**
@@ -36,6 +37,8 @@ const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 
 /** A request adapted from the host transport. */
 interface SchemaEditRequest {
+    /** API-spec mode the host runs codegen with; forwarded to the regeneration. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body for a `POST`; ignored for `GET`. */
     readonly body?: unknown;
     /** HTTP method (`GET` / `POST`). */
@@ -142,17 +145,14 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
 
     writeFileAtomic(schemaPath, applied.text);
 
-    // Re-run codegen so the generated types + DO shape follow the new source.
-    let diagnostics: ReadonlyArray<string> = [];
+    // Re-run codegen so the generated types + DO shape follow the new source —
+    // unless the codegen switch is off, which `runStudioCodegen` owns.
+    let diagnostics: ReadonlyArray<string>;
 
     try {
-        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
+        diagnostics = runStudioCodegen(request);
     } catch (error: unknown) {
-        if (error instanceof CodegenDiagnosticError) {
-            diagnostics = [error.message];
-        } else {
-            return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
-        }
+        return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
 
     const parsed = parseSchema(applied.text);

@@ -63,7 +63,7 @@ export const emailQueue = defineQueue<{ to: string; subject: string; body: strin
 });
 ```
 
-Then expose your own HTTP endpoint that calls `ctx.queues.emailQueue.pull()` to claim and process messages.
+`ctx.queues.<name>` is a **producer only** (`send` / `sendBatch`) — there is no `pull()`. `lunora dev` / `lunora deploy` write a `type: "http_pull"` consumer into `wrangler.jsonc`, and a pull queue is drained from **outside** the Worker: your consumer process calls Cloudflare's Queues HTTP pull API (`POST /accounts/:id/queues/:qid/messages/pull`, then `.../ack`) with an API token. Use pull mode when the consumer is not this Worker; otherwise keep the default push mode and write a `handler`.
 
 ## Configuration
 

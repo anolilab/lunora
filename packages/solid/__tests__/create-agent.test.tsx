@@ -147,4 +147,32 @@ describe(createAgent, () => {
 
         expect(fake.mutationCalls).toStrictEqual([]);
     });
+
+    // A session expiry or RLS denial on the thread/history subscription used to be
+    // dropped: `status` simply froze with nothing to read and no handler to call.
+    // Matches React's `useAgent` / `useAgentChat` error channel.
+    it("surfaces a thread subscription error on `error` and through `onError`", () => {
+        const fake = createFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        let latest: CreateAgentResult | undefined;
+
+        render(
+            () => {
+                latest = createAgent({
+                    api: buildApi(),
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    run: makeRef(RUN_REF) as FunctionReference<"mutation">,
+                    threadKey: "t1",
+                });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions.find((sub) => sub.functionPath === THREAD_REF)?.error({ code: "FORBIDDEN", message: "denied" });
+
+        expect(latest?.error()?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+    });
 });

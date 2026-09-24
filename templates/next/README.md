@@ -34,13 +34,13 @@ Lunora alongside Next.js on Cloudflare Workers.
 Durable Object classes into that output, so `/_lunora/*` can't ride inside the
 Next worker.
 
-### Worker 1 — Next.js SSR (`wrangler.jsonc`)
+### Worker 1 — Next.js SSR (`wrangler.opennext.jsonc`)
 
 Built by `opennextjs-cloudflare build`. Handles all page requests, RSC renders,
 and route handlers. The emitted `.open-next/worker.js` is the worker entry — no
 custom entrypoint, no `ShardDO` export.
 
-### Worker 2 — Lunora realtime (`wrangler.lunora.jsonc`)
+### Worker 2 — Lunora realtime (`wrangler.jsonc`)
 
 A standalone Lunora worker (`lunora/server.ts`) that owns:
 
@@ -61,11 +61,14 @@ Set `NEXT_PUBLIC_LUNORA_URL` to the Lunora worker's URL (e.g.
 ### Key files
 
 - **`lunora/server.ts`** — standalone Lunora worker entry; exports `ShardDO`.
-  Wrangler reads this via `wrangler.lunora.jsonc`.
-- **`wrangler.lunora.jsonc`** — Lunora worker config with the `SHARD` DO binding
-  and migration. Deploy with `wrangler deploy --config wrangler.lunora.jsonc`.
-- **`wrangler.jsonc`** — Next.js SSR worker config. Deploy with
-  `opennextjs-cloudflare build && opennextjs-cloudflare deploy` (or `pnpm deploy`).
+  Wrangler reads this via the root `wrangler.jsonc`.
+- **`wrangler.jsonc`** — Lunora worker config with the `SHARD` DO binding and
+  migration. Deploy with `wrangler deploy` (or `pnpm run deploy:lunora`). It is
+  the ROOT config because `lunora verify` / `lunora deploy` / `lunora dev` probe
+  `wrangler.jsonc` and require the `SHARD` binding.
+- **`wrangler.opennext.jsonc`** — Next.js SSR worker config, passed to every
+  OpenNext command with `--config`. Deploy with `pnpm run deploy:next` (or
+  `pnpm deploy`, which ships both workers).
 - **`open-next.config.ts`** — OpenNext Cloudflare adapter config (defaults).
 - **`next.config.ts`** — standard Next.js config (no custom entrypoint).
 
@@ -73,7 +76,7 @@ Set `NEXT_PUBLIC_LUNORA_URL` to the Lunora worker's URL (e.g.
 
 ```bash
 # Terminal 1 — Lunora worker (RPC + WebSocket + ShardDO)
-pnpm dev:lunora
+pnpm dev:lunora            # wrangler dev, on the root wrangler.jsonc
 
 # Terminal 2 — Next.js dev server (set the lunora port from terminal 1)
 NEXT_PUBLIC_LUNORA_URL=http://localhost:8787 pnpm dev

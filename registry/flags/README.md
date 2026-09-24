@@ -69,7 +69,9 @@ The `@lunora/flags` package ships framework hooks for React, Vue, Solid, and Sve
 import { useFlag } from "@lunora/react";
 
 function App() {
-    const { value: darkMode } = useFlag("dark_mode", false);
+    // `useFlag` returns the resolved value itself, not an `{ value }` envelope.
+    const darkMode = useFlag("dark_mode", false);
+
     return <div className={darkMode ? "dark" : "light"}>…</div>;
 }
 ```

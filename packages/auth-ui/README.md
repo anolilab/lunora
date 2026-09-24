@@ -31,7 +31,7 @@ product surface, not a dependency you upgrade and hope.
 
 ## How it is put together
 
-The flow logic lives once, in plain TypeScript, and the five framework layers are
+The flow logic lives once, in plain TypeScript, and the six framework layers are
 thin bindings over it:
 
 ```
@@ -45,8 +45,9 @@ src/
   vue/        .vue SFCs + provide/inject + a shallowRef composable
   svelte/     .svelte (Svelte 5) + context + a readable store
   solid/      .tsx + createContext + createStore/onCleanup
+  solid-v2/   the same port against Solid 2 (`@solidjs/web` JSX)
   angular/    standalone signal components + provideAuthUI/injectAuthUI
-  styles/     one stylesheet, shared by all five (reads the Lunora design
+  styles/     one stylesheet, shared by all six (reads the Lunora design
               tokens; no Tailwind)
 ```
 
@@ -98,15 +99,17 @@ step, and what you read here is exactly what the user gets.
 
 ## Type-checking scope
 
-`lint:types` runs four programs, so **every line that ships to a user is
+`lint:types` runs six programs, so **every line that ships to a user is
 type-checked**:
 
-| Config                 | Checker        | Covers                        |
-| ---------------------- | -------------- | ----------------------------- |
-| `tsconfig.json`        | `tsc`          | `core/`, `react/`, `angular/` |
-| `tsconfig.solid.json`  | `tsc`          | `solid/`                      |
-| `tsconfig.vue.json`    | `vue-tsc`      | `vue/`                        |
-| `tsconfig.svelte.json` | `svelte-check` | `svelte/`                     |
+| Config                   | Checker        | Covers                                            |
+| ------------------------ | -------------- | ------------------------------------------------- |
+| `tsconfig.json`          | `tsc`          | `core/`, `react/`, `angular/`                     |
+| `tsconfig.ngcheck.json`  | `ngc`          | `angular/` templates (`strictTemplates`)          |
+| `tsconfig.solid.json`    | `tsc`          | `solid/`                                          |
+| `tsconfig.solid-v2.json` | `tsc`          | `solid-v2/` (against the aliased Solid 2 install) |
+| `tsconfig.vue.json`      | `vue-tsc`      | `vue/`                                            |
+| `tsconfig.svelte.json`   | `svelte-check` | `svelte/`                                         |
 
 They can't be one program: a program holds a single `jsx`/`jsxImportSource` pair
 (React's here), and `.vue`/`.svelte` files need their own compilers.
@@ -117,7 +120,7 @@ Svelte caught six more plus a mistyped `autoComplete`. None was visible to any
 test — the ports had been checked only by being copied into a user's project.
 
 `eslint.config.js` still scopes to `core/` + `react/` (its type-aware rules
-follow the main program); Prettier formats all five.
+follow the main program); Prettier formats all six.
 
 For the same reason `registry/tsconfig.json` excludes the `auth-ui-*` items from
 the backend-oriented registry typecheck.
@@ -166,7 +169,7 @@ plugin together, and `<MultiSessionCard>` already covers switching before you
 start the flow.
 
 `PasskeysCard` covers list/add/remove; the controller also exposes `rename`, left
-out of the default card so all five ports render the same thing.
+out of the default card so all six ports render the same thing.
 
 ## Upgrading a copied port
 

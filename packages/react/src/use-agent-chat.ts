@@ -1,6 +1,6 @@
 "use client";
 
-import type { FunctionReference, OptimisticMessage } from "@lunora/client";
+import type { FunctionReference, OptimisticMessage, SubscriptionErrorCallback } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import { useRef, useState } from "react";
 
@@ -122,6 +122,14 @@ interface UseAgentChatOptions {
     limit?: number;
 
     /**
+     * Called when the live history or thread subscription reports an error (a
+     * session expiry, an RLS denial). Without it — and without reading `error` —
+     * such a failure is invisible and `messages` / `status` freeze at their last
+     * value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link UseAgentChatOptions.sendArgs} and the per-call args.
@@ -149,6 +157,8 @@ interface UseAgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The history or thread subscription's last error, or `undefined`. */
+    error: Error | undefined;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ReadonlyArray<AgentChatMessage>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
@@ -199,11 +209,11 @@ const EMPTY_MESSAGES: ReadonlyArray<Record<string, unknown>> = [];
  * replay-safe, live-only delta design.
  */
 const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+    const { api, cancel: cancelReference, limit, onError, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
     const messagesArguments = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
-    const { data: history } = useSubscription(api.agents.agentMessages, messagesArguments);
-    const { data: threadData } = useSubscription(api.agents.agentThread, { key: threadKey });
+    const { data: history, error: historyError } = useSubscription(api.agents.agentMessages, messagesArguments, { onError });
+    const { data: threadData, error: threadError } = useSubscription(api.agents.agentThread, { key: threadKey }, { onError });
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so `useStream` never opens a stream (and `streamingText` stays empty).
@@ -326,7 +336,8 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         await cancelMutate({ instanceId, threadKey });
     };
 
-    return { approve, cancel, messages, reject, send, status, streamingText };
+    // History is the surface the user reads, so its failure wins when both fail.
+    return { approve, cancel, error: historyError ?? threadError, messages, reject, send, status, streamingText };
 };
 
 export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };

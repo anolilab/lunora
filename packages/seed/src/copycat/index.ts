@@ -36,6 +36,22 @@ const resolveCount = (input: unknown, range: Range): number => {
     return seeded(["__count__", input], () => faker.number.int({ max, min }));
 };
 
+/**
+ * Domain every generated address is built on.
+ *
+ * Faker's default is one of `gmail.com` / `hotmail.com` / `yahoo.com`, so seeded
+ * rows carried DELIVERABLE addresses belonging to real strangers: seed a staging
+ * database (or `lunora seed --prod`), let any user-driven mail flow run — a welcome
+ * job, a digest, an `@lunora/auth` verification on a seeded account — and the app
+ * mails them from its own verified domain. `example.com` is reserved by RFC 2606
+ * for exactly this, and accepts no mail.
+ *
+ * No opt-out knob: a caller who genuinely wants a specific domain overrides the
+ * column, which is what every README and docs example already does
+ * (`users: { email: ({ index }) => ... }`).
+ */
+const RESERVED_EMAIL_DOMAIN = "example.com";
+
 /** Character-class probes for {@link copycat.scramble}, hoisted to avoid per-call recompilation. */
 const LOWER_ALPHA = /[a-z]/;
 const UPPER_ALPHA = /[A-Z]/;
@@ -54,16 +70,8 @@ const copycat = {
         return seeded(input, () => faker.location.country());
     },
 
-    /** ISO-8601 date string between `min`/`max` (default years 1980–2020). */
-    dateString(input: unknown, options?: { max?: Date; min?: Date }): string {
-        const min = options?.min ?? new Date("1980-01-01T00:00:00.000Z");
-        const max = options?.max ?? new Date("2020-01-01T00:00:00.000Z");
-
-        return seeded(input, () => faker.date.between({ from: min, to: max }).toISOString());
-    },
-
     email(input: unknown): string {
-        return seeded(input, () => faker.internet.email().toLowerCase());
+        return seeded(input, () => faker.internet.email({ provider: RESERVED_EMAIL_DOMAIN }).toLowerCase());
     },
 
     firstName(input: unknown): string {

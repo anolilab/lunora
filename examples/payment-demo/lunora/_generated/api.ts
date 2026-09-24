@@ -8,7 +8,7 @@ export interface ApiTypes {
     billing: {
         apiCallsRemaining: FunctionReference<"action", {}, { allowed: boolean; balance?: number; }>;
         checkout: FunctionReference<"action", { priceId: string }, { url: string; }>;
-        mySubscriptions: FunctionReference<"query", {}, { providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        mySubscriptions: FunctionReference<"query", {}, { cancelAtPeriodEnd: boolean; currentPeriodEnd?: number; currentPeriodStart?: number; priceId: string; priceIds?: string[]; provider: string; providerSubscriptionId: string; quantity: number; referenceId: string; state: string }[]>;
         portal: FunctionReference<"action", {}, { url: string; }>;
         recordApiCall: FunctionReference<"action", {}, { recorded: boolean; }>;
     };
@@ -19,7 +19,7 @@ export const api = anyApi as unknown as ApiTypes;
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
     billing: {
-        processWebhook: FunctionReference<"action", { body: string; signature: string }, { applied: boolean; status: number; }>;
+        processWebhook: FunctionReference<"action", { body: string; headers: Record<string, string> }, { applied: boolean; status: number; }>;
     };
 }
 

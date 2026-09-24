@@ -135,7 +135,7 @@ const authAdmin = (): AuthAdmin => {
         unbanUser: vi.fn<NonNullable<AuthAdmin["unbanUser"]>>(async () => USER),
 
         capabilities: vi.fn<NonNullable<AuthAdmin["capabilities"]>>(async () => {
-            return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
+            return { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false };
         }),
     };
 };

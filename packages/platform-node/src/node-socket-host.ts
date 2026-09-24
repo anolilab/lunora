@@ -48,6 +48,14 @@ interface NodeSocket {
     id: string;
     /** The raw object passed to `accept`, for `handleFor` lookups. */
     raw: unknown;
+
+    /**
+     * Frames sent through a socket this host had to give a `send` to — a bare
+     * test double with no transport of its own. A real transport keeps its own
+     * `send`, so nothing is buffered for it and this stays empty: a per-socket
+     * array that grew with every fan-out frame would be an unbounded leak on a
+     * long-lived connection.
+     */
     received: (string | ArrayBuffer)[];
     tags: Set<string>;
 }
@@ -136,6 +144,90 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         }
     };
 
+    /**
+     * Drop a socket from the runtime map and from durable storage.
+     *
+     * A closed socket is never restored, so its durable row is garbage the
+     * moment it closes. Cloudflare drops the socket from `getWebSockets()` on
+     * the close event; leaving the row (and the map entry) behind would both
+     * leak and fan updates out at a dead subscriber. Idempotent, because an
+     * adopted transport's `close` may be called more than once.
+     */
+    const deregister = (socketState: NodeSocket): void => {
+        const state = socketState;
+
+        state.closed = true;
+        runtimeSockets.delete(state.id);
+
+        if (isWeakKey(state.raw)) {
+            byRaw.delete(state.raw);
+        }
+
+        if (database.open) {
+            deleteRow.run(state.id);
+        }
+    };
+
+    /** Bind a state's id to the handle it is reachable through, for `idFor`. */
+    const bindHandle = (socketState: NodeSocket, handle: SocketHandle): SocketHandle => {
+        const state = socketState;
+
+        state.handle = handle;
+        handleIds.set(handle, state.id);
+
+        return handle;
+    };
+
+    /**
+     * Adopt an object transport AS the handle.
+     *
+     * `SocketHandle` is deliberately not a wrapper: "a host is expected to
+     * return its own transport socket here, unchanged", because the engine keys
+     * per-socket memos on whatever `accept` / `handleFor` / `getSockets` hand
+     * back, and a host that mints a second object makes those three disagree.
+     * This host used to mint one, so every fan-out frame written through
+     * `getSockets()` landed in an in-process array instead of on the wire while
+     * `handleFor` answered a different object for the same connection.
+     *
+     * The two attachment methods and the deregistering `close` are stamped onto
+     * the transport — the same thing the DO runtime does for Cloudflare's
+     * hosts, where the runtime owns hibernation and here this host is the
+     * runtime. `send` is left alone whenever the transport has one, so frames
+     * go straight out and nothing is buffered; a bare double with no `send`
+     * gets a recording one instead, which is what `readFrames` reads back.
+     */
+    const adoptRaw = (socketState: NodeSocket, raw: object): SocketHandle => {
+        const state = socketState;
+        const transport = raw as Partial<SocketHandle>;
+        const transportClose = typeof transport.close === "function" ? transport.close.bind(raw) : undefined;
+
+        if (typeof transport.send !== "function") {
+            transport.send = (data) => {
+                state.received.push(typeof data === "string" ? data : toArrayBuffer(data));
+            };
+        }
+
+        transport.close = (code, reason) => {
+            deregister(state);
+            transportClose?.(code, reason);
+        };
+        transport.deserializeAttachment = () => state.attachment;
+        transport.serializeAttachment = (value) => {
+            state.attachment = value;
+            persistAttachment(state.id, value);
+        };
+
+        return bindHandle(state, raw as SocketHandle);
+    };
+
+    /**
+     * Mint a handle for a socket that cannot BE one: a restored socket, whose
+     * transport died with the previous process, and a primitive raw, which
+     * cannot carry properties. Both are off the fan-out path — a restored
+     * socket has no wire to reach — so the identity collapse `adoptRaw` buys
+     * does not apply, and `send` here is honestly a buffer rather than a
+     * transport.
+     */
     const createHandle = (socketState: NodeSocket): SocketHandle => {
         // Alias so the mutation is on a local binding, not the parameter
         // (no-param-reassign) — same pattern as `@lunora/shard-engine`'s
@@ -144,26 +236,13 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         const handle: SocketHandle = {
             // `bufferedAmount` is deliberately ABSENT rather than reported as
             // `0`. The contract reads an absent value as "assume drained" but a
-            // present `0` as a positive claim of an empty queue, and this host
+            // present `0` as a positive claim of an empty queue, and this handle
             // has no outbound queue to measure — `send` appends to an in-process
             // array. A frozen `0` would tell the engine backpressure never
-            // applies, which is the one answer it cannot detect as missing.
+            // applies, which is the one answer it cannot detect as missing. An
+            // adopted transport reports its own, natively.
             close: (_code, _reason) => {
-                state.closed = true;
-                runtimeSockets.delete(state.id);
-
-                if (isWeakKey(state.raw)) {
-                    byRaw.delete(state.raw);
-                }
-
-                // A closed socket is never restored, so its durable row is
-                // garbage the moment it closes. Cloudflare drops the socket from
-                // `getWebSockets()` on the close event; leaving the row (and the
-                // map entry) behind would both leak and fan updates out at a dead
-                // subscriber.
-                if (database.open) {
-                    deleteRow.run(state.id);
-                }
+                deregister(state);
             },
             deserializeAttachment: () => state.attachment,
             send: (data) => {
@@ -175,10 +254,7 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             },
         };
 
-        state.handle = handle;
-        handleIds.set(handle, state.id);
-
-        return handle;
+        return bindHandle(state, handle);
     };
 
     const socket: SocketHost = {
@@ -212,6 +288,8 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             if (isWeakKey(raw)) {
                 byRaw.set(raw, state);
+
+                return adoptRaw(state, raw);
             }
 
             return createHandle(state);

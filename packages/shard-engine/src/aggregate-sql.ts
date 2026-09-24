@@ -29,16 +29,29 @@ const noScheduler = (): never => {
  * an `aggregateIndex.where`). Only handles literal equality and `{ eq: … }` —
  * the full operator vocabulary stays in the SQL compiler. Used during counter
  * maintenance to skip rows that don't qualify for a filtered aggregate.
+ *
+ * An ABSENT field reads as `null`, which is what the read path already means by
+ * it: the SQL compiler renders `{ deletedAt: null }` as `IS NULL`, and a
+ * document with no `deletedAt` key extracts to SQL NULL, so the scan counts it.
+ * A strict `undefined !== null` here disagreed, and the disagreement was total —
+ * the overwhelmingly common shape for a soft-delete/tombstone index is
+ * `where: { deletedAt: null }` over documents that simply omit the key, so the
+ * companion tallied ZERO rows while the scan tallied all of them, and any read
+ * routed to the counter answered 0. `encodeAggregateKey` already folds an
+ * absent `by` field to `null` for exactly this reason; this is the same rule on
+ * the predicate side.
  */
 export const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
     for (const [field, expected] of Object.entries(predicate)) {
-        const actual = document[field];
+        // eslint-disable-next-line unicorn/no-null -- an absent document field IS SQL NULL to the read path; see the note above
+        const actual = document[field] ?? null;
 
         if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
             const operatorKeys = Object.keys(expected);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
-                if (actual !== (expected as { eq: unknown }).eq) {
+                // eslint-disable-next-line unicorn/no-null -- mirror the `?? null` above so `{ eq: null }` matches an absent field too
+                if (actual !== ((expected as { eq: unknown }).eq ?? null)) {
                     return false;
                 }
 

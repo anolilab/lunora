@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "title": {
                                                 "type": "string"
@@ -158,7 +157,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -214,7 +212,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"tasks\">",
@@ -303,7 +300,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"tasks\">",
@@ -367,7 +363,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"tasks\">",

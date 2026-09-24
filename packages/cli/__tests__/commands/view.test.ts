@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +41,12 @@ const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Pro
 
 let workdir: string;
 
+/** Write a `.lunora/dev.json` record for a live (this process's) dev server. */
+const recordDevServer = (state: Record<string, unknown>): void => {
+    mkdirSync(join(workdir, ".lunora"), { recursive: true });
+    writeFileSync(join(workdir, ".lunora", "dev.json"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), ...state }), "utf8");
+};
+
 describe("lunora view", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-view-"));
@@ -50,89 +56,79 @@ describe("lunora view", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("lunora view", () => {
-        it("defaults to localhost:8787/_lunora/studio", async () => {
-            expect.assertions(2);
+    it("defaults to the local studio server when no dev server is running", async () => {
+        expect.assertions(2);
 
-            const { logger } = recordingLogger();
-            const { openedUrls, opener } = recordingOpener();
+        const { logger } = recordingLogger();
+        const { openedUrls, opener } = recordingOpener();
 
-            const result = await runViewCommand({ cwd: workdir, logger, opener });
+        const result = await runViewCommand({ cwd: workdir, logger, opener });
 
-            expect(result.code).toBe(0);
-            expect(openedUrls).toEqual(["http://localhost:8787/_lunora/studio"]);
-        });
+        expect(result.code).toBe(0);
+        expect(openedUrls).toEqual(["http://127.0.0.1:6173"]);
+    });
 
-        it("honours wrangler.dev.port for the local studio", async () => {
-            expect.assertions(1);
+    it("opens the running dev server's recorded studioUrl", async () => {
+        expect.assertions(1);
 
-            writeFileSync(
-                join(workdir, "wrangler.jsonc"),
-                `{
+        recordDevServer({ mode: "cli", studioUrl: "http://127.0.0.1:6180", url: "http://localhost:8788" });
+
+        const { logger } = recordingLogger();
+        const { openedUrls, opener } = recordingOpener();
+
+        await runViewCommand({ cwd: workdir, logger, opener });
+
+        expect(openedUrls).toEqual(["http://127.0.0.1:6180"]);
+    });
+
+    it("opens the Vite dev server's /__lunora route when Vite owns the studio", async () => {
+        expect.assertions(1);
+
+        recordDevServer({ mode: "vite", url: "http://localhost:5174/" });
+
+        const { logger } = recordingLogger();
+        const { openedUrls, opener } = recordingOpener();
+
+        await runViewCommand({ cwd: workdir, logger, opener });
+
+        expect(openedUrls).toEqual(["http://localhost:5174/__lunora"]);
+    });
+
+    it("ignores a wrangler dev.port — the worker serves no studio", async () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
     "name": "demo",
     "compatibility_date": "2026-04-07",
     "dev": { "port": 9091 }
 }`,
-                "utf8",
-            );
-            const { logger } = recordingLogger();
-            const { openedUrls, opener } = recordingOpener();
+            "utf8",
+        );
 
-            await runViewCommand({ cwd: workdir, logger, opener });
+        const { logger } = recordingLogger();
+        const { openedUrls, opener } = recordingOpener();
 
-            expect(openedUrls).toEqual(["http://localhost:9091/_lunora/studio"]);
+        await runViewCommand({ cwd: workdir, logger, opener });
+
+        expect(openedUrls).toEqual(["http://127.0.0.1:6173"]);
+    });
+
+    it("returns 1 when the opener fails", async () => {
+        expect.assertions(2);
+
+        const { logger, recorded } = recordingLogger();
+
+        const result = await runViewCommand({
+            cwd: workdir,
+            logger,
+            opener: async () => {
+                throw new Error("no browser");
+            },
         });
 
-        it("--remote builds a URL from wrangler.routes when present", async () => {
-            expect.assertions(1);
-
-            writeFileSync(
-                join(workdir, "wrangler.jsonc"),
-                `{
-    "name": "demo",
-    "compatibility_date": "2026-04-07",
-    "routes": [{ "pattern": "api.example.com/*", "zone_name": "example.com" }]
-}`,
-                "utf8",
-            );
-            const { logger } = recordingLogger();
-            const { openedUrls, opener } = recordingOpener();
-
-            await runViewCommand({ cwd: workdir, logger, opener, remote: true });
-
-            expect(openedUrls).toEqual(["https://api.example.com/_lunora/studio"]);
-        });
-
-        it("--remote falls back to <name>.workers.dev when no routes are set", async () => {
-            expect.assertions(1);
-
-            writeFileSync(
-                join(workdir, "wrangler.jsonc"),
-                `{
-    "name": "my-worker",
-    "compatibility_date": "2026-04-07"
-}`,
-                "utf8",
-            );
-            const { logger } = recordingLogger();
-            const { openedUrls, opener } = recordingOpener();
-
-            await runViewCommand({ cwd: workdir, logger, opener, remote: true });
-
-            expect(openedUrls).toEqual(["https://my-worker.workers.dev/_lunora/studio"]);
-        });
-
-        it("--remote without wrangler returns 1", async () => {
-            expect.assertions(3);
-
-            const { logger, recorded } = recordingLogger();
-            const { openedUrls, opener } = recordingOpener();
-
-            const result = await runViewCommand({ cwd: workdir, logger, opener, remote: true });
-
-            expect(result.code).toBe(1);
-            expect(openedUrls).toEqual([]);
-            expect(recorded.errors.join("\n")).toContain("could not determine the remote URL");
-        });
+        expect(result.code).toBe(1);
+        expect(recorded.errors.join("\n")).toContain("failed to open URL: no browser");
     });
 });

@@ -357,12 +357,15 @@ number of seconds):
 export const job = defineContainer({
     image: "./containers/job",
     sleepAfter: "5m", // sleep after 5 min idle
-    hardTimeout: "1h", // …but never run longer than an hour, busy or not
+    hardTimeout: "1h", // …stopped after an hour, busy or not
 });
 ```
 
 When it elapses, the generated class's `onHardTimeoutExpired` hook runs; the
-default action is `stop()`. The timer is armed through the container's own
+default action is `stop()`, which sends **SIGTERM** and does not escalate. A
+container that traps or ignores SIGTERM therefore keeps running past its cap —
+if yours might, override `onHardTimeoutExpired` and follow the stop with a
+`destroy()` after whatever grace period your workload needs. The timer is armed through the container's own
 scheduler and stamped with a run generation, so a stale timer left over from a
 previous (slept or crashed) run never kills a fresh one. Advanced apps that
 hand-author their container class can override `onHardTimeoutExpired` (the base

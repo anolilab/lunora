@@ -53,6 +53,18 @@ interface CdcChange {
 const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
 
 /**
+ * Row-scoped index backing {@link readCdcDocAtOrBefore} (`("table", id, seq)`).
+ *
+ * Built only when some table declares `.dropStalePatches()`, because that is the
+ * only reader seeking ONE row's history rather than a table's. On the
+ * `("table", seq)` index alone that seek is a descending scan of every entry the
+ * table logged since the caller's baseline, discarding each one belonging to a
+ * different row — so a busy table would tax a stale client's every patch in
+ * proportion to the whole table's write volume.
+ */
+const CDC_LOG_TABLE_ID_SEQ_INDEX = "__cdc_log_table_id_seq";
+
+/**
  * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
  * each shard a monotonic cursor that streaming-export consumers and replay-PITR
  * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
@@ -65,7 +77,7 @@ const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
  * subscribers in proportion to the busy one's write volume. The composite index
  * covers both the filter and the ordering, so a shape reads only its own ops.
  */
-const migrateCdcLog = (sql: SqlExec): void => {
+const migrateCdcLog = (sql: SqlExec, options: { rowHistoryIndex?: boolean } = {}): void => {
     runDrizzle(
         sql,
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE)} (
@@ -99,6 +111,22 @@ const migrateCdcLog = (sql: SqlExec): void => {
     } catch {
         /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
     }
+
+    if (options.rowHistoryIndex !== true) {
+        return;
+    }
+
+    // Same isolation and the same reasoning as the index above: a cold start that
+    // cannot afford to build it degrades `readCdcDocAtOrBefore` to a scan rather
+    // than bricking the shard.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_TABLE_ID_SEQ_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (${dsql.identifier("table")}, id, seq)`,
+        );
+    } catch {
+        /* degraded read path; the next cold start retries */
+    }
 };
 
 /**
@@ -119,42 +147,45 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
  */
 const CDC_TABLE_FILTER_CHUNK = 90;
 
-/** Bind a non-empty table set as an `AND "table" IN (?, …)` fragment, or nothing at all for the unfiltered read. */
-const tableInClause = (tables: ReadonlySet<string> | undefined): SQL => {
-    if (!tables || tables.size === 0) {
-        return dsql``;
-    }
-
+/**
+ * Bind one non-empty chunk of table names as an `AND "table" IN (?, …)`
+ * fragment. Chunking is the caller's job — the only caller is
+ * {@link cdcTouchesTables}, which splits an unbounded read-set at
+ * {@link CDC_TABLE_FILTER_CHUNK} so the statement stays inside workerd's
+ * 100-bound-parameter cap. A helper that silently accepted the whole set would
+ * put that cap one call site away again.
+ */
+const tableInClause = (tables: ReadonlySet<string>): SQL =>
     // Bind each table name as a parameter so the `IN (…)` list can never inject SQL.
-    return dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+    dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
         [...tables].map((table) => dsql`${table}`),
         dsql`, `,
     )})`;
-};
 
 /**
  * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
  * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
- * last `seq`, or `sinceSeq` when the page is empty).
+ * last `seq`, or `sinceSeq` when the page is empty). Every table's changes are
+ * in the page — this is the whole-log reader, used by the streaming
+ * export/resume and archive-sweep callers.
  *
- * The optional `tables` set narrows the page to changes on those tables — the
- * shape/poke path reads one filtered page per flush so it never scans op-log
- * entries for tables no live shape is watching. Omit it (or pass an empty set)
- * for the full, unfiltered page (the existing streaming-export/resume callers).
+ * There is deliberately no table filter. One was carried here for the shape/poke
+ * path, which reads per table — but that path goes through
+ * {@link readCdcChangeKeys}, which takes a single `table` and returns keys
+ * without post-images, so nothing ever passed the set. Restoring it is not one
+ * predicate: `tableInClause` binds a parameter per name against workerd's cap of
+ * 100, and chunking an ORDERED, LIMIT-ed page is not the loop
+ * {@link cdcTouchesTables} gets away with — the chunks would have to be merged
+ * back into commit order and the cursor re-derived from the merge, or the page
+ * silently truncates at whichever chunk filled `limit` first.
  */
-const readCdcChanges = (
-    sql: SqlExec,
-    options: { limit?: number; sinceSeq?: number; tables?: ReadonlySet<string> } = {},
-): { changes: CdcChange[]; cursor: number } => {
+const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
-    // An empty/omitted set leaves the predicate off entirely (full page).
-    const tableFilter = tableInClause(options.tables);
-
     const rows = runDrizzle<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
         sql,
-        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableFilter} ORDER BY seq ASC LIMIT ${limit}`,
+        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} ORDER BY seq ASC LIMIT ${limit}`,
     ).toArray();
 
     const changes = rows.map((row): CdcChange => {
@@ -357,6 +388,35 @@ interface CdcChangeKey {
  * the more accurate client-facing kind anyway (the client may already hold the
  * key), and for a non-member it is what earns the `delete` the client needs.
  */
+
+/**
+ * The post-image of `id` in `table` as of `atOrBeforeSeq` — the row as a client
+ * holding that CDC cursor last saw it, or `undefined` when the changelog cannot
+ * answer (the row predates the caller's cursor, the entry was trimmed, or CDC is
+ * off).
+ *
+ * `undefined` is deliberately indistinguishable from "no opinion": its only
+ * caller (`.dropStalePatches()`) reads it as "no baseline could be established"
+ * and applies the write, which is the historical behaviour. A changelog that has
+ * been trimmed must not start silently discarding writes.
+ *
+ * A `delete` entry answers `undefined` too — its `doc` is NULL, and a row the
+ * client last saw deleted has no field values to compare against.
+ */
+const readCdcDocAtOrBefore = (sql: SqlExec, table: string, id: string, atOrBeforeSeq: number): Record<string, unknown> | undefined => {
+    const rows = runDrizzle<{ doc: null | string }>(
+        sql,
+        dsql`SELECT doc FROM ${dsql.identifier(CDC_LOG_TABLE)}
+             WHERE ${dsql.identifier("table")} = ${table} AND id = ${id} AND seq <= ${atOrBeforeSeq}
+             ORDER BY seq DESC
+             LIMIT 1`,
+    ).toArray();
+
+    const doc = rows[0]?.doc;
+
+    return doc === null || doc === undefined ? undefined : decodeDocJson(doc);
+};
+
 const readCdcChangeKeys = (sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] => {
     // `maxSeq`, not a second `seq`: aliasing the aggregate to the name of the
     // column it aggregates leaves `ORDER BY seq` resolvable two ways, and which
@@ -536,6 +596,38 @@ const cdcTrimmedError = (floor: number, sinceSeq: number, scope: "global" | "sha
     );
 
 /**
+ * The refusal a read path returns to a consumer whose cursor sits ABOVE the
+ * changelog's high-watermark.
+ *
+ * That is not a cursor, it is proof: `seq` is monotonic and survives a trim
+ * (`readCdcCursor` reads `sqlite_sequence`), so no consumer can legitimately
+ * hold one the log has not issued. The one thing that produces it is a rollback
+ * of the log itself — in practice a point-in-time restore, which reverts the
+ * whole SQLite database and every durable record of the old timeline inside it,
+ * `__cdc_meta`'s epoch included. The consumer's own cursor is then the only
+ * surviving witness, which is why it is treated as one.
+ *
+ * The alternative — echoing `sinceSeq` back with an empty page — tells that
+ * consumer it is caught up, and it then never asks for the post-restore range:
+ * the log's writes climb back through seqs the consumer has already passed and
+ * are skipped one by one, silently and permanently. So this refuses, and carries
+ * what a resynchronisation needs: the surviving `cursor`, and — on the shard
+ * plane — the `epoch` the seal re-minted, which is what tells the consumer it is
+ * a different timeline rather than the same one shortened.
+ *
+ * `scope` names which log, as it does on {@link cdcTrimmedError}. The
+ * `.global()` one carries no epoch: its changelog has none to re-mint, and no
+ * channel on which a re-minted one could reach a consumer, so the refusal is
+ * the whole of the signal there.
+ */
+const cdcForkedError = (cursor: number, sinceSeq: number, scope: "global" | "shard", epoch?: string): LunoraError =>
+    new LunoraError(
+        "CDC_TIMELINE_FORKED",
+        `${scope === "global" ? "global cdc" : "cdc"} cursor ${String(sinceSeq)} is above ${scope === "global" ? "the changelog's" : "this shard's"} high-watermark ${String(cursor)}; the changelog rolled back (a point-in-time restore) and the changes you hold are on a timeline that no longer exists — resume from a snapshot${epoch === undefined ? "" : ` at epoch ${epoch}`}`,
+        { data: { cursor, ...(epoch === undefined ? {} : { epoch }) }, status: 409 },
+    );
+
+/**
  * Oldest `seq` still retained in the changelog, or `undefined` when the log is
  * empty. A reconnecting subscriber whose `sinceSeq` is below `floor - 1` has
  * missed changes that `trimCdcChanges` already compacted away, so it must take a
@@ -666,11 +758,17 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
         // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
         // row's original creation time instead of resetting it to the replay
         // clock (the default mutation path mints a fresh `clock()`).
+        //
+        // `change.table` is passed as `expectedTable` like the delete and insert
+        // above: an unscoped `replace` probes every table on the premise that ids
+        // are unique across them, which `.source()` tables break — `liftSourceId`
+        // sets `_id` to the upstream natural primary key, so an orders update
+        // lands in the users row.
         const fields = { ...document };
 
         delete fields["_id"];
 
-        await writer.replace(change.id, fields, undefined, { allowExplicitId: true });
+        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
     }
 };
 
@@ -694,6 +792,7 @@ export {
     CDC_LOG_TABLE_SEQ_INDEX,
     CDC_META_TABLE,
     cdcCanVouchFor,
+    cdcForkedError,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     cdcTrimmedError,
@@ -706,6 +805,7 @@ export {
     readCdcChangeKeys,
     readCdcChanges,
     readCdcCursor,
+    readCdcDocAtOrBefore,
     readCdcEpoch,
     trimCdcChanges,
 };

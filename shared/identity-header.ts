@@ -182,10 +182,24 @@ const isIdentityExpired = (expiresAt: number | undefined): boolean => typeof exp
  * error or a silent disconnect. Best-effort: a throw (the socket is already
  * gone) is swallowed — this must never escape a hibernation message handler,
  * where a thrown handler is fatal to the socket.
+ *
+ * The frame carries the reason under BOTH keys on purpose: `error.code` /
+ * `error.message` is `ShardDO`'s envelope, which `LunoraClient` reads, while a
+ * bare top-level `message` is what `VoiceServerFrame`'s `error` member declares
+ * — and `VoiceSessionDO` drops expired sockets through this same helper, so a
+ * frame carrying only the shard shape reached every voice adapter as
+ * `new Error(frame.message)` on an absent field, i.e. an empty error.
  */
 const dropExpiredCredentialSocket = (ws: ExpirableSocket): void => {
     try {
-        ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
+        ws.send(
+            JSON.stringify({
+                code: "TOKEN_EXPIRED",
+                error: { code: "TOKEN_EXPIRED", message: "authentication token expired" },
+                message: "authentication token expired",
+                type: "error",
+            }),
+        );
         ws.close?.(4001, "token_expired");
     } catch {
         /* socket already gone */

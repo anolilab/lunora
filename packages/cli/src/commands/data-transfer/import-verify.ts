@@ -58,30 +58,22 @@ const checkRowParity = (logger: Logger, sourceRows: ReadonlyMap<string, number>,
 /**
  * List unresolved storage references, capped so a wholly-unmigrated import does
  * not bury its own summary under one line per document.
+ *
+ * No dedup here any more: the report itself now holds one entry per DISTINCT
+ * `(table, column, storageId)` (see `import-rows.ts`). Deduping only for display
+ * is what made the counts printed beside this list disagree with it.
  */
 const listUnresolved = (
     logger: Logger,
     references: ReadonlyArray<UnresolvedStorageReference>,
     describe: (reference: UnresolvedStorageReference) => string,
 ): void => {
-    const seen = new Set<string>();
-
-    for (const reference of references) {
-        const key = `${reference.table} ${reference.column} ${reference.storageId}`;
-
-        if (seen.has(key)) {
-            continue;
-        }
-
-        seen.add(key);
-
-        if (seen.size <= UNRESOLVED_REPORT_LIMIT) {
-            logger.warn(describe(reference));
-        }
+    for (const reference of references.slice(0, UNRESOLVED_REPORT_LIMIT)) {
+        logger.warn(describe(reference));
     }
 
-    if (seen.size > UNRESOLVED_REPORT_LIMIT) {
-        logger.warn(`… and ${String(seen.size - UNRESOLVED_REPORT_LIMIT)} more`);
+    if (references.length > UNRESOLVED_REPORT_LIMIT) {
+        logger.warn(`… and ${String(references.length - UNRESOLVED_REPORT_LIMIT)} more`);
     }
 };
 
@@ -144,4 +136,4 @@ const reportUntransferredPaths = (logger: Logger, paths: ReadonlySet<string>, ve
     return verify && paths.size > 0;
 };
 
-export { checkRowParity, reportStorageOutcome, reportUntransferredPaths };
+export { checkRowParity, reportStorageOutcome, reportUntransferredPaths, UNRESOLVED_REPORT_LIMIT };

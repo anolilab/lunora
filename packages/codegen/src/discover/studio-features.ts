@@ -38,6 +38,15 @@ interface StudioFeatureSignals {
     storageRuleCount: number;
     /** Number of declared vector indexes. */
     vectorIndexCount: number;
+
+    /**
+     * The platform gate's `vectorStore` verdict. `false` withholds the page
+     * outright — the one signal that overrides the fail-open rule above, because
+     * the host has no vector binding for the panel to read through. Codegen
+     * withholds `ctx.vectors` and the shard's whole Vectorize wiring on the same
+     * verdict; leaving the nav entry on advertises a binding that is not there.
+     */
+    vectorStoreSupported: boolean;
     /** Number of declared workflows — any `defineWorkflow` means the workflows page is relevant. */
     workflowCount: number;
 }
@@ -52,10 +61,28 @@ interface StudioFeatureSignals {
  * wiring — the failure the studio must never make is hiding a working page.
  *
  * The dependency names tested here are PACKAGE names, which is what
- * `readPackageDependencies` collects — never a subpath. `analytics`, `kv` and
- * `vectors` all ship inside `@lunora/bindings`, so all three test that one name;
- * testing `"@lunora/bindings/kv"` (as they did) matched nothing, and the arm
- * that exists to fail open could never fire.
+ * `readPackageDependencies` collects — never a subpath. `analytics` and `kv` both
+ * ship inside `@lunora/bindings`, so both test that one name; testing
+ * `"@lunora/bindings/kv"` (as they did) matched nothing, and the arm that exists
+ * to fail open could never fire. Both pages render an empty state on a
+ * deployment that binds nothing — `createKvIntrospectorFromEnv` returns an
+ * introspector whose namespace list is `[]` rather than erroring — so failing
+ * open costs at most a page that says "none bound".
+ *
+ * `vectors` takes no dependency arm and no usage arm, because for it failing open
+ * costs an error rather than an empty state. The page and the home-screen card
+ * both call `/_lunora/admin/vector/indexes`, which the generated app.ts backs by
+ * passing the `LUNORA_VECTOR_INDEXES` registry and the app's own `.vectors(...)`
+ * binding map to `createVectorAdminIntrospector`. Both of those are emitted only
+ * when the schema declares an index, so a declaration is exactly the condition
+ * under which the tab has a backend — a bare `@lunora/bindings` dependency
+ * (installed for `ctx.images`, say) or a `ctx.vectors` call against a schema with
+ * no `.vectorize()` would show a tab that can only 400.
+ *
+ * The platform gate's `vectorStore` verdict AND's the expression on top of that:
+ * codegen withholds `ctx.vectors` and the shard's Vectorize imports on that
+ * verdict, and a nav entry pointing at what was just withheld is worse than a
+ * hidden page.
  *
  * `payments` is the lone exception: it has no dependency arm. Its panel reads the
  * `subscriptions`/`events` tables directly, which the app must hand-declare in its
@@ -78,7 +105,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),
-        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings"),
+        vectors: signals.vectorStoreSupported && signals.vectorIndexCount > 0,
         workflows: usage.workflows || signals.workflowCount > 0 || signals.dependencies.has("@lunora/workflow"),
     };
 };

@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Provider } from "@openfeature/server-sdk";
+import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Logger, Provider } from "@openfeature/server-sdk";
 import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 
 // Repo-root inlined helper (see shared/stable-key.ts) — the canonical
@@ -71,6 +71,77 @@ const EMPTY_ENV: Record<string, never> = {};
 const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPTY_ENV : env);
 
 /**
+ * Whether a value is thenable, so a rejection can be attached to it.
+ *
+ * Used on the return of a `void`-declared callback an app may nonetheless have
+ * written `async`: the value is `unknown` at this point, and reading `.then` off
+ * `null` would throw inside the very reporter that exists not to.
+ * @param value The returned value.
+ * @returns `true` when the value can be caught.
+ */
+const isThenable = (value: unknown): value is Promise<unknown> => typeof (value as { then?: unknown } | null)?.then === "function";
+
+/**
+ * Report a provider bind that failed — the ONE place this package is allowed to
+ * be loud.
+ *
+ * Every evaluation is contractually silent: `ctx.flags.*` never throws, and a
+ * provider error resolves with the caller's `defaultValue`. That is right for an
+ * evaluation and wrong for a bind, because a bind fails for exactly one reason —
+ * the deployment is misconfigured (`flagshipProvider`'s missing `FLAGS` binding,
+ * its `authToken` thunk resolving to nothing, a provider `initialize` that
+ * throws) — and the resulting fleet-wide fallback to checked-in defaults is
+ * invisible in every other signal. The error is reachable per-evaluation via
+ * `ctx.flags.details.*().errorMessage`, but nothing reads that on the path a
+ * kill-switch is written on.
+ *
+ * The definition's own `logger` is preferred (it is where the app already sends
+ * OpenFeature diagnostics); `console.error` is the fallback, since a Worker with
+ * no logger configured still has a tail. `client.setLogger` cannot serve here —
+ * it runs only after a bind SUCCEEDS.
+ *
+ * Fires once per failed bind attempt, and each request makes at most one bind
+ * attempt (see {@link createFlags}), so a broken deployment logs on the order of
+ * once per request rather than once per flag read.
+ *
+ * That `logger` is app-supplied, so `logger.error` can itself throw — and the
+ * only call site is a `.catch()` on a floating promise, where a rethrow becomes
+ * an unhandled rejection. Reporting must never change control flow, so a
+ * throwing logger is contained here and falls through to the same
+ * `console.error` as no logger at all, keeping the failure it was meant to
+ * report visible. `@lunora/client`'s `reportPersistenceError` is the same shape
+ * for the same reason.
+ */
+const reportBindFailure = (logger: Logger | undefined, error: unknown): void => {
+    const message = `@lunora/flags: could not bind the OpenFeature provider — every flag read falls back to its caller-supplied default until this is fixed: ${
+        error instanceof Error ? error.message : String(error)
+    }`;
+
+    if (logger) {
+        try {
+            // `Logger.error` is typed `void`, but nothing stops an implementation
+            // being `async` — and an ignored rejected promise is an unhandled
+            // rejection, which is the failure mode this whole function exists to
+            // avoid. Swallow both halves: the synchronous throw via `catch`, and a
+            // returned thenable via its own handler.
+            // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- `Logger` is `@openfeature/server-sdk`'s and declares `error` as `void`, which under-describes what an implementation may return; reading it is the whole defence
+            const reported: unknown = logger.error(message);
+
+            if (isThenable(reported)) {
+                reported.catch(() => undefined);
+            }
+
+            return;
+        } catch {
+            /* fall through to the console error below */
+        }
+    }
+
+    // eslint-disable-next-line no-console -- a misconfigured flag provider silently serving checked-in defaults fleet-wide is worth a Worker tail line
+    console.error(message);
+};
+
+/**
  * Bind (or reuse) the OpenFeature client for one (definition, env) pair.
  * `provider` resolves the provider to bind — the definition's own factory,
  * unless a caller overrode it.
@@ -79,6 +150,13 @@ const envKeyFor = (env: object): object => (Object.keys(env).length === 0 ? EMPT
  * provider whose `initialize` throws retries on the same domain instead of
  * renaming it (which would strand an external reader on a dead domain). Only
  * the client promise is dropped on rejection, so the next request re-attempts.
+ *
+ * A rejected bind is REPORTED (see {@link reportBindFailure}). Evaluations
+ * still fail closed to the caller's default — that is the OpenFeature contract
+ * `ctx.flags` documents — but they must not do it silently: a deployment missing
+ * its `flagship` binding, or whose `FLAGSHIP_TOKEN` is unset, otherwise boots
+ * clean and serves every kill-switch and rollout at its checked-in default
+ * across the whole fleet with nothing to notice.
  */
 const bindClient = (definition: FlagsDefinition, rawEnv: object, provider: () => Provider): Promise<Client> => {
     const env = envKeyFor(rawEnv);
@@ -126,11 +204,18 @@ const bindClient = (definition: FlagsDefinition, rawEnv: object, provider: () =>
 
     // Don't memoize a failed bind — let the next request re-attempt. Guarded on
     // identity so a reset-then-rebind is never clobbered by a stale rejection.
-    pending.catch(() => {
-        if (entry.client === pending) {
-            entry.client = undefined;
-        }
-    });
+    // The chain is terminated: {@link reportBindFailure} is non-throwing, and
+    // this `.catch` keeps even a hostile `error` (one whose `toString` throws)
+    // from turning the report into an unhandled rejection.
+    pending
+        .catch((error: unknown) => {
+            if (entry.client === pending) {
+                entry.client = undefined;
+            }
+
+            reportBindFailure(logger, error);
+        })
+        .catch(() => undefined);
 
     return pending;
 };
@@ -230,7 +315,9 @@ const resolveDetails = (
  * (`definition`, `env`) pair — both stable object identities for the isolate's
  * lifetime — and each pair owns its own OpenFeature domain, so a pair always
  * evaluates against the provider it was configured with instead of whichever
- * bind happened first. Evaluations resolve through the
+ * bind happened first. The bind is additionally attempted at most ONCE per
+ * request, so a broken deployment costs one `initialize` and one log line
+ * rather than one per flag read. Evaluations resolve through the
  * OpenFeature client (the SDK applies hooks and never throws — provider errors
  * surface as the default value with an `errorCode`). The default `targetingKey`
  * is merged under any per-call context, and identical evaluations within the
@@ -254,6 +341,31 @@ const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, 
 
     const memo = new Map<string, Promise<EvaluationDetails<FlagValue>>>();
 
+    /**
+     * The bind this request uses, attempted at most ONCE.
+     *
+     * {@link bindClient}'s own memo drops the client promise on rejection so the
+     * next request re-attempts — which is right across requests and wrong within
+     * one. The generated `evaluateFlags` reads flags SEQUENTIALLY (`await` per
+     * key), so with only that memo the first read's rejection clears the entry
+     * before the second read asks for it: every distinct flag in the request
+     * starts its own bind, hits the same broken config, and logs again. A
+     * hundred-flag app turns one misconfiguration into a hundred provider
+     * `initialize` attempts and a hundred log lines per request.
+     *
+     * Holding the (possibly rejected) promise for the life of the request
+     * collapses that back to one attempt and one report, which is what
+     * `reportBindFailure` documents. Retry scope is unchanged: `createFlags`
+     * runs per request, so the next one binds afresh.
+     */
+    let requestBind: Promise<Client> | undefined;
+
+    const bind = (): Promise<Client> => {
+        requestBind ??= bindClient(definition, env, provider);
+
+        return requestBind;
+    };
+
     const evaluate = <T extends FlagValue>(type: FlagType, flagKey: string, defaultValue: T, context?: EvaluationContext): Promise<EvaluationDetails<T>> => {
         const merged: EvaluationContext = resolvedTargetingKey === undefined ? { ...context } : { targetingKey: resolvedTargetingKey, ...context };
 
@@ -271,7 +383,7 @@ const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, 
         };
 
         const run = (): Promise<EvaluationDetails<FlagValue>> =>
-            bindClient(definition, env, provider)
+            bind()
                 .then((client) => resolveDetails(client, type, flagKey, defaultValue, merged))
                 .catch(failClosed);
 

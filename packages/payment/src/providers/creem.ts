@@ -188,6 +188,21 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         case "refund.created": {
+            // `RefundEntity.status` is pending | requiresAction | succeeded | failed | canceled, and
+            // Creem documents `pending`/`requiresAction` as non-terminal processing states — so this
+            // event alone does not mean money moved. Booking one leaves the ledger claiming a refund
+            // the customer never received, and the facade's over-refund guard then rejects every later
+            // attempt to issue it for real.
+            //
+            // Creem ships no `refund.updated`/`refund.succeeded` event, so a refund that settles AFTER
+            // this event is not observable from here — and `checkoutToSession` cannot recover it
+            // either (Creem's order/checkout carry no refunded total), so reconcile will not heal it.
+            // A ledger that lags is still the lesser error: over-stating it is unrecoverable, because
+            // it locks out the refund that would have corrected it.
+            if (readString(object, "status") !== "succeeded") {
+                return { ...base, type: "unhandled" };
+            }
+
             // Creem's refund object is flat: the amount lives in `refund_amount`/`refund_currency`
             // (not `amount`), and it references the original payment via a nested `transaction`
             // (fallback `subscription`), not an `order`. Read those first, keeping the legacy fields
@@ -200,7 +215,19 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), refundCurrency),
                 referenceId: referenceFromMetadata(object),
-                sessionId: idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
+                // The event object IS the refund, so its `id` is this refund's id. Creem issues refunds
+                // only from the dashboard (`refundPayment` throws), so no marker can ever match it —
+                // carrying it still keeps a same-amount dashboard refund from consuming one.
+                refundId: readString(object, "id"),
+                // Key on the CHECKOUT id: `checkout.completed` writes the row under
+                // `CheckoutEntity.id` (see `checkoutToSession`) and `getPaymentStatus` retrieves the
+                // same id from `checkouts.retrieve`, so that is the only id a Creem payment row ever
+                // has. `RefundEntity.transaction` is required while `checkout` is optional, so
+                // reading `transaction` first always won and keyed every dashboard refund to a
+                // `TransactionEntity.id` — a row that does not exist. The remaining reads are
+                // fallbacks for a refund that carries no checkout at all; they orphan either way,
+                // but they keep a stable key instead of falling through to the refund's own id.
+                sessionId: idOf(object.checkout) ?? idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? readString(object, "id"),
                 type: "payment.refunded",
             };
         }
@@ -365,6 +392,9 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
             // A plan change is an `upgrade` to the new product (prorated immediately); a bare
             // metadata/quantity patch has no upgrade semantics, so return the current truth.
+            // Un-deduped on purpose, for want of anywhere to put a key: neither
+            // `UpgradeSubscriptionRequestEntity` nor Creem's `RequestOptions` carries one (checkout's
+            // `requestId` has no counterpart here), so a retry charges the proration twice.
             if (patch.priceId) {
                 return subscriptionFromCreem(
                     await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior: "proration-charge-immediately" }),

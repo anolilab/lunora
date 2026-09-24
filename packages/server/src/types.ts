@@ -342,6 +342,13 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     commitOrderedMode?: boolean;
 
     /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the caller's
+     * CDC baseline rather than clobbering the newer value. See the builder method
+     * for the rule, the whole-patch granularity, and why it fails open.
+     */
+    dropStalePatchesMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
@@ -703,9 +710,40 @@ interface RunAction {
  * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
  * `init` is per-INSTANCE and fires once per cold start, before any handler runs
  * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
- * a watched read's result changed — see `onQueryChange`.
+ * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
+ * and decides whether a socket may join or broadcast to one — see `onWhisper`
+ * and {@link WhisperEvent}; unlike the other four it is a query, and its return
+ * value is the verdict.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+
+/**
+ * The event a whisper authorizer (`onWhisper`) receives as its second argument.
+ *
+ * Everything on it is either server-stamped from the socket's attachment
+ * (`connectionId`, `shardKey`, `userId`, `context`) or the client-supplied
+ * `topic` the verdict is about. The verified caller identity is also on
+ * `ctx.auth` — the authorizer runs under the socket's own identity.
+ */
+interface WhisperEvent {
+    /**
+     * Which side of the channel is being authorized: `"subscribe"` when the
+     * socket asks to JOIN the topic (and so to receive every message on it),
+     * `"send"` when it asks to BROADCAST to it. Checked separately because they
+     * are separate powers — a read-only observer is a coherent thing to allow.
+     */
+    readonly action: "send" | "subscribe";
+    /** Stable per-socket id, the same one `onConnect` saw. */
+    readonly connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope (e.g. `{ roomId }`). */
+    readonly context?: Record<string, unknown>;
+    /** The shard this socket is bound to — the outer boundary the topic lives inside. */
+    readonly shardKey: string;
+    /** The topic name the client asked for. Client-supplied: validate it, never trust its shape. */
+    readonly topic: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    readonly userId: string | null;
+}
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -933,6 +971,30 @@ interface DatabaseReader {
     query: (tableName: string) => TableReader;
 
     /**
+     * Walk the relation graph out of one row: follow the foreign keys the
+     * schema's `v.id("target")` columns already declare, breadth-first, and
+     * return each reached row with its `depth`, the edge names walked to reach
+     * it (`path`), the ids along the way (`pathIds`), and a depth-decaying
+     * `score`.
+     *
+     * This is the read a keyword or vector search cannot do: "everything
+     * connected to this customer" is a property of the edges, not of the text.
+     * Depth 1 (the default) is the direct neighbourhood; a multi-hop expansion
+     * is the same call with a higher `depth`.
+     *
+     * ```ts
+     * const { nodes } = await ctx.db.related({ table: "customers", id }, { depth: 2 });
+     * ```
+     *
+     * Every hop is a normal `ctx.db` read, so row-level security, column
+     * masking, soft-delete scoping and subscription dependency tracking all
+     * apply per hop. `depth` is capped at 4 and `limit` at 200; a
+     * `v.array(v.id(...))` column is followed outward only (there is no
+     * array-containment filter to find its holders with).
+     */
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
      * Best-effort, read-only reader over Lunora's system tables
      * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
      * part of the transaction snapshot — see {@link SystemDatabaseReader}.
@@ -973,6 +1035,84 @@ interface PaginationResult<T = Record<string, unknown>> {
      * into two adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+}
+
+/** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */
+type RelatedDirection = "both" | "in" | "out";
+
+/** An explicit `{ table, id }` start node for {@link DatabaseReader.related}. */
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: a loaded document (recognised by its `_id`, whose
+ * table the reader resolves), or an explicit `{ table, id }`.
+ *
+ * The document arm requires `_id`, which is what makes the two arms actually
+ * distinguishable: against a bare `Record<string, unknown>` the union collapses
+ * — `{ table, id }` is assignable to it — so a misspelled `{ tabel, id }` used
+ * to type-check and fail only at runtime.
+ */
+type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Options for {@link DatabaseReader.related}. */
+interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood.
+     * Must be an integer in `1 … 4`; anything else is refused rather than
+     * clamped, because a silently-shortened walk looks like a graph with fewer
+     * edges than it has.
+     */
+    depth?: number;
+
+    /**
+     * Which way foreign keys are followed. `"out"` follows the ids the start
+     * row HOLDS (ticket → customer), `"in"` the rows that point AT it (customer
+     * → tickets), `"both"` (the default) does both.
+     */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names — `"<table>.<column>"`, e.g.
+     * `"tickets.customerId"`. Omitted ⇒ every `v.id(...)` column the schema
+     * declares. An unknown name is refused, so a typo cannot silently widen the
+     * traversal.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default 50, capped at 200. */
+    limit?: number;
+}
+
+/** One row reached by {@link DatabaseReader.related}, with how it was reached. */
+interface RelatedNode<T = Record<string, unknown>> {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: T;
+    /** Edge-type names walked from the start node to this one, in order. Length equals `depth`. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance: `1` at depth 1, halving each hop (`0.5 ** (depth - 1)`). */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a {@link DatabaseReader.related} traversal — the {@link PaginationResult} envelope, with `nodes` instead of `page`. */
+interface RelatedPage<T = Record<string, unknown>> {
+    /** Cursor to pass back for the next page, or `null` once `isDone`. */
+    continueCursor: null | string;
+    /** `true` when this page is the last one. */
+    isDone: boolean;
+    /** The reached nodes, nearest first. */
+    nodes: RelatedNode<T>[];
 }
 
 /**
@@ -1371,6 +1511,20 @@ interface SchedulableWorkflowReference {
     readonly name?: string;
 }
 
+/**
+ * What `ctx.scheduler.runAfter` / `runAt` accept as a target:
+ *
+ * - a generated `internal.<file>.<fn>` / `api.<file>.<fn>` reference to a
+ * mutation or action — the form the docs and the setup skills use, and the one
+ * `@lunora/scheduler` has always resolved at runtime (it reads `__lunoraRef`);
+ * - the equivalent `"file:fn"` path string;
+ * - a generated `workflows.<name>` / `agents.<name>` reference, which starts a
+ * fresh durable instance on fire.
+ *
+ * A `query` is not schedulable — a deferred job exists to have an effect.
+ */
+type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
@@ -1380,14 +1534,13 @@ interface Scheduler {
     list: () => Promise<ScheduledJob[]>;
 
     /**
-     * Schedule a one-shot run `delayMs` from now. `target` is a function path
-     * (`"ns:fn"`) dispatched as a one-shot, or a generated `workflows.<name>` /
-     * `agents.<name>` reference which starts a fresh durable instance on fire
-     * (the args become its `params`).
+     * Schedule a one-shot run `delayMs` from now; see {@link SchedulableTarget}
+     * for the accepted targets. A workflow/agent reference starts a fresh
+     * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableWorkflowReference | string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -2128,7 +2281,26 @@ interface SpanHandle {
      * it in a bug report, to build a `traceparent` for a hand-rolled outbound
      * call, or to parent a third-party library's spans onto this request.
      */
-    spanContext: () => { spanId: string; traceId: string };
+    spanContext: () => SpanContextIds;
+}
+
+/**
+ * A span's W3C ids plus the trace's settled sampling verdict.
+ *
+ * `sampled` is the propagated head decision — absent means none reached this
+ * tier, which every consumer reads as keep. It rides with the ids because
+ * everything that announces this span downstream from them (a hand-built
+ * `traceparent`, an `@opentelemetry/api` `SpanContext`) needs the flag in the
+ * same breath: claiming SAMPLED on a trace that was sampled out leaves a
+ * collector holding the middle of a trace nobody kept.
+ */
+interface SpanContextIds {
+    /** The trace's settled W3C `sampled` verdict; absent when none was propagated. */
+    sampled?: boolean;
+    /** This span's id (16-hex). */
+    spanId: string;
+    /** The trace this span belongs to (32-hex). */
+    traceId: string;
 }
 
 /**
@@ -2208,16 +2380,47 @@ interface SpanOptions {
  * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
  * and put the varying part in `attributes` — a name built from an id makes every
  * span its own group in a collector.
- * @param fn The body to time, receiving a tracer bound to this span for any
+ * @param function_ The body to time, receiving a tracer bound to this span for any
  * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
  * attributes. May be sync or async; the result is awaited.
  * @param attributes Either a plain attribute bag to stamp on the span at start
  * (normalized like a log line's `fields`), or a {@link SpanOptions} object when
  * you need `kind` or `links`. It is read as options only when *every* key is one
- * of `attributes`/`kind`/`links`; `{ attributes: { kind: "premium" } }` is the
- * explicit form if your own attributes happen to be named that.
+ * of `attributes`/`kind`/`links` AND a `kind`, if present, actually names a
+ * {@link SpanKind}; `{ attributes: { kind: "premium" } }` is the explicit form if
+ * your own attributes happen to be named that.
+ * @param identity Adapter-only: record the span under ids the caller has ALREADY
+ * published (see {@link SpanIdentity}). A handler never passes this — it exists
+ * so the `@opentelemetry/api` bridge, which must hand a library a `SpanContext`
+ * synchronously, is recorded under the id it handed out rather than a phantom.
  */
-type LunoraTracer = <T>(name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T, attributes?: LogFields | SpanOptions) => Promise<T>;
+type LunoraTracer = <T>(
+    name: string,
+    function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T,
+    attributes?: LogFields | SpanOptions,
+    identity?: SpanIdentity,
+) => Promise<T>;
+
+/**
+ * Caller-supplied ids for one `ctx.trace` span — the tracer's fourth argument.
+ *
+ * For adapters that must publish a span's identity BEFORE the body runs: the
+ * `@opentelemetry/api` bridge returns a `SpanContext` synchronously from
+ * `startSpan` and a library builds a `traceparent` from it, so the span has to be
+ * recorded under the id already announced or every downstream span parents to an
+ * id that never reaches the collector. `parentSpanId` lets such an adapter
+ * express its own parent/child structure without an ambient span stack.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
+ */
+interface SpanIdentity {
+    /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
+    parentSpanId: string;
+    /** Record the span under this id (16-hex) instead of a freshly minted one. */
+    spanId: string;
+}
 
 /**
  * `ctx.span` — a handle onto **this request's own span**, and with it the
@@ -2321,10 +2524,18 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
 
@@ -2346,7 +2557,8 @@ interface QueryCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Query/mutation handlers must be
-     * deterministic — they may be re-run on OCC retry / subscription re-eval — so
+     * deterministic — they may be re-run on subscription re-evaluation (an OCC
+     * conflict surfaces as a `409` to the caller, not an internal retry) — so
      * read time through `ctx.now` instead of `Date.now()` (the latter is flagged
      * by the `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
@@ -2387,10 +2599,9 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
@@ -2412,9 +2623,10 @@ interface MutationCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Mutation handlers must be deterministic
-     * — they may be re-run on OCC retry — so read time through `ctx.now` instead
-     * of `Date.now()` (the latter is flagged by the `nondeterministic_query_mutation`
-     * advisor). Actions may use `Date.now()`.
+     * — an OCC conflict surfaces as a `409` to the caller rather than an internal
+     * retry, but a caller's own retry is a fresh dispatch — so read time through
+     * `ctx.now` instead of `Date.now()` (the latter is flagged by the
+     * `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
     readonly now: number;
 
@@ -2455,9 +2667,13 @@ interface ActionCtx {
 
     /**
      * Programmatic Workers Cache purge; see {@link CachePurge}.
-     * **Action-only** — actions run in the Worker, which has a `cache` binding.
-     * Queries and mutations run inside the Durable Object and do not expose this.
-     * Optional at runtime because Workers Cache is only present when enabled.
+     *
+     * **HTTP actions only.** It is the Worker that holds the `cache` binding, and
+     * only `HttpActionCtx` is built there — an `action` reached over RPC runs
+     * inside the Durable Object like a query or a mutation, so `ctx.cache` is
+     * `undefined` for it. Declared here because `HttpActionCtx` is a `Pick` of
+     * this interface. Optional because Workers Cache is only present when
+     * enabled in `wrangler.jsonc`; always branch on it.
      */
     readonly cache?: CachePurge;
 
@@ -2475,10 +2691,9 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
 
@@ -2586,6 +2801,12 @@ export type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
     RestCacheConfig,
     RetryPolicy,
@@ -2600,8 +2821,10 @@ export type {
     SecretsStoreSecretLike,
     ShardInitEvent,
     ShardMode,
+    SpanContextIds,
     SpanEvaluation,
     SpanHandle,
+    SpanIdentity,
     SpanKind,
     SpanLink,
     SpanOptions,
@@ -2648,6 +2871,7 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,

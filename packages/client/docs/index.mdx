@@ -34,9 +34,12 @@ const unsubscribe = client.subscribe(api.messages.list, { channelId: "general" }
 - **Queries / mutations / actions**: `POST /_lunora/rpc`, JSON body
   `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
 - **Subscriptions**: single multiplexed WebSocket at `/_lunora/ws`. The
-  client sends `subscribe` / `unsubscribe` / `connect` / `ack` / `stream`
-  frames; the server pushes `delta` (and `resume`) frames back, each tagged
-  with the originating subscription `id`.
+  client sends `connect` / `subscribe` / `shape_subscribe` / `unsubscribe` /
+  `stream` / `whisper` frames; the server pushes `ack`, `data`, `delta`,
+  `resume`, `settled`, `chunk`, `error`, `complete` and `whisper` frames back,
+  each tagged with the originating subscription `id`. The normative frame table
+  is [`protocol/README.md`](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md)
+  §5.
 
 ### Supported value types
 
@@ -70,7 +73,10 @@ one is caught by the peer that reads it rather than by the sender.
 
 ## Reconnect & bookmarks
 
-Reconnect uses decorrelated-jitter backoff (`reconnect` option). The client
+Reconnect uses exponential backoff with equal jitter (`reconnect` option): the
+delay doubles per attempt from `initialDelayMs` (default 250 ms) up to
+`maxDelayMs` (default 30 s), and each attempt then picks uniformly from
+`[delay/2, delay]` (`jitter`, on by default). The client
 keeps a per-session monotonic bookmark in `BookmarkStorage` (in-memory by
 default), sent on the `x-d1-bookmark` request header of each HTTP RPC and
 refreshed from the response, so D1 reads are read-your-writes consistent across
@@ -121,21 +127,44 @@ See [Offline-first](/docs/concepts/offline-first) for the full reads + writes st
 
 ## Optimistic updates
 
-`client.mutation(fn, args, { optimistic: (current) => next })` patches the
-matching subscription's cache immediately, then reconciles it **gaplessly**: the
-patch is recorded as a rebaseable layer, so an unrelated server delta that lands
-while the write is still pending is re-folded _under_ it (your change never
-flickers away and back), and the layer is dropped the moment a server frame whose
-`cursor` reaches the write's committed cursor arrives. The server echoes that
-cursor on the mutation response, so the drop is keyed on confirmed server state,
-not RPC-response timing (which races the WebSocket broadcast). A coded rejection
-rolls the layer back.
+`client.mutation(fn, args, { optimisticUpdate })` patches subscribed queries
+immediately, then reconciles them **gaplessly**: each patch is recorded as a
+rebaseable layer, so an unrelated server delta that lands while the write is
+still pending is re-folded _under_ it (your change never flickers away and back),
+and the layer is dropped the moment a server frame whose `cursor` reaches the
+write's committed cursor arrives. The server echoes that cursor on the mutation
+response, so the drop is keyed on confirmed server state, not RPC-response timing
+(which races the WebSocket broadcast). A coded rejection rolls every layer of the
+batch back atomically.
 
-To patch several subscribed queries from one mutation, pass `optimisticUpdate`
-instead; it receives an `OptimisticLocalStore` over the live cache, and each
-`setQuery` registers a constant-value layer on the same engine, so the whole
-batch rebases and settles together (confirmed on the mutation's commit cursor, or
-rolled back atomically on failure). See
+The callback receives an `OptimisticLocalStore` over the live cache plus the
+mutation's args, and **names the queries it patches** — which it has to: a write
+and the queries it affects are different functions, and no client can infer which
+ones a `messages:send` changes.
+
+```ts
+await client.mutation(
+    api.messages.send,
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
+```
+
+`getAllQueries(fn)` patches every subscribed variant of a query (all channels,
+all filters) when you don't want to enumerate their args.
+
+There is also a per-call `optimistic: (current) => next` shortcut, and its
+targeting rule is narrow enough to be worth stating: it patches the subscription
+registered under the **mutation's own** reference and args, and silently finds
+nothing otherwise. That makes it the shorthand for a query and a mutation that
+share a path (a counter, a document by id) — for anything else, including the
+`send`/`list` shape above, use `optimisticUpdate`. See
 [Offline-first](/docs/concepts/offline-first#the-reconciliation-model) for the
 full reconciliation model.
 
@@ -189,10 +218,19 @@ const call = createCallRunner((args, options) => client.action(api.commands.run,
 });
 ```
 
-The adapters agree on one lifecycle contract on top of it: a success clears
+The adapters that use it agree on one lifecycle contract: a success clears
 `error`, a failure leaves the previous `data` in place (a transient error does
 not blank the view), and `reset()` clears both without cancelling an in-flight
 call — a call that settles after a reset repopulates.
+
+**React's `useMutation` is the exception.** It is TanStack Query's
+`useMutation` with a ref-counted `pending` on top, not this runner, so `data`
+and `error` follow TanStack's reducer: `data` is cleared when a call starts
+**and** when one fails. A component that renders the previous `data` as a
+fallback during a retry keeps it on Vue/Solid/Svelte and blanks on React — hold
+the last value yourself if you need it on both. `useAction` and every other
+adapter's mutation/action handle are runner-backed and follow the contract
+above.
 
 You only reach for it when writing a custom adapter; app code uses the adapter
 primitive for its framework.
@@ -235,6 +273,26 @@ reconnect with the new credential.
 fires whenever the bearer changes. The `@lunora/client/auth` subpath wraps
 these into a shared per-client identity store (single in-flight fetch, fan-out
 to every mounted hook) that the framework adapters consume.
+
+### Auth status
+
+The store resolves to one of four states, exposed as `status` by every adapter's
+auth primitive (`useAuth`, `createAuth`, `auth`). **Branch on `status`, never on
+whether `user` is null** — `user` is null both when signed out and when a held
+credential's identity has not resolved (or could not be reached), and gating on
+it renders a sign-in form to a signed-in user.
+
+| Status            | Meaning                                                             | Gate          |
+| ----------------- | ------------------------------------------------------------------- | ------------- |
+| `loading`         | the first identity resolve is in flight                             | loading       |
+| `authenticated`   | the server returned a user                                          | authenticated |
+| `unauthenticated` | the server answered that there is no session                        | signed out    |
+| `unreachable`     | a credential is held but the identity endpoint could not be reached | authenticated |
+
+`unreachable` counts as authenticated because the **credential** is what
+authorizes requests; a failed identity round-trip is a fact about the network,
+not about the session. A cookie session carries no bearer token at all, so the
+first resolve always asks the server — a null token is not an answer.
 
 ## SSR preloading
 

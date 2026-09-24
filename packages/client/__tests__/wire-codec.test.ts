@@ -1,7 +1,7 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire, WIRE_TAG } from "../../../shared/wire-codec";
 
 /** JSON round-trip of the encoded form, mirroring what the transport actually does. */
 // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport (structuredClone wouldn't serialize, nor throw on bigint), which is exactly what the codec exists to survive
@@ -117,6 +117,32 @@ describe("wireCodec round-trips", () => {
         expect(decoded.err.code).toBe("E_BOOM");
         // own props round-trip through the codec too (bigint survives).
         expect(decoded.err.detail).toBe(7n);
+    });
+
+    it("coerces an Error's non-string name/message so encode cannot emit what decode refuses", () => {
+        expect.assertions(3);
+
+        // Both slots are writable and neither is type-checked by the platform,
+        // and `decodeWire` refuses a non-string in either. Passing them through
+        // produced a frame this codec's own decoder throws on — and a decoder
+        // throw on a subscription frame kills the subscription rather than
+        // surfacing the error. `name` is defined rather than assigned so it
+        // stays non-enumerable, as a real Error's is: a bare assignment makes it
+        // an own enumerable prop, which rides the `ownProps` slot instead and
+        // never reaches the label being tested.
+        const source = new Error("ignored");
+
+        Object.defineProperty(source, "name", { configurable: true, value: 5, writable: true });
+        // Cast at the assignment: `Error["message"]` is `string`, so an
+        // intersection with `{ message: unknown }` still narrows back to
+        // `string` and the whole point of the test will not compile.
+        (source as unknown as { message: unknown }).message = { a: 1 };
+
+        const encoded = encodeWire(source) as unknown[];
+
+        expect(encoded[2]).toBe("5");
+        expect(encoded[3]).toBe("[object Object]");
+        expect(() => wire(source)).not.toThrow();
     });
 
     it("restores a custom Error subclass name via the generic Error fallback", () => {
@@ -321,6 +347,29 @@ describe("wireCodec round-trips", () => {
         expect(Object.keys(decoded)).toStrictEqual(["__proto__", "amount"]);
         // And nothing was polluted along the way — the key is an own data
         // property, so no object in the chain gained a `polluted` member.
+        expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    });
+
+    // Same defect, one branch over: the ERROR encode branch built its props object
+    // with a plain `properties[key] = …`, so an error carrying a literal `__proto__`
+    // own prop (which `decodeWire` faithfully produces) re-encoded as `{}` — and the
+    // props object itself came back with a wire-chosen prototype, which `JSON.stringify`
+    // hides. The decode side and the plain-object encode branch both already guarded it.
+    it("round-trips a literal __proto__ prop on an error instead of dropping it on encode", () => {
+        expect.assertions(4);
+
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport, which is what the codec decodes
+        const frame = JSON.parse(JSON.stringify([WIRE_TAG, "error", "Error", "boom", JSON.parse('{"__proto__":{"polluted":true},"code":"E_BOOM"}')]));
+        const decoded = decodeWire(frame) as Error;
+
+        const encoded = encodeWire(decoded) as unknown[];
+        const properties = encoded[4] as Record<string, unknown>;
+
+        expect(Object.keys(properties)).toStrictEqual(["__proto__", "code"]);
+        // The props object is a plain object, not one wearing the wire's prototype.
+        expect(Object.getPrototypeOf(properties)).toBe(Object.prototype);
+        // And the whole frame is a fixed point of the round trip.
+        expect(encoded).toStrictEqual(frame);
         expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
     });
 });

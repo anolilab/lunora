@@ -76,6 +76,13 @@ const readOptionalNumber = (row: PaymentRow, key: string): number | undefined =>
 
 const readBoolean = (row: PaymentRow, key: string): boolean => row[key] === true;
 
+/** An optional `v.array(v.string())` column. Absent — or any non-array — reads as `undefined`. */
+const readStringArray = (row: PaymentRow, key: string): string[] | undefined => {
+    const value = row[key];
+
+    return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : undefined;
+};
+
 const readBigint = (row: PaymentRow, key: string): bigint => {
     const value = row[key];
 
@@ -86,10 +93,19 @@ const readBigint = (row: PaymentRow, key: string): bigint => {
     return typeof value === "number" || typeof value === "string" ? BigInt(value) : 0n;
 };
 
+/**
+ * Every `*ToRow` codec OMITS an optional field it has no value for rather than writing the key with
+ * `undefined`.
+ *
+ * `upsert` below is insert-then-patch, and `ctx.db.patch` REJECTS a key whose value is explicitly
+ * `undefined` (shard-engine's `assertNoExplicitUndefined`) — the merge that builds the written row
+ * would silently drop the key, deleting the column instead of leaving it alone. So a row whose
+ * optional columns are absent inserts fine and then throws on every LATER write of the same row.
+ */
 const customerToRow = (customer: Customer): Record<string, unknown> => {
     return {
         createdAt: customer.createdAt,
-        email: customer.email,
+        ...(customer.email === undefined ? {} : { email: customer.email }),
         provider: customer.provider,
         providerCustomerId: customer.id,
         referenceId: customer.referenceId,
@@ -141,9 +157,12 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
     return {
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
         createdAt: subscription.createdAt,
-        currentPeriodEnd: subscription.currentPeriodEnd,
-        currentPeriodStart: subscription.currentPeriodStart,
+        ...(subscription.currentPeriodEnd === undefined ? {} : { currentPeriodEnd: subscription.currentPeriodEnd }),
+        ...(subscription.currentPeriodStart === undefined ? {} : { currentPeriodStart: subscription.currentPeriodStart }),
         priceId: subscription.priceId,
+        // Left absent when the adapter reported no set, so the column stays unwritten for the
+        // single-price providers and the round-trip below falls back to `[priceId]`.
+        ...(subscription.priceIds === undefined ? {} : { priceIds: [...subscription.priceIds] }),
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
         quantity: subscription.quantity,
@@ -161,6 +180,10 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
         id: readString(row, "providerSubscriptionId"),
         priceId: readString(row, "priceId"),
+        // Absent on a row written before the column existed, and on one the webhook path wrote (it
+        // carries a single price id). `undefined` is what makes the entitlement read fall back to
+        // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
+        priceIds: readStringArray(row, "priceIds"),
         provider: readString(row, "provider") as ProviderId,
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),
@@ -291,7 +314,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return events;
         },
 
-        markEventProcessed: async (provider, eventId) => {
+        markEventProcessed: async (provider, eventId, type) => {
             const existing = await database.findFirst("events", { provider, providerEventId: eventId });
 
             if (existing) {
@@ -300,7 +323,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_provider_event` index is the real race guard in the DO; a concurrent
             // insert of the same event id fails its OCC commit, so at most one caller wins.
-            await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type: "" });
+            await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type });
 
             return true;
         },

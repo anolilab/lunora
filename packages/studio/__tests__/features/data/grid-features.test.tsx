@@ -46,6 +46,14 @@ describe("toCsv", () => {
 
         expect(toCsv(["n"], [{ n: -5 }])).toBe("n\n-5");
     });
+
+    it("renders a bytes cell the way the grid does, not as the `{}` an ArrayBuffer stringifies to", () => {
+        expect.assertions(2);
+
+        expect(toCsv(["blob"], [{ blob: Uint8Array.from([1, 2, 3, 4]).buffer }])).toBe("blob\n<bytes: 4 B>");
+        // And a nested bigint no longer throws mid-export.
+        expect(toCsv(["meta"], [{ meta: { amount: 42n } }])).toBe('meta\n"{""amount"":""42""}"');
+    });
 });
 
 describe("toJson", () => {
@@ -86,6 +94,39 @@ describe("toSql", () => {
         const sql = toSql("query-result", ['we"ird'], [{ 'we"ird': "O'Brien" }]);
 
         expect(sql).toBe('INSERT INTO "query-result" ("we""ird") VALUES\n  (\'O\'\'Brien\');');
+    });
+
+    it("renders a bytes cell as its grid rendering rather than the empty `'{}'` an ArrayBuffer stringifies to", () => {
+        expect.assertions(1);
+
+        expect(toSql("t", ["blob"], [{ blob: Uint8Array.from([1, 2, 3, 4]).buffer }])).toBe('INSERT INTO "t" ("blob") VALUES\n  (\'<bytes: 4 B>\');');
+    });
+
+    it("targets the physical columns and re-assembles `__doc__` when the page was expanded", () => {
+        expect.assertions(1);
+
+        // `columns` is the DISPLAY list (doc fields lifted); `sqlColumns` is what
+        // the table physically has. Without the second, the statement names
+        // `"body"`/`"pinned"`, which no shard table has.
+        const sql = toSql(
+            "notes",
+            ["id", "_creationTime", "body", "pinned"],
+            [{ _creationTime: 17, body: "hi", id: "n1", pinned: true }],
+            ["id", "_creationTime", "__doc__"],
+        );
+
+        expect(sql).toBe('INSERT INTO "notes" ("id", "_creationTime", "__doc__") VALUES\n  (\'n1\', 17, \'{"body":"hi","pinned":true}\');');
+    });
+
+    it("leaves the dump column-for-column when the page still carries a raw `__doc__` (unexpanded)", () => {
+        expect.assertions(1);
+
+        // A row whose `__doc__` did not parse is reported unexpanded, so the
+        // display list already IS the physical list and there is nothing to
+        // re-assemble — re-assembling would emit an empty document.
+        const sql = toSql("notes", ["id", "__doc__"], [{ __doc__: "not-json", id: "n1" }], ["id", "__doc__"]);
+
+        expect(sql).toBe('INSERT INTO "notes" ("id", "__doc__") VALUES\n  (\'n1\', \'not-json\');');
     });
 
     it("returns an empty string when there are no columns or no rows", () => {

@@ -85,7 +85,9 @@ describe("localTools", () => {
     it("omits the documentation tools when docs is false", () => {
         expect.assertions(1);
 
-        expect(namesOf(localTools({ docs: false }))).toStrictEqual([]);
+        // The error catalog is compiled in and stays — it is neither a docs tool
+        // nor a deployment tool, so neither switch reaches it.
+        expect(namesOf(localTools({ docs: false }))).toStrictEqual(["lunora_explain_error"]);
     });
 
     it("advertises the deployment tools even when the resolver currently finds nothing", () => {
@@ -97,6 +99,42 @@ describe("localTools", () => {
         // must not depend on whether the dev server happened to be up.
         expect(names).toContain("lunora_run_query");
         expect(names).toContain("lunora_list_functions");
+    });
+
+    /**
+     * `lunora_explain_error` answers from the compiled-in `ERROR_CATALOG`. It
+     * used to be registered inside the deployment-bound list, which `localTools`
+     * only builds when `deployment` is set — so a server started with no
+     * deployment never advertised the one tool that needs none, and "what does
+     * SHARD_TIMEOUT mean" is exactly the question you ask when nothing is up.
+     */
+    it("advertises the error tool with no deployment configured at all", () => {
+        expect.assertions(3);
+
+        const names = namesOf(localTools({ docs: false }));
+
+        expect(names).toContain("lunora_explain_error");
+        // …and it is registered exactly once, not shadowed by a second entry
+        // riding the deployment list.
+        expect(
+            namesOf(localTools({ deployment: { token: "admin-token", url: "https://worker.example" }, docs: false })).filter(
+                (name) => name === "lunora_explain_error",
+            ),
+        ).toHaveLength(1);
+        // The deployment tools really are absent here — this is not a server
+        // that happened to get the whole surface.
+        expect(names).not.toContain("lunora_run_query");
+    });
+
+    it("answers the error tool without a deployment", async () => {
+        expect.assertions(2);
+
+        const tools = localTools({ docs: false });
+        const explain = tools.find((tool) => tool.definition.name === "lunora_explain_error");
+        const result = await explain!.handle({ code: "SHARD_TIMEOUT" });
+
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0]!.text).toContain("SHARD_TIMEOUT");
     });
 
     it("hides the write tools unless allowWrites is set", () => {

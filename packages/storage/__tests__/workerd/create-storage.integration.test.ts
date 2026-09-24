@@ -89,4 +89,148 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
 
         expect(got).toBeNull();
     });
+
+    // R2 refuses any `ReadableStream` whose length it cannot read, so a `maxSize`
+    // that wraps the body in a plain `TransformStream` makes every streaming
+    // upload fail with "Provided readable stream must have a known length".
+    // The unit suite's fake bucket accepts any stream, so only workerd sees it.
+    it("uploads a ReadableStream body under maxSize", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await sut.upload("streamed/ok.txt", new Blob([new TextEncoder().encode("streamed body")]).stream(), {
+            contentType: "text/plain",
+            maxSize: 1024,
+        });
+
+        const got = await sut.download("streamed/ok.txt");
+
+        expect(got).not.toBeNull();
+        await expect(got!.text()).resolves.toBe("streamed body");
+    });
+
+    // A ReadableStream may carry any BufferSource shape. The counter measures
+    // all of them, but the collected body is drained through a `Response`, whose
+    // stream only accepts Uint8Array — so this settles on the real runtime what
+    // was only observed under undici.
+    it("uploads a streamed body whose chunks are ArrayBuffers and DataViews", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue(encoder.encode("ab").buffer);
+                controller.enqueue(new DataView(encoder.encode("cd").buffer));
+                controller.close();
+            },
+        });
+
+        await sut.upload("streamed/buffers.txt", stream, { contentType: "text/plain", maxSize: 1024 });
+
+        const got = await sut.download("streamed/buffers.txt");
+
+        expect(got).not.toBeNull();
+        await expect(got!.text()).resolves.toBe("abcd");
+    });
+
+    it("rejects a maxSize that is not a finite, non-negative number", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await expect(sut.upload("streamed/nan.txt", new Blob(["body"]).stream(), { maxSize: Number.NaN })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        await expect(sut.download("streamed/nan.txt")).resolves.toBeNull();
+    });
+
+    it("rejects a ReadableStream body over maxSize without storing it", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await expect(
+            sut.upload("streamed/too-big.txt", new Blob([new TextEncoder().encode("far too many bytes for this cap")]).stream(), { maxSize: 8 }),
+        ).rejects.toThrow(/maxSize/);
+
+        await expect(sut.download("streamed/too-big.txt")).resolves.toBeNull();
+    });
+
+    // A view and a string are both shapes R2's `put` stores bytes from, and both
+    // used to slip past `maxSize` (`body.size` is `undefined` for either, and
+    // `undefined > maxSize` is false) — real R2 stored the full 100 bytes under
+    // a 10-byte cap.
+    it("enforces maxSize for an ArrayBufferView and a string body, storing neither", async () => {
+        expect.assertions(4);
+
+        const sut = storage();
+
+        await expect(sut.upload("capped/view.bin", new Uint8Array(100).fill(65), { maxSize: 10 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        await expect(sut.download("capped/view.bin")).resolves.toBeNull();
+
+        await expect(sut.upload("capped/string.txt", "x".repeat(100), { maxSize: 10 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+        await expect(sut.download("capped/string.txt")).resolves.toBeNull();
+    });
+
+    // Real R2 answers `MaxKeys params must be positive integer <= 1000. (10022)`
+    // for a `NaN` limit — `Math.floor(NaN)` is `NaN` and passed both clamps. The
+    // guard has to fire locally, so the rejection names `limit`, not `MaxKeys`.
+    it("rejects a non-integer list limit locally instead of letting R2 answer 10022", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await expect(sut.list("any/", { limit: Number.NaN })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(sut.list("any/", { limit: 0 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    // The `head`-less fallback used to ask R2 for a 0-length range, which R2
+    // refuses (`get: The requested range is not satisfiable (10039)`), so the
+    // documented degradation could not work against a real bucket. A 1-byte
+    // range fails the same way on a 0-byte object, which this covers too.
+    it("head() works through a head-less binding, including for a 0-byte object", async () => {
+        expect.assertions(3);
+
+        const headless = createStorage({
+            bucket: {
+                delete: async (key) => {
+                    await env.BUCKET.delete(key);
+                },
+                get: async (key, options) => (options ? await env.BUCKET.get(key, options) : await env.BUCKET.get(key)),
+                list: async (options) => await env.BUCKET.list(options),
+                put: async (key, body, options) => await env.BUCKET.put(key, body, options),
+            },
+            bucketName: "default",
+        });
+
+        await headless.upload("headless/ten.txt", "abcdefghij");
+        await headless.upload("headless/empty.txt", new Uint8Array(0));
+
+        await expect(headless.head("headless/ten.txt")).resolves.toMatchObject({ size: 10 });
+        await expect(headless.head("headless/empty.txt")).resolves.toMatchObject({ size: 0 });
+        await expect(headless.head("headless/missing.txt")).resolves.toBeNull();
+    });
+
+    // R2 omits `httpMetadata`/`customMetadata` from list entries unless the call
+    // asks for them (`r2_list_honor_include`, on for every compat date since
+    // 2022-08-04). The fake bucket returns whatever it stored, so only workerd
+    // shows the empty objects a real bucket sends back.
+    it("list reports httpMetadata and customMetadata for each entry", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await sut.upload("meta/one.txt", new TextEncoder().encode("m").buffer, {
+            contentType: "text/plain",
+            customMetadata: { owner: "u1" },
+        });
+
+        const listed = await sut.list("meta/");
+        const entry = listed.objects.find((object) => object.key === "meta/one.txt");
+
+        expect(entry?.httpMetadata?.contentType).toBe("text/plain");
+        expect(entry?.customMetadata).toStrictEqual({ owner: "u1" });
+    });
 });

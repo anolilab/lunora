@@ -31,13 +31,27 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`. Read at
-     * dispatch to decide whether the function runs system-trusted: `init` and
-     * `reactor` have no caller identity, so RLS has no user to scope to.
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`/`onWhisper`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * `init` and `reactor` have no caller identity, so RLS has no user to scope
+     * to. `whisper` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -57,36 +71,35 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
 installCompiledValidatorMap(lunora_documents_0.create.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-if (source["organizationId"].length > 128) return DEFER;
 if (typeof source["title"] !== "string") return DEFER;
 if (source["title"].length > 256) return DEFER;
 if (typeof source["body"] !== "string") return DEFER;
 if (source["body"].length > 100000) return DEFER;
-return { "organizationId": source["organizationId"], "title": source["title"], "body": source["body"] };
-});
-installCompiledValidatorMap(lunora_documents_0.list.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-if (source["organizationId"].length > 128) return DEFER;
-return { "organizationId": source["organizationId"] };
+return { "title": source["title"], "body": source["body"] };
 });
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
- * per Durable Object instance before any handler runs (`init`), and after a
- * write flush when a watched read's result changed (`reactor`). Each path also
- * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; `init` and `reactor` have no caller, so they run
- * anonymous — all via system dispatch.
+ * per Durable Object instance before any handler runs (`init`), after a
+ * write flush when a watched read's result changed (`reactor`), and before a
+ * socket joins or broadcasts to a whisper topic (`whisper`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket-scoped moments run under
+ * the socket's verified identity; `init` and `reactor` have no caller, so they
+ * run anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: {
+    connect: readonly string[];
+    disconnect: readonly string[];
+    init: readonly string[];
+    reactor: readonly string[];
+    whisper: readonly string[];
+} = {
     connect: [],
     disconnect: [],
     init: [],
     reactor: [],
+    whisper: [],
 };
 
 /**
@@ -119,8 +132,8 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     documents: {
-        create: (args: { organizationId: string; title: string; body: string }) => Promise<Id<"documents">>;
-        list: (args: { organizationId: string }) => Promise<{ _id: Id<"documents">; organizationId: string; ownerId: string; title: string; body: string; createdAt: number }[]>;
+        create: (args: { title: string; body: string }) => Promise<Id<"documents">>;
+        list: (args?: {}) => Promise<{ _id: Id<"documents">; body: string; createdAt: number; ownerId: string; title: string }[]>;
     };
 }
 
@@ -129,6 +142,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

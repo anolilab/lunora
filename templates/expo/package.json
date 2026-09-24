@@ -2,18 +2,18 @@
     "name": "{{name}}",
     "version": "0.0.0",
     "private": true,
+    "main": "index.ts",
     "imports": {
         "#lunora/*": "./lunora/*"
     },
-    "main": "index.ts",
     "scripts": {
         "start": "expo start",
         "android": "expo start --android",
         "ios": "expo start --ios",
         "web": "expo start --web",
         "codegen": "lunora codegen",
-        "dev:server": "wrangler dev",
-        "deploy": "wrangler deploy",
+        "dev:server": "lunora dev",
+        "deploy": "lunora deploy",
         "lint:types": "lunora codegen && tsc --noEmit"
     },
     "dependencies": {

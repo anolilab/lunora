@@ -1,5 +1,7 @@
 import type { DestroyRef, Injector } from "@angular/core";
-import { effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
+import { computed, effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
+
+import { stableWireKey } from "../../../shared/wire-key";
 
 /**
  * Whether a reactive primitive should open its live WebSocket subscription (and
@@ -33,6 +35,29 @@ export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean =
 };
 
 /**
+ * The deferred form of {@link runOutsideAngular}: resolve the zone escape NOW
+ * (in the injection context) and apply it LATER. `inject(NgZone)` only works
+ * while the primitive body is running, so a primitive that registers its
+ * listeners asynchronously — `voiceAgent` opens its socket and its capture graph
+ * inside `startCall`, after an `await` — cannot call `runOutsideAngular` at the
+ * point it needs it.
+ *
+ * Worth the escape specifically there: a voice call's socket delivers a binary
+ * audio frame per synthesized chunk and the capture graph reports an input level
+ * roughly twelve times a second, so leaving them inside the zone is an app-wide
+ * change-detection pass at audio rate for the whole call.
+ */
+export const outsideAngularRunner = (fromInjectionContext: boolean): (<T>(task: () => T) => T) => {
+    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
+
+    if (!zone) {
+        return <T>(task: () => T): T => task();
+    }
+
+    return <T>(task: () => T): T => zone.runOutsideAngular(task);
+};
+
+/**
  * Run `register` outside Angular's zone when a `NgZone` is available, so timers /
  * DOM listeners it sets up (and the callbacks they later fire) do not schedule an
  * app-wide change-detection pass. Signal writes still notify their consumers
@@ -44,19 +69,25 @@ export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean =
  * from DI. Falls back to a direct call otherwise (a call made with an explicit
  * `destroyRef` outside DI, or a zoneless app with no `NgZone`).
  */
-export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: () => T): T => {
-    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
-
-    return zone ? zone.runOutsideAngular(register) : register();
-};
+export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: () => T): T => outsideAngularRunner(fromInjectionContext)(register);
 
 /**
  * Wire the reactive-args form of a primitive: re-run `open` whenever the tracked
- * `args` thunk produces a new value, tearing the previous generation down first
- * (via the `onCleanup` handed to `open`), and stop the whole effect when the
- * owner is destroyed.
+ * `args` thunk produces args with new CONTENT, tearing the previous generation
+ * down first (via the `onCleanup` handed to `open`), and stop the whole effect
+ * when the owner is destroyed.
  *
- * `args` is read TRACKED — it is the only dependency the effect exists for.
+ * The effect tracks `stableWireKey(args())` rather than the args object: a thunk
+ * such as `() => ({ id: id(), limit: Math.min(limit(), 10) })` builds a fresh
+ * object whenever any signal it reads ticks, and tracking identity would tear the
+ * live subscription down and re-snapshot from the server — blanking the signal —
+ * for args that did not actually change. A `computed` memoises the key, so an
+ * equal-content tick never schedules the effect at all (the dedupe cannot live
+ * inside the effect body: by then Angular has already run the previous
+ * generation's `onCleanup`).
+ *
+ * `args` is read TRACKED through that key — it is the only dependency the effect
+ * exists for.
  * `open` runs UNTRACKED, which is load-bearing rather than an optimisation: a
  * primitive that reads its own signals while building a generation (the
  * paginated engine reads its page list) would otherwise take a dependency on
@@ -81,14 +112,15 @@ export const attachReactiveArgs = <A>(
     open: (resolved: A, onCleanup: (teardown: () => void) => void) => void,
 ): void => {
     let effectRef;
+    const argsKey = computed(() => stableWireKey(args()));
 
     try {
         effectRef = effect(
             (onCleanup) => {
-                const resolved = args();
+                argsKey();
 
                 untracked(() => {
-                    open(resolved, onCleanup);
+                    open(args(), onCleanup);
                 });
             },
             { injector: owner.injector, manualCleanup: true },

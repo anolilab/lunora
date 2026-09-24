@@ -75,12 +75,17 @@ const isLoopbackUrl = (url: string): boolean => {
  * running right now" — the deployment tools stay advertised and explain
  * themselves when called.
  *
- * The token is deliberately NOT carried across an explicit `--url` to a remote
- * host. `LUNORA_ADMIN_TOKEN` is discovered from the environment or `.dev.vars`
- * and is meant for the local dev server; `--url` exists precisely to point
- * somewhere else, so pairing the two by default would ship the project's admin
- * bearer to an arbitrary origin — including over plain HTTP — on the strength of
- * one flag in a committed `.mcp.json`. Pass `--token` to send one deliberately.
+ * The token is deliberately NOT carried to a remote host. `LUNORA_ADMIN_TOKEN`
+ * is discovered from the environment or `.dev.vars` and is meant for the local
+ * dev server; pairing the two by default would ship the project's admin bearer
+ * to an arbitrary origin — including over plain HTTP — on the strength of one
+ * flag in a committed `.mcp.json`. Pass `--token` to send one deliberately.
+ *
+ * The loopback check applies to the resolved URL, WHICHEVER SOURCE it came
+ * from. `.lunora/dev.json` is an on-disk record this command reads without
+ * being asked to — written by whatever last ran in the checkout, and carried
+ * along by anything that copies a project directory — so gating only the
+ * explicit `--url` left the un-asked-for source as the trusted one.
  */
 const resolveDeployment = (options: McpServeOptions): LocalDeployment | undefined => {
     const url = options.url ?? readLiveDevServerState(options.cwd)?.url;
@@ -93,7 +98,7 @@ const resolveDeployment = (options: McpServeOptions): LocalDeployment | undefine
         return { token: options.token, url };
     }
 
-    if (options.url !== undefined && !isLoopbackUrl(options.url)) {
+    if (!isLoopbackUrl(url)) {
         return { url };
     }
 
@@ -135,7 +140,7 @@ const waitForClose = async (closable: ClosableServer): Promise<void> => {
  * with nothing running the deployment tools are present but inert, and without
  * an admin token they are present but will be refused.
  */
-const describeStartup = (deployment: LocalDeployment | undefined, options: McpServeOptions): string => {
+const describeStartup = (deployment: LocalDeployment | undefined): string => {
     if (deployment === undefined) {
         return "lunora mcp serve: ready (documentation tools). No dev server running yet — start `lunora dev` and the deployment tools start working, no restart needed.\n";
     }
@@ -144,9 +149,9 @@ const describeStartup = (deployment: LocalDeployment | undefined, options: McpSe
         return `lunora mcp serve: ready — deployment at ${deployment.url}\n`;
     }
 
-    const withheld = options.url !== undefined && !isLoopbackUrl(options.url);
+    const withheld = !isLoopbackUrl(deployment.url);
     const why = withheld
-        ? "the project's admin token was NOT sent to this non-local --url; pass --token to authenticate deliberately"
+        ? "the project's admin token was NOT sent to this non-local url; pass --token to authenticate deliberately"
         : "no LUNORA_ADMIN_TOKEN in the environment or .dev.vars; the deployment tools will be refused until one is set";
 
     return `lunora mcp serve: ready — deployment at ${deployment.url} (${why})\n`;
@@ -189,7 +194,7 @@ const runMcpServe = async (
 
     const deployment = resolveDeployment(options);
 
-    writeError(describeStartup(deployment, options));
+    writeError(describeStartup(deployment));
 
     await waitForClose(server);
 

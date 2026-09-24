@@ -19,8 +19,19 @@ import type {
     UploadOptions,
 } from "./types";
 
-/** Accepted upload body shapes (bytes, blob, or a byte stream). */
-type UploadBody = ReadableStream | ArrayBuffer | Blob;
+/**
+ * Accepted upload body shapes — every shape R2's `put` takes bytes from (see
+ * `R2BucketLike.put` in `@lunora/platform`).
+ *
+ * `ArrayBufferView` and `string` are here because R2 accepts them and callers
+ * hand them over: a `Uint8Array` is the most natural thing to give a byte store,
+ * and `v.bytes()` already accepts a view because views arrive on the wire. While
+ * this type listed only `ArrayBuffer`/`Blob`/`ReadableStream`, {@link applyMaxSize}
+ * measured a body as `body instanceof ArrayBuffer ? byteLength : body.size` —
+ * both `undefined` for a view or a string, and `undefined > maxSize` is false,
+ * so an uncapped body was forwarded to R2 verbatim.
+ */
+type UploadBody = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string;
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
@@ -30,6 +41,21 @@ const MAX_LIST_LIMIT = 1000;
 
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
+
+/**
+ * Ceiling on a `maxSize` used with a STREAMED body, which has to be buffered
+ * whole — see {@link collectStreamWithinMaxSize} for why it cannot stay a
+ * stream.
+ *
+ * A Worker isolate has roughly 128 MB for everything and shares it across every
+ * concurrent request, so the cap is not a per-request budget: N in-flight
+ * uploads each hold up to `maxSize`, and a cap in the tens of megabytes OOMs the
+ * isolate two or three uploads deep with every single one inside its documented
+ * limit. 16 MiB leaves room for a handful of concurrent uploads; anything larger
+ * belongs on `createMultipartUpload`/`createUploadHandler`, neither of which
+ * holds the whole object.
+ */
+const MAX_BUFFERED_STREAM_SIZE = 16 * 1024 * 1024;
 
 /**
  * Surface R2's SHA-256 checksum as `sha256` (hex) and `sha256Base64` (base64)
@@ -138,50 +164,79 @@ const toListObject = (object: R2ObjectLike): R2ObjectLike => {
 };
 
 /**
- * Wrap a byte stream so the upload aborts once more than `maxSize` bytes have
- * flowed through. A `ReadableStream`'s length isn't known synchronously, so a
- * counting `TransformStream` is the only way to bound a streaming upload —
- * without it R2 would happily accept (or, for an unknown-length stream, silently
- * truncate) a body larger than the caller intended. A non-byte chunk (no
- * `byteLength`) can't be measured, so it aborts the stream rather than flowing
- * through uncounted — otherwise it would silently defeat the `maxSize` bound.
+ * Read a byte stream into a sized body, refusing it at the first chunk that
+ * pushes it past `maxSize`.
+ *
+ * R2 accepts a `ReadableStream` only when it can read the length up front — a
+ * request/response body, or the readable half of a `FixedLengthStream`. A
+ * counting `TransformStream` is neither, so handing R2 the wrapped stream (what
+ * this guard used to do) failed EVERY streamed upload carrying a `maxSize` with
+ * "Provided readable stream must have a known length": the documented
+ * `upload(key, request.body, { maxSize })` could never succeed.
+ *
+ * A `FixedLengthStream` is no answer either — it needs the exact byte count up
+ * front, and `upload()` is handed a stream, not a length. The unknown-length
+ * stream is precisely the case the cap exists to bound, so the counted bytes are
+ * collected here into a `Blob`, which carries the length R2 needs. Reading stops
+ * at the chunk that crosses the cap (the counter errors the stream, and the
+ * `Response` drain rejects with it), so nothing oversized is buffered whole and
+ * nothing reaches the bucket.
+ *
+ * `maxSize` is therefore also the memory ceiling for a streamed body, and it is
+ * a SHARED one: the isolate's ~128 MB is spread across every concurrent request,
+ * so N in-flight uploads hold up to N x `maxSize`. That is why the caller's cap
+ * is itself capped at {@link MAX_BUFFERED_STREAM_SIZE} on this path. For objects
+ * larger than that, use `createMultipartUpload` / `createUploadHandler`, neither
+ * of which buffers the whole object.
+ *
+ * A non-byte chunk (no `byteLength`) can't be measured, so it errors the stream
+ * rather than flowing through uncounted — otherwise it would silently defeat the
+ * `maxSize` bound.
  */
-const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): ReadableStream => {
+const collectStreamWithinMaxSize = async (stream: ReadableStream, maxSize: number): Promise<Blob> => {
     let seen = 0;
 
-    const byteLengthOf = (chunk: unknown): number | undefined => {
+    /**
+     * Measure a chunk AND normalise it to the one shape the `Response` drain
+     * below accepts. A stream may carry any BufferSource, and undici's
+     * `Response` body takes only `Uint8Array` — enqueuing the original
+     * ArrayBuffer/DataView/Float32Array surfaced as a bare
+     * `TypeError: Received non-Uint8Array chunk` with no code and nothing
+     * naming storage. (workerd accepts those shapes as-is, so only Node saw
+     * it; the view is a no-op wrapper there, not a copy.) `undefined` signals
+     * a non-byte chunk, whose length can't be counted.
+     */
+    const toBytes = (chunk: unknown): Uint8Array | undefined => {
         if (chunk instanceof ArrayBuffer) {
-            return chunk.byteLength;
+            return new Uint8Array(chunk);
         }
 
-        // Covers Uint8Array and every other typed-array / DataView view;
-        // `undefined` signals a non-byte chunk whose length can't be counted.
-        return ArrayBuffer.isView(chunk) ? chunk.byteLength : undefined;
+        return ArrayBuffer.isView(chunk) ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength) : undefined;
     };
 
     const counter = new TransformStream({
         transform(chunk: unknown, controller) {
-            const length = byteLengthOf(chunk);
+            const bytes = toBytes(chunk);
 
-            if (length === undefined) {
-                controller.error(new Error("@lunora/storage: stream chunk is not a byte chunk; cannot enforce maxSize"));
+            if (bytes === undefined) {
+                controller.error(new LunoraError("VALIDATION_ERROR", "@lunora/storage: stream chunk is not a byte chunk; cannot enforce maxSize"));
 
                 return;
             }
 
-            seen += length;
+            seen += bytes.byteLength;
 
             if (seen > maxSize) {
-                controller.error(new Error(`@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));
+                controller.error(new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));
 
                 return;
             }
 
-            controller.enqueue(chunk);
+            controller.enqueue(bytes);
         },
     });
 
-    return stream.pipeThrough(counter);
+    return await new Response(stream.pipeThrough(counter)).blob();
 };
 
 /** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
@@ -196,6 +251,92 @@ const TEXT_ENCODER = new TextEncoder();
  * error strings on this side said "byte limit" while counting code units.
  */
 const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
+
+/**
+ * Byte length of a non-stream body, or `undefined` when the value is none of the
+ * shapes R2 stores bytes from — the caller then refuses it rather than uploading
+ * something it could not measure.
+ *
+ * A string is measured in UTF-8 **bytes**, not UTF-16 code units: that is what
+ * R2 stores and what `maxSize` is expressed in, and a multi-byte character would
+ * otherwise under-count (a 100-character emoji string is 400 bytes).
+ *
+ * `size` is read duck-typed rather than behind `instanceof Blob` so a Blob-like
+ * double still measures, which is how the fakes in this package's tests supply
+ * bodies.
+ */
+const measureBody = (body: unknown): number | undefined => {
+    if (body instanceof ArrayBuffer) {
+        return body.byteLength;
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return body.byteLength;
+    }
+
+    if (typeof body === "string") {
+        return byteLength(body);
+    }
+
+    if (typeof body !== "object" || body === null) {
+        return undefined;
+    }
+
+    const { size } = body as { size?: unknown };
+
+    return typeof size === "number" ? size : undefined;
+};
+
+/**
+ * Apply a `maxSize` cap, returning the body to hand R2.
+ *
+ * An `ArrayBuffer`/`Blob` length is known up front and refused before the upload
+ * starts. A `ReadableStream`'s isn't, so it is collected under the cap and
+ * handed to R2 as a sized body — see {@link collectStreamWithinMaxSize} for why
+ * it can't stay a stream, and {@link MAX_BUFFERED_STREAM_SIZE} for why the
+ * caller's cap is itself capped on that path.
+ */
+const applyMaxSize = async (body: UploadBody, maxSize: number): Promise<UploadBody> => {
+    // A cap that isn't a finite, non-negative number breaks both comparisons
+    // that enforce it, in opposite directions: `seen > NaN` is never true, so
+    // the cap is silently off while a stream is still collected whole (an
+    // unbounded in-isolate buffer — an unset byte-limit variable coerced with
+    // `Number(...)` is all it takes); `seen > -1` is true on the first chunk, so
+    // a negative cap refuses every upload. Both are configuration bugs, and both
+    // are reported as one here rather than acted on.
+    if (!Number.isFinite(maxSize) || maxSize < 0) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxSize must be a finite, non-negative number (received ${String(maxSize)})`);
+    }
+
+    if (body instanceof ReadableStream) {
+        // The ceiling is on the stream path only: it bounds what this call must
+        // BUFFER, and an ArrayBuffer/Blob body is already in the caller's memory,
+        // so capping it there would buy nothing.
+        if (maxSize > MAX_BUFFERED_STREAM_SIZE) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/storage: maxSize ${String(maxSize)} exceeds the ${String(MAX_BUFFERED_STREAM_SIZE)}-byte ceiling for a streamed body, which must be buffered to be capped — use createMultipartUpload() or createUploadHandler() for objects this large`,
+            );
+        }
+
+        return await collectStreamWithinMaxSize(body, maxSize);
+    }
+
+    const size = measureBody(body);
+
+    // An unmeasurable body is refused rather than waved through: the previous
+    // `body.size` read answered `undefined` for every shape it didn't know, and
+    // `undefined > maxSize` is false, so the cap silently did nothing.
+    if (size === undefined) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: cannot measure body length, so maxSize cannot be enforced");
+    }
+
+    if (size > maxSize) {
+        throw new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: body exceeds maxSize (${String(size)} > ${String(maxSize)})`);
+    }
+
+    return body;
+};
 
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
@@ -308,30 +449,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
 
         assertContentTypeAllowed(uploadOptions);
 
-        // `maxSize` enforcement. ArrayBuffer/Blob lengths are known up front and
-        // rejected before the upload starts; a ReadableStream's length isn't, so
-        // it's piped through a byte counter that aborts mid-stream once the limit
-        // is exceeded (also closing R2's silent-truncation gap for unbounded
-        // streams).
-        let putBody: UploadBody = body;
-
-        if (typeof uploadOptions.maxSize === "number") {
-            let size: number | undefined;
-
-            if (body instanceof ArrayBuffer) {
-                size = body.byteLength;
-            } else if (body instanceof Blob) {
-                size = body.size;
-            }
-
-            if (size !== undefined && size > uploadOptions.maxSize) {
-                throw new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
-            }
-
-            if (body instanceof ReadableStream) {
-                putBody = enforceStreamMaxSize(body, uploadOptions.maxSize);
-            }
-        }
+        const putBody = uploadOptions.maxSize === undefined ? body : await applyMaxSize(body, uploadOptions.maxSize);
 
         const object = await options.bucket.put(key, putBody, {
             customMetadata: uploadOptions.customMetadata,
@@ -372,12 +490,25 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         validateKey(key);
 
         // Prefer a true HEAD (no body transfer) when the binding exposes one.
-        // Fall back to a 0-length ranged GET (`{ length: 0 }`) so we still avoid
-        // streaming the body when running against a `head`-less double or runtime.
-        // Either way `size` is the FULL object size — R2 reports the object's
-        // size, not the returned window's — which is what makes this enough to
-        // resolve a `Range` against.
-        const object = options.bucket.head ? await options.bucket.head(key) : await options.bucket.get(key, { range: { length: 0 } });
+        //
+        // The fallback for a `head`-less binding used to ask for a 0-length range
+        // (`{ length: 0 }`), which R2 refuses outright — `get: The requested
+        // range is not satisfiable (10039)` — so the documented degradation threw
+        // instead of degrading. A 1-byte range is no fix either: it fails the
+        // same way on a 0-byte object. So the fallback reads the object and
+        // discards the body without consuming it; `size` is the object's full
+        // size either way, which is what makes this enough to resolve a `Range`
+        // against.
+        let object: R2ObjectLike | null;
+
+        if (options.bucket.head) {
+            object = await options.bucket.head(key);
+        } else {
+            const withBody = await options.bucket.get(key);
+
+            await withBody?.body?.cancel();
+            object = withBody;
+        }
 
         // The `toListObject` projection, not `download()`'s `withSha256` Proxy: a
         // head result has no body to keep native accessors alive for, and it IS
@@ -404,9 +535,35 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: prefix contains NUL byte");
         }
 
-        const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
-        const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
-        const result = await options.bucket.list({ cursor: listOptions.cursor, delimiter: listOptions.delimiter, limit, prefix });
+        // Reject a non-integer or non-positive limit here rather than coercing
+        // it. `Math.floor(NaN)` is `NaN` and passes both clamps, so a
+        // `limit: Number(env.PAGE_SIZE)` with the variable unset forwarded `NaN`
+        // to R2, which answers `MaxKeys params must be positive integer <= 1000.
+        // (10022)` — a remote error naming a parameter the caller never wrote.
+        // Silently clamping instead would hide the same configuration bug behind
+        // a page size nobody asked for. Mirrors `@lunora/bindings/kv`'s `list`.
+        if (listOptions.limit !== undefined && (!Number.isInteger(listOptions.limit) || listOptions.limit <= 0)) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: list limit must be a positive integer (received ${String(listOptions.limit)})`);
+        }
+
+        // The upper bound stays a clamp, as documented on `Storage.list`
+        // ("Defaults to 100, capped at 1000").
+        const limit = Math.min(listOptions.limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+        const result = await options.bucket.list({
+            cursor: listOptions.cursor,
+            delimiter: listOptions.delimiter,
+            // Under `r2_list_honor_include` (every compat date since 2022-08-04)
+            // R2 omits both metadata bags from list entries unless the call asks
+            // for them. `toListObject` copies them either way, so without this a
+            // real bucket returned `httpMetadata: {}` / `customMetadata: {}` for
+            // every entry while `head()` on the same key returned them in full.
+            // The cost, documented on `Storage.list`: R2 may shrink a page to fit
+            // the metadata, so a page can hold fewer than `limit` objects and
+            // `objects.length < limit` does not mean the listing is finished.
+            include: ["customMetadata", "httpMetadata"],
+            limit,
+            prefix,
+        });
 
         // With a delimiter, R2 puts the rolled-up "folders" in `delimitedPrefixes`
         // and leaves them OUT of `objects` — dropping them made
@@ -521,6 +678,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         getSignedUrl(key, { contentType: uploadUrlOptions.contentType, expiresInSeconds: uploadUrlOptions.expiresInSeconds, method: "PUT" });
 
     return {
+        bucketName: options.bucketName,
         createMultipartUpload,
         delete: deleteObject,
         download,

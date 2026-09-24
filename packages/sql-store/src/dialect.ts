@@ -80,8 +80,17 @@ export interface SqlDialect {
      *   decimal string), and `LONGTEXT` for everything else — strings unbounded
      *   so they never truncate, composites because their wire-marked form is not
      *   valid JSON and a `JSON` column would reject it on insert.
+     *
+     * `unique` says the column carries a `.unique()` constraint, so the type has
+     * to be one the engine can index in FULL. It exists for MySQL: InnoDB cannot
+     * index a `LONGTEXT` without a key prefix, and a prefixed UNIQUE index
+     * enforces uniqueness of the PREFIX — two distinct 200-character emails
+     * sharing their first 191 characters collided as a duplicate. A bounded
+     * `VARCHAR` indexes whole, so the constraint means what it says; a value
+     * past the bound is a loud write error rather than a wrong conflict. SQLite
+     * and Postgres index text of any length and ignore the flag.
      */
-    columnType: (kind: string | undefined) => string;
+    columnType: (kind: string | undefined, options?: { unique?: boolean }) => string;
 
     /**
      * Engine SQL types for the **internal companion tables** (aggregate / rank /

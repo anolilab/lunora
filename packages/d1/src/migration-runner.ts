@@ -14,9 +14,19 @@ interface Migration {
 }
 
 /**
- * Drizzle's canonical migration-tracking table. The column shape matches
- * `drizzle-orm/migrator`'s `MigrationConfig`, so a future swap to drizzle-kit
- * journal-based migrations can read the same table without a data migration.
+ * Drizzle's canonical migration-tracking table, borrowed for its column shape
+ * (`id` / `hash` / `created_at`) so `drizzle-orm/d1`'s `migrate()` can be
+ * pointed at the same table without a schema change.
+ *
+ * It is **not** drop-in swappable, and nothing should be built on the
+ * assumption that it is: drizzle decides what to apply purely from
+ * `Number(created_at) < migration.folderMillis` of the newest row (its
+ * `d1/migrator.js`; it never reads `hash`), and it stores `folderMillis` — the
+ * moment the journal entry was *generated*. This runner stores wall-clock
+ * millis at *apply* time and dedups by content hash instead, so after a swap
+ * every journal migration generated before the last Lunora apply would be
+ * skipped. Moving to drizzle-kit journals therefore needs a real data
+ * migration (rewrite `created_at` from the journal), not just a call-site swap.
  *
  * - `hash` is the SHA-256 of the migration SQL — content-addressed dedup.
  * `UNIQUE` so two runners racing the same pending migration (parallel CI
@@ -29,6 +39,41 @@ const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (i
 
 /** Single whitespace char — used by the trailing-token scan. Hoisted to avoid per-call recompilation. */
 const WHITESPACE_RE = /\s/u;
+/** A character that continues a SQL word token (keyword or identifier). Hoisted to avoid per-call recompilation. */
+const WORD_CHAR_RE = /[$\w]/u;
+
+/**
+ * One unit of SQL trivia BETWEEN two keywords: a whitespace char, a `--` line
+ * comment, or a `/* ... *\/` block comment. Written once and shared by both
+ * probes below — they drifted apart before, and only the leading position
+ * tolerated comments at all.
+ *
+ * A line comment here must be newline-terminated: something (the next keyword)
+ * always follows, so a `--` run to end-of-input cannot occur in this position.
+ */
+const TRIVIA_SOURCE = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)`;
+
+/**
+ * Leading whitespace and comments, so the `CREATE TRIGGER` probe can look past a
+ * migration's header comment.
+ *
+ * Unlike {@link TRIVIA_SOURCE} this position CAN run to end-of-input — a file of
+ * nothing but a comment is all trivia — hence the extra `$` alternative.
+ */
+const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
+
+/**
+ * `CREATE [TEMP|TEMPORARY] TRIGGER` at the head of a migration — the one
+ * statement whose body carries its own `;`s.
+ *
+ * Trivia is matched BETWEEN the keywords, not just before them: SQLite accepts
+ * `CREATE /* … *\/ TRIGGER` as one statement, and a probe that only allowed
+ * `\s` there stopped recognising it as a trigger — `assertSingleStatement` then
+ * read the body's first `;` as a statement boundary and rejected the trailing
+ * `END`, telling the author to split a statement SQLite cannot have split.
+ */
+const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iu");
+
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
@@ -51,6 +96,13 @@ interface MigrationRunnerResult {
  * `;` followed only by whitespace and/or comments is allowed (and `;` is
  * stripped before submission to D1).
  *
+ * `CREATE TRIGGER` is the one statement whose body legitimately contains `;`s
+ * (`BEGIN INSERT …; END;`), and it cannot be split across migrations — so the
+ * scan borrows SQLite's own `sqlite3_complete()` rule for it: inside a trigger,
+ * a `;` ends the statement only when the token before it is an `END` that itself
+ * directly follows a body `;`. That distinguishes the trigger's closing `END`
+ * from a `CASE … END` in the body, which is never preceded by a `;`.
+ *
  * The scan is a hand-written SQL lexer: a single linear pass over the source
  * with a small set of mutually-exclusive mode flags. Its branching IS the
  * grammar, so splitting it across helpers (each needing the same closured
@@ -63,11 +115,24 @@ interface MigrationRunnerResult {
 // eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @lunora/do data-migration.ts)
 const assertSingleStatement = (migration: Migration): number | undefined => {
     const text = migration.sql;
+    const isTrigger = CREATE_TRIGGER_RE.test(text.slice(LEADING_TRIVIA_RE.exec(text)?.[0].length ?? 0));
     let inSingle = false;
     let inDouble = false;
+    // SQLite's two other identifier quotings, which it accepts for MySQL and
+    // MS-Access compatibility. Without them a `;` inside `[a;b]` or `` `a;b` ``
+    // read as a statement terminator and the migration was false-rejected as
+    // "more than one SQL statement".
+    let inBracket = false;
+    let inBacktick = false;
     let inLineComment = false;
     let inBlockComment = false;
     let terminatorIndex: number | undefined;
+    // Trigger-body bookkeeping (inert unless `isTrigger`): the word token being
+    // accumulated, whether the last token was an `END` that followed a body `;`,
+    // and whether the last token was that body `;`.
+    let word = "";
+    let endClosesBody = false;
+    let afterBodySemicolon = false;
 
     for (let index = 0; index < text.length; index += 1) {
         const character = text[index];
@@ -115,6 +180,27 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
             continue;
         }
 
+        // A bracket-quoted identifier has no escape: it ends at the first `]`.
+        if (inBracket) {
+            if (character === "]") {
+                inBracket = false;
+            }
+
+            continue;
+        }
+
+        if (inBacktick) {
+            if (character === "`") {
+                if (next === "`") {
+                    index += 1;
+                } else {
+                    inBacktick = false;
+                }
+            }
+
+            continue;
+        }
+
         // Comment starts are allowed anywhere, including after the terminating
         // `;` (a trailing comment), so detect them before the terminator guard.
         if (character === "-" && next === "-") {
@@ -146,6 +232,27 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
             continue;
         }
 
+        if (isTrigger && character !== undefined) {
+            if (WORD_CHAR_RE.test(character)) {
+                word += character;
+                continue;
+            }
+
+            const token = word.toUpperCase();
+
+            word = "";
+
+            if (token !== "") {
+                endClosesBody = afterBodySemicolon && token === "END";
+                afterBodySemicolon = false;
+            } else if (character !== ";" && !WHITESPACE_RE.test(character)) {
+                // Any other punctuation breaks the `; END ;` run (so a `CASE … END`
+                // in the body can't be mistaken for the trigger's closing `END`).
+                endClosesBody = false;
+                afterBodySemicolon = false;
+            }
+        }
+
         if (character === "'") {
             inSingle = true;
             continue;
@@ -156,7 +263,23 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
             continue;
         }
 
+        if (character === "[") {
+            inBracket = true;
+            continue;
+        }
+
+        if (character === "`") {
+            inBacktick = true;
+            continue;
+        }
+
         if (character === ";") {
+            if (isTrigger && !endClosesBody) {
+                // A `;` inside the trigger body, not the statement's terminator.
+                afterBodySemicolon = true;
+                continue;
+            }
+
             // A `;` ends the (only) statement. Record its index so the caller can
             // strip it plus any trailing comment/whitespace before submitting to
             // D1, which rejects any content after the statement's terminator.
@@ -244,8 +367,9 @@ class MigrationRunner {
         // D1 lacks user-level BEGIN/COMMIT, but `batch` runs statements
         // atomically. A migration is required to be a single statement (or
         // a whitespace-only trailing `;`) — a naive split-on-`;` mishandles
-        // semicolons inside string literals and comments. Callers wanting
-        // multiple statements per file should split them across migrations.
+        // semicolons inside string literals, comments and trigger bodies.
+        // Callers wanting multiple statements per file should split them
+        // across migrations; a `CREATE TRIGGER … BEGIN …; END;` stays whole.
         const terminatorIndex = assertSingleStatement(migration);
 
         // Strip from the terminating `;` onward (the lexer's own index) rather
@@ -328,5 +452,5 @@ class MigrationRunner {
     }
 }
 
-export { MigrationRunner };
+export { MigrationRunner, TRACKING_TABLE_NAME };
 export type { Migration, MigrationRunnerResult };

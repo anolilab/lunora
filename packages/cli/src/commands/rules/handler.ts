@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { RulesOptions } from "./index";
 
@@ -233,8 +234,8 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
 
     logger.error("rules: unknown subcommand. Usage: lunora rules <install|check>");
 
-    return { code: 1 };
+    return { code: EXIT_CODE.USAGE };
 });
 
-export { execute, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall };
+export { execute, listBundledSkills, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall };
 export type { RunRulesOptions, RunRulesResult };

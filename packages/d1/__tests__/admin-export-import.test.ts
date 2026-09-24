@@ -47,15 +47,16 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
  * the inner one would refuse — `optional(string).parse(null)` throws, which is
  * exactly what made an unset optional column unrestorable.
  */
-const optional = (inner: ValidatorLike): ValidatorLike =>
-    ({
+const optional = (inner: ValidatorLike): ValidatorLike => {
+    return {
         _meta: { column: { notNull: true }, inner },
         kind: "optional",
 
         parse(value: unknown) {
             return value === undefined ? value : inner.parse?.(value);
         },
-    }) as unknown as ValidatorLike;
+    };
+};
 
 // The D1 writer is the global-tables view; only the `.global()` table is in
 // its schema (the DO ctx-db owns shard-local tables). The import helper still
@@ -101,6 +102,7 @@ describe("d1 admin export/import globals", () => {
             `CREATE TABLE "settings" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "name" TEXT,
             "nickname" TEXT,
             "note" TEXT,
@@ -365,6 +367,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "ledger" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "blob" BLOB,
                 "cents" TEXT
             )`,
@@ -397,6 +400,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "ledger" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "blob" BLOB,
                 "cents" TEXT
             )`,
@@ -437,6 +441,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,
@@ -488,6 +493,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,
@@ -539,6 +545,7 @@ describe("d1 admin export/import globals", () => {
                 `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
                 "name" TEXT,
                 "nickname" TEXT,
                 "note" TEXT,

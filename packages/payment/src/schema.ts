@@ -42,6 +42,16 @@ const subscriptions = defineTable({
     currentPeriodEnd: v.optional(v.number()),
     currentPeriodStart: v.optional(v.number()),
     priceId: v.string(),
+
+    /**
+     * Every price/product id the subscription bills — a Stripe subscription is a list of items, and a
+     * base plan alongside an add-on or a metered price is ordinary. `priceId` stays the primary one.
+     *
+     * OPTIONAL, so adding it needs no backfill: a row written before this column (or by the webhook
+     * path, which carries one price id) reads as absent and falls back to `[priceId]`. Apps that
+     * mirror these tables inline must add the column to get multi-item entitlements.
+     */
+    priceIds: v.optional(v.array(v.string())),
     provider: v.string(),
     providerSubscriptionId: v.string(),
     quantity: v.number(),

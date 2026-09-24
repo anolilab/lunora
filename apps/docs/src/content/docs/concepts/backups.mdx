@@ -34,9 +34,24 @@ touches the change log.
 Everything below talks to admin-gated endpoints on a running worker, so each
 command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
 variable over `--token`, which is visible to other local processes through the
-process table. Targeting anything other than localhost requires `--prod`
-together with an explicit `--url`, the guardrail that stops a production script
-from quietly hitting `http://localhost:8787`.
+process table.
+
+Two separate guardrails apply to the target, and neither is `--prod` on its own:
+
+- `--prod` requires an explicit `--url`. It never _grants_ a remote target and
+  never _gates_ one — a `--url https://…` is accepted with or without it.
+- A non-loopback `--url` must be `https:`, so the admin bearer is never sent in
+  the clear.
+
+What gates a destructive verb is the resolved URL, not the flag: a PITR
+`--restore` against any non-loopback worker refuses without `--yes`, whether or
+not `--prod` was passed. `prune` always confirms — `--yes` or an interactive
+prompt — because an object-store delete has no undo.
+
+<Callout type="warn">
+    Omitting `--prod` does **not** keep a script off production. `lunora backup create --url https://prod.example.com` exports production with no extra flag. If
+    you need a script that can only ever hit local state, withhold the production URL and the admin token, not `--prod`.
+</Callout>
 
 ## Point-in-time recovery
 
@@ -66,6 +81,73 @@ omit it for the root shard. Because PITR is per shard, a
     A production `pitr --restore` overwrites live data and requires `--yes`. Read the bookmark first, and take a snapshot before restoring so you can get back
     to the current state if the target moment turns out to be wrong.
 </Callout>
+
+### Anything reading the change feed must be re-seeded, not resumed
+
+A restore rewinds the changelog along with the data, and the changelog then
+re-issues the sequence numbers it lost to different rows. A warehouse connector
+holding a cursor from before the restore is therefore holding a position in a
+sequence that no longer means what it meant — and its mirror still contains rows
+the restore removed, for which no delete will ever be emitted.
+
+The read paths refuse such a cursor **while they can still recognise it**: a
+cursor above the changelog's high-watermark is proof of the rewind, and the feed
+answers `CDC_TIMELINE_FORKED` (409) rather than an empty page. That proof
+expires. Once post-restore writes have pushed the sequence back past the cursor,
+it is in range again and the feed serves it — skipping everything the new
+timeline wrote below it, permanently and without an error.
+
+So treat re-seeding every change-feed consumer as part of the restore, in the
+same way you would clear the [R2 archive](#archiving-trimmed-entries-to-r2). Do
+not wait to be told: on a busy deployment the window in which you would be told
+is minutes wide.
+
+#### Storing the epoch beside the cursor widens that window
+
+Every per-shard page from `/_lunora/admin/sync` carries an `epoch` next to its
+`cursor` — the identity of the timeline that cursor indexes. Store the pair, and
+post the epochs back in the next request's `epochs` map alongside `cursors`:
+
+```json
+{ "cursors": { "c1": 812 }, "epochs": { "c1": "6c95…" }, "tables": ["messages"] }
+```
+
+A shard whose timeline has since been sealed then refuses that shard's page with
+`CDC_TIMELINE_FORKED` **whatever the cursor says**, so you are told after the
+watermark proof has expired rather than only before it. The refusal carries the
+current epoch to resume against, and the remedy is unchanged: re-seed, because
+an incremental cursor cannot cross a fork.
+
+The refusal arrives as that shard's `error` in the response, with the shard's own
+code on it — branch on `code`, never on the message:
+
+```json
+{
+    "shards": [
+        {
+            "shardKey": "c1",
+            "cursor": 812,
+            "epoch": "6c95…",
+            "error": { "code": "CDC_TIMELINE_FORKED", "message": "…", "timedOut": false }
+        }
+    ]
+}
+```
+
+`CDC_TIMELINE_FORKED` means re-seed against the epoch the message names.
+`CDC_LOG_TRIMMED` and `CDC_PAYLOAD_COMPACTED` also mean re-seed — the range you
+asked for is gone rather than moved. Anything else (`SHARD_TIMEOUT`,
+`SHARD_HTTP_ERROR`, `INTERNAL`) is transport: retry the same cursor and epoch,
+which the response echoes back to you for exactly that purpose.
+
+Both halves are optional. A connector that ignores `epoch` and never sends
+`epochs` behaves exactly as it did, with exactly the guarantee described above —
+so this widens the window for consumers that opt in, and does not replace the
+standing instruction to re-seed proactively. It also only fires once something on
+the shard has sealed the fork: a reconnecting subscriber, a refused consumer, or
+the retention sweep finding the [R2 archive](#archiving-trimmed-entries-to-r2)
+rewound. The `globalCursor` for `.global()` tables has no epoch, and for the same
+reason — that plane has no archive, so nothing there detects a fork unattended.
 
 ## Snapshot backups
 
@@ -156,9 +238,14 @@ way the answer is `--tables` / `backupTables`, or `--dir` plus
 ### Scheduled backups into R2
 
 <Callout type="warn">
-    **Scheduled backups never delete.** `backupRetain` sets the window; `lunora backup prune` is the only command that removes a backup, and it confirms before
-    it does. `lunora backup retention` shows what a prune would remove, from the same selection, so the preview cannot drift from the deletion. A bucket
-    therefore grows until you prune it. Every scheduled run reports how many snapshots sit past the window, so that is not a surprise either.
+    **The built-in `backupCron` never deletes.** `backupRetain` sets the window, but the scheduled run only reports how many snapshots sit past it —
+    `lunora backup prune` is the one command that removes a backup, and it confirms before it does. `lunora backup retention` shows what a prune would remove,
+    from the same selection, so the preview cannot drift from the deletion. A bucket therefore grows until you prune it.
+
+    The `backup` **registry item** is the exception, and deliberately so: it copies a `prune` internal action into your project alongside its `snapshot`, and
+    you schedule the pair on your own cron so the loop is self-managing. That one deletes — `{ keepDays, keepLast }` is its retention window, and it refuses to
+    run with neither set. If you added that item, the "grows until you prune it" sentence above does not describe your bucket.
+
 </Callout>
 
 ```bash

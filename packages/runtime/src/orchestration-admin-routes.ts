@@ -407,7 +407,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     /**
      * `POST /_lunora/admin/pitr` — drive native Durable-Object point-in-time
      * recovery on a single shard. Admin-gated (its own bearer check), so it is
-     * NOT subject to the user-facing `authorizeShard`/`authorizeFunction`
+     * NOT subject to the user-facing `authorizeShard`/`authorizeFanOut`
      * callbacks the public RPC path enforces; the forwarded `Authorization`
      * header then satisfies the shard's own admin gate in `handleAdminRpc`.
      * Forwards `getPitrBookmark` (read the current / for-a-time bookmark) or

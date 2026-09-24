@@ -6,7 +6,7 @@
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta", "fix/**"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
@@ -26,6 +26,7 @@
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
             "templates": "${{ steps.changes.outputs.templates }}"
+            "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
         "steps":
@@ -51,7 +52,12 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 45, not 30. The 22.15 leg runs `test:affected:coverage`, and a change to
+        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
+        # this leg runs the whole suite under v8 coverage. That is ~25 min for
+        # @lunora/codegen alone, which left no room for the studio step after it and
+        # cancelled the job at 30 min with every test passing.
+        "timeout-minutes": 45
         "strategy":
             "fail-fast": false
             "matrix":
@@ -197,7 +203,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "sql-store", "storage", "workflow", "x402"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -218,7 +224,7 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
+            # The matrix is a hand-typed list of 12 packages, duplicated verbatim in
             # test.yml and nightly.yml, with nothing tying either copy to the packages
             # that actually declare a `workerd` vitest project. Drop a package from one
             # and its workerd suites stop running with every check green. Each leg
@@ -253,6 +259,91 @@
                   "LUNORA_WORKERD_TESTS": "1"
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+
+    # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
+    # core renders for a `.global()` MySQL backend actually executes. mysqld comes
+    # from `mysql-memory-server`, provisioned from npm like pglite and workerd
+    # rather than from a service container, so the job needs no `services:` block.
+    #
+    # The point of the job is that the suites cannot report green having run
+    # nothing. They skip when the binary is unobtainable, and no CI job had ever
+    # declared that mysqld was expected — so a suite that had never been observed
+    # to run reported success on every PR. `LUNORA_MYSQL_TESTS=1` turns that skip
+    # into a failure (`__tests__/_helpers/mysql-mem.ts`), and the assertion below
+    # closes the other half: a run that executes zero cases, or skips any, fails
+    # here instead of passing quietly.
+    "test-mysql":
+        "name": "MySQL integration (@lunora/hyperdrive)"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-mysql"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The run step names its suites by path, so a fourth one added against the
+            # same harness would not be picked up and nothing else would notice — the
+            # same hazard the workerd matrix assertion above exists for.
+            - "name": "Assert the run covers every suite using the MySQL harness"
+              "run": |
+                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts '
+                  if [ "$declared" != "$expected" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=hyperdrive"
+
+            - "name": "Run the MySQL suites against a real mysqld"
+              "env":
+                  "LUNORA_MYSQL_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/hyperdrive" run test \
+                      __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-collation-parity.test.ts \
+                      __tests__/global-mysql.integration.test.ts \
+                      --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
+
+            - "name": "Assert the suites executed their cases"
+              "run": |
+                  node -e '
+                      const { appendFileSync, readFileSync } = require("node:fs");
+
+                      const report = JSON.parse(readFileSync("packages/hyperdrive/test-results/mysql.json", "utf8"));
+                      const passed = report.numPassedTests;
+                      const skipped = report.numPendingTests + report.numTodoTests;
+
+                      appendFileSync(
+                          process.env.GITHUB_STEP_SUMMARY,
+                          `- MySQL parity on \`@lunora/hyperdrive\`: **${passed} cases executed** against a real mysqld (${skipped} skipped).\n`,
+                      );
+
+                      if (passed === 0 || skipped > 0) {
+                          console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+                  '
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
@@ -356,14 +447,70 @@
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
+            # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
+            # pulls the react-native/expo graph that no other template shares, and
+            # editing `templates/next` cannot break it.
             - "name": "Run the template scaffold matrix"
               "run": "pnpm run test:templates"
+              "env":
+                  "SMOKE_SKIP_TEMPLATES": "expo"
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
                   "name": "template-smoke-logs"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # The Expo leg of the same matrix, split out by cost. Its `pnpm install` pulls the
+    # react-native/expo graph and no other template shares it, so it runs on
+    # `templates_expo` — its own tree, the packages it consumes, `shared/`, the harness
+    # and the lockfiles — and not on an edit to a sibling template that cannot reach it.
+    #
+    # Same script, scoped with its positional arg. The matrix job above skips `expo` via
+    # `SMOKE_SKIP_TEMPLATES`, so the two legs partition the templates rather than
+    # overlapping, and `templates/expo` is covered by exactly one of them.
+    "templates-expo":
+        "name": "Template scaffold matrix (expo)"
+        "if": "needs.files-changed.outputs.templates_expo == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "templates-expo"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Same prerequisite as the matrix job: the harness packs `packages/*/dist`
+            # into tarballs, and the production build is what users install.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the expo scaffold leg"
+              "run": "pnpm run test:templates expo"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs-expo"
                   "path": ".template-smoke-logs"
                   "retention-days": 7
                   "if-no-files-found": "ignore"
@@ -468,19 +615,19 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # A third hardcoded copy of the language list — `sdks/lint-all.sh` and
-            # `sdks/generated-check.sh` hold the other two — and the only one no
-            # script can see. A ninth SDK missed here is never conformance-tested at
-            # all, with every leg green. `strategy.job-total` is this matrix's size,
-            # so compare it against what is on disk; the two scripts reconcile
-            # themselves against the same directories.
+            # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
+            # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
+            # and the only one no script can see. A ninth SDK missed here is never
+            # conformance-tested at all, with every leg green. `strategy.job-total` is
+            # this matrix's size, so compare it against what is on disk; the three
+            # scripts reconcile themselves against the same directories.
             - "name": "Assert the matrix covers every SDK on disk"
               "run": |
                   on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
                   if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
                     echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
                     echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
-                    echo "sdks/lint-all.sh and sdks/generated-check.sh." >&2
+                    echo "sdks/lint-all.sh, sdks/generated-check.sh and sdks/run-all.sh." >&2
                     exit 1
                   fi
                   echo "matrix covers all $on_disk SDKs"
@@ -662,7 +809,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates", "worker-size", "sdk-conformance"]
+        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

@@ -40,13 +40,57 @@ describe("search analyzer", () => {
 
             const analyzer = createSearchAnalyzer(undefined);
 
-            expect(analyzer.document("東京 タワー")).toStrictEqual(["東京", "タワー"]);
+            // Unspaced scripts are cut into overlapping bigrams (see below); the
+            // characters themselves are untouched by folding.
+            expect(analyzer.document("東京 タワー")).toStrictEqual(["東京", "タワ", "ワー"]);
             expect(analyzer.document("Привет мир")).toStrictEqual(["привет", "мир"]);
             // Japanese voiced sound marks are combining marks, but stripping
             // them merges distinct words — `が`/`か`, `パ`/`ハ`.
             expect(analyzer.document("がか パハ")).toStrictEqual(["がか", "パハ"]);
             // Hangul syllables decompose to jamo; the recompose puts them back.
-            expect(analyzer.document("한국어")).toStrictEqual(["한국어"]);
+            expect(analyzer.document("한국어")).toStrictEqual(["한국", "국어"]);
+        });
+
+        it("keeps й and ё apart from и and е — they are letters, not accented spellings", () => {
+            expect.assertions(4);
+
+            const analyzer = createSearchAnalyzer(undefined);
+
+            // Both decompose to base + a combining mark in U+0300–036F, so a blanket
+            // strip merged `бой` with `бои` and `ёж` with `еж`.
+            expect(analyzer.document("бой")).toStrictEqual(["бой"]);
+            expect(analyzer.document("бои")).toStrictEqual(["бои"]);
+            expect(analyzer.document("ёж")).toStrictEqual(["ёж"]);
+            expect(analyzer.document("еж")).toStrictEqual(["еж"]);
+        });
+
+        it("cuts an unspaced CJK clause into overlapping bigrams so an inner word matches", () => {
+            expect.assertions(3);
+
+            const analyzer = createSearchAnalyzer(undefined);
+            const document = analyzer.document("北京大学は東京にある");
+
+            // One `[\p{L}\p{N}]+` run: as a single token only a PREFIX of the whole
+            // clause could ever match, so searching `大学` found nothing.
+            expect(document).toContain("大学");
+            expect(analyzer.query("大学")).toStrictEqual(["大学"]);
+            // A mixed run keeps its Latin/digit stretch whole.
+            expect(analyzer.document("iphone15プロ用")).toStrictEqual(["iphone15", "プロ", "ロ用"]);
+        });
+
+        it("leaves a run holding no CJK alone, and keeps a trailing Latin stretch whole", () => {
+            expect.assertions(2);
+
+            const analyzer = createSearchAnalyzer(undefined);
+
+            // The CJK cut is decided once for the whole text, then applied per
+            // run — so a text that has CJK *somewhere* still sends its
+            // CJK-free runs through the expander, which must hand them back
+            // untouched rather than bigram them.
+            expect(analyzer.document("hello 世界")).toStrictEqual(["hello", "世界"]);
+            // The mirror of `iphone15プロ用`: the Latin/digit stretch trails the
+            // CJK run instead of leading it, and is still kept whole.
+            expect(analyzer.document("プロ15")).toStrictEqual(["プロ", "15"]);
         });
 
         it("does not fold ß, which has no combining decomposition", () => {
@@ -248,9 +292,45 @@ describe("search analyzer — ascii fast path", () => {
     const reference = (text: string): string =>
         text
             .normalize("NFD")
-            .replaceAll(/[\u0300-\u036F]/gu, "")
+            // Mirrors the analyzer: a breve/diaeresis on a CYRILLIC base is a
+            // letter (`й`, `ё`), not an accent, so it survives the strip.
+            .replaceAll(/(?<=\p{Script=Cyrillic})[\u0300-\u0305\u0307\u0309-\u036F]|(?<!\p{Script=Cyrillic})[\u0300-\u036F]/gu, "")
             .normalize("NFC")
             .toLowerCase();
+
+    /** Mirrors the analyzer's CJK bigram cut — this suite exists to be a second implementation. */
+    const referenceTokens = (text: string): string[] =>
+        (reference(text).match(/[\p{L}\p{N}]+/gu) ?? []).flatMap((run) => {
+            const parts: string[] = [];
+            let cursor = 0;
+
+            for (const match of run.matchAll(
+                /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]+/gu,
+            )) {
+                // eslint-disable-next-line @typescript-eslint/no-misused-spread -- code points ARE the unit here: the run is matched as CJK only, so it holds no emoji or grapheme cluster, and splitting by UTF-16 unit would cut an astral ideograph in half
+                const characters = [...match[0]];
+
+                if (match.index > cursor) {
+                    parts.push(run.slice(cursor, match.index));
+                }
+
+                cursor = match.index + match[0].length;
+
+                if (characters.length === 1) {
+                    parts.push(match[0]);
+                } else {
+                    for (let offset = 0; offset + 1 < characters.length; offset += 1) {
+                        parts.push(`${String(characters[offset])}${String(characters[offset + 1])}`);
+                    }
+                }
+            }
+
+            if (cursor < run.length) {
+                parts.push(run.slice(cursor));
+            }
+
+            return parts.length === 0 ? [run] : parts;
+        });
 
     it.each([
         ["empty", ""],
@@ -273,9 +353,7 @@ describe("search analyzer — ascii fast path", () => {
         expect.assertions(1);
 
         // Folding is only observable through `document`, so compare there.
-        expect(createSearchAnalyzer(undefined).document(input)).toStrictEqual(
-            (reference(input).match(/[\p{L}\p{N}]+/gu) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH),
-        );
+        expect(createSearchAnalyzer(undefined).document(input)).toStrictEqual(referenceTokens(input).filter((token) => token.length <= MAX_TOKEN_LENGTH));
     });
 
     it("tokenizes the same text identically on repeat calls", () => {

@@ -3,9 +3,9 @@ import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime"
 import { createWorker } from "lunorash/runtime";
 import Stripe from "stripe";
 
-import { app } from "../../lunora/http.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
+import { app } from "../../lunora/http.js";
 
 interface Env {
     SHARD: ShardNamespaceLike;
@@ -48,15 +48,14 @@ export const ShardDO = createShardDO({
     },
 });
 
-let worker: ReturnType<typeof createWorker> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!worker) {
-            // `httpRouter: app` mounts the `POST /payment/webhook` action; everything
-            // else falls through to Lunora's RPC + reactive query surface.
-            worker = createWorker({ httpRouter: app, openApiSpec, shardDO: env.SHARD });
-        }
+        // `httpRouter: app` mounts the `POST /payment/webhook` action; everything
+        // else falls through to Lunora's RPC + reactive query surface. Built once
+        // per isolate and reused.
+        worker ??= createWorker({ httpRouter: app, openApiSpec, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

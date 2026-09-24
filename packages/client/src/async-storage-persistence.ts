@@ -62,6 +62,19 @@ const createAsyncStoragePersistence = (options: AsyncStoragePersistenceOptions):
                     await blob.write(remaining);
                 }
             }),
+        // In-place swap inside the serialized chain: one read, one write, so the
+        // record never leaves the blob and keeps its index in FIFO order.
+        replace: (mutation) =>
+            blob.serialize(async () => {
+                const mutations = await readAll();
+                const at = mutations.findIndex((candidate) => candidate.id === mutation.id);
+
+                if (at !== -1) {
+                    mutations[at] = mutation;
+
+                    await blob.write(mutations);
+                }
+            }),
     };
 };
 

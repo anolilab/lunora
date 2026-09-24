@@ -1,7 +1,7 @@
+import { expo } from "@better-auth/expo";
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { bearer } from "@lunora/auth/plugins";
-import { expo } from "@better-auth/expo";
 
 /** The app's URL scheme (see `app.json` → `expo.scheme`) — a trusted origin for native requests. */
 const APP_SCHEME = "expoexample";
@@ -17,32 +17,39 @@ const APP_SCHEME = "expoexample";
  *   runs against `/api/auth/*` works.
  * - `bearer()` lets `getSession` authenticate from an `Authorization: Bearer`
  *   header, not just a cookie. The native client sends its session as a bearer
- *   token (React Native has no cookie jar, and a `Cookie` header would be
- *   rejected by the runtime's CSRF guard on an `Origin`-less native request) —
- *   see `src/lunora.ts` / `src/server/index.ts`.
+ *   token — see `src/lunora.ts` / `src/server/index.ts`. A cookie credential
+ *   cannot work here: the runtime's CSRF guard rejects a cookie-bearing
+ *   state-changing request that carries no trusted `Origin`, and a native request
+ *   sends none. (React Native's cookie jar is real, so the client explicitly
+ *   sends `credentials: "omit"` to keep a stray session cookie off the wire.)
  *
  * `trustedOrigins` lists the scheme explicitly.
  *
  * The password-reset delivery hook logs to the console — the standard dev
  * pattern. In production swap it for an `@lunora/mail` send.
  */
-const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOptions => ({
-    appName: "Lunora Expo Example",
-    baseURL: env.AUTH_URL,
-    emailAndPassword: {
-        enabled: true,
-        sendResetPassword: async ({ user }) => {
-            // Log only a non-sensitive identifier — never the reset URL (a
-            // credential) or the user's email (PII). In production swap this for
-            // an `@lunora/mail` send that delivers the `url` to the user.
-            // eslint-disable-next-line no-console
-            console.log(`[auth] password reset requested for user ${user.id}`);
+const options = (env: { AUTH_SECRET: string; AUTH_URL?: string }): LunoraAuthOptions => {
+    return {
+        appName: "Lunora Expo Example",
+        baseURL: env.AUTH_URL,
+        emailAndPassword: {
+            enabled: true,
+            sendResetPassword: ({ user }) => {
+                // Log only a non-sensitive identifier — never the reset URL (a
+                // credential) or the user's email (PII). In production swap this for
+                // an `@lunora/mail` send that delivers the `url` to the user.
+
+                console.log(`[auth] password reset requested for user ${user.id}`);
+
+                // The contract is async; this dev-only delivery has nothing to await.
+                return Promise.resolve();
+            },
         },
-    },
-    plugins: [expo(), bearer()],
-    secret: env.AUTH_SECRET,
-    trustedOrigins: [`${APP_SCHEME}://`],
-});
+        plugins: [expo(), bearer()],
+        secret: env.AUTH_SECRET,
+        trustedOrigins: [`${APP_SCHEME}://`],
+    };
+};
 
 /**
  * Runtime auth instance, backed by `@lunora/auth`'s SQL adapter over D1.

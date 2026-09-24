@@ -41,6 +41,25 @@ describe("resolveSecurity", () => {
         warn.mockRestore();
     });
 
+    it("denies an origin when the custom predicate returns a truthy non-boolean", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The predicate is consumed truthily at three security decision points —
+        // preflight, header reflection, and the CSRF trusted-origin check — so it is
+        // narrowed once at resolve time. `indexOf` is the classic slip: it returns
+        // `-1` for "not found", which is TRUTHY and would have allowed every origin.
+        const resolved = resolveSecurity({
+            cors: { allowedOrigins: (origin) => ["https://app.example"].indexOf(origin) as unknown as boolean },
+        });
+
+        expect(resolved.cors.isAllowed("https://evil.example")).toBe(false);
+        expect(resolved.cors.isExplicitlyAllowed("https://evil.example")).toBe(false);
+
+        warn.mockRestore();
+    });
+
     it("allows a wildcard origin without credentials", () => {
         expect.hasAssertions();
 
@@ -312,6 +331,31 @@ describe("handleCorsPreflight", () => {
         // The REST edge-cache hit indicator: documented as readable, so a browser
         // client has to actually be able to read it.
         expect(exposed).toContain("x-lunora-edge-cache");
+    });
+
+    it("admits `x-lunora-shard-key` at preflight, the REST surface's documented header form of `?shardKey=`", () => {
+        expect.hasAssertions();
+
+        // The allowlist has no wildcard, so a name missing from it is dropped from
+        // `access-control-allow-headers` and the browser blocks the WHOLE request —
+        // a SPA on an allowlisted origin that picked the header over the query
+        // parameter never reached the origin at all.
+        const response = handleCorsPreflight(
+            httpsRequest({
+                method: "OPTIONS",
+                headers: {
+                    origin: "https://app.example.com",
+                    "access-control-request-method": "GET",
+                    "access-control-request-headers": "x-lunora-shard-key, content-type",
+                },
+            }),
+            cors,
+        );
+
+        const allowHeaders = (response?.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+
+        expect(allowHeaders).toContain("x-lunora-shard-key");
+        expect(allowHeaders).toContain("content-type");
     });
 
     it("ignores non-preflight OPTIONS and disabled CORS", () => {

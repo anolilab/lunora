@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { SchemaHistoryPanel } from "../../../src/features/database/schema-history";
+import { SchemaHistoryPanel, tierOf } from "../../../src/features/database/schema-history";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -187,5 +187,31 @@ describe("schemaHistoryPanel", () => {
         });
 
         expect(screen.queryByTestId("sh-empty")).toBeNull();
+    });
+});
+
+describe("tierOf", () => {
+    it("reads every global spelling as the global tier", () => {
+        expect.assertions(4);
+
+        /*
+         * A current snapshot encodes which physical store a `.global()` table
+         * lives in, because D1 and Hyperdrive are not the same database. An
+         * equality check against the pre-backend spelling survived that change
+         * silently and rendered every global table in the ledger as a shard
+         * table — the diagram's one job on this page.
+         */
+        expect(tierOf("global")).toBe("global");
+        expect(tierOf("global:d1")).toBe("global");
+        expect(tierOf("global:hyperdrive")).toBe("global");
+        // A backend this version has not heard of is still the global tier.
+        expect(tierOf("global:future")).toBe("global");
+    });
+
+    it("leaves the shard modes alone", () => {
+        expect.assertions(2);
+
+        expect(tierOf("root")).toBe("shard");
+        expect(tierOf("shardBy:orgId")).toBe("shard");
     });
 });

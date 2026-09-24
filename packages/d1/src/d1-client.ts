@@ -113,9 +113,14 @@ class D1Session {
      * read-only statement. An `UPDATE … RETURNING` runs through here too and is
      * left unretried.
      */
+    // `meta` carries D1's own per-query accounting (`rows_read`, `rows_written`,
+    // `duration`). Forwarded rather than dropped: it is the only place the
+    // SCANNED row count is observable, and scanned is what D1 bills. Widening it
+    // here is what keeps the accounting reachable through the Sessions API —
+    // without it the contract stopped at this wrapper.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
-    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        const run = async (): Promise<{ results: T[]; success: boolean }> =>
+    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }> {
+        const run = async (): Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }> =>
             this.prepare(sql)
                 .bind(...binds)
                 .all<T>();

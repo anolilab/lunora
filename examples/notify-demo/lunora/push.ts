@@ -1,8 +1,9 @@
+import { webPushId } from "@lunora/notify";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { ActionCtx, Id, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * This demo has no sign-in, so a deployed instance is reachable by anyone and
@@ -14,7 +15,7 @@ const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
-interface AnnouncementDoc {
+interface AnnouncementDocument {
     _id: Id<"announcements">;
     body: string;
     sentAt: number;
@@ -30,6 +31,10 @@ interface AnnouncementDoc {
  */
 export const registerDevice = mutation
     .input({
+        // Set only after a VAPID rotation — the endpoint of the subscription the
+        // browser just replaced. Its server row is keyed on that endpoint, so
+        // nothing else will ever overwrite or prune it.
+        replacedEndpoint: v.optional(v.string().max(2048)),
         // The exact Web Push subscription shape, declared rather than `v.any()`:
         // this is a trust boundary (the endpoint is a URL the server will later
         // POST to), so the validator rejects anything else before it reaches the
@@ -43,7 +48,15 @@ export const registerDevice = mutation
         }),
     })
     .use(rateLimit(mutationLimiter, "write", byCaller))
-    .mutation(async ({ args: { subscription }, ctx }): Promise<void> => {
+    .mutation(async ({ args: { replacedEndpoint, subscription }, ctx }): Promise<void> => {
+        if (replacedEndpoint !== undefined) {
+            // `replacedEndpoint` is a caller-controlled key, so the removal is
+            // scoped to the caller's own rows. This demo has no sign-in, so
+            // every row is anonymous and the scope separates nothing here —
+            // it is what an app WITH auth passes `ctx.auth?.userId` for.
+            await ctx.push.unregister(webPushId(replacedEndpoint), { userId: undefined });
+        }
+
         await ctx.push.register({ subscription });
     });
 
@@ -54,10 +67,10 @@ export const announce = mutation
     .mutation(async ({ args: { body, title }, ctx }): Promise<Id<"announcements">> => ctx.db.insert("announcements", { body, sentAt: Date.now(), title }));
 
 /** List announcements, newest first. Subscribers receive deltas as `announce` writes. */
-export const listAnnouncements = query.query(async ({ ctx }): Promise<AnnouncementDoc[]> => {
+export const listAnnouncements = query.query(async ({ ctx }): Promise<AnnouncementDocument[]> => {
     const rows = await ctx.db.query("announcements").withIndex("by_sent").collect();
 
-    return [...rows].sort((a, b) => b.sentAt - a.sentAt);
+    return rows.toSorted((a, b) => b.sentAt - a.sentAt);
 });
 
 /**
@@ -82,7 +95,12 @@ export const broadcast = action
         // secrets (the web-push `keys`, the FCM token). Handing `ctx.notify.send` a
         // bare `endpoint` URL routed the message to FCM — the push router treats
         // any non-`{`-prefixed string as an opaque FCM registration token.
-        const [first] = await ctx.push.list();
+        // `.at(0)` rather than destructuring: this example sets
+        // `noUncheckedIndexedAccess: false`, so `const [first] = …` is typed as if
+        // the element always exists and the emptiness check below reads as dead.
+        // `at` is declared `T | undefined`, so the type matches the runtime.
+        const subscriptions = await ctx.push.list();
+        const first = subscriptions.at(0);
 
         if (first !== undefined) {
             await ctx.push.send(first.id, { body, title });

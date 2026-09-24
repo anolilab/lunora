@@ -183,6 +183,32 @@ describe("fixed window", () => {
 
         expect(next.value).toEqual({ ts: 1000, value: 3 });
     });
+
+    it("recovers from a reserved debt of a full window's rate", () => {
+        expect.assertions(5);
+
+        // rate 5, no explicit capacity. Reserving the whole rate against an
+        // already-empty window leaves a debt EQUAL to one grant, so the next
+        // window is spent entirely repaying it and the one after must be back
+        // to full. The rejection in between persists nothing, so every later
+        // call re-projects from this same stored prior — granting a single
+        // period's rate however long it sat would strand the key forever.
+        const reserved = evaluate(fixedWindow, { ts: 0, value: 0 }, consumeOptions(5, 0, true));
+
+        expect(reserved.value).toEqual({ ts: 0, value: -5 });
+
+        const nextWindow = evaluate(fixedWindow, reserved.value, consumeOptions(1, 1000));
+
+        expect(nextWindow.status.ok).toBe(false);
+        // Nothing persisted: the recovery below must come out of the projection.
+        expect(nextWindow.value).toBeUndefined();
+
+        // Two elapsed windows grant 2 * rate against a one-window debt.
+        const afterNext = evaluate(fixedWindow, reserved.value, consumeOptions(1, 2000));
+
+        expect(afterNext.status.ok).toBe(true);
+        expect(afterNext.value).toEqual({ ts: 2000, value: 4 });
+    });
 });
 
 describe("sliding window", () => {
@@ -260,14 +286,19 @@ describe("sliding window", () => {
     });
 
     it("reserve borrows past the limit and reports when the pressure clears", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const currentFull = { prev: 0, ts: 0, value: 10 };
         const { status, value } = evaluate(slidingWindow, currentFull, consumeOptions(2, 0, true));
 
         expect(status.ok).toBe(true);
         expect(value).toEqual({ prev: 0, ts: 0, value: 12 });
-        expect(status.retryAfter).toBe(1200);
+        // Derived from the count the reserve PERSISTS (12), not the pre-reserve
+        // 10: at 1200 the stored 12 still weighs 9.6, so the same request would
+        // be denied again and the caller would burn a rejected retry.
+        expect(status.retryAfter).toBe(1334);
+        // The reported time is honoured rather than approximate.
+        expect(evaluate(slidingWindow, value, consumeOptions(2, status.retryAfter)).status.ok).toBe(true);
     });
 });
 
@@ -292,12 +323,16 @@ describe("availableAt", () => {
     });
 
     it("fixed window reports remaining tokens, resetting at the boundary", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         // Same window: 2 of 5 left.
         expect(availableAt(fixedWindow, { ts: 0, value: 2 }, 400)).toEqual({ ts: 0, value: 2 });
         // Next window: a fresh `rate`.
         expect(availableAt(fixedWindow, { ts: 0, value: 0 }, 1000)).toEqual({ ts: 1000, value: 5 });
+        // A reserved debt is repaid out of every elapsed window's grant, not
+        // just one, so a debt of a full rate clears after two windows.
+        expect(availableAt(fixedWindow, { ts: 0, value: -5 }, 1000)).toEqual({ ts: 1000, value: 0 });
+        expect(availableAt(fixedWindow, { ts: 0, value: -5 }, 2000)).toEqual({ ts: 2000, value: 5 });
     });
 
     it("fixed window carries a reserved debt across the boundary, matching evaluate", () => {

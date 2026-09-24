@@ -17,12 +17,17 @@
 #
 # What this does NOT cover:
 #   - The remote giget fetch itself — that needs network + a published
-#     template ref, covered by a separate online smoke once /templates
-#     lands on the alpha branch.
+#     template ref. `/templates` is on the branch now and there is still no
+#     online smoke, so this remains uncovered by anything.
 #   - Booting the Vite + workerd dev server (requires a real Cloudflare
 #     environment and a long-running process; covered manually).
-#   - Installing the scaffold's @lunora/* runtime deps from npm — none of
-#     them are published yet.
+#   - Installing the scaffold's @lunora/* runtime deps from npm. They ARE
+#     published (the `alpha` dist-tag), but this script deliberately resolves
+#     them from the packed local tarballs so a run is offline-deterministic
+#     and tests THIS tree rather than the last release.
+#
+# `pnpm run test:clean-machine`, and only that: this script is in no workflow,
+# so nothing here runs in CI.
 #
 # Exits non-zero on any failure. Output is verbose so CI logs explain
 # where things broke.

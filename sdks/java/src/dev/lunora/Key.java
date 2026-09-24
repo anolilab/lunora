@@ -110,6 +110,12 @@ public final class Key {
             return "null";
         }
 
+        // Negative zero keeps its sign in a key — stableStringify emits the bare
+        // token "-0" — and every integer conversion below drops it.
+        if (value == 0.0 && 1.0 / value < 0.0) {
+            return "-0";
+        }
+
         if (value == Math.rint(value) && Math.abs(value) < 1e21) {
             return BigDecimal.valueOf(value)
                     .setScale(0, java.math.RoundingMode.HALF_UP)

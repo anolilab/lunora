@@ -34,8 +34,11 @@ export const requestExport = mutation.input({ workspaceId: v.id("workspaces") })
 and return the job id.
 
 Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's `/schedule`
-endpoint with `functionPath`, `args`, `scheduledFor`, and an `originUrl` it can
-call back into.
+endpoint with `functionPath`, `args` and `scheduledFor`. The origin it is called
+back on is NOT on that request: the DO reads it from its own
+`env.LUNORA_ORIGIN_URL`, because a caller-supplied dispatch target would be an
+SSRF vector. Set that var (in `vars` for local dev, as a secret in production) or
+every schedule is refused with `ORIGIN_NOT_CONFIGURED`.
 
 ### Standalone scheduler
 
@@ -50,7 +53,6 @@ import { api } from "@/lunora/_generated/api";
 
 const scheduler = createScheduler({
     namespace: env.SCHEDULER, // SchedulerDO binding
-    originUrl: "https://app.acme.test", // where the DO dispatches back
 });
 
 const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
@@ -65,7 +67,8 @@ await scheduler.cancel(id);
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 
 Per-job `RunOptions` cover `shardKey` (routing hint) and `retry`, a retry
-policy with `maxAttempts` (default 5), `backoff` (`"exponential"` | `"linear"`),
+policy with `maxAttempts` (default 5 — retries **after** the first dispatch, so
+six deliveries in all), `backoff` (`"exponential"` | `"linear"`),
 `baseMs` (default 30_000), and an optional `maxMs` ceiling. On exhaustion the job
 is parked under a dead-letter key rather than dropped.
 
@@ -100,8 +103,10 @@ function reference (a one-shot dispatch) or a durable workflow reference
 fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="info">
-    `interval` takes exactly one of `{seconds | minutes | hours}`. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use
-    `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
+    `interval` takes exactly one of `{minutes | hours}`. `{ seconds }` is **rejected at definition time**: Cloudflare Cron Triggers have a one-minute floor,
+    and the 6-field expression it would compile to is refused by `wrangler deploy`. For sub-minute recurrence use `ctx.scheduler.runAfter`/`runAt` (via a
+    workpool for bounded concurrency); `{ minutes: 1 }` is the fastest cron-native cadence. `hourly`, `daily`, `weekly`, and `monthly` schedule at a fixed UTC
+    wall-clock time. Use `.cron` for the raw 5- or 6-field grammar when the ergonomic forms don't fit.
 </Callout>
 
 <Callout type="warn">
@@ -151,7 +156,6 @@ import { internal } from "@/lunora/_generated/api";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
-    originUrl: "https://app.acme.test",
     maxConcurrency: 5,
     name: "stripe-sync",
 });
@@ -161,11 +165,41 @@ const { inFlight, queued, maxConcurrency } = await pool.status();
 await pool.cancel(id);
 ```
 
-Reach for the DO-backed `createWorkpool` when you need a hard concurrency cap,
-per-job cancellation, or per-job status. When you only want to rate-limit
-fire-and-forget work, `createQueueWorkpool` leans on Cloudflare Queues instead:
-concurrency, retries, and dead-lettering are configured on the consumer in
-`wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`):
+### What bounds a drain
+
+Two platform ceilings sit above `maxConcurrency`, and both apply to the drain as
+a whole rather than to one job:
+
+- **Six concurrent dispatches.** A Durable Object may have at most six
+  connections simultaneously waiting for response headers, so one alarm drain
+  keeps six jobs in flight. A `maxConcurrency` above six is not wrong, just not
+  reachable in a single drain — the surplus goes out on the following alarms.
+- **A 15-minute alarm.** An alarm handler has 15 minutes of wall time, and the
+  whole drain shares it. Work that does not fit is deferred to the next alarm,
+  not dropped: an unreached job keeps both its record and its index entry.
+
+Both matter more than they look, because the DO's dispatch only returns once the
+dispatched function has **finished running** — a dispatch's latency is the whole
+job's latency, not a kick's.
+
+### Long-running jobs belong on Queues
+
+That is the case to move off this pool. A job that runs for minutes holds one of
+the six slots and one slice of the 15-minute budget for its whole duration, and
+it does so for every other job in the app, not just its own pool.
+
+`createQueueWorkpool` + `createQueueConsumer` give each batch a fresh Worker
+invocation with its own connection budget and its own clock, and the consumer's
+`max_concurrency` is not capped at six. The dispatcher allows each job five
+minutes by default (`httpDispatcher({ timeoutMs })`).
+
+You give up the hard concurrency cap, per-job cancellation, and per-job status —
+that is the whole trade. Reach for the DO-backed `createWorkpool` when you need
+those and your jobs are short; reach for Queues when the jobs are long.
+
+Concurrency, retries, and dead-lettering are configured on the consumer in
+`wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`) rather
+than in code:
 
 ```ts
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "@lunora/scheduler";
@@ -182,9 +216,6 @@ export const queueHandler = createQueueConsumer({
 });
 ```
 
-The Queues-backed pool has no hard concurrency cap, per-job cancel, or per-job
-status; that's the trade for letting Cloudflare own retries and backoff.
-
 <Callout type="warn">
     Neither workpool is for multi-step orchestration. Reach for Cloudflare Workflows (`@lunora/workflow`) when you need durable `step.do` / `step.sleep` /
     `step.waitForEvent`.
@@ -192,6 +223,81 @@ status; that's the trade for letting Cloudflare own retries and backoff.
 
 ## Dispatch contract
 
-When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
-with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
-that and runs the function exactly as if it were an RPC call.
+When the alarm fires the DO POSTs to
+`${env.LUNORA_ORIGIN_URL}/_lunora/scheduler/dispatch` with
+`{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
+that and runs the function on the same code path as an RPC call — with one
+difference: the dispatch is **server-initiated**, so it carries no end-user
+identity. `ctx.auth.userId` is `null` and `ctx.ip` is `undefined`, which is also
+what lets a job target an `internal` function. Pass anything the job needs to
+know about a user in its `args`; never gate a scheduled function on `ctx.auth`.
+
+A **cron trigger** takes a different route: the worker's `scheduled()` handler
+dispatches it straight to the shard, without touching the `SchedulerDO`. So the
+retry ladder, backoff, and dead-letter park above apply to `runAfter`/`runAt`
+jobs only — a failed cron tick is logged as `CRON_JOB_FAILED` and not retried.
+
+## Delivery guarantee
+
+**A scheduled job is delivered at least once.** That is the contract the retry
+ladder and the dead-letter park are built on, and it means a job can run more
+than once. There are two ways it happens, and they are not equally forgiving.
+
+**A retry after a failed attempt** is the ordinary one. The attempt is over
+before the next begins, so the record id — which rides to the shard as the
+replay-dedup key, and to Cloudflare Workflows as the instance id — finds the
+previous attempt's mark already in place. A `mutation` short-circuits to its
+cached result, a `workflow` re-attaches to the instance it already created, and
+an `action` short-circuits too.
+
+**A re-delivery that overlaps a live attempt** is the hard one, and it comes
+from exactly one source: the Durable Object that owns the schedule being evicted
+or crashing while a dispatch is open. **Every target kind now survives it.**
+
+| Target             | Overlapping re-delivery                                                         |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `mutation`         | Runs once. The dedup read holds the shard's single-writer gate.                 |
+| `workflow` / agent | Runs once. The record id is the instance id; a second create is a no-op.        |
+| `action`           | Runs once. The shard declines the second delivery while the first is in flight. |
+
+`action` used to be the exception. It is dispatched without the shard's
+single-writer gate — taking it would let any caller freeze a whole shard for the
+length of an action's outbound I/O — and its dedup row is written only once the
+handler returns, so a second delivery arriving mid-flight found nothing to dedup
+against and ran the handler again, alongside the first.
+
+The shard now claims the dedup key **before** running the handler and replaces
+the claim with the result afterwards. A delivery that arrives while the claim is
+live is answered `409 DISPATCH_IN_PROGRESS` and the handler is not entered a
+second time.
+
+**The decline is temporary, never terminal.** A 409 is not a success, so the
+scheduler keeps the record and re-arms it on the ordinary retry ladder — the job
+is still delivered at least once. What it no longer does is run twice at the
+same time. The retry that follows lands after the first attempt has settled and
+is served that attempt's cached result.
+
+Staleness needs no timeout, because the claim lives in the same isolate as the
+handler. A Durable Object is single-instance: if the isolate that took a claim is
+gone, so is the handler it was running, so a successor instance finds no claim
+and runs the job. Nothing waits out a guessed horizon.
+
+Two reservations still bound how _soon_ a lost job is retried, and neither is a
+correctness gap:
+
+- A claimed job stays reserved by the scheduler for **15 minutes** before another
+  instance may fire it — the platform's own ceiling on how long a dispatch this
+  scheduler started can still be open (an alarm invocation, and the fetch it
+  owns, are torn down at that mark). A job whose instance genuinely died waits
+  that out. It is delayed, never dropped.
+- A job whose handler keeps declining because it really is still running rides
+  the retry ladder like any other unsuccessful attempt, and is parked in the
+  dead-letter once its `maxAttempts` budget is spent. The work itself completed;
+  the record is in `/dead` and can be retried from there.
+
+<Callout type="info">
+    **A scheduled `action` no longer has to be idempotent to survive an overlapping re-delivery** — the shard refuses the second one. It still has to be
+    idempotent to survive an ordinary **sequential** retry whose first attempt's response was lost in transit before its dedup row was written, which is the
+    plain at-least-once case every scheduled job has. For genuinely long work, `createQueueWorkpool` + `createQueueConsumer` remains the better fit: it bounds
+    each job at five minutes and reports completion explicitly.
+</Callout>

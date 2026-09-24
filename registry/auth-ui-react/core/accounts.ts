@@ -67,6 +67,13 @@ const createAccountsController = (context: ControllerContext, options: { autoLoa
         actions: {
             link: async (provider: string) => {
                 try {
+                    /*
+                     * The raw field, not `postAuthDestination`: this runs from a
+                     * settings screen on an already-signed-in session. A
+                     * `?redirectTo=` in *that* URL was written for whatever sent
+                     * the user to settings, so honouring it here would take them
+                     * somewhere else the moment they link an account.
+                     */
                     assertOk(await context.authClient.linkSocial({ callbackURL: context.redirects.afterSignIn, provider }));
                 } catch (error) {
                     notifyError(context, error, context.localization.genericError);

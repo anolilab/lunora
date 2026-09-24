@@ -2,6 +2,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 import { API_SPEC_HELP } from "../../util/api-spec";
 import { TARGET_OPTION } from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /**
  * `lunora build` — run codegen + all pre-deploy gates and emit the bundled
@@ -36,8 +37,29 @@ const buildCommand: Command = {
             name: "emit-bindings",
             type: String,
         },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
+        // `build` runs the same advisory gate `deploy` does (it IS `deploy
+        // --dry-run` underneath), and that gate's blocked message names this flag
+        // — which `build` rejected as an unknown option, so half its own advice
+        // did not work on the command that printed it. Same failure the drift
+        // gate's `--allow-schema-drift` above already closed.
+        //
+        // Both halves are declared explicitly, like `codegen`/`deploy`/`prepare`:
+        // letting cerebro synthesize the positive form from the `no-*` one clones
+        // the "Don't fail…" description AND stamps `defaultValue: true`, which
+        // would defeat `resolveStrictAdvisories`'s CI-vs-local fallback.
+        {
+            description: "Fail the build on ERROR-level codegen advisories even locally (the gate already defaults to on in CI)",
+            name: "strict-advisories",
+            type: Boolean,
+        },
+        {
+            description:
+                "Don't fail the build on ERROR-level codegen advisories (the gate defaults to on in CI, off locally). Never downgrades platform diagnostics.",
+            name: "no-strict-advisories",
+            type: Boolean,
+        },
         TARGET_OPTION,
     ],
 };
@@ -50,5 +72,9 @@ export type BuildOptions = CreateOptions<{
     "emit-bindings": string | undefined;
     format: string | undefined;
     "out-dir": string | undefined;
+    // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
+    // both under this one positive camelCase key, `undefined` until a side is
+    // picked (which is what lets the CI-vs-local default apply).
+    "strict-advisories": boolean | undefined;
     target: string | undefined;
 }>;

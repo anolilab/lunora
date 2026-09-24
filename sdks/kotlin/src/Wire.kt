@@ -33,6 +33,15 @@ object Wire {
     const val MAX_BIGINT_DIGITS: Int = 1024
 
     /**
+     * Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+     * non-finite epoch, `new Date(v)` is an Invalid Date.
+     */
+    const val MAX_TIME_VALUE: Double = 8.64e15
+
+    /** An RFC 3986 scheme, then the rest — what makes an href ABSOLUTE. */
+    private val ABSOLUTE_HREF = Regex("^[A-Za-z][A-Za-z0-9+\\-.]*:[\\s\\S]*$")
+
+    /**
      * Bytes per element for the typed-array views the codec round-trips. A view
      * whose payload is not a whole number of elements is not a view the
      * reference can rebuild — `new Float32Array(buffer)` raises a RangeError
@@ -127,10 +136,10 @@ object Wire {
         "inf" -> WireValue.Infinity
         "-inf" -> WireValue.NegInfinity
         "bigint" -> decodeBigInt(items)
-        "date" -> WireValue.Date(decode(items.getOrNull(2), depth + 1))
-        "url" -> WireValue.Url(items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag"))
+        "date" -> decodeDate(items, depth)
+        "url" -> decodeUrl(items)
         "map" -> decodeMap(items, depth)
-        "set" -> WireValue.WireSet(payloadList(items, "set").map { decode(it, depth + 1) })
+        "set" -> decodeSet(items, depth)
         "error" -> decodeError(items, depth)
         "bytes" -> decodeBytes(items)
         "arr" -> WireValue.Arr(payloadList(items, "arr").map { decode(it, depth + 1) })
@@ -175,7 +184,10 @@ object Wire {
                 val index = seen[identity]
 
                 if (index != null) {
-                    entries[index] = pair
+                    // Only the VALUE. `Map.prototype.set` on a key already
+                    // present keeps the key it holds, so a later `-0` never
+                    // replaces the `0` stored under it.
+                    entries[index] = entries[index].first to pair.second
 
                     continue
                 }
@@ -187,6 +199,32 @@ object Wire {
         }
 
         return WireValue.WireMap(entries)
+    }
+
+    /**
+     * Decode a `set` tag, collapsing duplicates the way a real `Set` does.
+     *
+     * The reference builds a `new Set`, which de-duplicates by SameValueZero and
+     * keeps the FIRST occurrence's position — the same rule as a `Map`'s keys, so
+     * the same identity helper decides it. Carrying both copies re-encoded a set
+     * the reference would never emit.
+     */
+    private fun decodeSet(items: List<*>, depth: Int): WireValue {
+        val decoded = mutableListOf<WireValue>()
+        val seen = mutableSetOf<String>()
+
+        for (entry in payloadList(items, "set")) {
+            val value = decode(entry, depth + 1)
+            val identity = mapKeyIdentity(value)
+
+            if (identity != null && !seen.add(identity)) {
+                continue
+            }
+
+            decoded.add(value)
+        }
+
+        return WireValue.WireSet(decoded)
     }
 
     /**
@@ -203,10 +241,61 @@ object Wire {
         is WireValue.Infinity -> "num:inf"
         is WireValue.NegInfinity -> "num:-inf"
         is WireValue.Bool -> "bool:${key.value}"
-        is WireValue.Num -> "num:${key.value}"
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while Double.toString keeps the sign ("-0.0").
+        is WireValue.Num -> "num:${key.value + 0.0}"
         is WireValue.Text -> "str:${key.value}"
         is WireValue.BigInt -> "big:${key.value}"
         else -> null
+    }
+
+    private fun decodeDate(items: List<*>, depth: Int): WireValue {
+        // Epoch milliseconds, and nothing else. The payload is DECODED first (a
+        // nested `[TAG, "nan"]` is how an invalid date travels), then checked:
+        // `null` or a string would otherwise become a Date carrying a value no
+        // epoch arithmetic can use, re-encoded as a legitimate-looking date tag.
+        val epoch = decode(items.getOrNull(2), depth + 1)
+
+        if (epoch !is WireValue.Num && epoch !is WireValue.NaN && epoch !is WireValue.Infinity && epoch !is WireValue.NegInfinity) {
+            throw WireFormatException("wire-codec: malformed date tag")
+        }
+
+        // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+        // zero, and turn anything non-finite or past +-8.64e15 into an Invalid
+        // Date. Kept verbatim, an out-of-range epoch re-encoded as a date tag
+        // the reference — whose own Date can never hold that value — refuses to
+        // produce.
+        // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+        // exactly one window: an epoch in (-1, 0] gives +0 there and -0 under
+        // `ceil`, which keeps the sign of zero. The window is one value wide,
+        // and the stable subscription key spells -0 as the bare token `-0`,
+        // distinct from `0` — so the `+ 0.0` is what keeps a Date built from
+        // -0.5 on the same subscription as the TS client.
+        val clipped = when {
+            epoch is WireValue.Num && Math.abs(epoch.value) <= MAX_TIME_VALUE ->
+                WireValue.Num((if (epoch.value < 0) Math.ceil(epoch.value) else Math.floor(epoch.value)) + 0.0)
+            else -> WireValue.NaN
+        }
+
+        return WireValue.Date(clipped)
+    }
+
+    /**
+     * An href must be ABSOLUTE — a scheme, per RFC 3986, then the rest.
+     *
+     * The reference builds a real `URL`, which throws on anything unparseable,
+     * while every port stored the string verbatim and accepted `"not a url"` — a
+     * frame that kills a JS peer's subscription and is waved through here.
+     * Reproducing WHATWG URL parsing in eight languages is not on offer (their
+     * own parsers disagree with it in the deep end), so the contract, and
+     * `protocol/README.md` §2.1, is the floor of it.
+     */
+    private fun decodeUrl(items: List<*>): WireValue {
+        val href = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag")
+
+        if (!ABSOLUTE_HREF.matches(href)) throw WireFormatException("wire-codec: url href is not absolute")
+
+        return WireValue.Url(href)
     }
 
     private fun decodeBigInt(items: List<*>): WireValue {
@@ -220,18 +309,34 @@ object Wire {
     }
 
     private fun decodeError(items: List<*>, depth: Int): WireValue {
-        // The props slot is NOT optional and NOT nullable: the reference reads it
-        // with `Object.keys`, which throws on a null or missing slot, so quietly
-        // substituting an empty map accepted a frame the reference refuses.
-        if (items.size < 5 || items[4] == null) throw WireFormatException("wire-codec: malformed error tag")
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+        // reference reads it with `Object.keys`, which throws on a null or
+        // missing slot and ENUMERATES a string/number/boolean/array — so
+        // `[TAG,"error","E","m","ab"]` would decode there with the invented props
+        // {0:"a",1:"b"} while substituting an empty map accepted the same frame
+        // here.
+        if (items.size < 5) throw WireFormatException("wire-codec: malformed error tag")
 
-        val props = (items[4] as? Map<*, *>)
-            ?.map { (key, item) -> key.toString() to decode(item, depth + 1) }
-            ?: emptyList()
+        // The slot is decoded as one VALUE at depth+1, which puts its own fields
+        // at depth+2 — what the reference does with a single
+        // `decodeWire(value[4], depth + 1)` before it touches a field. Walking
+        // the raw map's entries here charged a level too few, so a props value
+        // nested one past the cap re-encoded happily out of this port and out of
+        // no other (`error-props-past-cap`).
+        val slot = decode(items[4], depth + 1)
+        val props = (slot as? WireValue.Obj ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")).fields
+
+        // Both label slots are type-CHECKED, like every other slot. Defaulting to
+        // "" accepted the frame while erasing the error's identity, and the ports
+        // did not even agree on that: two carried the non-string through
+        // verbatim. A slot that must hold a string and does not is a malformed
+        // frame.
+        val name = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
+        val message = items.getOrNull(3) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
 
         return WireValue.Err(
-            name = items.getOrNull(2) as? String ?: "",
-            message = items.getOrNull(3) as? String ?: "",
+            name = name,
+            message = message,
             props = props,
             cause = if (items.size > 5) decode(items[5], depth + 1) else null,
         )
@@ -244,6 +349,16 @@ object Wire {
             Base64.getDecoder().decode(encoded)
         } catch (error: IllegalArgumentException) {
             throw WireFormatException("wire-codec: invalid base64 in bytes tag")
+        }
+
+        // The payload must be CANONICAL, not merely decodable. The JDK's basic
+        // decoder infers missing padding and ignores the unused low bits of a
+        // short final quantum, so "AQI" and "AQJ=" both decoded here — the second
+        // one silently, into two bytes that re-encode as "AQI=", different bytes
+        // than the peer wrote. Re-encoding and comparing is the whole rule: the
+        // payload must be exactly what a conforming encoder would have written.
+        if (Base64.getEncoder().encodeToString(data) != encoded) {
+            throw WireFormatException("wire-codec: bytes payload is not canonical padded base64")
         }
 
         val ctor = items.getOrNull(3) as? String ?: "Uint8Array"

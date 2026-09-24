@@ -93,6 +93,15 @@ interface DispatchOptions {
     env: Record<string, unknown>;
     /** Injectable fetch for the `ctx.run` dispatcher (tests). */
     fetchImpl?: typeof fetch;
+
+    /**
+     * W3C `traceparent` of the consumer invocation's own trace, supplied by the
+     * runtime's `queue()` entry. Forwarded on every `ctx.run` dispatch so the
+     * functions a handler calls are CHILDREN of the queue span instead of a set of
+     * unrelated root traces. Absent (a hand-built dispatch, a unit test) keeps the
+     * prior behaviour: the callee mints its own trace.
+     */
+    traceparent?: string;
 }
 
 /** Cloudflare Queues' default `max_retries` (retries after the initial delivery; total deliveries = 1 + max_retries). */
@@ -434,7 +443,12 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         throw new TypeError(`@lunora/queue: queue "${batch.queue}" (${entry.exportName}) has no push handler — it is declared as a pull consumer`);
     }
 
-    const context = createQueueRunContext({ env: options.env, exportName: entry.exportName, fetchImpl: options.fetchImpl });
+    const context = createQueueRunContext({
+        env: options.env,
+        exportName: entry.exportName,
+        fetchImpl: options.fetchImpl,
+        ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
+    });
     // Always instrumented, capture sink or not: the wrapper is what gives each
     // message its pinned `run`, and poison-message isolation is a DELIVERY
     // property — gating it on the dev capture sink left it inert in production,

@@ -35,6 +35,18 @@ const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 ```
 
+### `AI_GATEWAY_METADATA_MAX_KEYS` (const)
+
+```ts
+const AI_GATEWAY_METADATA_MAX_KEYS = 5;
+```
+
+### `AI_GATEWAY_TAGS_ENV` (const)
+
+```ts
+const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
+```
+
 ### `AI_GATEWAY_TOKEN_ENV` (const)
 
 ```ts
@@ -153,6 +165,12 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `readAiGatewayEnvTags` (const)
+
+```ts
+const readAiGatewayEnvTags: (env: Record<string, unknown>) => Record<string, string> | undefined;
+```
+
 ### `resolveAiGateway` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -189,6 +207,33 @@ interface ChunkerOptions {
 }
 ```
 
+### `FusionLeg` (interface)
+
+```ts
+interface FusionLeg {
+    chunks: ReadonlyArray<RetrievedChunk>;
+    weight?: FusionWeight;
+}
+```
+
+### `FusionWeight` (type)
+
+```ts
+type FusionWeight = "proximity" | "rank";
+```
+
+### `GraphMatch` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `HybridRankOptions` (interface)
+
+```ts
+interface HybridRankOptions {
+    k?: number;
+}
+```
+
 ### `IndexInput` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -222,6 +267,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 type RagExtractor = (raw: string, object: RagSourceObject) => Promise<string | undefined> | string | undefined;
 ```
+
+### `RagGraphStore` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `RagLexicalStore` (interface)
 
@@ -541,3 +590,41 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `vectorizeStore` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `RagSyncEvent` (interface)
+
+```ts
+interface RagSyncEvent {
+    readonly doc?: Record<string, unknown>;
+    readonly id: string;
+    readonly previous?: Record<string, unknown>;
+}
+```
+
+### `RagSyncHandler` (type)
+
+```ts
+type RagSyncHandler = (context: RagSyncTriggerContext, event: RagSyncEvent) => Promise<void>;
+```
+
+### `RagSyncScheduler` (interface)
+
+```ts
+interface RagSyncScheduler {
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+}
+```
+
+### `RagSyncTriggerContext` (interface)
+
+```ts
+interface RagSyncTriggerContext {
+    readonly scheduler: RagSyncScheduler;
+}
+```

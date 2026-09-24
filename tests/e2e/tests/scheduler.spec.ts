@@ -22,7 +22,7 @@ test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
-test("scheduled cleanup fires within a few seconds and updates the runs log", async ({ user }) => {
+test("scheduled cleanup fires within a few seconds", async ({ user }) => {
     // `user.request` carries the better-auth session cookie set during signup.
     // `now` is a required input on `cleanup:cleanupOldMessages` (the handler must
     // stay deterministic, so the caller stamps wall-clock time). Omitting it makes
@@ -59,4 +59,18 @@ test("scheduled cleanup fires within a few seconds and updates the runs log", as
     }
 
     expect(status).toBe("executed");
+});
+
+/*
+ * The poll above only ever asks for "executed", so it is worth no more than the
+ * endpoint's willingness to withhold that word. `/test/job-status` answered
+ * "executed" for ANY id it held no record of — the SchedulerDO deletes a job's
+ * rows on success, and the route read that absence as proof — so a spec polling
+ * a typo'd or never-scheduled id passed on its first attempt.
+ */
+test("job-status refuses to invent a verdict for an id it never issued", async ({ user }) => {
+    const response = await user.request.get(`/test/job-status?id=never-scheduled-${Date.now()}`);
+
+    expect(response.ok()).toBe(true);
+    expect(((await response.json()) as { status?: string }).status).toBe("unknown");
 });

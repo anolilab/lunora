@@ -20,7 +20,6 @@ See ``protocol/README.md`` §2 for the normative grammar.
 from __future__ import annotations
 
 import base64
-import binascii
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,6 +32,10 @@ MAX_BIGINT_DIGITS = 1024
 #: float64, so an integer past this cannot cross the wire as a number without
 #: changing value — ``WireBigInt`` and its tag exist for that case.
 MAX_EXACT_INTEGER = 2**53 - 1
+
+#: Largest epoch a ``Date`` holds (ECMAScript TimeClip). Past this, and for any
+#: non-finite epoch, ``new Date(v)`` is an Invalid Date.
+MAX_TIME_VALUE = 8.64e15
 
 
 class WireFormatError(ValueError):
@@ -138,9 +141,46 @@ def _b64encode(data: bytes) -> str:
 
 def _b64decode(text: str) -> bytes:
     try:
-        return base64.b64decode(text, validate=True)
-    except binascii.Error as error:
+        data = base64.b64decode(text, validate=True)
+    except ValueError as error:
+        # ValueError, not just its ``binascii.Error`` subclass: a payload
+        # carrying a non-ASCII character raises a BARE ValueError ("string
+        # argument should contain only ASCII characters"), which escaped as
+        # itself — so a caller catching the codec's own type caught the codec's
+        # rejection of every OTHER malformed payload and not that one.
         raise WireFormatError(f"wire-codec: invalid base64 in bytes tag: {error}") from error
+
+    # The payload must be CANONICAL, not merely decodable. ``validate=True``
+    # rejects a character outside the alphabet but not the unused low bits of a
+    # short final quantum, so ``"AQJ="`` decoded to two bytes that re-encode as
+    # ``"AQI="`` — different bytes than the peer wrote, accepted silently.
+    # Re-encoding and comparing is the whole rule: the payload must be exactly
+    # what a conforming encoder would have written for these bytes.
+    if _b64encode(data) != text:
+        raise WireFormatError("wire-codec: bytes payload is not canonical padded base64")
+
+    return data
+
+
+def _is_absolute_href(href: str) -> bool:
+    """Whether an href carries a URL scheme, per RFC 3986.
+
+    An ASCII letter, then letters/digits/``+``/``-``/``.``, then ``:``.
+
+    The reference builds a real ``URL``, which throws on anything unparseable,
+    while every port stored the string verbatim and accepted ``"not a url"`` — a
+    frame that kills a JS peer's subscription and is waved through here.
+    Reproducing WHATWG URL parsing in eight languages is not on offer (their own
+    parsers disagree with it in the deep end), so the contract, and
+    ``protocol/README.md`` §2.1, is the floor of it: an href must be ABSOLUTE.
+    """
+
+    scheme, separator, _ = href.partition(":")
+
+    if not separator or not scheme or not (scheme[0].isascii() and scheme[0].isalpha()):
+        return False
+
+    return all(char.isascii() and (char.isalnum() or char in "+-.") for char in scheme)
 
 
 def encode_wire(value: Any, depth: int = 0) -> Any:
@@ -191,7 +231,11 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
 
     if isinstance(value, WireError):
         props = {k: encode_wire(v, depth + 1) for k, v in value.props.items() if v is not UNDEFINED}
-        encoded = [TAG, "error", value.name, value.message, props]
+        # Coerced, because ``decode_wire`` REFUSES a non-string in either slot
+        # and an encoder must not emit a frame its own decoder rejects.
+        # ``WireError`` is a plain dataclass, so nothing stops a caller putting a
+        # number there.
+        encoded = [TAG, "error", str(value.name), str(value.message), props]
         if value.cause is not UNDEFINED:
             encoded.append(encode_wire(value.cause, depth + 1))
         return encoded
@@ -256,16 +300,23 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
                     raise WireFormatError(f"wire-codec: invalid or over-long bigint (max {MAX_BIGINT_DIGITS} digits)")
                 return WireBigInt(int(raw))
             if tag == "date":
-                return WireDate(decode_wire(_payload(value, "date"), depth + 1))
+                # Epoch milliseconds, and nothing else: `None` or a string would
+                # otherwise become a `WireDate` carrying a value no arithmetic can
+                # use, re-encoded as a legitimate-looking date tag. `bool` is an
+                # `int` in Python, so it is excluded explicitly.
+                epoch = decode_wire(_payload(value, "date"), depth + 1)
+                if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+                    raise WireFormatError("wire-codec: malformed date tag")
+                return WireDate(_time_clip(epoch))
             if tag == "url":
                 href = _payload(value, "url")
-                if not isinstance(href, str):
+                if not isinstance(href, str) or not _is_absolute_href(href):
                     raise WireFormatError("wire-codec: malformed url tag")
                 return WireUrl(href)
             if tag == "map":
                 return _decode_map(value, depth)
             if tag == "set":
-                return WireSet([decode_wire(item, depth + 1) for item in _payload_list(value, "set")])
+                return _decode_set(value, depth)
             if tag == "error":
                 return _decode_error(value, depth)
             if tag == "bytes":
@@ -324,10 +375,43 @@ def _decode_error(value: list, depth: int) -> WireError:
     if len(value) < 5 or not isinstance(value[4], dict):
         raise WireFormatError("wire-codec: malformed error tag")
 
+    # Both label slots are type-CHECKED, like every other slot. Carrying a
+    # non-string through verbatim (as this port did) or substituting "" for it
+    # (as six others did) are two different wrong answers to a malformed frame.
+    if not isinstance(value[2], str) or not isinstance(value[3], str):
+        raise WireFormatError("wire-codec: malformed error tag — name and message must be strings")
+
     props = decode_wire(value[4], depth + 1)
     cause = decode_wire(value[5], depth + 1) if len(value) > 5 else UNDEFINED
 
     return WireError(value[2], value[3], dict(props), cause)
+
+
+def _decode_set(value: list, depth: int) -> WireSet:
+    """Decode a ``set`` tag, collapsing duplicates the way a real ``Set`` does.
+
+    The reference builds a ``new Set``, which de-duplicates by SameValueZero and
+    keeps the FIRST occurrence's position — the same rule as a ``Map``'s keys, so
+    the same identity helper decides it. Carrying both copies re-encoded a set
+    the reference would never emit.
+    """
+
+    items: list[Any] = []
+    seen: set[str] = set()
+
+    for entry in _payload_list(value, "set"):
+        item = decode_wire(entry, depth + 1)
+        identity = _map_key_identity(item)
+
+        if identity is not None:
+            if identity in seen:
+                continue
+
+            seen.add(identity)
+
+        items.append(item)
+
+    return WireSet(items)
 
 
 def _decode_map(value: list, depth: int) -> WireMap:
@@ -356,7 +440,10 @@ def _decode_map(value: list, depth: int) -> WireMap:
         # from identical bytes, and re-encoded as two entries a map the
         # reference emits as one.
         if identity is not None and identity in seen:
-            pairs[seen[identity]] = (key, item)
+            # Only the VALUE. ``Map.prototype.set`` on a key already present keeps
+            # the key it holds, so a later ``-0`` never replaces the ``0`` stored
+            # under it.
+            pairs[seen[identity]] = (pairs[seen[identity]][0], item)
             continue
 
         if identity is not None:
@@ -416,6 +503,21 @@ def _decode_bytes(value: list) -> Any:
     return WireBytes(data, ctor)
 
 
+def _time_clip(epoch: float) -> float:
+    """``new Date(epoch).getTime()`` — ECMAScript TimeClip.
+
+    A ``Date`` truncates its argument toward zero, and anything non-finite or
+    past +-8.64e15 becomes an Invalid Date, which the reference re-encodes as
+    ``[TAG,"date",[TAG,"nan"]]``. Keeping the epoch verbatim put a date back on
+    the wire carrying a value the reference's own ``Date`` never holds.
+    """
+
+    if not math.isfinite(epoch) or abs(epoch) > MAX_TIME_VALUE:
+        return math.nan
+
+    return math.trunc(epoch)
+
+
 def _map_key_identity(key: Any) -> str | None:
     """A map key's collapse identity, or ``None`` when it never collapses.
 
@@ -449,6 +551,11 @@ def _map_key_identity(key: Any) -> str | None:
             # JSON.parse renders an over-large literal as +-Infinity; Python
             # keeps it exact, so collapse it the way the reference would see it.
             number = math.inf if key > 0 else -math.inf
+
+        # SameValueZero holds -0 equal to 0, so a signed zero must not be its own
+        # key. Python's repr keeps the sign (``-0.0``), which split the two.
+        if number == 0.0:
+            number = 0.0
 
         return f"num:{number!r}"
 
@@ -487,15 +594,37 @@ def _format_number(value: Any) -> str:
         return str(value)
     if not math.isfinite(value):  # pragma: no cover - tagged before this is reached
         return "null"
-    if value.is_integer() and abs(value) < 1e21:
-        return str(int(value))
-
     magnitude = abs(value)
+
+    if value.is_integer() and magnitude < 1e21:
+        return _integral(value)
 
     if 1e-6 <= magnitude < 1e21:
         return _trim_zeros(f"{value:.17f}", value)
 
     return _exponential(value)
+
+
+def _integral(value: float) -> str:
+    """Positional spelling of an integral double, ECMAScript-style.
+
+    ECMAScript prints the SHORTEST digit string that reads back as the same
+    double and then zero-pads it, so ``String(2**60)`` is
+    ``1152921504606847000`` — not the exact expansion ``1152921504606846976``
+    that ``int(value)`` (and every other exact converter) produces. It also
+    spells negative zero ``-0``, which every integer conversion flattens.
+    """
+
+    for precision in range(18):
+        candidate = f"{value:.{precision}e}"
+        if float(candidate) == value:
+            mantissa, _, exponent = candidate.partition("e")
+            sign = "-" if mantissa.startswith("-") else ""
+            digits = mantissa.lstrip("-").replace(".", "").rstrip("0") or "0"
+
+            return sign + digits.ljust(int(exponent) + 1, "0")
+
+    return str(int(value))  # pragma: no cover - 17 significant digits always round-trip
 
 
 def _trim_zeros(text: str, value: float) -> str:

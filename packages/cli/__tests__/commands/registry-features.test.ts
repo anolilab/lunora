@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "../../src/commands/registry/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { lines: string[]; logger: Logger } => {
@@ -186,7 +187,8 @@ describe("lunora add — shadcn-parity features", () => {
         });
 
         expect(prompts).toHaveLength(1);
-        expect(result.code).toBe(1);
+        // Prompt shown and declined — CANCELLED, not a generic failure.
+        expect(result.code).toBe(EXIT_CODE.CANCELLED);
         expect(existsSync(destination())).toBe(false);
     });
 
@@ -241,6 +243,29 @@ describe("lunora add — shadcn-parity features", () => {
         expect(lines.join("\n")).not.toMatch(/^ {2}bind {2}vars\.ADMIN/mu);
     });
 
+    it("registry list sanitizes a fallback catalog's directory names before printing them", async () => {
+        expect.assertions(3);
+
+        // With no `index.json` the catalog falls back to the item DIRECTORIES. A
+        // remote registry is unpacked into that root, so a tarball entry can
+        // carry escape or BIDI bytes in its path, and `list` renders the name
+        // straight to the terminal — as untrusted as the manifest beside it.
+        const hostile = "foo\u001B[2J\u202Ebar";
+
+        mkdirSync(join(registryRoot, hostile), { recursive: true });
+        writeFileSync(join(registryRoot, hostile, "registry.json"), JSON.stringify({ description: "hostile", files: [], name: hostile }), "utf8");
+
+        const { lines, logger } = capturingLogger();
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, list: true, logger, names: [] });
+
+        const printed = lines.join("\n");
+
+        expect(printed).not.toContain("\u001B");
+        expect(printed).not.toContain("\u202E");
+        expect(printed).toContain("foo[2Jbar");
+    });
+
     it("registry build generates index.json and --check detects drift", async () => {
         expect.assertions(3);
 
@@ -269,6 +294,6 @@ describe("lunora add — shadcn-parity features", () => {
 
         const stale = await runBuildIndexCommand({ check: true, cwd: workdir, from: registryRoot, logger, names: [] });
 
-        expect(stale.code).toBe(1);
+        expect(stale.code).toBe(EXIT_CODE.USAGE);
     });
 });

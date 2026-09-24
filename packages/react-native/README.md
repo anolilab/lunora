@@ -13,8 +13,8 @@
 The same live hooks you use on the web — `useQuery`, `useMutation`,
 `useSubscription`, `useAuth`, `usePresence`, … — running on your phone, plus the
 two seams a native app needs that a browser gives you for free: a durable offline
-queue backed by `AsyncStorage`, and credentialed requests (there is no cookie jar
-in React Native, so the session has to be attached explicitly).
+queue backed by `AsyncStorage`, and credentialed requests (the session is a
+bearer, attached explicitly).
 
 This package **re-exports the whole `@lunora/react` surface** (see
 [below](#re-exported-lunorareact-surface)), so you import your hooks and
@@ -90,10 +90,9 @@ other clients write, and `send` is optimistic and offline-safe.
 
 ## Authentication (better-auth + Expo)
 
-React Native has no cookie jar, so the session is sent as a **bearer** token: the
-HTTP RPC carries it in the `Authorization` header and the live socket carries it
-in the `?token=` query param. A bearer avoids the `Cookie` header the runtime's
-CSRF guard rejects on an `Origin`-less native request (see [Why a bearer token](#why-a-bearer-token)).
+The session is sent as a **bearer** token: the HTTP RPC carries it in the
+`Authorization` header and the live socket carries it in the `?token=` query
+param (see [Why a bearer token](#why-a-bearer-token)).
 
 ```tsx
 // auth.ts
@@ -182,10 +181,21 @@ import { expo } from "@better-auth/expo";
 
 Lunora's runtime enables a CSRF Origin-check by default — it rejects any
 state-changing HTTP request or WebSocket upgrade that carries a `Cookie` but no
-trusted `Origin`. React Native sends no `Origin`, so a cookie-based credential
-would be **rejected** once signed in. A bearer token carries no `Cookie`, so it's
-exempt — and it works identically on `react-native-web` (the browser lets you set
+trusted `Origin`. React Native sends no `Origin`, so a cookie-based credential is
+**rejected** once signed in. A bearer token is the credential instead, and it
+works identically on `react-native-web` (the browser lets you set
 `Authorization`, and the token rides `?token=` on the socket).
+
+Using a bearer does **not** by itself guarantee the absence of a `Cookie` header.
+React Native has a real cookie jar — `fetch` is backed by the platform HTTP stack
+(`NSURLSession` / `OkHttp`) and its shared cookie store — so the `Set-Cookie` a
+better-auth sign-in returns is kept and re-attached to later requests, and the
+guard then 403s every state-changing RPC with `FORBIDDEN_ORIGIN`. It is
+intermittent (it depends on whether the jar holds the cookie that launch), and
+`security.csrf.trustedOrigins` cannot fix it: the trust list is only consulted
+for an `Origin` that was actually received, and a missing one is rejected
+outright. `createLunoraClient` closes this by sending `credentials: "omit"` on
+every request; if you pass your own `fetch`, wrap it in `withoutAmbientCookies`.
 
 ### TanStack Query focus / online managers
 

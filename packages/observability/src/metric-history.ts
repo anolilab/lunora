@@ -188,7 +188,14 @@ const knownBucketsFor = (sql: SqlExec): Set<string> => {
  * omitted field keeps the historical behaviour.
  */
 interface MetricHistoryOptions {
-    /** Distinct series tracked before the least-recently-updated one is evicted to admit a new one (default {@link METRIC_HISTORY_MAX_SERIES}). */
+    /**
+     * Distinct series tracked before a brand-new one is REFUSED admission
+     * (default {@link METRIC_HISTORY_MAX_SERIES}). Nothing is evicted: an
+     * already-tracked series keeps accumulating past the cap, and a flood of
+     * one-off series cannot displace the app's real ones — see
+     * {@link admitNewSeries}. `readMetricHistory`'s `capped` flag is the
+     * read-side signal that admission is being refused.
+     */
     maxSeries?: number;
     /** Minute-buckets kept per series before older rows are trimmed (default {@link METRIC_HISTORY_BUCKET_RETENTION}). */
     retentionBuckets?: number;

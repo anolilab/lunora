@@ -110,6 +110,17 @@ export const ERROR_CATALOG = {
     },
 
     RUN_DEPTH_EXCEEDED: { internal: true, status: 500, title: "Run depth exceeded" },
+
+    /**
+     * A `query` context reached for `ctx.runMutation` / `ctx.runAction`. The
+     * generated context object installs all three `run*` methods on every kind, so
+     * the TYPE is the only thing that stops a read-only handler from writing — and
+     * a cast walks straight past it, inside a subscription re-run that may execute
+     * many times per write. Deliberately NOT `internal`: the message names the
+     * function that was reached for, and it is a programming error the developer
+     * needs to read.
+     */
+    RUN_KIND_FORBIDDEN: { status: 500, title: "Function kind may not be composed from a query" },
     TRANSACTION_LIMIT_EXCEEDED: {
         hint: [
             "A single mutation may only read and write a bounded amount before it is stopped.",
@@ -127,6 +138,14 @@ export const ERROR_CATALOG = {
 
     SHARD_ERROR: { status: 503, title: "Shard error" },
     SHARD_UNAVAILABLE: { status: 503, title: "Shard unavailable" },
+    /** A fan-out shard call exceeded the coordinator's per-shard deadline. */
+    SHARD_TIMEOUT: { status: 504, title: "Shard timeout" },
+    /** A fan-out shard call answered with a non-2xx status; the status is in the message, the body is not. */
+    SHARD_HTTP_ERROR: { status: 502, title: "Shard HTTP error" },
+    /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
+    SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
+    /** A connection asked for more concurrent subscriptions than the shard allows. */
+    TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
@@ -147,7 +166,7 @@ export const ERROR_CATALOG = {
         hint: [
             "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
             "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`).",
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`).",
         ],
         status: 400,
         title: "Email domain not allowed",
@@ -178,6 +197,53 @@ export const ERROR_CATALOG = {
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 
+    /*
+     * `@lunora/payment` codes, minted through `LunoraPaymentError` — a
+     * `LunoraError` subclass. They shipped uncatalogued because the
+     * registration gate's scanner only matched the literal `new LunoraError(`,
+     * so every subclass mint was invisible to it and `isInternalCode` (which
+     * fails OPEN) classed all six as client-safe. `status` mirrors the
+     * package's own `STATUS_BY_CODE`. The remaining payment codes — `FORBIDDEN`,
+     * `INVALID_TRANSITION`, `NOT_FOUND`, `VALIDATION_ERROR` — are the generic
+     * entries above and keep their existing verdicts.
+     *
+     * `CONFIG_INVALID` is `internal` because its messages name server wiring
+     * ("webhook secret not configured", a duplicate/absent adapter), and the
+     * caller can do nothing with them. That verdict only holds while the code
+     * is reserved for server configuration: `check()`'s argument-shape guard
+     * used to mint it for "requires a featureId or priceId", which is the
+     * caller's own mistake and now mints `VALIDATION_ERROR` instead. Keep new
+     * caller-fixable failures off this code rather than widening it.
+     */
+
+    /** Server-side payment wiring is wrong or missing (`webhook secret not configured`, a duplicate/absent adapter). A 500 that names internal configuration — redact on the wire. */
+    CONFIG_INVALID: { internal: true, status: 500, title: "Payment configuration invalid" },
+    /** Arithmetic across two currencies. The message names only the two currency codes the caller supplied. */
+    CURRENCY_MISMATCH: { status: 400, title: "Currency mismatch" },
+
+    /**
+     * A payment provider refused or answered unusably. NOT `internal`, matching
+     * the upstream-API 502s above: the messages are fixed capability text
+     * ("<provider> does not support refundPayment") or echo back the malformed
+     * id the CALLER passed in, so none of them reveals state the caller did not
+     * already have.
+     */
+    PROVIDER_ERROR: { status: 502, title: "Payment provider error" },
+
+    /**
+     * Webhook rejections, addressed to the provider posting the hook, so NOT
+     * `internal`. Five of the six mint sites are fixed strings ("no matching
+     * signature", "missing creem-signature header"). The sixth,
+     * `providers/stripe.ts`, passes the Stripe SDK's own verification message
+     * through — "No signatures found matching…", "Timestamp outside the
+     * tolerance zone" — which still describes the REQUEST the poster sent, not
+     * this server's state. Keep that true of anything added here: an upstream
+     * message is only safe to forward while it is about the caller's input.
+     */
+    WEBHOOK_EVENT_ID_MISSING: { status: 400, title: "Webhook event id missing" },
+    WEBHOOK_SIGNATURE_INVALID: { status: 400, title: "Webhook signature invalid" },
+    WEBHOOK_TIMESTAMP_INVALID: { status: 400, title: "Webhook timestamp outside tolerance" },
+
     /**
      * Admin-gated `/_lunora/admin/*` and `__lunora_admin__:*` codes. Registered
      * here (plan 230, ERRORS-01) after an audit found them minted with `code:`
@@ -190,6 +256,25 @@ export const ERROR_CATALOG = {
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
+
+    /**
+     * Deliberately NOT `internal`, unlike its 500 neighbours: the message is
+     * fixed configuration guidance that names no table, path or identifier, and
+     * redacting it to "Internal error" would strip the only thing this code
+     * exists to deliver. It is raised before any query runs, so there is no
+     * backend detail to leak.
+     */
+    AUTH_MIGRATOR_UNSUPPORTED: {
+        hint: [
+            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
+            "",
+            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
+            "",
+            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.",
+        ],
+        status: 500,
+        title: "Auth migrator cannot drive the configured database",
+    },
     AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
     AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
@@ -215,9 +300,27 @@ export const ERROR_CATALOG = {
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    EXPORT_SHARD_FAILED: {
+        hint: [
+            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
+            "",
+            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows.",
+        ],
+        status: 502,
+        title: "Export failed on one or more shards",
+    },
     EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
     FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
     GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
+    ID_COLLISION: {
+        hint: [
+            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
+            "",
+            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.",
+        ],
+        status: 409,
+        title: "Document id already belongs to another table",
+    },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
@@ -245,6 +348,15 @@ export const ERROR_CATALOG = {
     STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    RAG_DIMENSION_MISMATCH: {
+        hint: [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths.",
+        ],
+        status: 409,
+        title: "Embedding dimension mismatch",
+    },
     VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },
     VECTOR_QUERY_UNSUPPORTED: { status: 400, title: "Vector index querying not enabled" },
     WORKFLOWS_NOT_CONFIGURED: { status: 501, title: "Workflows not configured" },
@@ -297,12 +409,50 @@ export const ERROR_CATALOG = {
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
+
+    /**
+     * The `/_lunora/scheduler/dispatch` entry rejected the request's own
+     * signature/bearer — a worker/scheduler MISCONFIGURATION (missing, wrong, or
+     * rotated `LUNORA_SCHEDULER_SECRET` / `LUNORA_ADMIN_TOKEN`), not a verdict on
+     * the function being dispatched. Distinct from `FORBIDDEN`/`FORBIDDEN_SHARD`
+     * because dispatch consumers classify a 403 as deterministic and stop
+     * retrying: an auth failure clears the moment the secret is fixed, so it must
+     * stay retryable or every queued message drains into the void while the
+     * credential is wrong. See `isDeterministicDispatchFailure` in
+     * `@lunora/dispatch`.
+     */
+    DISPATCH_UNAUTHENTICATED: {
+        hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.",
+        status: 403,
+        title: "Dispatch caller not authenticated",
+    },
+
+    /**
+     * A dispatch arrived carrying an `x-lunora-mutation-id` whose handler is
+     * ALREADY executing in the shard, on the ungated (non-mutation) path where
+     * nothing serialises the two. The shard declines the second delivery rather
+     * than running it alongside the first.
+     *
+     * Deliberately a `409` and deliberately NOT one of `@lunora/dispatch`'s
+     * `DETERMINISTIC_DISPATCH_STATUSES`: the refusal is about WHEN the request
+     * arrived, not about the request. It clears on its own the moment the first
+     * attempt settles — at which point the same id replays into the dedup row
+     * and is served its cached result — so every caller (the scheduler's retry
+     * ladder, a queue consumer, a workflow step) must keep retrying it.
+     */
+    DISPATCH_IN_PROGRESS: {
+        hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.",
+        status: 409,
+        title: "Dispatch already in progress",
+    },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
+    /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
+    INVALID_SCHEDULE_ID: { status: 400, title: "Invalid schedule id" },
     RATE_LIMITED: { status: 429, title: "Rate limited" },
 
     /**
@@ -329,7 +479,7 @@ export const ERROR_CATALOG = {
     SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
 
     /**
-     * A shape was declared over a `.memory()` table. Refused at subscribe, because
+     * A shape was declared over, or whose predicate joins, a `.memory()` table. Refused at subscribe, because
      * the poke path replicates from `__cdc_log` and a memory table is deliberately
      * never appended to it — so the shape would seed once and then stay frozen
      * while the table changed underneath it. Same registration-time refusal as
@@ -350,6 +500,19 @@ export const ERROR_CATALOG = {
      * `connected` and the cursor silently stopped advancing.
      */
     WIRE_DECODE_FAILED: { status: 502, title: "Could not decode a server frame" },
+
+    /**
+     * A function's RETURN value cannot be carried by the wire codec — a class
+     * instance (`Decimal`, an ORM entity, `Temporal.*`, `RegExp`, `Headers`), or
+     * nesting past the codec's depth cap.
+     *
+     * Deliberately NOT `internal`: the message names the offending constructor,
+     * which is the caller's own handler code and the only thing that makes the
+     * failure actionable. Redacting it leaves a bare 500 with nothing to grep.
+     * Raised INSIDE a mutation's transaction, so the writes roll back rather than
+     * committing behind a response that then fails to serialize.
+     */
+    WIRE_ENCODE_FAILED: { status: 500, title: "Could not encode a return value" },
     UNKNOWN_COLUMN: { status: 404, title: "Unknown column" },
 
     /**
@@ -359,13 +522,16 @@ export const ERROR_CATALOG = {
      * `NESTED_TRANSACTION` and `SQL_UNAVAILABLE` are "should never happen" state
      * invariants (mirrors `RUN_DEPTH_EXCEEDED`'s posture above): today's message
      * is static and safe, but flagged internal so a future edit that adds
-     * diagnostic detail can't accidentally start leaking it. The two `CDC_*`
-     * codes are the opposite — ordinary, expected, operator-configured outcomes
-     * — and both are `409` because the cursor the caller holds is real but no
-     * longer serveable, so the recovery is a snapshot rather than a retry.
+     * diagnostic detail can't accidentally start leaking it. The three `CDC_*`
+     * codes are the opposite — ordinary, expected outcomes of a configured
+     * retention window or an operator-ordered restore — and all three are `409`
+     * because the cursor the caller holds is real but no longer serveable, so
+     * the recovery is a snapshot rather than a retry.
      */
     /** A resume below the deleted changelog prefix: the entries are gone outright, for every consumer. */
     CDC_LOG_TRIMMED: { status: 409, title: "CDC log trimmed" },
+    /** A resume from ABOVE the changelog's high-watermark: the shard's log rewound (a point-in-time restore), so the cursor indexes a timeline that no longer exists. Carries the surviving cursor and the freshly minted epoch to resynchronise against. */
+    CDC_TIMELINE_FORKED: { status: 409, title: "CDC timeline forked" },
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
@@ -375,10 +541,23 @@ export const ERROR_CATALOG = {
     SHAPE_NOT_FOUND: { status: 404, title: "Shape not found" },
     SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
+    STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
     TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
+
+    /**
+     * A socket asked an `onWhisper` authorizer to decide more distinct topics
+     * than the shard allows. Names only the socket's own ceiling — never the
+     * topic, never what the authorizer would have answered — so it is safe on
+     * the wire and not `internal`.
+     */
+    TOO_MANY_WHISPER_TOPICS: {
+        hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.",
+        status: 429,
+        title: "Too many whisper topics",
+    },
     UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },
 
     /**
@@ -440,6 +619,27 @@ export const ERROR_CATALOG = {
 
     /** `@lunora/db`'s offline outbox: a queued write targeted a collection removed/renamed in a later deploy. */
     UNKNOWN_MUTATION_FN: { status: 404, title: "Unknown mutation function" },
+
+    /**
+     * A local tool the CLI shells out to — `wrangler`, `git`, `docker`, a
+     * package manager — is not on PATH, so the child process never started.
+     *
+     * CLI-only and build-time-like: it never crosses the RPC wire (the same
+     * posture as `CODEGEN_DIAGNOSTIC`), so it is deliberately not `internal` —
+     * the message names the missing command, which IS the fix. The `500` is a
+     * placeholder for a transport that never carries it; `@lunora/cli` maps this
+     * code to its `missing local dependency` exit code BY NAME, because no HTTP
+     * status means "that program isn't installed".
+     */
+    LOCAL_DEPENDENCY_MISSING: {
+        hint: [
+            "The command Lunora tried to run is not on your PATH, so nothing ran.",
+            "",
+            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately.",
+        ],
+        status: 500,
+        title: "Required local tool not found",
+    },
 } as const;
 
 // Shape validation kept as a standalone statement: `as const satisfies …` is not
@@ -562,7 +762,7 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
         body: [
             "This table name collides with a built-in `ctx.db` member, so the generated client can't expose it.",
             "",
-            "Rename the table to anything that isn't a reserved name (the error lists them) — e.g. `userAccounts` instead of `insert`.",
+            "Rename the table to anything that isn't a `ctx.db` member (the error names the one it hit) — e.g. `userAccounts` instead of `insert`, or `pageViews` instead of `count`.",
         ].join("\n"),
         header: "Table name is reserved",
         id: "lunora-table-reserved",

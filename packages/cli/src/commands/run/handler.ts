@@ -4,7 +4,9 @@ import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-t
 import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { RunRpcOptions } from "./index";
 
@@ -26,6 +28,8 @@ interface RunCommandOptions {
     claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -37,7 +41,20 @@ interface RunCommandOptions {
 interface RunCommandResult {
     body: unknown;
     code: number;
+    /** Why the call failed before (or at) the RPC, for the `--format json` envelope. */
+    error?: string;
     requestUrl: string;
+}
+
+/**
+ * The `--format json` payload. The function's own return value is the point;
+ * `functionPath` and `requestUrl` name what produced it so a captured document
+ * is self-describing. There is no `ok` — the envelope's `code` is the verdict.
+ */
+interface RunCommandData {
+    functionPath: string;
+    requestUrl: string;
+    result: unknown;
 }
 
 /**
@@ -195,6 +212,10 @@ const parseRunPayloads = (
 
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    // In `--format json` mode every human line — the POST echo, the pretty-printed
+    // body `readAndLogBody` logs, the shard-denial hint — moves to stderr so
+    // stdout carries only the result document.
+    const { logger } = options;
     const runAs = options.as !== undefined && options.as !== "";
 
     // `--claims` only travels inside the `runAs` envelope. Without a non-empty
@@ -202,18 +223,21 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     // ANONYMOUS call and exited 0, which is an authoritative-looking wrong answer
     // for exactly the person debugging a claims-gated procedure.
     if (options.claims !== undefined && !runAs) {
-        options.logger.error("--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.");
+        const message = "--claims requires --as <userId> — extra identity claims only travel inside the admin-gated `runAs` dispatch.";
 
-        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+        logger.error(message);
+
+        return { body: undefined, code: EXIT_CODE.USAGE, error: message, requestUrl: options.url ?? "" };
     }
     // A forged identity and the reserved admin paths both travel with the
     // full-access admin bearer, which changes how the target may be chosen.
     const needsBearer = runAs || options.functionPath.startsWith(ADMIN_PREFIX);
 
-    const baseUrl = resolveRunTarget({ cwd, logger: options.logger, needsBearer, url: options.url });
+    const baseUrl = resolveRunTarget({ cwd, logger, needsBearer, url: options.url });
 
     if (baseUrl === undefined) {
-        return { body: undefined, code: 1, requestUrl: options.url ?? "" };
+        // `resolveRunTarget` logged why the target was refused.
+        return { body: undefined, code: EXIT_CODE.USAGE, error: "could not resolve a usable worker URL", requestUrl: options.url ?? "" };
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
@@ -224,10 +248,11 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
     }
 
-    const parsed = parseRunPayloads(options, options.logger);
+    const parsed = parseRunPayloads(options, logger);
 
     if (parsed === undefined) {
-        return { body: undefined, code: 1, requestUrl };
+        // `parseRunPayloads` logged which flag could not be read.
+        return { body: undefined, code: EXIT_CODE.USAGE, error: "could not parse --args / --claims as JSON", requestUrl };
     }
 
     // `--as` dispatches through the admin-gated `runAs` op rather than calling the
@@ -240,13 +265,15 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     const { source, token } = needsBearer ? resolveAdminBearer({ cwd, token: options.token, url: baseUrl }) : {};
 
     if (needsBearer && token === undefined) {
-        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+        const message = "admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)";
 
-        return { body: undefined, code: 1, requestUrl };
+        logger.error(message);
+
+        return { body: undefined, code: EXIT_CODE.AUTH, error: message, requestUrl };
     }
 
     if (token !== undefined) {
-        options.logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
+        logger.debug?.(`admin bearer from ${describeAdminTokenSource(source)}`);
     }
 
     const headers: Record<string, string> = {
@@ -256,7 +283,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     const payload = buildEnvelope({ args: parsed.args, claims: parsed.claims, options, runAs });
 
-    options.logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
+    logger.info(`POST ${requestUrl} -> ${options.functionPath}${runAs ? ` (as ${options.as ?? ""})` : ""}`);
 
     const response = await fetchImpl(requestUrl, {
         body: JSON.stringify(payload),
@@ -264,40 +291,52 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         method: "POST",
     });
 
-    const body = await readAndLogBody(response, options.logger);
+    const body = await readAndLogBody(response, logger);
 
-    hintOnShardDenial(options.logger, { body, runAs, status: response.status });
+    hintOnShardDenial(logger, { body, runAs, status: response.status });
 
     return {
         body,
-        code: response.ok ? 0 : 1,
+        // The worker already said which failure this was — a 403 shard denial and
+        // a 429 are different answers, and the taxonomy maps them.
+        code: response.ok ? 0 : exitCodeForStatus(response.status),
+        error: response.ok ? undefined : `${options.functionPath} failed: HTTP ${String(response.status)}`,
         requestUrl,
     };
 };
 
 /** `lunora run <functionPath>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions, RunCommandData>(async ({ argument, cwd, format, logger, options }) => {
     const functionPath = argument[0];
 
     if (!functionPath) {
-        logger.error("missing function path. Usage: lunora run <functionPath> [--args <json>]");
+        const message = "missing function path. Usage: lunora run <functionPath> [--args <json>]";
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
-    return runRpcCommand({
+    const result = await runRpcCommand({
         args: options.args,
         as: options.as,
         claims: options.claims,
         cwd,
+        format,
         functionPath,
         logger,
         shard: options.shard,
         token: options.token,
         url: options.url,
     });
+
+    return {
+        code: result.code,
+        data: { functionPath, requestUrl: result.requestUrl, result: result.body },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { FetchLike, RunCommandOptions, RunCommandResult };
+export type { FetchLike, RunCommandData, RunCommandOptions, RunCommandResult };
 export { readAndLogBody, runRpcCommand };

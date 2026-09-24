@@ -282,8 +282,15 @@ const buildBody = (
         });
     }
 
-    // Stable ordering so a contract/snapshot never flakes on registry iteration order.
-    checks.sort((a, b) => a.name.localeCompare(b.name));
+    // Stable ordering so a contract/snapshot never flakes on registry iteration
+    // order. By UTF-16 CODE UNIT, not `localeCompare` — for the reason
+    // `shared/rest-surface.ts` and `shared/schema-snapshot.ts`'s `sortKeys` both
+    // spell out: `localeCompare` resolves against the runtime's default locale and
+    // ICU version, so it is not stable across machines, which is the one property
+    // the comment above claims. The names here carry `:` and `#`
+    // (`d1`, `d1#2`, `durable-object:default`) — exactly where collation and
+    // code-unit order diverge.
+    checks.sort((a, b) => (a.name < b.name ? -1 : Number(a.name > b.name)));
 
     return {
         anyCriticalDown,

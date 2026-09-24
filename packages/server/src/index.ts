@@ -18,9 +18,11 @@ export type {
     TerminalKind,
 } from "./builder/index";
 export { initLunora } from "./builder/index";
+export { isPerDispatchMiddleware, tagPerDispatchMiddleware } from "./builder/per-dispatch-tag";
 export { createSecrets } from "./create-secrets";
 export type { DeferredDeleteFlushResult } from "./deferred-deletes";
-export { flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
+export { beginDeferredDeletes, flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
+export { beginDeferredSchedules, withDeferredSchedules } from "./deferred-schedules";
 export type { DefineDocumentHistoryOptions, DocumentHistoryComponent, DocumentHistoryEntry, DocumentHistoryFunctions } from "./document-history";
 export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTORY_TABLE, documentHistoryExtension } from "./document-history";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
@@ -35,12 +37,15 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpRunners,
     HttpStreamHandlerOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
 } from "./http";
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject } from "./http";
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue } from "./http";
+export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-storage";
+export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
 export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
@@ -72,12 +77,14 @@ export type {
     RlsOptions,
     RlsReadRegistry,
     Role,
+    ShapeGuardDeclaration,
     ShapeReadWhereRequest,
     TypedDefinePolicyInput,
     WhereInput,
 } from "./rls/index";
 export {
     allowAll,
+    assertShapesDeclareReadPolicies,
     buildRlsReadRegistry,
     composeShapeReadWhere,
     createPolicyDsl,
@@ -154,6 +161,12 @@ export type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
     RestCacheConfig,
     RetryPolicy,
@@ -166,8 +179,10 @@ export type {
     SearchIndexDefinition,
     ShardInitEvent,
     ShardMode,
+    SpanContextIds,
     SpanEvaluation,
     SpanHandle,
+    SpanIdentity,
     SpanKind,
     SpanLink,
     SpanOptions,
@@ -214,6 +229,7 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,
@@ -223,6 +239,8 @@ export type {
     WorkflowStatusResult,
 } from "./types";
 export { anyApi } from "./types";
+export type { RegisteredWhisperAuthorizer, WhisperAuthorizeHandler } from "./whisper";
+export { onWhisper } from "./whisper";
 // `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and
 // re-exported here so handlers can throw it without a second dependency. The
 // third argument is `LunoraErrorOptions` (`{ cause, data, status, … }`) — there

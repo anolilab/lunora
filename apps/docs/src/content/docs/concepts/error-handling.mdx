@@ -18,7 +18,14 @@ because that decides what the caller sees.
 
 `LunoraError` is the canonical error type for procedures and middleware. Its
 `code` maps to an HTTP/RPC status automatically, so throwing one is all the
-wiring you need:
+wiring you need.
+
+<Callout type="warn">
+    **Import it from `lunorash/server` (equivalently `@lunora/server` or `@lunora/errors`), and put the `code` first.** `@lunora/runtime` exports a *different*
+    `LunoraError` for the worker entry, with the arguments the other way round — `new LunoraError(message, { code, status })`. Mixing them up is quiet rather
+    than loud: `new LunoraError("NOT_FOUND", "no such post")` against the runtime class mints an error whose *message* is `"NOT_FOUND"` and whose code defaults
+    to `INTERNAL`, so the caller gets a redacted 500. Inside a query, mutation, action, or middleware you want the `(code, message)` class below.
+</Callout>
 
 ```ts
 import { LunoraError } from "lunorash/server";
@@ -108,16 +115,17 @@ try {
 For rendering, the React hooks expose error state directly so you don't manage a
 separate `useState`.
 
-`useMutation` returns a callable with a `.pending` flag for in-flight UI; await
-it and `catch` to handle failure:
+`useMutation` returns `{ mutate, pending, ... }`, not a callable: destructure
+`mutate` to invoke the mutation and `pending` for in-flight UI. Await `mutate`
+and `catch` to handle failure:
 
 ```tsx
 import { useMutation } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
 
-const send = useMutation(api.messages.send);
+const { mutate: send, pending } = useMutation(api.messages.send);
 
-// send.pending is true while a call is in flight
+// pending is true while a call is in flight
 await send({ channelId, text });
 ```
 
@@ -143,11 +151,25 @@ failure), those closures fire and the cache reverts. You don't write any
 rollback code; a rejected mutation leaves the UI as it was.
 
 ```tsx
-const send = useMutation(api.messages.send);
+const { mutate: send } = useMutation(api.messages.send);
 
-await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+await send(
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
 // If this rejects, `draft` is removed from the list automatically.
 ```
+
+`optimisticUpdate` is what names the query a write patches. (The per-call
+`optimistic: (current) => next` shortcut targets only the subscription registered
+under the mutation's own reference and args — a counter or a document by id, not
+a `send` updating a `list`.)
 
 The rollback is conservative: it only restores when no newer server delta has
 superseded the optimistic write and no later optimistic write has stacked on top

@@ -17,7 +17,7 @@ const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
         "csrf-disabled": t("CSRF/origin guard is off"),
         "dev-args-unredacted": t("Request log keeps un-redacted args"),
         "security-headers-disabled": t("Security headers are off"),
-        "ws-gate-open": t("Live admin subscriptions are ungated"),
+        "ws-gate-open": t("User subscriptions are ungated"),
     })[finding.kind];
 
 /** Defensive: an older worker (or a stand-in) may not return a findings array — treat anything but an array as "no findings". */
@@ -63,7 +63,7 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
             "LUNORA_SECURITY_HEADERS is off, so HSTS, CSP, nosniff, and frame-options are not applied. Re-enable the baseline headers in production.",
         ),
         "ws-gate-open": t(
-            "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
+            "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: anyone who can reach the worker can open a socket and run ordinary user subscriptions. Admin subscriptions are unaffected — they need the admin token. Set it if subscribers should present a shared credential.",
         ),
     })[finding.kind];
 
@@ -72,8 +72,8 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
  * (Errors / Warnings / Info) over a findings table. It pulls `getSecurityAudit`
  * (deployment-wide, so it targets the root shard and needs no shard selector) and
  * maps each finding the server derived from the Worker `env` — weak admin token,
- * an open WebSocket gate, a dev-mode request log keeping un-redacted args — into a
- * row. These are signals only lunora can surface: Cloudflare's dashboard can't
+ * an open WebSocket gate for user subscriptions, a dev-mode request log keeping
+ * un-redacted args — into a row. These are signals only lunora can surface: Cloudflare's dashboard can't
  * reason about lunora's admin/WS gates or its log-redaction policy.
  */
 const SecurityAdvisorPanel = (): ReactElement => {

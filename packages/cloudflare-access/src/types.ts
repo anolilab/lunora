@@ -1,6 +1,7 @@
 import type { JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import type { AccessRoleMap } from "./identity-groups";
 
 /**
  * The verified claims of a Cloudflare Access caller — from the
@@ -173,8 +174,31 @@ export interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
      * Remap verified claims into the resolved identity. Return an object to
      * shallow-merge over the defaults; return a `userId` to override the derived
      * caller id. Runs only after signature/issuer/audience/expiry are verified.
+     *
+     * It is merged OVER the `roles` claim {@link CreateAccessResolverOptions.roles}
+     * mints, so returning `roles` here replaces the mapped set outright.
      */
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
+
+    /**
+     * Map the verified Access `groups` claim onto RLS role names, minted as the
+     * identity's `roles` claim — the list `rls()` unions permissions over.
+     *
+     * A table (`{ "idp-admins": "admin", "idp-eng": ["editor", "viewer"] }`) or a
+     * function; either may return one role, an array, or `undefined` to drop the
+     * group. Omit the option and no `roles` claim is minted at all — granting
+     * every group name as a role by default would hand existing deployments
+     * permissions their policies never intended. Pass `(group) => group` to opt
+     * into group names as role names verbatim.
+     *
+     * Roles live ON THE IDENTITY rather than being derived per-procedure so that
+     * every consumer sees the same set. A middleware that writes `ctx.auth.roles`
+     * reaches queries and mutations but NOT live shapes — a shape runs no
+     * procedure, so no middleware fires — and a role-gated policy then resolves
+     * differently for a query and the subscription that mirrors it. The identity
+     * is the one place both paths read.
+     */
+    roles?: AccessRoleMap;
 }
 
 /**

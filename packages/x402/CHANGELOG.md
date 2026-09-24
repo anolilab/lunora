@@ -1,3 +1,136 @@
+## @lunora/x402 [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.73...@lunora/x402@1.0.0-alpha.74) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/x402 [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.72...@lunora/x402@1.0.0-alpha.73) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/x402 [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.71...@lunora/x402@1.0.0-alpha.72) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/x402 [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.70...@lunora/x402@1.0.0-alpha.71) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/x402 [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.69...@lunora/x402@1.0.0-alpha.70) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/x402 [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.68...@lunora/x402@1.0.0-alpha.69) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/x402 [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.67...@lunora/x402@1.0.0-alpha.68) (2026-09-12)
+
+## @lunora/x402 [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.66...@lunora/x402@1.0.0-alpha.67) (2026-09-11)
+
+## @lunora/x402 [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.65...@lunora/x402@1.0.0-alpha.66) (2026-09-11)
+
+## @lunora/x402 [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.64...@lunora/x402@1.0.0-alpha.65) (2026-09-10)
+
+## @lunora/x402 [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.63...@lunora/x402@1.0.0-alpha.64) (2026-09-10)
+
+## @lunora/x402 [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.62...@lunora/x402@1.0.0-alpha.63) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.61...@lunora/x402@1.0.0-alpha.62) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.60...@lunora/x402@1.0.0-alpha.61) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.59...@lunora/x402@1.0.0-alpha.60) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.58...@lunora/x402@1.0.0-alpha.59) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.57...@lunora/x402@1.0.0-alpha.58) (2026-09-08)
+
+## @lunora/x402 [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.56...@lunora/x402@1.0.0-alpha.57) (2026-09-07)
+
+## @lunora/x402 [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.55...@lunora/x402@1.0.0-alpha.56) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
+## @lunora/x402 [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.54...@lunora/x402@1.0.0-alpha.55) (2026-09-06)
+
+### Bug Fixes
+
+* **agent,ai,ratelimit,x402:** point prettier at the repo ignore file ([#638](https://github.com/anolilab/lunora/issues/638)) ([bf2a8e7](https://github.com/anolilab/lunora/commit/bf2a8e7e50019149ddf3a50f38adbb91f6e0351b))
+
+## @lunora/x402 [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.53...@lunora/x402@1.0.0-alpha.54) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/x402 [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.52...@lunora/x402@1.0.0-alpha.53) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/x402 [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.51...@lunora/x402@1.0.0-alpha.52) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/x402 [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.50...@lunora/x402@1.0.0-alpha.51) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+
+## @lunora/x402 [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.49...@lunora/x402@1.0.0-alpha.50) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+## @lunora/x402 [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.48...@lunora/x402@1.0.0-alpha.49) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/x402 [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.47...@lunora/x402@1.0.0-alpha.48) (2026-09-02)
 
 

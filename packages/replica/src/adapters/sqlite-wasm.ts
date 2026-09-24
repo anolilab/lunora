@@ -1,3 +1,4 @@
+import { narrowSafeIntegers } from "./int64";
 import type { SqliteAdapter } from "./types";
 
 /**
@@ -47,7 +48,11 @@ export const createSqliteWasmAdapter = (database: {
                 rowMode: "object",
             });
 
-            return (rows ?? []) as T[];
+            // This build decodes an out-of-range INTEGER as a `bigint` on its
+            // own (`bigIntEnabled`), so there is no per-call flag to set here —
+            // only the same narrowing the other two adapters apply, so all
+            // three agree on when a column is a `number` and when it is wide.
+            return narrowSafeIntegers<T>(rows ?? []);
         },
 
         transaction(function_: () => void): void {

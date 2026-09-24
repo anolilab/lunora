@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import { get } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,7 @@ interface SubscribeCall {
     args: { key: string };
     callback: (value: unknown) => void;
     functionPath: string;
+    onError?: (error: SubscriptionError) => void;
 }
 
 const buildApi = (): AgentApi =>
@@ -33,13 +34,18 @@ const createFakeClient = () => {
         return { resolved: true };
     });
 
-    const subscribe = vi.fn<(function_: FunctionReference, args: SubscribeCall["args"], callback: (value: unknown) => void) => () => void>(
-        (function_, args, callback) => {
-            subscribeCalls.push({ args, callback, functionPath: function_["__lunoraRef"] });
+    const subscribe = vi.fn<
+        (
+            function_: FunctionReference,
+            args: SubscribeCall["args"],
+            callback: (value: unknown) => void,
+            options?: { onError?: (error: SubscriptionError) => void },
+        ) => () => void
+    >((function_, args, callback, options) => {
+        subscribeCalls.push({ args, callback, functionPath: function_["__lunoraRef"], onError: options?.onError });
 
-            return unsubscribeSpy;
-        },
-    );
+        return unsubscribeSpy;
+    });
 
     const client = { mutation: mutationSpy, subscribe } as unknown as LunoraClient;
 
@@ -95,6 +101,24 @@ describe(agent, () => {
         handle.teardown();
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards onError so a thread subscription error reaches the caller", () => {
+        // Without an error channel a session expiry left `thread` / `status`
+        // frozen at their last value with nothing surfaced.
+        const fake = createFakeClient();
+        const errors: SubscriptionError[] = [];
+
+        agent(fake.client, {
+            api: buildApi(),
+            onError: (error) => errors.push(error),
+            run: makeRef(RUN_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        fake.subscribeCalls[0]?.onError?.({ code: "UNAUTHORIZED", message: "session expired" });
+
+        expect(errors).toStrictEqual([{ code: "UNAUTHORIZED", message: "session expired" }]);
     });
 
     it("fires the run mutation with the input, thread key, and merged run args", async () => {

@@ -8,9 +8,9 @@ import type { Lint } from "../../types";
  * R2 SQL (`@lunora/bindings/r2sql`) queries Apache Iceberg tables over an **external**
  * REST endpoint Lunora does not own — there is no Workers binding, every query
  * is an HTTPS round-trip. A `ctx.r2sql` query is therefore non-deterministic
- * (exactly like `fetch`), which breaks the determinism the coordinator relies on
- * when it re-runs a query on subscription re-evaluation or a mutation on OCC
- * retry. And R2 SQL reads are invisible to the DO/SQLite change-feed, so a
+ * (exactly like `fetch`), which breaks the determinism a `query` handler needs:
+ * a live subscription re-runs it whenever a table it reads changes, so the result
+ * can differ between evaluations. And R2 SQL reads are invisible to the DO/SQLite change-feed, so a
  * subscription will never re-fire on them. `ctx.r2sql` is therefore wired onto
  * `ActionCtx` **only** and belongs exclusively in `action(...)` handlers; using
  * it in a query/mutation is the same class of bug as `fetch`/`Date.now`.

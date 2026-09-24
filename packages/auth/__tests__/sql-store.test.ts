@@ -75,15 +75,21 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
         await expect(store.count("users", [clause("age", 25, "gt")])).resolves.toBe(1);
     });
 
-    it("folds an OR connector across clauses", async () => {
-        expect.assertions(1);
+    it("groups OR connectors as alternatives, still ANDed with the AND clauses", async () => {
+        expect.assertions(3);
 
         const store = createSqlAuthStore(executor);
         await store.create("users", { age: 30, email: "ada@example.com", id: "u1" });
         await store.create("users", { age: 20, email: "bob@example.com", id: "u2" });
 
-        // id = u1 OR age = 20 → both rows.
-        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // An all-OR list is a plain disjunction.
+        await expect(store.count("users", [clause("id", "u1", "eq", "OR"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // With an AND clause present the OR group is ANDed with it, not folded
+        // into it: `id = u1 AND age = 20` matches nothing. The clause matrix at
+        // the bottom of this file has the note on why this is not
+        // "id = u1 OR age = 20", and pins it against the memory store too.
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(0);
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 30, "eq", "OR")])).resolves.toBe(1);
     });
 
     it("honours case-insensitive equality via LOWER()", async () => {
@@ -258,8 +264,43 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         { expected: [], name: "contains non-string value", where: [clause("email", 123, "contains")] },
         { expected: ["u1"], name: "eq insensitive", where: [{ ...clause("email", "ada@example.com"), mode: "insensitive" }] },
         { expected: [], name: "eq sensitive (case mismatch)", where: [clause("email", "ada@example.com")] },
-        { expected: ["u2"], name: "AND fold", where: [clause("role", "user"), clause("age", 20)] },
-        { expected: ["u1", "u2", "u3"], name: "OR fold", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        { expected: ["u2"], name: "AND group", where: [clause("role", "user"), clause("age", 20)] },
+
+        /*
+         * How a `connector: "OR"` clause combines with the rest of the list.
+         *
+         * better-auth hands an adapter a FLAT clause list in which each clause
+         * carries its own connector, and every persistent adapter it ships
+         * resolves that the same way: partition into an AND group and an OR
+         * group, then require both — the OR clauses are an alternative among
+         * THEMSELVES, not an escape hatch from the AND clauses.
+         * `@better-auth/kysely-adapter@1.7.1` pushes each group into its own
+         * `.where()` (two `.where()` calls are ANDed), `@better-auth/drizzle-adapter`
+         * ends in `and(andClause, orClause)`, and `@better-auth/prisma-adapter`
+         * emits `{ AND: […], OR: […] }` — Prisma ANDs those too.
+         *
+         * Both Lunora stores used to fold the list left-associatively instead, so
+         * `[A, B(OR), C(OR)]` became `A OR B OR C`: strictly BROADER than every
+         * adapter above. On a credential lookup that is an authentication bypass
+         * in shape — a row failing the primary condition can still be returned
+         * because a secondary one matched. (`@better-auth/memory-adapter` folds
+         * left too, but it is the only one, and it re-evaluates `where[0]` in the
+         * same loop; it is not the contract to mirror.)
+         *
+         * Nothing in better-auth 1.7.1 or in this repo emits `connector: "OR"`
+         * today — every occurrence is `"AND"` — so these pin the semantics before
+         * a plugin that does arrives, not a live break. They belong in this table
+         * rather than a suite of their own because the defect was the two stores
+         * disagreeing, which is exactly what the table exists to catch.
+         */
+        { expected: [], name: "OR group under a failing AND clause", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        {
+            expected: ["u2"],
+            name: "OR group under a passing AND clause",
+            where: [clause("role", "user"), clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")],
+        },
+        { expected: ["u2", "u3"], name: "all-OR list", where: [clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")] },
+        { expected: [], name: "all-OR list, no alternative holds", where: [clause("id", "nobody", "eq", "OR"), clause("age", 99, "eq", "OR")] },
     ];
 
     const idsFrom = async (store: AuthStore, where: AuthWhereClause[]): Promise<string[]> => {
@@ -424,6 +465,112 @@ describe("incrementOne — atomic guarded counter (both stores)", () => {
             expect(results.every((result) => result !== undefined)).toBe(true);
         } finally {
             close();
+        }
+    });
+});
+
+describe("createSqlAuthStore — `_creationTime` on `defineTable`-backed tables", () => {
+    /** The DDL `defineTable` produces for a global (D1) table: framework columns better-auth never writes. */
+    const createLunoraTable = (db: DatabaseSync): void => {
+        db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "key" TEXT, "count" INTEGER)`);
+    };
+
+    it("fills `_creationTime` in so the insert does not breach NOT NULL", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            const before = Date.now();
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "/sign-up/email" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["key"]).toBe("/sign-up/email");
+            expect(row?.["_creationTime"]).toBeGreaterThanOrEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("leaves an explicitly supplied `_creationTime` alone", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { _creationTime: 42, count: 0, id: "r1", key: "k" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["_creationTime"]).toBe(42);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not mistake a CHECK expression that merely names the column for the column", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // The DDL TEXT contains `_creationTime`; the table does not have the
+            // column. A substring test over `sqlite_master.sql` says yes here and
+            // the insert then dies with `table has no column named _creationTime`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "kind" TEXT CHECK ("kind" <> '_creationTime'))`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { id: "r1", kind: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not memoise a probe that failed, so a table created later is still seen", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            const store = createSqlAuthStore(executorFor(db));
+
+            // The table does not exist yet — `ensureMigrated` has not run. Caching
+            // that "answer" would pin the store to "no `_creationTime`" for the
+            // isolate's life, which is the outage this fill-in exists to prevent.
+            await expect(store.create("rateLimit", { id: "r0", key: "k" })).rejects.toThrow(/no such table/iu);
+
+            createLunoraTable(db);
+
+            await store.create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not invent the column on a table that has none — better-auth's own migrator makes those", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // `lunoraDoAdapter`'s tables come from `./do-schema.ts`, which mirrors
+            // better-auth's own DDL. Adding `_creationTime` there is `no such column`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "key" TEXT, "count" INTEGER)`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
         }
     });
 });

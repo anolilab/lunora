@@ -60,7 +60,7 @@ export const list = query.use(notesReadRls).query(async ({ ctx }): Promise<Doc<"
  */
 export const listPage = query
     .input({
-        cursor: v.optional(v.string().check((value) => value.length <= 512, { message: "must be at most 512 characters", schema: { maxLength: 512 } })),
+        cursor: v.optional(v.string().max(512)),
         numItems: v.number().check((value) => Number.isInteger(value) && value > 0 && value <= 200, {
             message: "must be a whole number between 1 and 200",
             schema: { maximum: 200, minimum: 1, type: "integer" },
@@ -80,7 +80,7 @@ export const listPage = query
 export const add = mutation
     .input({
         createdAt: v.number(),
-        text: v.string().check((value) => value.length <= 1024, { message: "must be at most 1024 characters", schema: { maxLength: 1024 } }),
+        text: v.string().max(1024),
     })
     .use(dbRateLimit(limits, "add", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .use(notesWriteRls)

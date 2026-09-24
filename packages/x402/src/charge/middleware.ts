@@ -85,7 +85,7 @@ export interface ChargeHandlerDeps {
     /**
      * Keep background work (the receipt sink) alive past the response — the
      * request's `ctx.waitUntil`. Absent on paths with no platform execution
-     * context reaching the middleware (e.g. today's HTTP-action rail).
+     * context reaching the middleware (e.g. a non-Workers test).
      */
     readonly waitUntil?: (promise: Promise<unknown>) => void;
 }

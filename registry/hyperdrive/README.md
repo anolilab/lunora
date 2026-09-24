@@ -27,7 +27,7 @@ lunora codegen
 ## Prerequisites
 
 1. **Create a Hyperdrive database** in the Cloudflare dashboard: **Workers & Pages → Hyperdrive → Create**. Point it at your Postgres or MySQL instance.
-2. The **`HYPERDRIVE` binding** is added to `wrangler.jsonc` by this item. If you use a different binding name, update both `wrangler.jsonc` and the source file.
+2. The **`HYPERDRIVE` binding** is added to `wrangler.jsonc` by this item, with a placeholder `id`. Replace `<replace-with-hyperdrive-create-id>` with the id the dashboard (or `wrangler hyperdrive create`) hands back — wrangler requires both `binding` and `id` on a hyperdrive entry and refuses to load a config that is missing one, so the placeholder fails the whole Worker's config validation until you fill it in. If you use a different binding name, update both `wrangler.jsonc` and the source file.
 
 ## How it works
 

@@ -9,8 +9,8 @@ import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
 
-/** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany` family. */
-const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"]);
+/** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany`/`findUnique` family. */
+const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique", "get"]);
 
 /**
  * The table a direct `ctx.db` row read addresses, or `undefined` when `call` isn't

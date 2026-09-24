@@ -41,6 +41,18 @@ const makeDb = (): ProbedDatabase => {
 
     const matches = (row: PaymentRow, where: Record<string, unknown>): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
 
+    // `ctx.db.patch` REJECTS a key whose value is explicitly `undefined` (shard-engine's
+    // `assertNoExplicitUndefined`), because the merge that builds the written row would silently
+    // drop it and delete the field. A double that merged `{ ...row, ...patch }` accepted such a key
+    // and went green over a store that throws on every second write of an optional column.
+    const assertNoExplicitUndefined = (patch: Record<string, unknown>): void => {
+        for (const field of Object.keys(patch)) {
+            if (patch[field] === undefined) {
+                throw new Error(`Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`);
+            }
+        }
+    };
+
     return {
         delete: async (id) => {
             for (const rows of tables.values()) {
@@ -79,6 +91,8 @@ const makeDb = (): ProbedDatabase => {
             return id;
         },
         patch: async (id, patch) => {
+            assertNoExplicitUndefined(patch);
+
             for (const rows of tables.values()) {
                 const row = rows.get(id);
 
@@ -185,14 +199,83 @@ describe("createDatabasePaymentStore", () => {
         expect(all[0]?.state).toBe("canceled");
     });
 
+    it("re-upserts a row whose optional columns are absent (regression)", async () => {
+        expect.assertions(4);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        // The shape every non-Stripe adapter produces: no `priceIds`, and — on the subscription
+        // events Polar/Creem/Dodo/Autumn send without period bounds — no `currentPeriod*` either.
+        // `upsert` is insert-then-patch, so the FIRST write went in (insert tolerates an absent
+        // value) and every LATER one hit `patch`, which rejects a key set to `undefined`. A Polar
+        // `subscription.canceled` following its `subscription.active` therefore threw, the row
+        // stayed `active`, and `check`/`hasActivePrice` kept entitling a cancelled customer.
+        const sparse = { ...subscription, currentPeriodEnd: undefined, provider: "polar" as const };
+
+        await store.upsertSubscription(sparse);
+        await store.upsertSubscription({ ...sparse, state: "canceled" });
+
+        const stored = await store.getSubscription("polar", "sub_1");
+
+        expect(stored?.state).toBe("canceled");
+        expect(stored?.priceIds).toBeUndefined();
+
+        // Same shape on the customer codec: `email` is optional and a reference can be re-minted.
+        const anonymous: Customer = { createdAt: 1, id: "cus_2", provider: "polar", referenceId: "user_2" };
+
+        await store.upsertCustomer(anonymous);
+        await store.upsertCustomer({ ...anonymous, id: "cus_3" });
+
+        const reminted = await store.getCustomerByReference("polar", "user_2");
+
+        expect(reminted?.id).toBe("cus_3");
+        expect(reminted?.email).toBeUndefined();
+    });
+
+    it("round-trips the multi-item price set, and reads an absent column as undefined (regression)", async () => {
+        expect.assertions(3);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, priceIds: ["price_1", "price_addon"] });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_1", "price_addon"]);
+
+        // A row written without the column — every non-Stripe adapter, the webhook path, and anything
+        // stored before `priceIds` existed. It must read back ABSENT, not as an empty set: `undefined`
+        // is what makes the entitlement read fall back to `[priceId]`, so no backfill is needed.
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        const legacy = await store.getSubscription("stripe", "sub_2");
+
+        expect(legacy?.priceIds).toBeUndefined();
+        expect(legacy?.priceId).toBe("price_1");
+    });
+
     it("dedupes events via markEventProcessed", async () => {
         expect.assertions(3);
 
         const store = createDatabasePaymentStore(makeDb());
 
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(false);
-        await expect(store.markEventProcessed("stripe", "evt_2")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(false);
+        await expect(store.markEventProcessed("stripe", "evt_2", "payment.captured")).resolves.toBe(true);
+    });
+
+    it("records the event type on the claim so `events` is a readable audit log", async () => {
+        expect.assertions(2);
+
+        // The `events` table is documented as the audit log the studio renders. Every claim
+        // used to be written with `type: ""`, so it carried ids and timestamps and nothing
+        // that said what had happened.
+        const database = makeDb();
+        const store = createDatabasePaymentStore(database);
+
+        await store.markEventProcessed("stripe", "evt_1", "subscription.active");
+        await store.markEventProcessed("stripe", "evt_2", "payment.refunded");
+
+        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_1" })).resolves.toMatchObject({ type: "subscription.active" });
+        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_2" })).resolves.toMatchObject({ type: "payment.refunded" });
     });
 
     it("sumUsage folds a `set` marker the same way the in-memory store does", async () => {
@@ -344,12 +427,12 @@ describe("createDatabasePaymentStore", () => {
 
         const store = createDatabasePaymentStore(makeDb());
 
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
 
         await store.releaseEvent("stripe", "evt_1");
 
         // After release the claim is gone, so a retry wins the claim again.
-        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
         // Releasing an unknown id is a harmless no-op.
         await expect(store.releaseEvent("stripe", "never_claimed")).resolves.toBeUndefined();
     });

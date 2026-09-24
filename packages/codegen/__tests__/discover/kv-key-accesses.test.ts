@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
+import type { FunctionIR } from "../../src/ir";
 
 let workdir: string;
 let project: Project;
@@ -113,6 +114,31 @@ describe("discoverKvKeyAccesses", () => {
         write("other.ts", `export const read = action(async ({ ctx, args }) => { return ctx.storage.x.get(args.key); });`);
 
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("attaches the enclosing procedure's visibility when `functions` is supplied", () => {
+        expect.assertions(2);
+
+        write("cache.ts", `export const warmCache = internalMutation(async ({ ctx, args }) => { await ctx.kv.put(args.cacheKey, args.blob); });`);
+
+        const functions: FunctionIR[] = [
+            { args: {}, exportName: "warmCache", filePath: "cache", kind: "mutation", returnType: "unknown", visibility: "internal" },
+        ];
+        const found = discoverKvKeyAccesses(project, join(workdir, "lunora"), functions);
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ visibility: "internal" });
+    });
+
+    it("leaves visibility undefined when the access can't be attributed to a supplied function", () => {
+        expect.assertions(2);
+
+        write("orphan.ts", `export const orphan = query(async ({ ctx, args }) => { return ctx.kv.get(args.key); });`);
+
+        const found = discoverKvKeyAccesses(project, join(workdir, "lunora"), []);
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.visibility).toBeUndefined();
     });
 
     it("ignores ctx.kv.list (takes a prefix, not a per-entry key)", () => {

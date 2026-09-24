@@ -65,6 +65,15 @@ const schema: SchemaLike = {
                 refundedMinor: { kind: "bigint" },
             },
         },
+        // An UNDECLARED column: `v.any()` commits to no type, so nothing in the
+        // schema says "bigint" — but the projection keys off the RUNTIME type,
+        // so a `bigint` written here is stored as the same order-preserving key
+        // a declared column gets. A guard reading only the declared kind lets
+        // the scan reduce those keys and hand back 2e+39.
+        ledger: {
+            indexes: [],
+            shape: { amount: { kind: "any" }, tenant: { kind: "string" } },
+        },
         // Soft delete lives on its own table so the aggregate cases above are
         // read through one path only. It no longer forces them onto the scan —
         // a soft-delete table reaches the companion for a projected field — but
@@ -479,6 +488,85 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const error = await writer.groupBy("paymentSessions", { agg: { op: "count" }, by: ["amountMinor"] }).catch((error_: unknown) => error_);
 
             expect(isLunoraError(error)).toBe(true);
+        });
+    });
+
+    describe("undeclared columns that hold a bigint", () => {
+        /**
+         * `v.any()` / `v.union()` / `v.from()` declare no type, so a `bigint`
+         * written into one is projected to its order-preserving key exactly as a
+         * `v.bigint()` column is — the projection dispatches on the runtime type.
+         * A read-side guard that keys off the DECLARED kind therefore lets the
+         * scan reduce those keys: `sum` of 10n + 32n came back as `2e+39`, `max`
+         * as the 40-character padded string, and `groupBy` keyed on the padding.
+         * All three look like answers, which is what makes it a money bug.
+         *
+         * The write side has used the wide `mayHoldProjectedValue` test since a
+         * declared-kind gate wrote ~1e39 into a companion; this is the read side
+         * catching up.
+         */
+        const seedLedger = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("ledger", { _id: "l1", amount: 10n, tenant: "t1" }, { allowExplicitId: true });
+            await writer.insert("ledger", { _id: "l2", amount: 32n, tenant: "t1" }, { allowExplicitId: true });
+        };
+
+        it("still round-trips the value through findMany", async () => {
+            expect.assertions(1);
+
+            const writer = setup();
+
+            await seedLedger(writer);
+
+            const { page } = await writer.findMany("ledger", {});
+
+            expect(page.map((row) => row["amount"])).toStrictEqual([10n, 32n]);
+        });
+
+        it("refuses to reduce it rather than summing the padded keys", async () => {
+            expect.assertions(4);
+
+            const writer = setup();
+
+            await seedLedger(writer);
+
+            for (const op of ["sum", "max"] as const) {
+                // eslint-disable-next-line no-await-in-loop -- two ops against one seeded table, sequential by design
+                const error = await writer.aggregate("ledger", { field: "amount", op }).catch((error_: unknown) => error_);
+
+                expect(isLunoraError(error)).toBe(true);
+                expect((error as Error).message).toContain("aggregateIndex");
+            }
+        });
+
+        it("refuses it as a groupBy reducer field and as a group key", async () => {
+            expect.assertions(4);
+
+            const writer = setup();
+
+            await seedLedger(writer);
+
+            const reducerError = await writer.groupBy("ledger", { agg: { field: "amount", op: "sum" }, by: ["tenant"] }).catch((error_: unknown) => error_);
+
+            expect(isLunoraError(reducerError)).toBe(true);
+            expect((reducerError as Error).message).toContain("aggregateIndex");
+
+            const keyError = await writer.groupBy("ledger", { agg: { op: "count" }, by: ["amount"] }).catch((error_: unknown) => error_);
+
+            expect(isLunoraError(keyError)).toBe(true);
+            expect((keyError as Error).message).toContain("aggregateIndex");
+        });
+
+        it("still reduces an undeclared column that holds plain numbers", async () => {
+            expect.assertions(1);
+
+            // The refusal is per-column, not per-value — an `any` column is
+            // refused whether or not this particular table holds a bigint today.
+            // `count()` hands SQL no field at all, so it keeps working.
+            const writer = setup();
+
+            await seedLedger(writer);
+
+            await expect(writer.count("ledger")).resolves.toBe(2);
         });
     });
 

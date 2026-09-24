@@ -3,7 +3,7 @@ import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1DatabaseLike } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
-import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
@@ -11,6 +11,7 @@ import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 
 import { defineApp } from "../../lunora/_generated/app.js";
+import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
 // WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
@@ -33,12 +34,20 @@ interface Env extends Record<string, unknown> {
      * When set to the literal string `"true"`, the worker exposes a small
      * surface of `/test/*` helpers (reset DO state, mint a short-lived signed
      * URL, schedule a job, etc.) used by the `@lunora/e2e` Playwright suite.
-     * The flag is read in `apps/playground/wrangler.jsonc` and injected via
-     * `tests/e2e/globalSetup.ts` — *never* set this in production.
+     * The worker reads it off `.dev.vars`, which `tests/e2e/globalSetup.ts`
+     * writes for the server it starts; `.dev.vars.example` documents it for a
+     * playground you start yourself. It is deliberately absent from
+     * `wrangler.jsonc` — *never* set this in production.
      */
     LUNORA_E2E?: string;
-    /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
-    LUNORA_WORKER_ORIGIN?: string;
+
+    /**
+     * This worker's own public origin — the one binding every loopback back
+     * into it uses. The SchedulerDO reads it off its own env to dispatch jobs
+     * (never off the schedule request, which would be an SSRF vector), and
+     * `.global({ origin })` fans reverse cross-shard relations across it.
+     */
+    LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
@@ -118,8 +127,8 @@ const app = defineApp<Env>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .scheduler({ namespace: (env) => env.SCHEDULER, origin: (env) => env.LUNORA_WORKER_ORIGIN })
-    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_WORKER_ORIGIN })
+    .scheduler({ namespace: (env) => env.SCHEDULER })
+    .global({ d1: (env) => env.DB, origin: (env) => env.LUNORA_ORIGIN_URL })
     .auth({ d1: (env) => env.DB, options: authOptions })
     .admin((env) => env.LUNORA_ADMIN_TOKEN)
     .onEmail((env) => async (message, _workerEnv, context) => {
@@ -151,15 +160,13 @@ const app = defineApp<Env>()
             // this gate anyone who can send mail to the routed address reaches
             // that, choosing `from` freely.
             //
-            // Fails closed on purpose: a `null` verdict means the receiving MX
-            // stamped no `Authentication-Results` header, which is "unknown",
-            // not "fine". DMARC passing is sufficient (it subsumes an aligned
-            // SPF or DKIM); otherwise both SPF and DKIM must pass on their own.
-            verify: (email) => {
-                const { dkim, dmarc, spf } = email.authentication;
-
-                return dmarc === "pass" || (spf === "pass" && dkim === "pass");
-            },
+            // `authenticatesFrom` is `@lunora/mail`'s one implementation of the
+            // rule: accept only when some reported DMARC/SPF/DKIM clause both
+            // passes AND names the `From` address's own domain. Do not hand-roll
+            // it — the copy that used to live here asked only "did any clause
+            // pass?", which an attacker satisfies with a genuine `spf=pass` +
+            // `dkim=pass` for the domain THEY control while forging `From`.
+            verify: authenticatesFrom,
         });
 
         await handler(message as ForwardableEmailMessageLike, env, context);
@@ -218,16 +225,20 @@ const clearD1 = async (database: D1Reset): Promise<void> => {
     }
 };
 
+/**
+ * `/test/reset` — clears the **D1** state the e2e suite shares (users, channels
+ * and every other `.global()` table). Gated by `LUNORA_E2E === "true"`.
+ *
+ * It does NOT reset Durable Object state, and does not pretend to. It used to
+ * POST `https://do/internal/reset` at a DO named `__e2e_reset__` behind a
+ * swallowing `catch`: `ShardDO.fetch` 404s anything that is not `/rpc` or its
+ * WS/relay routes, and that name is neither `__root__` nor any channel shard, so
+ * the call cleared nothing and reported success either way. Deleted rather than
+ * implemented — shard-local rows (`messages`) are reachable only through their
+ * channel, and every spec mints a fresh channel, so nothing depends on clearing
+ * them. A spec that ever does needs a real per-shard admin op, not this.
+ */
 const handleTestReset = async (env: Env): Promise<Response> => {
-    try {
-        const id = env.SHARD.idFromName("__e2e_reset__");
-        const stub = env.SHARD.get(id);
-
-        await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
-    } catch {
-        // best-effort
-    }
-
     try {
         await clearD1(env.DB);
     } catch {
@@ -260,8 +271,9 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
         // signed value unconditionally, so an unpinned URL only accepts a body
         // with no content type.
         contentType: body.contentType,
-        // The playground declares one bucket, which `createStorage` signs under
-        // the canonical `"default"` tag — mint the e2e URLs the same way or they
+        // The app declares two buckets (`FILES` as the default, `AVATARS` under
+        // the `avatars` tag). `createStorage` signs the unnamed one under the
+        // canonical `"default"` tag — mint the e2e URLs the same way or they
         // verify against a different canonical.
         bucketName: "default",
         expiresInSeconds: body.expiresInSeconds,
@@ -285,15 +297,43 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
         return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
     }
 
-    const originUrl = new URL(request.url).origin;
-    const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
     // `runAt` resolves the bare job id; `scheduledFor` is the instant we just
     // computed and passed in, so the response shape is unchanged.
     const jobId = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
+    await rememberIssuedJob(env.DB, jobId);
+
     return Response.json({ jobId, scheduledFor });
+};
+
+/**
+ * Where a scheduled job got to: `unknown`, `scheduled`, `failed`, `executed`.
+ *
+ * `executed` is inferred from an absence — the SchedulerDO deletes a job's rows
+ * the moment it succeeds — so it is only sound once the other two readings of
+ * that absence are ruled out: an id this app never issued (see
+ * {@link wasJobIssued}) and a job parked in the dead-letter after exhausting its
+ * retries, whose `id:` header is deleted too.
+ */
+const handleTestJobStatus = async (url: URL, env: Env): Promise<Response> => {
+    const id = url.searchParams.get("id");
+
+    if (!id || !env.SCHEDULER || !(await wasJobIssued(env.DB, id))) {
+        return Response.json({ status: "unknown" });
+    }
+
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
+
+    if (await scheduler.get(id)) {
+        return Response.json({ status: "scheduled" });
+    }
+
+    const parked = await scheduler.dead();
+
+    return Response.json({ status: parked.some((record) => record.id === id) ? "failed" : "executed" });
 };
 
 /**
@@ -328,18 +368,7 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/job-status" && method === "GET") {
-        const id = url.searchParams.get("id");
-
-        if (!id || !env.SCHEDULER || !env.LUNORA_WORKER_ORIGIN) {
-            return Response.json({ status: "unknown" });
-        }
-
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.LUNORA_WORKER_ORIGIN });
-        const record = await scheduler.get(id);
-
-        // The SchedulerDO deletes a job's rows once it completes successfully, so
-        // a previously-scheduled id with no record left has executed.
-        return Response.json({ status: record ? "scheduled" : "executed" });
+        return handleTestJobStatus(url, env);
     }
 
     return new Response("not found", { status: 404 });
@@ -380,8 +409,11 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
     }
 
     // The bucket is HMAC-bound, so this is the URL's own claim about which
-    // binding to serve — never a caller-supplied parameter. One bucket is
-    // declared here, so anything else is a URL minted for an app we are not.
+    // binding to serve — never a caller-supplied parameter. Only the default
+    // bucket is served here: the app also declares `avatars`, but nothing mints
+    // a URL against it (`lunora/avatars.ts` writes `avatars/`-prefixed keys into
+    // the default bucket), so a URL naming any other bucket was minted for an
+    // app we are not. Serving `avatars` means resolving the binding here first.
     if (verdict.bucketName !== "default") {
         return new Response("forbidden", { status: 403 });
     }

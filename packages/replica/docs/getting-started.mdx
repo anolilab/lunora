@@ -115,7 +115,8 @@ import { mirror } from "./mirror";
 
 const source = new EventSource(initialState, reducer);
 const sync = new EventsSync({
-    fetchEventsSince: (seq) => eventLogClient.getSince(seq),
+    // One bounded page per call — EventsSync walks the pages for you.
+    fetchEventsSince: async (seq) => (await eventLogClient.getSince(seq)).entries,
     applyEvents: (events) => {
         for (const event of events) {
             source.applyEvent(event.type, event.payload);

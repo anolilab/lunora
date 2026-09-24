@@ -105,7 +105,7 @@ export interface LunoraPluginOptions {
 
     /**
      * Deploy target the emitted `ctx.*` surface is tailored to. Defaults to
-     * `"target"` in `lunora.json`, then `"cloudflare"` — so an existing project
+     * `"target"` in `lunora.config.*`, then `"cloudflare"` — so an existing project
      * emits byte-identical output.
      *
      * Set it here only to override the project config for one build — keeping

@@ -83,8 +83,8 @@ export interface InboxStore {
     list: (userId: string, filter?: ListInboxFilter) => Promise<InboxItem[]>;
     /** Mark all of `userId`'s currently-unread items as read; returns how many were changed. */
     markAllRead: (userId: string) => Promise<number>;
-    /** Mark one item as read by id (idempotent — a no-op if already read or unknown). */
-    markRead: (id: string) => Promise<void>;
+    /** Mark one of `userId`'s items as read by id (idempotent — a no-op if already read, unknown, or owned by someone else). */
+    markRead: (userId: string, id: string) => Promise<void>;
     /** Count `userId`'s unread items. */
     unreadCount: (userId: string) => Promise<number>;
 }

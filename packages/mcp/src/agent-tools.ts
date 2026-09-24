@@ -120,6 +120,11 @@ const parseAgentsEnv = (raw: string | undefined): McpAgentExposure[] => {
 };
 
 /**
+ * Polling a run's status touches no state; the call goes to the deployment.
+ */
+const READ_ONLY_ANNOTATIONS = { destructiveHint: false, idempotentHint: true, openWorldHint: true, readOnlyHint: true } as const;
+
+/**
  * The tools this module advertises. Fail-closed: only the boolean `true` opts
  * in (an env-plumbed caller could pass a truthy string), and the tools appear
  * ONLY when at least one agent is exposed — so an agent-free or non-opted-in
@@ -133,6 +138,13 @@ const agentToolDefinitions = (exposures: ReadonlyArray<McpAgentExposure>, allowA
 
     const perAgent: ToolDefinition[] = exposures.map((exposure) => {
         return {
+            annotations: {
+                destructiveHint: true,
+                idempotentHint: false,
+                openWorldHint: true,
+                readOnlyHint: false,
+                title: `Run the ${exposure.name} agent (starts a durable run)`,
+            },
             description: `${exposure.description} Starts a durable agent run and returns its final answer.`,
             inputSchema: AGENT_RUN_INPUT_SCHEMA,
             name: agentToolName(exposure),
@@ -142,6 +154,7 @@ const agentToolDefinitions = (exposures: ReadonlyArray<McpAgentExposure>, allowA
     return [
         ...perAgent,
         {
+            annotations: { ...READ_ONLY_ANNOTATIONS, title: "Check a durable agent run" },
             description: "Check the status of a durable agent run (and its answer if finished) by its threadKey.",
             inputSchema: AGENT_STATUS_INPUT_SCHEMA,
             name: AGENT_STATUS_TOOL_NAME,

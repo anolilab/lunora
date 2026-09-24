@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
-import type { SqlExec } from "../src/ctx-db";
+import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */
@@ -18,6 +18,28 @@ const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; las
             return state.lastQuery;
         },
     };
+};
+
+/**
+ * A `SqlExec` stub whose cursor also exposes the statement's own column names
+ * and positional rows — the capability Cloudflare's `SqlStorageCursor` and
+ * better-sqlite3 both have. Hand-built rather than driven off `node:sqlite`
+ * because that module only grew `columns()` / `setReturnArrays` in 22.14 and CI
+ * runs 22.15 alongside 24: a fixture that silently degrades on one leg would
+ * leave the path this exercises untested exactly where it matters.
+ */
+const rawExec = (columnNames: string[], rows: unknown[][]): SqlExec => {
+    const toObject = (values: unknown[]): Record<string, unknown> => Object.fromEntries(columnNames.map((name, index) => [name, values[index]]));
+
+    const cursor: SqlCursor<Record<string, unknown>> = {
+        columnNames,
+        one: () => toObject(rows[0] ?? []),
+        raw: () => rows[Symbol.iterator](),
+        toArray: () => rows.map((values) => toObject(values)),
+        [Symbol.iterator]: () => rows.map((values) => toObject(values))[Symbol.iterator](),
+    };
+
+    return { exec: () => cursor as never };
 };
 
 /** A `SqlExec` stub whose `exec` throws — models SQLite rejecting a malformed statement. */
@@ -131,6 +153,42 @@ describe("runReadonlySql", () => {
         // The guard runs before exec, so the query was never sent.
         expect(sql.lastQuery).toBe("");
     });
+
+    it("keeps both values when two result columns share a name", () => {
+        expect.assertions(2);
+
+        // `SELECT u.id, o.id FROM users u JOIN orders o …` — SQLite names both
+        // result columns `id`, and a row object can only hold one of them. Read
+        // off the row keys, the join's left-hand id disappeared with nothing on
+        // screen to suggest a column had been dropped.
+        const result = runReadonlySql(rawExec(["id", "id"], [["u1", "o1"]]), "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id");
+
+        expect(result.columns).toStrictEqual(["id", "id:2"]);
+        expect(result.rows).toStrictEqual([{ id: "u1", "id:2": "o1" }]);
+    });
+
+    it("reports the columns of a result that matched no rows", () => {
+        expect.assertions(3);
+
+        const result = runReadonlySql(rawExec(["id", "status"], []), "SELECT id, status FROM t WHERE 1 = 0");
+
+        // The shape of an empty result is exactly what someone debugging one
+        // needs; derived from the first row there is nothing to derive it from.
+        expect(result.columns).toStrictEqual(["id", "status"]);
+        expect(result.rows).toStrictEqual([]);
+        expect(result.rowCount).toBe(0);
+    });
+
+    it("caps and flags truncation on the positional path too", () => {
+        expect.assertions(3);
+
+        const rows = Array.from({ length: MAX_SQL_ROWS + 5 }, (_, index) => [index]);
+        const result = runReadonlySql(rawExec(["i"], rows), "SELECT i FROM t");
+
+        expect(result.rows).toHaveLength(MAX_SQL_ROWS);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS + 5);
+        expect(result.truncated).toBe(true);
+    });
 });
 
 describe("classifyStatement offsets", () => {
@@ -161,6 +219,20 @@ describe("classifyStatement offsets", () => {
         expect.assertions(1);
 
         expect(classifyStatement("SELECT 1;")).toBeUndefined();
+    });
+
+    it("allows a comment after the trailing semicolon", () => {
+        expect.assertions(3);
+
+        // A comment is whitespace to SQLite, so `SELECT 1; -- note` is one
+        // statement. The trailing-`;` strip ran on the RAW text, where the comment
+        // sits between the `;` and the end, so the regex missed it and the `;` was
+        // read as a batch separator — the editor refused a draft the operator
+        // could run by deleting the note.
+        expect(classifyStatement("SELECT 1;\n-- a closing note")).toBeUndefined();
+        expect(classifyStatement("SELECT 1; /* note */")).toBeUndefined();
+        // …and the tail is still not a place to hide a second statement.
+        expect(classifyStatement("SELECT 1; -- note\nSELECT 2")?.code).toBe("SQL_MULTIPLE_STATEMENTS");
     });
 
     it.each([
@@ -221,6 +293,20 @@ describe("classifyStatement offsets", () => {
         // trade for a tool that must never corrupt the shadow tables. Masking the
         // batch scan fixes a rule nobody chose; this one someone did.
         expect(classifyStatement("SELECT 'DROP TABLE x'")?.code).toBe("SQL_NOT_READONLY");
+    });
+
+    it("allows SQLite's read-only `replace()` scalar but still refuses `REPLACE INTO`", () => {
+        expect.assertions(4);
+
+        // `replace` is a write only in the `REPLACE INTO` statement form. As a
+        // scalar it is a core string function, and refusing it broke a plain
+        // SELECT with a message that named no rule the operator had broken.
+        expect(classifyStatement("SELECT REPLACE(name, 'a', 'b') FROM users")).toBeUndefined();
+        expect(classifyStatement("SELECT replace(name, 'a', 'b') AS n FROM users")).toBeUndefined();
+        // The statement form is still refused — including from inside a CTE,
+        // which is the reason the keyword scan exists at all.
+        expect(classifyStatement("REPLACE INTO t VALUES (1)")?.code).toBe("SQL_NOT_READONLY");
+        expect(classifyStatement("WITH x AS (SELECT 1) REPLACE INTO t SELECT * FROM x")?.code).toBe("SQL_NOT_READONLY");
     });
 });
 

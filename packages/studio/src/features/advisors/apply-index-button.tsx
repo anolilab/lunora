@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ConfirmButton } from "../../components/confirm-button";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
-import { composeCreateIndex } from "./compose-index-sql";
+import { composeIndexDeclaration } from "./compose-index-declaration";
 
 interface ApplyIndexButtonProps {
     /** Fields covered by the suggested index (at minimum the FK column). */
@@ -20,44 +20,46 @@ interface ApplyIndexButtonProps {
 /**
  * Confirm-before-copy button for a missing-index advisory finding.
  *
- * Composes a `CREATE INDEX IF NOT EXISTS` statement from the finding's
- * `table` / `indexName` / `fields` and, after the operator confirms, copies it
- * to the clipboard. The operator can then paste it into the SQL editor or
- * their migration tooling.
+ * Composes the `.index("name", [fields])` declaration from the finding's
+ * `indexName` / `fields` and, after the operator confirms, copies it to the
+ * clipboard. The operator appends it to the table in `lunora/schema.ts` — what
+ * the lint's own remediation names, and the only mechanism the migration system
+ * tracks. Raw `CREATE INDEX … ON "posts" ("authorId")` DDL is NOT what to hand
+ * over: a shard table is `(id, _creationTime, __doc__)`, so that statement fails
+ * with `no such column: authorId` wherever it is pasted.
  *
- * It COPIES; it does not apply. The label says so, because the studio's `runSql`
- * admin RPC is read-only (it rejects DDL by design, so a schema change can't
- * bypass the schema-aware writer) and nothing here can run the statement. The
- * confirm step guards against accidental clicks.
+ * It COPIES; it does not apply. The label says so — the studio's `runSql` admin
+ * RPC is read-only and nothing here writes the project's source. The confirm
+ * step guards against accidental clicks.
  *
- * Both ways a copy can fail end at the same place — the statement rendered for
+ * Both ways a copy can fail end at the same place — the declaration rendered for
  * manual selection. A studio served over a LAN IP is not a secure context, so
  * `navigator.clipboard` is `undefined` there; and even where it exists the write
  * can be denied. Neither may report a copy that did not happen.
  */
 const ApplyIndexButton = ({ fields, indexName, table, testId }: ApplyIndexButtonProps): ReactElement => {
     const t = useT();
-    const [outcome, setOutcome] = useState<null | { copied: boolean; sql: string }>(null);
+    const [outcome, setOutcome] = useState<null | { copied: boolean; declaration: string }>(null);
 
     const onConfirm = (): void => {
-        const sql = composeCreateIndex(table, indexName, fields);
+        const declaration = composeIndexDeclaration(indexName, fields);
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
         const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
 
         if (clipboard === undefined) {
-            setOutcome({ copied: false, sql });
+            setOutcome({ copied: false, declaration });
 
             return;
         }
 
         fireAndForget(
-            clipboard.writeText(sql).then((): boolean => {
-                setOutcome({ copied: true, sql });
+            clipboard.writeText(declaration).then((): boolean => {
+                setOutcome({ copied: true, declaration });
 
                 return true;
             }),
             () => {
-                setOutcome({ copied: false, sql });
+                setOutcome({ copied: false, declaration });
             },
         );
     };
@@ -65,19 +67,19 @@ const ApplyIndexButton = ({ fields, indexName, table, testId }: ApplyIndexButton
     if (outcome !== null) {
         return outcome.copied ? (
             <span className="text-xs text-muted-foreground" data-testid={`${testId}-applied`}>
-                {t("CREATE INDEX SQL copied to clipboard.")}
+                {t("Index declaration copied — add it to {table} in lunora/schema.ts.", { table })}
             </span>
         ) : (
             <span className="flex flex-col gap-1 text-xs text-muted-foreground" data-testid={`${testId}-manual`}>
-                {t("Could not reach the clipboard — copy this statement:")}
-                <code className="font-mono break-all select-all">{outcome.sql}</code>
+                {t("Could not reach the clipboard — add this to {table} in lunora/schema.ts:", { table })}
+                <code className="font-mono break-all select-all">{outcome.declaration}</code>
             </span>
         );
     }
 
     return (
         <ConfirmButton confirmLabel={t("Copy?")} onConfirm={onConfirm} testId={testId}>
-            {t("Copy index SQL for {table}", { table })}
+            {t("Copy index declaration for {table}", { table })}
         </ConfirmButton>
     );
 };

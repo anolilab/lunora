@@ -70,7 +70,7 @@ export default defineConfig({
 ```
 
 ```ts
-// src/worker.ts — the composed worker's `export default`.
+// src/server.ts — the composed worker's `export default`.
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -81,7 +81,7 @@ export default withLunora(
 );
 ```
 
-Set `"main": "src/worker.ts"` in `wrangler.jsonc` so wrangler bundles this entry. `withLunora` reserves `/_lunora/rpc`, `/_lunora/ws`, and `/_lunora/admin/*` for the realtime plane; every other request falls through to Astro's SSR handler. An Astro render that throws is contained at the seam as a plain 500 — it can't take down realtime.
+Set `"main": "src/server.ts"` in `wrangler.jsonc` so wrangler bundles this entry. `withLunora` reserves `/_lunora/rpc`, `/_lunora/ws`, and `/_lunora/admin/*` for the realtime plane; every other request falls through to Astro's SSR handler. An Astro render that throws is contained at the seam as a plain 500 — it can't take down realtime.
 
 Reactivity comes from the island adapter you hydrate with, not from this package. Preload a query in `.astro` frontmatter or a server endpoint with `@lunora/astro/server`, then hand the token to that adapter's `hydratePreloaded`:
 
@@ -91,11 +91,22 @@ Reactivity comes from the island adapter you hydrate with, not from this package
 import { createServerClient, preloadQuery, serializePreloaded } from "@lunora/astro/server";
 import { api } from "../lunora/_generated/api";
 
-const client = createServerClient({ url: Astro.url.origin + "/_lunora/rpc" });
+const client = createServerClient({ url: Astro.url.origin });
 const preloaded = await preloadQuery(client, api.messages.list, {});
 ---
 
-<my-island data-preloaded={serializePreloaded(preloaded)}></my-island>
+<script id="preloaded" type="application/json" set:html={serializePreloaded(preloaded)}></script>
+<my-island></my-island>
+```
+
+The island has to pick the token up explicitly — no adapter discovers `#preloaded` on its own:
+
+```ts
+import { hydratePreloaded } from "@lunora/react";
+import { deserializePreloaded } from "@lunora/astro/server";
+
+const preloaded = deserializePreloaded(document.querySelector("#preloaded")!.textContent!);
+const initial = hydratePreloaded(preloaded); // seeds the first paint, then goes live
 ```
 
 ### Feature flags
@@ -108,7 +119,7 @@ const preloaded = await preloadQuery(client, api.messages.list, {});
 import { createServerClient, preloadQuery, preloadedQueryResult } from "@lunora/astro/server";
 import { api } from "../lunora/_generated/api";
 
-const client = createServerClient({ url: Astro.url.origin + "/_lunora/rpc" });
+const client = createServerClient({ url: Astro.url.origin });
 const preloaded = await preloadQuery(client, api.homepage.heroFlag, {}); // a query that returns ctx.flags.boolean(...)
 const newHero = preloadedQueryResult(preloaded);
 ---

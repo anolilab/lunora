@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
@@ -215,7 +216,7 @@ describe("lunora backup", () => {
             url: "https://app.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(importCalls).toHaveLength(0);
     });
 
@@ -453,7 +454,7 @@ describe("lunora backup", () => {
 
         const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "restore", target: "does-not-exist" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
 
     describe("retention", () => {
@@ -552,7 +553,7 @@ describe("lunora backup", () => {
             try {
                 const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "retention", url: "http://localhost:8787" });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
                 expect(logs.some((line) => line.includes("admin token required"))).toBe(true);
             } finally {
                 if (previous !== undefined) {
@@ -611,7 +612,7 @@ describe("lunora backup", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
             expect(logs.some((line) => line.includes("--yes"))).toBe(true);
         });
@@ -772,7 +773,7 @@ describe("lunora backup", () => {
                 yes: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toStrictEqual([]);
             expect(logs.some((line) => line.includes("--bucket"))).toBe(true);
         });
@@ -816,7 +817,7 @@ describe("lunora backup", () => {
                 yes: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
             expect(logs.some((line) => line.includes("backupRetain"))).toBe(true);
         });
@@ -933,7 +934,7 @@ describe("lunora backup", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -954,7 +955,7 @@ describe("lunora backup", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(logs.join("\n")).toContain("--yes");
         });
@@ -999,7 +1000,7 @@ describe("lunora backup", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -1014,7 +1015,35 @@ describe("lunora backup", () => {
             try {
                 const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "pitr", url: "http://localhost:8787" });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+        });
+
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.assertions(1);
+
+            const { logger } = capturingLogger();
+            const calls: PitrCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workDir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+
+            try {
+                const result = await runBackupCommand({
+                    cwd: workDir,
+                    logger,
+                    adminFetch: captureFetch(calls, { current: "bm-123" }),
+                    subcommand: "pitr",
+                    url: "http://localhost:8787",
+                });
+
+                expect(result.code).toBe(0);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;

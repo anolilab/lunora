@@ -12,7 +12,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runCodegen } from "@lunora/codegen";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
+import { ScriptTarget, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseManifest, runAddCommand, runBuildIndexCommand } from "../../src/commands/registry/index";
@@ -41,6 +43,240 @@ const itemNames = readdirSync(registryRoot).filter((entry) => {
 
     return statSync(full).isDirectory() && existsSync(join(full, "registry.json"));
 });
+
+/** Every shipped item's parsed manifest — the source sweeps below all start here. */
+const manifests = itemNames.map((name) => {
+    return { manifest: parseManifest(JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")), name), name };
+});
+
+/** Every file an item ships, with its source — one flat list to sweep. */
+const itemSources = manifests.flatMap(({ manifest, name }) =>
+    manifest.files.map((file) => {
+        return { from: file.from, name, source: readFileSync(join(registryRoot, name, file.from), "utf8") };
+    }),
+);
+
+/**
+ * Wrangler's own `config-schema.json` `required` lists, for the binding kinds
+ * this registry scaffolds. A missing required field is not a warning: wrangler
+ * refuses to load the config, so an item shipping one breaks validation for the
+ * WHOLE Worker.
+ */
+const REQUIRED_BINDING_FIELDS: Record<string, ReadonlyArray<string>> = {
+    ai: ["binding"],
+    browser: ["binding"],
+    d1_databases: ["binding"],
+    hyperdrive: ["binding", "id"],
+    r2_buckets: ["binding", "bucket_name"],
+    send_email: ["name"],
+};
+
+/**
+ * Binding kinds that are a NAME→VALUE map rather than resource entries: the key
+ * IS the binding name, so there is no per-entry field wrangler could require and
+ * {@link REQUIRED_BINDING_FIELDS} has nothing to say about them. Listed here
+ * rather than keyed to `[]` there so that map keeps one meaning and its "unknown
+ * binding kind" branch keeps its teeth for a kind nobody has thought about.
+ */
+const MAP_SHAPED_BINDINGS = new Set(["vars"]);
+
+/** Bindings whose scaffolded value omits something wrangler requires. */
+const bindingsMissingRequiredFields = (): string[] => {
+    const offenders: string[] = [];
+
+    for (const { manifest, name } of manifests) {
+        for (const binding of manifest.bindings ?? []) {
+            const kind = binding.path[0] ?? "";
+
+            if (MAP_SHAPED_BINDINGS.has(kind)) {
+                continue;
+            }
+
+            const required = REQUIRED_BINDING_FIELDS[kind];
+
+            if (required === undefined) {
+                offenders.push(`${name}: unknown binding kind \`${kind}\` — add its wrangler-required fields to REQUIRED_BINDING_FIELDS`);
+
+                continue;
+            }
+
+            const entries = (Array.isArray(binding.value) ? binding.value : [binding.value]) as Record<string, unknown>[];
+
+            for (const entry of entries) {
+                offenders.push(...required.filter((field) => entry[field] === undefined).map((field) => `${name}: ${kind} entry is missing \`${field}\``));
+            }
+        }
+    }
+
+    return offenders;
+};
+
+/**
+ * UI frameworks an item deliberately does not declare: it is scaffolded INTO a
+ * React/Vue/Solid app, so pinning that app's own framework would be wrong. A
+ * package belongs here only when the consumer necessarily already has it.
+ */
+const CONSUMER_PROVIDED = new Set(["@angular/core", "react", "solid-js", "svelte", "vue"]);
+
+/**
+ * Source dialects an item can carry an import in. `.vue`/`.svelte` are here
+ * because the Vue and Svelte ports author their view layer as single-file
+ * components: 41 of the registry's bare specifiers live in an SFC, and a sweep
+ * that reads only `.ts`/`.tsx` never opens the 114 files where a Vue- or
+ * Svelte-only dependency would be the one to go undeclared.
+ */
+const SCANNED_DIALECTS = /\.(?:tsx?|vue|svelte)$/u;
+
+/**
+ * Every bare package specifier the items import, and the subset of those an item
+ * does not name in its `deps`.
+ */
+const itemImports = (): { scanned: string[]; undeclared: string[] } => {
+    const scanned: string[] = [];
+    const undeclared: string[] = [];
+    const declaredBy = new Map(manifests.map(({ manifest, name }) => [name, new Set(Object.keys(manifest.deps ?? {}))]));
+
+    for (const { from, name, source } of itemSources.filter((entry) => SCANNED_DIALECTS.test(entry.from))) {
+        // Bare specifiers only — a relative import or a `#lunora/…` subpath
+        // resolves inside the user's own project.
+        for (const match of source.matchAll(/from "((?:@[a-z\d-]+\/)?[a-z\d][a-z\d._-]*)(?:\/[^"]*)?"/gu)) {
+            const packageName = match[1] as string;
+
+            scanned.push(`${name} → ${packageName} (${from})`);
+
+            if (!declaredBy.get(name)?.has(packageName) && !CONSUMER_PROVIDED.has(packageName)) {
+                undeclared.push(`${name} → ${packageName} (${from})`);
+            }
+        }
+    }
+
+    return { scanned, undeclared };
+};
+
+/**
+ * The dependencies an item pulls in through the code CODEGEN emits, not through
+ * the code the item itself imports.
+ *
+ * `itemImports()` above cannot see these: `lunora/crons.ts` imports `cronJobs`
+ * from `@lunora/server` and nothing else, yet the declaration it makes is what
+ * puts `import { createScheduler } from "@lunora/scheduler"` into
+ * `_generated/app.ts`. An item that declares a cron without declaring
+ * `@lunora/scheduler` therefore scaffolds cleanly and then fails the project's
+ * very next `lunora codegen` with "this schema's generated code imports packages
+ * the project does not declare" — exit 1, no dev server.
+ *
+ * So the signals here mirror the signal-driven arms of
+ * `packages/codegen/src/assert-required-packages.ts`: the declaration codegen
+ * reads, and the package the emitted output will import because of it. Keep the
+ * two in step when a new signal is added there.
+ *
+ * The storage row currently matches nothing in the registry — no shipped item
+ * declares a `v.storage()` column or reads `ctx.storage` outside a comment. It
+ * is the other half of the same contract, not evidence of coverage; the guard
+ * below pins only what the scan really finds.
+ */
+const EMITTED_DEPENDENCY_SIGNALS: ReadonlyArray<{ package: string; pattern: RegExp }> = [
+    { package: "@lunora/scheduler", pattern: /\bcronJobs\s*\(|\bcrons\.(?:cron|daily|interval|monthly|weekly)\s*\(/u },
+    { package: "@lunora/storage", pattern: /\bctx\.storage\b|\bv\.storage\s*\(/u },
+];
+
+/**
+ * Comments removed, so prose counts for nothing.
+ *
+ * Codegen discovers these declarations by AST, so a sentence mentioning
+ * `ctx.storage` is not a `ctx.storage` read — and `backup.ts`, `crons/jobs.ts`
+ * and `mail.ts` all mention `ctx.scheduler` in a doc comment. A comment-blind
+ * scan would demand a dependency the generated code never imports.
+ */
+const withoutComments = (source: string): string =>
+    transpileModule(source, { compilerOptions: { removeComments: true, target: ScriptTarget.ESNext } }).outputText;
+
+/**
+ * Every (item, package) pair the emitted output will need, and whether the
+ * manifest declares it.
+ *
+ * The scan surface is what `lunora add <item>` puts in front of the user: the
+ * `.ts` files it writes, AND the manifest's `docs` string, which the command
+ * prints as the item's next step. `backup` ships no cron of its own — its `docs`
+ * tells the reader to add two `crons.daily(...)` lines — so a files-only scan
+ * would read it as clean and leave the same defect standing in the item that
+ * documents the cron rather than writing it.
+ */
+const emittedDependencies = (): { needed: string[]; undeclared: string[] } => {
+    const needed: string[] = [];
+    const undeclared: string[] = [];
+
+    for (const { manifest, name } of manifests) {
+        const declared = new Set(Object.keys(manifest.deps ?? {}));
+        const surfaces: ReadonlyArray<[string, string]> = [
+            ["docs", manifest.docs ?? ""],
+            ...manifest.files
+                .filter((file) => /\.tsx?$/u.test(file.from))
+                .map((file): [string, string] => [file.from, withoutComments(readFileSync(join(registryRoot, name, file.from), "utf8"))]),
+        ];
+
+        for (const signal of EMITTED_DEPENDENCY_SIGNALS) {
+            for (const [where] of surfaces.filter(([, text]) => signal.pattern.test(text))) {
+                const entry = `${name} → ${signal.package} (${where})`;
+
+                needed.push(entry);
+
+                if (!declared.has(signal.package)) {
+                    undeclared.push(entry);
+                }
+            }
+        }
+    }
+
+    return { needed, undeclared };
+};
+
+/** Every `createMailerFromEnv(` call site in the registry, split by whether it guards `cloudflareSend`. */
+const mailerCallSites = (): { guarded: string[]; unguarded: string[] } => {
+    const guarded: string[] = [];
+    const unguarded: string[] = [];
+
+    for (const { from, name, source } of itemSources) {
+        const calls = source.split("\n").filter((line) => line.includes("createMailerFromEnv(") && !line.trimStart().startsWith("*"));
+
+        for (const line of calls) {
+            (line.includes('["SEND_EMAIL"] === undefined') ? guarded : unguarded).push(`${name} → ${from}: ${line.trim()}`);
+        }
+    }
+
+    return { guarded, unguarded };
+};
+
+/** The message shapes that mark a throw as an authorization refusal rather than a server fault. */
+const AUTHORIZATION_MESSAGE = /requires an authenticated user|belongs to a different user|is not allowed/iu;
+
+/**
+ * Items generated from `packages/auth-ui/src` by `scripts/sync-auth-ui-registry.mjs`
+ * and held to their source by `pnpm run lint:registry:sync`.
+ *
+ * Skipped by the advisor sweep below for cost, not for trust: each ships ~80-125
+ * files into `lunora/auth-ui/**`, six times over, and they are client-side view
+ * code — no `ctx.db` write, no `ctx.browser` navigation, nothing the static lints
+ * key on. Reviewing the copy also reviews nothing the source review missed. The
+ * ONE lunora-side thing they scaffold is the base `auth` item they `require`,
+ * which the sweep covers on its own row.
+ *
+ * Derived from the sync script's own output prefix rather than listed by hand, so
+ * a seventh dialect is excluded automatically and — more to the point — a
+ * non-generated item can never be dropped into this set by a typo.
+ */
+const SYNCED_AUTH_UI_PREFIX = "auth-ui-";
+
+/** Items the advisor sweep covers: everything `lunora registry add` can put in front of a user, minus the synced copies. */
+const advisorSweepItems = itemNames.filter((name) => !name.startsWith(SYNCED_AUTH_UI_PREFIX));
+
+/** Authorization refusals thrown as a bare `Error`, which `toErrorBody` redacts to a 500. */
+const uncodedAuthorizationThrows = (): string[] =>
+    itemSources
+        .filter(({ source }) =>
+            [...source.matchAll(/throw new Error\((?<head>[^;]*)/gu)].some((match) => AUTHORIZATION_MESSAGE.test(match.groups?.["head"] ?? "")),
+        )
+        .map(({ from, name }) => `${name} → ${from}`);
 
 let workdir: string;
 
@@ -138,14 +374,16 @@ describe("shipped registry items", () => {
         expect(messages.some((message) => message.includes("binding DB already exists"))).toBe(true);
     });
 
-    it("self-describing bindings (ai/browser/images) are single objects, not arrays", () => {
+    it("object-shaped bindings (ai/browser/images/vars) are single objects, not arrays", () => {
         expect.assertions(1);
 
         // Cloudflare's `ai`/`browser`/`images` bindings are single objects
-        // (`{ "binding": "NAME" }`), unlike list bindings such as `r2_buckets`.
-        // Wrapping one in an array writes a wrangler.jsonc wrangler rejects on
-        // dev/deploy — guard every shipped item against that shape.
-        const selfDescribing = new Set(["ai", "browser", "images"]);
+        // (`{ "binding": "NAME" }`), and `vars` is a name→value map — unlike list
+        // bindings such as `r2_buckets`. Wrapping one in an array writes a
+        // wrangler.jsonc wrangler rejects on dev/deploy, and `mergedBindingValue`
+        // takes its array branch and appends, so the damage is a config that no
+        // longer loads for the WHOLE Worker. Guard every shipped item.
+        const selfDescribing = new Set(["ai", "browser", "images", ...MAP_SHAPED_BINDINGS]);
         const offenders: string[] = [];
 
         for (const name of itemNames) {
@@ -159,6 +397,102 @@ describe("shipped registry items", () => {
         }
 
         expect(offenders).toStrictEqual([]);
+    });
+
+    it("every scaffolded binding carries the fields wrangler requires", () => {
+        expect.assertions(1);
+
+        // `lunora registry add hyperdrive` left a `wrangler.jsonc` that failed
+        // validation for the whole Worker: the hyperdrive entry was the one
+        // shipped without a placeholder for its required `id`, while `auth`,
+        // `mail` and `storage` all had one for theirs.
+        expect(bindingsMissingRequiredFields()).toStrictEqual([]);
+    });
+
+    it("every package an item imports is declared in its `deps`", () => {
+        expect.assertions(2);
+
+        // `deps` is written verbatim into a USER's package.json by `lunora add`,
+        // so a package an item imports but does not declare is simply absent from
+        // the scaffolded project. `storage`, `payment` and `presence` each reached
+        // for `@lunora/errors` without declaring it while their `ai`/`browser`
+        // siblings did, and the Solid 2 port used `@solidjs/web` — its JSX import
+        // source, a package that exists only on the 2.x line — in 15 files without
+        // naming it anywhere.
+        const { scanned, undeclared } = itemImports();
+
+        expect(undeclared).toStrictEqual([]);
+        // Guard the guard. This sweep passes by finding nothing, so a filter that
+        // stops matching a dialect — the way it silently skipped every `.vue` and
+        // `.svelte` file — turns it green rather than red. Require positive
+        // evidence that the SFC ports were read.
+        expect(scanned.filter((entry) => /\((?:vue|svelte)\/[^)]+\.(?:vue|svelte)\)$/u.test(entry))).not.toHaveLength(0);
+    });
+
+    it("every package an item's GENERATED code needs is declared in its `deps`", () => {
+        expect.assertions(2);
+
+        // The dependency no import scan can see. `crons` declared `@lunora/server`
+        // and stopped there, so `lunora add crons` succeeded ("2 written") and the
+        // project's next `lunora codegen` exited 1 on `@lunora/scheduler` — a
+        // package the item never imports and `_generated/app.ts` does. `backup`,
+        // whose docs instruct the same cron registration, carried the same gap.
+        const { needed, undeclared } = emittedDependencies();
+
+        expect(undeclared).toStrictEqual([]);
+        // Guard the guard: this passes by finding nothing undeclared, so a pattern
+        // that stops matching, or a scan surface that stops being read, turns it
+        // green instead of red. Demand the two signals that are really there — one
+        // from a scaffolded file, one from a manifest's `docs`.
+        expect(needed).toStrictEqual(expect.arrayContaining(["crons → @lunora/scheduler (crons.ts)", "backup → @lunora/scheduler (docs)"]));
+    });
+
+    it("no item hands `createMailerFromEnv` an unguarded `cloudflareSend`", () => {
+        expect.assertions(2);
+
+        // `createMailerFromEnv` prefers `cloudflareSend` over `RESEND_API_KEY`
+        // whenever it is supplied (`packages/mail/src/from-env.ts`), so passing it
+        // unconditionally makes the documented Resend path unreachable: a deploy
+        // with no `SEND_EMAIL` binding throws inside the callback while
+        // `RESEND_API_KEY` is set. The base `auth` item shipped exactly that while
+        // its three siblings guarded the call.
+        const { guarded, unguarded } = mailerCallSites();
+
+        expect(unguarded).toStrictEqual([]);
+        // Guard the guard: a renamed helper must not turn this into a vacuous pass.
+        expect(guarded).toHaveLength(4);
+    });
+
+    it("authorization guards throw a coded error, not a bare `Error`", () => {
+        expect.assertions(1);
+
+        // `toErrorBody` maps a non-`LunoraError` to a redacted `INTERNAL` 500, so
+        // an uncoded throw tells the caller "server fault" where it meant "sign in
+        // first" / "not yours". Item authors keep rediscovering this — `ai` and
+        // `browser` carry a comment about it — so it is checked here.
+        expect(uncodedAuthorizationThrows()).toStrictEqual([]);
+    });
+
+    it("the `auth-emails` recipe passes only fields `sendAuthEmail` accepts", () => {
+        expect.assertions(1);
+
+        // The item's only documented integration is
+        // `sendAuthEmail(env, { html, subject, text, to })`, and `renderEmail`
+        // really does return `{ html, text }` — but the base `auth` item's
+        // signature named only `{ subject, text, to }`, so the recipe did not
+        // compile against the item it `requires`.
+        const { docs } = JSON.parse(readFileSync(join(registryRoot, "auth-emails", "registry.json"), "utf8")) as { docs: string };
+        const signature =
+            /const sendAuthEmail = async \(env: AuthEnv, message: \{(?<fields>[^}]*)\}/u.exec(readFileSync(join(registryRoot, "auth", "index.ts"), "utf8"))
+                ?.groups?.["fields"] ?? "";
+
+        const passed = /sendAuthEmail\(env, \{(?<fields>[^}]*)\}/u
+            .exec(docs)
+            ?.groups?.["fields"]?.split(",")
+            .map((field) => (field.split(":")[0] as string).trim())
+            .filter((field) => field.length > 0);
+
+        expect(passed?.filter((field) => !new RegExp(String.raw`\b${field}\??:`, "u").test(signature))).toStrictEqual([]);
     });
 
     it("`list` reads the catalog and reports every item", async () => {
@@ -177,6 +511,43 @@ describe("shipped registry items", () => {
         }
     });
 
+    describe("advisor", () => {
+        it("sweeps every item that is not a synced auth-ui copy", () => {
+            expect.assertions(3);
+
+            // Guard the guard. The sweep below passes by finding nothing, so a
+            // filter that stops matching turns it green rather than red — and the
+            // registry is exactly where that goes unnoticed, because nothing else
+            // in CI runs the advisor over it. Pin the shape of the covered set.
+            expect(advisorSweepItems.length).toBeGreaterThanOrEqual(15);
+            expect(advisorSweepItems).toStrictEqual(expect.arrayContaining(["ai", "auth", "browser", "crons", "payment", "presence", "storage"]));
+            expect(advisorSweepItems.filter((name) => name.startsWith(SYNCED_AUTH_UI_PREFIX))).toStrictEqual([]);
+        });
+
+        it.each(advisorSweepItems)("`%s` scaffolds with no ERROR-level advisory", async (name) => {
+            expect.assertions(1);
+
+            // Registry items are copy-in code that `lunora registry add` writes
+            // into a user's project VERBATIM, so an ERROR-level advisory in one
+            // ships to every consumer — a wider blast radius than an example. Yet
+            // `registry/` is not a vis project and `scripts/check-generated-files.mjs`
+            // reads `examples/` only, so until this ran, `tsc -p registry/tsconfig.json`
+            // was the directory's entire CI coverage and an item could carry an
+            // `owner_field_from_args_not_auth` (ERROR, act-as-any-user IDOR) with
+            // nothing to notice.
+            //
+            // Scaffolded and then read exactly as a consumer's project is: `add`
+            // writes the item's files and merges its schema extension, then the
+            // real `runCodegen` discovery feeds the real advisor. `dryRun`, so
+            // nothing is emitted.
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+
+            expect(advisories.filter((finding) => finding.level === "ERROR").map((finding) => `${finding.name}: ${finding.detail}`)).toStrictEqual([]);
+        });
+    });
+
     describe.each(itemNames)("%s", (name) => {
         const manifestRaw = JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")) as unknown;
         const manifest = parseManifest(manifestRaw, name);
@@ -185,6 +556,14 @@ describe("shipped registry items", () => {
             expect.assertions(1);
 
             expect(manifest.name).toBe(name);
+        });
+
+        it("ships a README", () => {
+            expect.assertions(1);
+
+            // The README is the only prose a copy-in item has once it lands in
+            // someone's repo — `auth-emails` was the one item of 26 without one.
+            expect(existsSync(join(registryRoot, name, "README.md"))).toBe(true);
         });
 
         it("every declared source file exists in the item directory", () => {

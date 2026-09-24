@@ -18,7 +18,7 @@ const channelId = "channel:demo" as const;
  * every outgoing RPC so the Lunora worker auth middleware sees the same session.
  *
  * Two-worker split: the Lunora realtime plane lives in a SEPARATE worker
- * (`wrangler.lunora.jsonc`). The RSC loader reaches `/_lunora/rpc` via
+ * (the root `wrangler.jsonc`). The RSC loader reaches `/_lunora/rpc` via
  * NEXT_PUBLIC_LUNORA_URL; the localhost fallback matches `wrangler dev`'s
  * default port during local dev, and is development-only so a production
  * deployment with the variable unset fails loudly instead of silently

@@ -9,15 +9,23 @@ import { LunoraProvider } from "../src/lunora-provider";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-// `randomSessionId`'s fallback path is unprefixed (shared/random-session-id.ts);
-// this just asserts the no-`crypto` path yields a non-empty id without throwing.
-const SESS_ID_PATTERN = /^[\da-z]+$/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
-    const subscribeCalls: { args: unknown; callback: Callback; functionPath: string; unsubscribed: boolean }[] = [];
+    const subscribeCalls: {
+        args: unknown;
+        callback: Callback;
+        functionPath: string;
+        onError?: (error: { code?: string; message: string }) => void;
+        unsubscribed: boolean;
+    }[] = [];
     // Each acquired connection-context holder; `released` flips when the returned
     // release fn runs, so tests can assert refcounted (non-stomping) behaviour.
     const connectionContextHolders: { context: Record<string, unknown>; released: boolean }[] = [];
@@ -37,11 +45,17 @@ const createPresenceFakeClient = () => {
 
             return Promise.resolve(undefined);
         },
-        subscribe: (function_: FunctionReference, args: Record<string, unknown>, callback: Callback) => {
+        subscribe: (
+            function_: FunctionReference,
+            args: Record<string, unknown>,
+            callback: Callback,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => {
             const call = {
                 args,
                 callback,
                 functionPath: function_.__lunoraRef,
+                onError: options?.onError,
                 unsubscribed: false,
             };
 
@@ -142,12 +156,17 @@ describe("createPresence (Solid)", () => {
         expect(capturedPresent!()).toStrictEqual(members);
     });
 
-    it("generates fallback session id when crypto is unavailable", async () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", async () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         let capturedSessionId: string | undefined;
 
@@ -257,5 +276,40 @@ describe("createPresence (Solid)", () => {
         await flushAsync();
 
         expect(fake.connectionContextHolders[1]?.released).toBe(true);
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                captured = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    listPresent: LIST_PRESENT,
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    sessionId: "sess-fixed",
+                });
+
+                return <pre />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(captured!.error()?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(captured!.present()).toStrictEqual([{ sessionId: "sess-fixed" }]);
     });
 });

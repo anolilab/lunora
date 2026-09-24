@@ -6,6 +6,7 @@
     "docs": "Re-export the functions from lunora/presence/index.ts so codegen emits api.presence.*, then drive them from React with usePresence (see the README). Tune PRESENCE_TTL_MS in lunora/presence/schema.ts.",
     "requires": [],
     "deps": {
+        "@lunora/errors": "workspace:*",
         "@lunora/server": "workspace:*",
         "@lunora/ratelimit": "workspace:*"
     },

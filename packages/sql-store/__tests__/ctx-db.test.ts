@@ -1,14 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
+import { BACKFILL_BATCH_SIZE } from "../src/sql-exec";
+import { sqliteEncode } from "../src/value-codec";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -110,13 +113,66 @@ const createSqliteHarness = (): { close: () => void; exec: SqlCtxExec } => {
     };
 };
 
+/**
+ * Wrap an exec so a bound value over `limitBytes` fails the way the real engine
+ * does. `node:sqlite` is built with SQLite's default `SQLITE_MAX_LENGTH` (~1 GB),
+ * so it stores a 2 MB row happily — the ceiling this asserts against is D1's, and
+ * workerd raises it as a bare `SQLITE_TOOBIG` whose message is "string or blob
+ * too big". Both seams are capped because an insert funnels through `run` while
+ * a `RETURNING`-guarded patch funnels through `all`.
+ */
+const cappedExec = (exec: SqlCtxExec, limitBytes: number): SqlCtxExec => {
+    const check = (parameters: ReadonlyArray<unknown>): void => {
+        for (const parameter of parameters) {
+            if (typeof parameter === "string" && Buffer.byteLength(parameter, "utf8") > limitBytes) {
+                throw new Error("string or blob too big");
+            }
+        }
+    };
+
+    return {
+        all: (query, parameters) => {
+            check(parameters);
+
+            return exec.all(query, parameters);
+        },
+        run: (query, parameters) => {
+            check(parameters);
+
+            return exec.run(query, parameters);
+        },
+    };
+};
+
 const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike => {
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
 
-/** An `optional(inner)` column — stays nullable in the DDL; `effectiveColumnKind` unwraps to `inner` for storage affinity/decode. */
-const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
+/**
+ * An `optional(inner)` column — stays nullable in the DDL (the DDL builder is
+ * kind-aware); `effectiveColumnKind` unwraps to `inner` for storage
+ * affinity/decode.
+ *
+ * `notNull: true` on BOTH levels is what `v.optional()` actually builds:
+ * `createValidator("optional", parser, { inner })` passes no `column` key, so
+ * the default `{ notNull: true }` applies, and only `.nullable()` ever clears
+ * it. Declaring the fixture nullable made `nullMeansAbsent` return `false` for
+ * every optional column in this suite, so `decodeGlobalRow`'s absent-on-null
+ * branch — the fix for a shipped export/import data-loss bug — was never once
+ * executed by it.
+ */
+const optionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" };
+};
+
+/**
+ * An `optional(inner.nullable())` column — the case where a stored NULL is a
+ * VALUE the column holds rather than an absent field. `.nullable()` is the one
+ * thing that clears `notNull`, and it clears it on the INNER validator.
+ */
+const nullableOptionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" };
+};
 
 const schema: SchemaLike = {
     tables: {
@@ -158,6 +214,31 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         expect(doc).toMatchObject({ archived: false, body: "hello", priority: 3, slug: "a" });
         expect(doc?._id).toBe(id);
+    });
+
+    it("names the row-size limit instead of redacting an oversized row to INTERNAL", async () => {
+        expect.assertions(4);
+
+        // D1's per-row ceiling is 2 MB; a row over it raises a bare
+        // `SQLITE_TOOBIG`, which is not a LunoraError — so `toErrorBody` used to
+        // redact it to `{ code: "INTERNAL", message: "Internal error" }`, status
+        // 500, telling the caller nothing about a document they can simply move
+        // to R2.
+        const twoMegabytes = 2 * 1024 * 1024;
+        const writer = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec: cappedExec(harness.exec, twoMegabytes),
+            schema,
+        });
+
+        const oversized = "x".repeat(twoMegabytes + 1);
+        const error = await writer.insert("notes", { archived: false, body: oversized, priority: 1, slug: "big" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain('too large to store in "notes"');
+        expect((error as LunoraError).message).toContain("2 MB on D1");
     });
 
     it("decodes booleans and numbers back to their JS forms", async () => {
@@ -304,21 +385,127 @@ describe("createSqlCtxDb — the column ceiling", () => {
     it("provisions a table that exactly fills the budget", async () => {
         expect.assertions(1);
 
-        // 98 declared fields + the id/_creationTime framework columns = 100.
+        // 97 declared fields + the id/_creationTime/_version framework columns = 100.
         const atLimit: SchemaLike = {
             tables: {
                 atLimit: {
                     indexes: [],
-                    shape: Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, col("string")])),
+                    shape: Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, col("string")])),
                     shardMode: { kind: "global" },
                 },
             },
         } as never;
 
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: atLimit });
-        const row = Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, "x"]));
+        const row = Object.fromEntries(Array.from({ length: 97 }, (_unused, index) => [`f${String(index)}`, "x"]));
 
         expect(typeof (await writer.insert("atLimit", row))).toBe("string");
+    });
+
+    /**
+     * `_version` joined the framework column set after tables were already in
+     * production, dropping the declared-field ceiling from 98 to 97. A table
+     * standing at the old ceiling is one column over the new one on its very
+     * next request, and the engine's limit is hard — there is no `ALTER` that
+     * widens a table already at 100 columns. The rejection is therefore correct
+     * and unavoidable; what it must not do is read as "your schema is too wide"
+     * when the schema never changed.
+     */
+    it("names the migration path for a table already provisioned at the pre-_version ceiling", async () => {
+        expect.assertions(3);
+
+        const fields = Array.from({ length: 98 }, (_unused, index) => `f${String(index)}`);
+
+        // The DDL the framework itself emitted before `_version` existed:
+        // id + _creationTime + 98 declared fields = exactly the 100-column limit.
+        await harness.exec.run(
+            `CREATE TABLE existing (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, ${fields.map((field) => `${field} TEXT`).join(", ")})`,
+            [],
+        );
+        await harness.exec.run(`INSERT INTO existing (id, _creationTime, f0) VALUES ('row-1', 1, 'already here')`, []);
+
+        const existing: SchemaLike = {
+            tables: {
+                existing: {
+                    indexes: [],
+                    shape: Object.fromEntries(fields.map((field) => [field, col("string")])),
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: existing });
+        const thrown = (await writer.insert("existing", { f0: "x" }).catch((error: unknown) => error)) as LunoraError;
+
+        // Still a caller-safe VALIDATION_ERROR, so the message survives the wire.
+        expect(thrown.code).toBe("VALIDATION_ERROR");
+        // It says which column displaced the table and what the new ceiling is…
+        expect(thrown.message).toMatch(/"_version".+caps declared fields at 97/u);
+        // …and names a migration for the rows that are already in there.
+        expect(thrown.message).toMatch(/defineMigration/u);
+    });
+
+    /**
+     * D1 runs Workerd's SQLite build, which caps a statement at 100 BOUND
+     * PARAMETERS as well as at 100 columns. The optimistic-concurrency guard used
+     * to bind one parameter per physical column of the snapshot on top of one per
+     * `SET` field, so an `UPDATE` bound `2N+2` — over the ceiling from 50 declared
+     * fields up. `INSERT` at the same width binds `N+2` and succeeded, so the
+     * table provisioned, rows went in, and only the first `patch`/`replace`/soft-
+     * `delete` failed, with a raw `too many SQL variables` that redacts to
+     * "Internal error" on the way out.
+     *
+     * `node:sqlite` allows 32,766 parameters, so nothing here throws on either
+     * side of the fix — the assertion has to be on the parameter COUNT the store
+     * binds, which is why this counts through a recording exec rather than
+     * waiting for an engine to complain.
+     */
+    it("keeps every guarded write on a maximum-width table inside D1's 100-bound-parameter budget", async () => {
+        expect.assertions(2);
+
+        const FIELDS = 96;
+        const shape: Record<string, unknown> = { deletedAt: optionalCol("number") };
+
+        for (let index = 0; index < FIELDS; index += 1) {
+            shape[`f${String(index)}`] = col("string");
+        }
+
+        const wide: SchemaLike = {
+            tables: { wide: { indexes: [], shape, shardMode: { kind: "global" }, softDeleteMode: { field: "deletedAt" } } },
+        } as never;
+
+        const bound: number[] = [];
+        const recording: SqlCtxExec = {
+            all: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.all(query, parameters);
+            },
+            run: (query, parameters) => {
+                bound.push(parameters.length);
+
+                return harness.exec.run(query, parameters);
+            },
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: recording, schema: wide });
+        const row = Object.fromEntries(Array.from({ length: FIELDS }, (_unused, index) => [`f${String(index)}`, "x"]));
+
+        const softId = await writer.insert("wide", row);
+        const hardId = await writer.insert("wide", row);
+
+        bound.length = 0;
+
+        await writer.patch(softId, { f0: "changed" });
+        await writer.replace(softId, row);
+        // Soft delete (the marker field is declared) and a forced hard delete —
+        // both route through the same guard.
+        await writer.delete(softId);
+        await writer.delete(hardId, undefined, { hard: true });
+
+        expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+        // …and the writes actually landed rather than being silently skipped.
+        await expect(writer.get(hardId)).resolves.toBeNull();
     });
 });
 
@@ -713,6 +900,78 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             database.close();
         }
     });
+
+    it("chunks the rank backfill instead of buffering the whole table into one batch", async () => {
+        expect.assertions(3);
+
+        const rowCount = BACKFILL_BATCH_SIZE * 2 + 7;
+        const database = new DatabaseSync(":memory:");
+        const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
+
+        const plainExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        const batchSizes: number[] = [];
+        const batchingExec: SqlCtxExec = {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            batch: (statements) => {
+                batchSizes.push(statements.length);
+
+                for (const statement of statements) {
+                    all(statement.sql, statement.params);
+                }
+
+                return Promise.resolve();
+            },
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
+
+        try {
+            // Provision the base + companion tables, then seed the rest of the
+            // rows straight into the physical table — the point is the SIZE of
+            // the backfill, and 1000-odd `insert()` round trips would only make
+            // the test slow.
+            const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: plainExec, schema: backfillSchema });
+
+            await seeder.insert("notes", { archived: false, priority: 0, slug: "seed" });
+
+            for (let index = 1; index < rowCount; index += 1) {
+                all(`INSERT INTO notes (id, _creationTime, archived, priority, slug) VALUES (?, ?, ?, ?, ?)`, [
+                    `row-${String(index).padStart(6, "0")}`,
+                    1,
+                    0,
+                    index,
+                    `s${String(index)}`,
+                ]);
+            }
+
+            // A fresh ctx-db with an empty backfill cache: its first `rankPage`
+            // rebuilds the rank companion from every row in the table.
+            const rebuilder = createSqlCtxDb({ clock: () => 2, dialect: makeSqliteDialect(), exec: batchingExec, schema: backfillSchema });
+            const page = await rebuilder.rankPage("notes", "byPriority", { take: 3 });
+
+            expect(page.page).toHaveLength(3);
+            // Every tuple still lands…
+            expect(batchSizes.reduce((total, size) => total + size, 0)).toBeGreaterThanOrEqual(rowCount);
+            // …but no single batch carries the whole table. An N-statement batch
+            // (and the N drizzle `SQL` objects behind it) is what the docblock's
+            // "an unbounded table never has to fit in a single SELECT" claim did
+            // not cover.
+            expect(Math.max(...batchSizes)).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
+        } finally {
+            database.close();
+        }
+    });
 });
 
 describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
@@ -739,6 +998,30 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
 
     // The NULL-safe-equality operator each engine must emit (never a bare `col IS ?`, which is SQLite-only).
     const NULL_SAFE_OPERATOR = { mysql: /<=>/u, postgres: /IS NOT DISTINCT FROM/u } as const;
+
+    it.each([
+        ["mysql", Object.assign(new Error("Row size too large (8126)"), { errno: 1118 }), "InnoDB's per-row ceiling"],
+        ["postgres", new Error("row is too big: size 8168, maximum size 8160"), "8 KB heap page"],
+    ] as const)("maps the %s row-size error to PAYLOAD_TOO_LARGE rather than a redacted INTERNAL", async (engine, raised, limitText) => {
+        expect.assertions(3);
+
+        // Neither engine phrases the overflow the way SQLite does, so the
+        // recogniser has to key on each one's own shape — MySQL's
+        // `ER_TOO_BIG_ROWSIZE` errno, Postgres' "row is too big" message. Without
+        // it the raw driver error is not a LunoraError and `toErrorBody` redacts
+        // it to INTERNAL / 500.
+        const exec: SqlCtxExec = {
+            all: () => Promise.resolve([]),
+            run: (query) => (/^\s*insert into/iu.test(query) ? Promise.reject(raised) : Promise.resolve()),
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema });
+
+        const error = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "s" }).catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+        expect((error as LunoraError).message).toContain(limitText);
+    });
 
     it.each(["postgres", "mysql"] as const)("renders the %s OCC guard with engine-correct NULL-safe equality", async (engine) => {
         expect.assertions(2);
@@ -822,6 +1105,34 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         expect(listed).toMatch(engine === "postgres" ? /desc nulls last/iu : /desc(?! nulls)/iu);
     });
 
+    /**
+     * `KEY` is a reserved word in MySQL 8 and cannot be an unquoted alias, so the
+     * enumerate statement the indexed `groupBy` fast path emits died with
+     * `ER_PARSE_ERROR` on every `groupBy` whose `by` matches an `aggregateIndex`
+     * and carries no `where` — the most common grouped-count shape there is. The
+     * companion tables are always provisioned, so the SQL `GROUP BY` fallback
+     * never ran and the whole call was a 500.
+     *
+     * `sql.identifier` was applied to the source column but not to the alias;
+     * routing the alias through it too lets drizzle quote it the way each engine
+     * expects (backticks on MySQL, double quotes elsewhere).
+     */
+    it.each(["postgres", "mysql", "sqlite"] as const)("quotes the indexed groupBy enumerate aliases on %s", async (engine) => {
+        expect.assertions(2);
+
+        // One companion row, which also answers the `tableExists` probe so the
+        // indexed path is taken rather than the SQL `GROUP BY` fallback.
+        const { exec, statements } = recordingExec([{ count: 1, key: JSON.stringify(["a", "active"]), value: null }]);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema: groupSchema });
+
+        await writer.groupBy("events", { agg: { op: "count" }, by: ["tenant", "status"] });
+
+        const enumerated = statements.find((statement) => /^select .*__agg_bytenantstatus/iu.test(statement));
+
+        expect(enumerated).toBeDefined();
+        expect(enumerated).toMatch(engine === "mysql" ? /as `key`/iu : /as "key"/iu);
+    });
+
     it("leaves a notNull ordered column's ORDER BY bare on Postgres", async () => {
         expect.assertions(2);
 
@@ -897,7 +1208,12 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         expect(insert?.params[1]).toBe(1);
     });
 
-    it("replace() mints clock() and ignores a forged document _creationTime", async () => {
+    it("replace() preserves the stored _creationTime and ignores a forged one", async () => {
+        // `_creationTime` is when the row was INSERTED, and every default order
+        // and keyset cursor is built on it — so a rewrite must not re-stamp it,
+        // or the row jumps to the end of every ordered read and a paginating
+        // client sees it twice or never. `patch` preserves it; the two write
+        // verbs cannot disagree about a system field.
         expect.assertions(3);
 
         // resolveTableName + the OCC snapshot both read; return this row for every SELECT.
@@ -910,9 +1226,24 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
         expect(update).toBeDefined();
-        // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
-        expect(update?.params[0]).toBe(CLOCK);
+        // The SET clause binds `_creationTime = ?` first, so the stored 42 is the leading param — never the forged 5, never a fresh clock().
+        expect(update?.params[0]).toBe(42);
         expect(update?.params).not.toContain(5);
+    });
+
+    it("replace() WITH allowExplicitId honors the document _creationTime (import/CDC replay)", async () => {
+        expect.assertions(2);
+
+        const snapshotRow = { _creationTime: 42, archived: 0, body: "x", id: "row1", priority: 1, slug: "s" };
+        const { calls, exec } = recordingExecWithParams([snapshotRow]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, undefined, { allowExplicitId: true });
+
+        const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
+
+        expect(update).toBeDefined();
+        expect(update?.params[0]).toBe(5);
     });
 });
 
@@ -968,6 +1299,158 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
 
         expect(next?.tables).toStrictEqual(["notes"]);
         expect(next?.cursor).toBeGreaterThan(head);
+    });
+
+    /**
+     * Rewind the changelog the way a D1 Time Travel restore does — the rows AND
+     * the `sqlite_sequence` bookkeeping that holds the high-watermark, because a
+     * restore reverts the whole database rather than a table in it. `toSeq` is
+     * the watermark at the point restored to.
+     */
+    const restoreLogTo = async (toSeq: number): Promise<void> => {
+        await harness.exec.run(`DELETE FROM "__cdc_log" WHERE "seq" > ?`, [toSeq]);
+        await harness.exec.run(`UPDATE sqlite_sequence SET seq = ? WHERE name = '__cdc_log'`, [toSeq]);
+    };
+
+    it("refuses a cursor above the high-watermark rather than reporting caught-up", async () => {
+        expect.assertions(3);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+        await writer.insert("notes", { archived: false, body: "c", priority: 1, slug: "c" });
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(3);
+
+        await restoreLogTo(0);
+
+        // Post-restore writes climb back through seqs the consumer has already
+        // passed. Served an empty page, it would call itself caught up and skip
+        // both of them permanently.
+        await writer.insert("notes", { archived: false, body: "d", priority: 1, slug: "d" });
+        await writer.insert("notes", { archived: false, body: "e", priority: 1, slug: "e" });
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toThrow(/rolled back/iu);
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    /**
+     * The residual gap the watermark guard does NOT close, pinned so it is not
+     * mistaken for one that is.
+     *
+     * The guard fires on `sinceSeq > watermark`, and a rewound log re-issues the
+     * seqs it lost. So the proof expires: once post-restore writes have climbed
+     * the AUTOINCREMENT back past a consumer's cursor, that cursor is in range
+     * again and the consumer is served — a page of the NEW timeline, whose
+     * earlier entries are already behind its cursor and unreachable for good.
+     *
+     * Closing it needs a witness that outlives the seq space — an epoch paired
+     * with the cursor, the way the shard plane's subscription frames carry one.
+     * This path has no such channel, and neither does the shard plane's twin of
+     * it: `runShardCdcSync` returns `{ changes, cursor }` and stamps its epoch
+     * only on the refusal. Whether to add one is a wire decision; until it is
+     * made, this is the shape of what gets through.
+     */
+    it("serves a rewound timeline once post-restore writes climb back over the cursor", async () => {
+        expect.assertions(4);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Timeline A: five committed writes, all drained by the consumer.
+        for (const slug of ["a", "b", "c", "d", "e"]) {
+            // eslint-disable-next-line no-await-in-loop -- the seqs have to be allocated in order; that ordering is the subject
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(5);
+
+        // Restore to the moment only two writes existed. Timeline A's seqs 3..5
+        // are gone, and so is the watermark that named them.
+        await restoreLogTo(2);
+
+        // Timeline B keeps taking writes while the consumer is between polls,
+        // re-issuing seqs 3..5 for different rows and carrying on past them.
+        for (const slug of ["f", "g", "h", "i", "j", "k"]) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const watermark = await harness.exec.all(`SELECT seq FROM sqlite_sequence WHERE name = '__cdc_log'`, []);
+
+        expect(Number(watermark[0]?.["seq"])).toBe(8);
+
+        // 5 <= 8, so the rollback guard does not fire and the page is served.
+        const page = await readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect);
+
+        expect(page.changes.map((change) => change.doc?.["slug"])).toStrictEqual(["i", "j", "k"]);
+
+        // "f", "g", "h" were committed on the timeline the consumer is now
+        // reading, at seqs its cursor is already past. Nothing will deliver them.
+        const retained = await harness.exec.all(`SELECT doc FROM "__cdc_log" ORDER BY seq`, []);
+
+        expect(retained.map((row) => JSON.parse(String(row["doc"]))["slug"])).toStrictEqual(["a", "b", "f", "g", "h", "i", "j", "k"]);
+    });
+
+    it("treats a changelog that was never written as a watermark of zero", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Provision the log without writing to it. SQLite creates the
+        // `sqlite_sequence` TABLE with the first AUTOINCREMENT table but the ROW
+        // only on the first insert, so this is the shape where the watermark has
+        // to be inferred rather than read.
+        await writer.cdcChangedTables?.(0);
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect)).resolves.toStrictEqual({ changes: [], cursor: 0 });
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 5 }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    it("serves a consumer sitting exactly at the high-watermark", async () => {
+        expect.assertions(1);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        // The boundary the refusal must NOT claim: a caught-up consumer holds the
+        // watermark itself, and `>` rather than `>=` is what keeps it served.
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 1 });
+    });
+
+    it("does not accuse a caught-up consumer after retention swept the log empty", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+
+        // A sweep DELETEs rows; it does not rewind the timeline. `MAX(seq)` is
+        // NULL here, which is exactly why the watermark is read from
+        // `sqlite_sequence` — reading the rows would refuse every healthy
+        // consumer of a quiet, fully swept log.
+        await harness.exec.run(`DELETE FROM "__cdc_log"`, []);
+
+        const head = await harness.exec.all(`SELECT MAX(seq) AS seq FROM "__cdc_log"`, []);
+
+        expect(head[0]?.["seq"]).toBeNull();
+
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 2 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 2 });
     });
 
     it("round-trips a bigint / bytes post-image through the changelog", async () => {
@@ -1067,6 +1550,120 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         // an integer — is never prefixed on either.
         expect(columnsOf(plain)).toBe(`"table", "seq"`);
         expect(plain).not.toMatch(/\(191\)/u);
+    });
+});
+
+/**
+ * Declaring a UNIQUE index over a global table that already holds duplicates is
+ * a migration that cannot succeed. `CREATE UNIQUE INDEX` raises a bare
+ * `UNIQUE constraint failed: <table>.<column>` from inside `ensureMigrated`,
+ * which every read and write on the `.global()` store awaits — and the table
+ * loop bails at the first throw, so one unmigratable index takes the whole
+ * global plane down and leaves every table declared after it unprovisioned.
+ * That has to arrive as a diagnostic naming the table and the remedy.
+ */
+describe("global table UNIQUE index over existing duplicates", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const plain: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string") }, shardMode: { kind: "global" } } },
+    } as never;
+
+    const withUniqueIndex: SchemaLike = {
+        tables: {
+            notes: { indexes: [{ fields: ["slug"], name: "by_slug", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+        },
+    } as never;
+
+    const withUniqueColumn: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string", { unique: true }) }, shardMode: { kind: "global" } } },
+    } as never;
+
+    /** Provision the index-free shape and write two rows sharing a slug. */
+    const seedDuplicates = async (): Promise<void> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "dup" });
+        await writer.insert("notes", { slug: "dup" });
+    };
+
+    /** Force the provisioning pass for `next` and return whatever it threw. */
+    const provision = async (next: SchemaLike): Promise<unknown> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: next });
+
+        try {
+            await writer.findMany("notes", {});
+        } catch (error) {
+            return error;
+        }
+
+        return undefined;
+    };
+
+    it("refuses a declared unique index whose column list already has duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueIndex);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_by_slug.*duplicates/isu);
+    });
+
+    it("refuses a `.unique()` column whose values already have duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueColumn);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_unique_slug.*duplicates/isu);
+    });
+
+    it("still creates the index when the values are duplicate-free", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "a" });
+        await writer.insert("notes", { slug: "b" });
+
+        await expect(provision(withUniqueIndex)).resolves.toBeUndefined();
+        await expect(harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`, [])).resolves.toHaveLength(1);
+    });
+
+    it("leaves an unrelated DDL failure as its own error rather than relabelling it", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        // The index name collides with an existing TABLE, so `CREATE UNIQUE INDEX`
+        // fails for a reason that has nothing to do with the rows — on a table
+        // that DOES hold duplicates, which is the case a probe run unconditionally
+        // would have mislabelled. The dialect does not call this a unique
+        // violation, so the probe never runs and the engine's own error stands.
+        await harness.exec.run(`CREATE TABLE "notes_by_other" ("x" TEXT)`, []);
+
+        const collidingName: SchemaLike = {
+            tables: {
+                notes: { indexes: [{ fields: ["slug"], name: "by_other", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+
+        const error = await provision(collidingName);
+
+        expect(error).not.toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/already (a table|another table or index) named/iu);
     });
 });
 
@@ -1243,5 +1840,999 @@ describe("global table index sort keys", () => {
 
         expect(String(before[0]?.["sql"])).not.toMatch(/_creationTime/u);
         await expect(provisionedIndex("posts_by_status")).resolves.toMatch(/_creationTime/u);
+    });
+});
+
+describe("global table companion provisioning", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** A table whose sole UNIQUE index is over `field`; both columns are optional, so either can hold NULL. */
+    const uniqueOver = (field: string): SchemaLike =>
+        ({
+            tables: {
+                drafts: {
+                    indexes: [{ fields: [field], name: "by_uniq", unique: true }],
+                    shape: { note: optionalCol("string"), slug: optionalCol("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        }) as never;
+
+    it("re-creates a UNIQUE index over a column whose unset rows SQLite would accept", async () => {
+        expect.assertions(3);
+
+        // Provision `drafts_by_uniq` over `note`.
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+
+        // Two rows that leave the OPTIONAL `slug` unset. SQLite's UNIQUE index
+        // treats NULLs as distinct and accepts both, but `GROUP BY` treats them
+        // as equal — so an unfiltered duplicate probe reads them as one group of
+        // two and refuses a `CREATE UNIQUE INDEX` that would have succeeded, on
+        // every wake, for the life of the deployment.
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d1", 1, "a"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note") VALUES (?, ?, ?)`, ["d2", 2, "b"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).resolves.toBeDefined();
+
+        const rows = await harness.exec.all(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, ["drafts_by_uniq"]);
+
+        expect(String(rows[0]?.["sql"])).toContain(`"slug"`);
+
+        // And the re-created constraint actually enforces on non-NULL values.
+        await writer.insert("drafts", { slug: "x" });
+
+        await expect(writer.insert("drafts", { slug: "x" })).rejects.toThrow(/unique constraint violation/iu);
+    });
+
+    it("still refuses a UNIQUE index whose non-NULL rows really are duplicates", async () => {
+        expect.assertions(1);
+
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("note") });
+
+        await seeder.findMany("drafts", { limit: 1 });
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d1", 1, "a", "same"]);
+        await harness.exec.run(`INSERT INTO "drafts" ("id", "_creationTime", "note", "slug") VALUES (?, ?, ?, ?)`, ["d2", 2, "b", "same"]);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: uniqueOver("slug") });
+
+        await expect(writer.findMany("drafts", { limit: 1 })).rejects.toThrow(/cannot be re-created/u);
+    });
+
+    it("creates no aggregate or rank companion for an explicitly non-global table", async () => {
+        expect.assertions(4);
+
+        const mixed: SchemaLike = {
+            tables: {
+                metrics: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "metrics", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "metrics", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { kind: "global" },
+                },
+                // Its rows live in the Durable Objects, so a companion here is an
+                // orphan: nothing on this plane ever writes to it or reads it.
+                sessions: {
+                    aggregateIndexes: [{ by: ["archived"], name: "byArchived", on: "sessions", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "sessions", partitionBy: ["archived"], sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { archived: col("boolean"), priority: col("number") },
+                    shardMode: { key: "archived", kind: "shardBy" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: mixed });
+
+        await writer.findMany("metrics", { limit: 1 });
+
+        const named = async (name: string): Promise<boolean> => {
+            const rows = await harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [name]);
+
+            return rows.length > 0;
+        };
+
+        await expect(named("metrics__agg_byArchived")).resolves.toBe(true);
+        await expect(named("metrics__rank_byPriority")).resolves.toBe(true);
+        await expect(named("sessions__agg_byArchived")).resolves.toBe(false);
+        await expect(named("sessions__rank_byPriority")).resolves.toBe(false);
+    });
+});
+
+/**
+ * A `.global()` table whose min/max aggregate indexes are declared over a
+ * `v.bigint()` column — the shape that sends `recomputeExtreme` down its
+ * reduce-in-SQL branch over a column holding an order-preserving key rather
+ * than a number. Every other `aggregateIndexes` fixture here is `op: "count"`,
+ * which passes SQL no field at all.
+ */
+const bigintExtremeSchema: SchemaLike = {
+    tables: {
+        payments: {
+            aggregateIndexes: [
+                { by: ["tenant"], field: "amount", name: "maxAmount", on: "payments", op: "max" },
+                { by: ["tenant"], field: "amount", name: "minAmount", on: "payments", op: "min" },
+            ],
+            indexes: [],
+            shape: { amount: col("bigint"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — min/max companion over a bigint column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("recomputes the surviving extreme from the decoded rows, not by reducing the stored key in SQL", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: bigintExtremeSchema });
+
+        const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+        const highest = await writer.insert("payments", { amount: 1234n, tenant: "a" });
+
+        await writer.insert("payments", { amount: 42n, tenant: "a" });
+        await writer.insert("payments", { amount: 900n, tenant: "a" });
+        // A second tenant, so a recompute that lost its `by`-scope would be caught too.
+        await writer.insert("payments", { amount: 5n, tenant: "b" });
+
+        // Both extremes are seeded through `coerceAggregateNumber`, so they start right.
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(7);
+
+        // Deleting the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(42);
+
+        await writer.delete(highest);
+
+        await expect(writer.aggregate("payments", { op: "max", field: "amount", where: { tenant: "a" } })).resolves.toBe(900);
+
+        await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "b" } })).resolves.toBe(5);
+    });
+});
+
+/**
+ * The same table shape with the bigint column left UNDECLARED. `sqliteEncode`
+ * keys off the runtime type, so a `bigint` written into a `v.any()` column is
+ * stored as the identical order-preserving key a `v.bigint()` column gets —
+ * while a refusal that reads the DECLARED kind sees only "any" and waves the
+ * scan through to reduce the padding.
+ */
+const untypedAmountSchema: SchemaLike = {
+    tables: {
+        ledger: {
+            indexes: [],
+            shape: { amount: col("any"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — an undeclared column holding a bigint", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const seeded = async () => {
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedAmountSchema });
+
+        await writer.insert("ledger", { amount: 10n, tenant: "t1" });
+        await writer.insert("ledger", { amount: 32n, tenant: "t1" });
+
+        return writer;
+    };
+
+    it("round-trips the value but refuses to reduce it", async () => {
+        expect.assertions(5);
+
+        const writer = await seeded();
+        const { page } = await writer.findMany("ledger", {});
+
+        // Sorted: the fixed clock gives both rows the same `_creationTime`, so
+        // the tie breaks on a random id and the page order is not stable.
+        expect(page.map((row) => row["amount"] as bigint).toSorted((left, right) => Number(left - right))).toStrictEqual([10n, 32n]);
+
+        // Unfixed, `sum` returned 2e+39 and `max` the 40-character padded key.
+        for (const op of ["sum", "max"] as const) {
+            // eslint-disable-next-line no-await-in-loop -- two ops against one seeded table, sequential by design
+            const error = await writer.aggregate("ledger", { field: "amount", op }).catch((error_: unknown) => error_);
+
+            expect(error).toBeInstanceOf(LunoraError);
+            expect((error as Error).message).toContain("aggregateIndex");
+        }
+    });
+
+    it("refuses it as a groupBy reducer field and as a group key", async () => {
+        expect.assertions(4);
+
+        const writer = await seeded();
+        const reducerError = await writer.groupBy("ledger", { agg: { field: "amount", op: "sum" }, by: ["tenant"] }).catch((error_: unknown) => error_);
+
+        expect(reducerError).toBeInstanceOf(LunoraError);
+        expect((reducerError as Error).message).toContain("aggregateIndex");
+
+        const keyError = await writer.groupBy("ledger", { agg: { op: "count" }, by: ["amount"] }).catch((error_: unknown) => error_);
+
+        expect(keyError).toBeInstanceOf(LunoraError);
+        expect((keyError as Error).message).toContain("aggregateIndex");
+    });
+});
+
+/** A table with one `v.optional()` and one `v.optional(v.nullable())` column, so the decoder's two NULL meanings are both covered. */
+const optionalSchema: SchemaLike = {
+    tables: {
+        drafts: {
+            indexes: [],
+            shape: {
+                // `v.optional(v.string())` — a stored NULL means the field is ABSENT.
+                note: optionalCol("string"),
+                // `v.optional(v.string().nullable())` — a stored NULL is a value the column holds.
+                subtitle: nullableOptionalCol("string"),
+                title: col("string"),
+            },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — a NULL in an optional column decodes as absent", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("omits an unset v.optional() field instead of reading it back as null, and keeps an explicit null on a nullable one", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: optionalSchema });
+
+        // An explicit `null` on a `.nullable()` column is a VALUE, not an absent field.
+        const id = await writer.insert("drafts", { subtitle: null, title: "t" });
+        const row = await writer.get(id, "drafts");
+
+        // `optional(string).parse(null)` throws, so decoding an unset optional
+        // column as `null` broke the export/import round trip outright.
+        expect(Object.hasOwn(row as object, "note")).toBe(false);
+        expect(Object.hasOwn(row as object, "subtitle")).toBe(true);
+        expect((row as Record<string, unknown>)["subtitle"]).toBeNull();
+        expect((row as Record<string, unknown>)["title"]).toBe("t");
+    });
+});
+
+/**
+ * The same min/max shape as {@link bigintExtremeSchema}, but over a `v.any()`
+ * column. `sqliteEncode` keys off the RUNTIME type, so this column holds the
+ * same order-preserving key a declared `v.bigint()` one does — which is the
+ * whole reason `mayHoldBigintKey` matches `any`/`union`/`from`. What the
+ * declared fixture cannot catch is the DECODE half: an untyped column's key has
+ * to come back as a `bigint` for the fold to reduce it.
+ */
+const untypedBigintExtremeSchema: SchemaLike = {
+    tables: {
+        payments: {
+            aggregateIndexes: [
+                { by: ["tenant"], field: "amount", name: "maxAmount", on: "payments", op: "max" },
+                { by: ["tenant"], field: "amount", name: "minAmount", on: "payments", op: "min" },
+            ],
+            indexes: [],
+            shape: { amount: col("any"), tenant: col("string") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — a bigint in an untyped column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("reads a bigint back out of a v.any() column as a bigint, not as the stored key", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const id = await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        const negative = await writer.insert("payments", { amount: -900n, tenant: "a" });
+
+        await expect(writer.get(negative)).resolves.toMatchObject({ amount: -900n });
+    });
+
+    it("recomputes both extremes of an untyped column from the decoded bigints", async () => {
+        expect.assertions(4);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+        const highest = await writer.insert("payments", { amount: 1234n, tenant: "a" });
+
+        await writer.insert("payments", { amount: 42n, tenant: "a" });
+        await writer.insert("payments", { amount: 900n, tenant: "a" });
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(1234);
+
+        await writer.delete(highest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(900);
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
+    });
+
+    /*
+     * The collision the untyped-column decode admits, pinned so a change to this
+     * codec has to argue with it rather than rediscover it.
+     *
+     * `decodeBigintSqlKey` accepts exactly 40 characters: `"0"` or `"1"`, then 39
+     * digits. A *string* of that shape in an untyped column is indistinguishable
+     * from a stored key — a padded account number or a numeric external id can
+     * reach it — and reads back as a `bigint`. Storage genuinely cannot tell them
+     * apart: `sqliteEncode` writes the string verbatim and writes the key by the
+     * same rule, so the two are byte-identical on disk.
+     */
+    it("cannot tell a 40-character digit string in an untyped column from a stored key", async () => {
+        expect.assertions(3);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedBigintExtremeSchema });
+
+        // Exactly the accepted shape: leading "1", then 39 digits.
+        const collides = `1${"0".repeat(36)}900`;
+
+        expect(collides).toHaveLength(40);
+
+        const id = await writer.insert("payments", { amount: collides, tenant: "a" });
+
+        // Reads back as the bigint that shape encodes, NOT as the string written.
+        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+
+        // One character outside the shape is unambiguous and survives as a string.
+        const safe = await writer.insert("payments", { amount: `2${"0".repeat(36)}900`, tenant: "a" });
+
+        await expect(writer.get(safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
+    });
+});
+
+describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("pages the fold instead of selecting the whole group into the isolate", async () => {
+        expect.assertions(2);
+
+        let widest = 0;
+        const counting: SqlCtxExec = {
+            all: async (query, parameters) => {
+                const rows = await harness.exec.all(query, parameters);
+
+                widest = Math.max(widest, rows.length);
+
+                return rows;
+            },
+            run: async (query, parameters) => harness.exec.run(query, parameters),
+        };
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: counting, schema: untypedBigintExtremeSchema });
+
+        // One group, comfortably past a single page of the keyset walk.
+        const total = BACKFILL_BATCH_SIZE + 20;
+        let lowest = "";
+
+        for (let index = 0; index < total; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- companion maintenance is per-write and sequential; concurrent inserts would interleave the min/max bump.
+            const id = await writer.insert("payments", { amount: BigInt(index + 1), tenant: "a" });
+
+            if (index === 0) {
+                lowest = id;
+            }
+        }
+
+        widest = 0;
+
+        // Removing the row that IS the stored extreme is what forces the recompute.
+        await writer.delete(lowest);
+
+        await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(2);
+        expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
+    });
+});
+
+/**
+ * `v.union()` / `v.any()` / `v.from()` columns are TEXT on every engine, so a
+ * number or boolean written to one is kept in a marked, self-describing form
+ * (`sqliteEncode` with the column's kind) rather than as a value the engine
+ * would coerce to `"42.0"` on the way in. The READ side then has to bind the
+ * same form — and it did not: every `where` and every keyset-cursor pivot went
+ * through a kind-blind encode, bound a bare `42`, and matched nothing.
+ *
+ * The pagination case is the severe one: a cursor pivot bound in the wrong form
+ * makes page 2 empty, so the rows after the first page are simply never
+ * returned. The identical reads against the DO row store are correct, which is
+ * what made moving a table to `.global()` change the answers.
+ *
+ * The marked form a number takes is an order-preserving key, so that one order
+ * is NUMERIC. It was interim text order for one round — the assertions below
+ * pinned it deliberately, and now pin the numeric order they were placed to be
+ * replaced by.
+ */
+const untypedFilterSchema: SchemaLike = {
+    tables: {
+        readings: {
+            indexes: [],
+            shape: { label: col("string"), value: col("union") },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+/** The same table with a NULLABLE untyped column, so a stored SQL NULL is part of the ordering under test. */
+const untypedMixedSchema: SchemaLike = {
+    tables: {
+        readings: {
+            indexes: [],
+            shape: { label: col("string"), value: col("union", { notNull: false }) },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — filtering and paging an untyped column", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const makeWriter = () => createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+    const seedReadings = async (writer: ReturnType<typeof makeWriter>): Promise<void> => {
+        for (const [label, value] of [
+            ["a", 1.5],
+            ["b", 2],
+            ["c", 9],
+            ["d", 10],
+            ["e", 100],
+            ["f", true],
+            ["g", "10"],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; ordering the writes keeps `_creationTime` deterministic.
+            await writer.insert("readings", { label, value });
+        }
+    };
+
+    it("matches a number, a boolean and a look-alike string written to the same column", async () => {
+        expect.assertions(4);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const labels = async (where: Record<string, unknown>): Promise<string[]> => {
+            const result = await writer.findMany("readings", { where });
+
+            return result.page.map((row) => String(row["label"])).toSorted((left, right) => left.localeCompare(right));
+        };
+
+        // Each of these came back EMPTY: the bound value was the bare JS scalar
+        // and the column holds the marked form.
+        await expect(labels({ value: 10 })).resolves.toStrictEqual(["d"]);
+        await expect(labels({ value: true })).resolves.toStrictEqual(["f"]);
+
+        // A string that looks like the number is stored verbatim, so the two
+        // must not collide.
+        await expect(labels({ value: "10" })).resolves.toStrictEqual(["g"]);
+        await expect(labels({ value: 1.5 })).resolves.toStrictEqual(["a"]);
+    });
+
+    it("returns every row across pages when the sort key is an untyped column", async () => {
+        expect.assertions(4);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const seenLabels: string[] = [];
+        let cursor: null | string = null;
+
+        for (let page = 0; page < 10; page += 1) {
+            // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction.
+            const result: { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] } = await writer.findMany("readings", {
+                cursor,
+                limit: 3,
+                orderBy: [{ value: "asc" }],
+            });
+
+            seenLabels.push(...result.page.map((row) => String(row["label"])));
+            cursor = result.continueCursor;
+
+            if (result.isDone) {
+                break;
+            }
+        }
+
+        // Page 2 used to come back EMPTY — the seek pivot bound the raw number —
+        // and the walk stopped there with four of the seven rows unreachable.
+        expect(seenLabels).toHaveLength(7);
+        expect(new Set(seenLabels).size).toBe(7);
+
+        // The order the page walks is the STORAGE order, and for a number in an
+        // untyped column that is now the order-preserving key's — so it is
+        // numeric, and paging agrees with it. This assertion pinned the interim
+        // text order (`a, d, e, b, c`) for one round.
+        const straight = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+
+        expect(seenLabels).toStrictEqual(straight.page.map((row) => String(row["label"])));
+
+        // 1.5 < 2 < 9 < 10 < 100, then `true`, then the string "10" — not
+        // `1.5, 10, 100, 2, 9` with the rest interleaved by text.
+        expect(seenLabels).toStrictEqual(["a", "b", "c", "d", "e", "f", "g"]);
+    });
+
+    it("selects a numeric range, not the rows a text comparison would put after the bound", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+
+        await seedReadings(writer);
+
+        const ordered = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+        const pivotIndex = ordered.page.findIndex((row) => row["label"] === "c");
+        const after = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }], where: { value: { gt: 9 } } });
+
+        // `{ gt: 9 }` still selects exactly the rows the ORDER BY places after
+        // `c` — the consistency the round before this one bought. Before that it
+        // bound a bare `9` against marked text and selected none of them.
+        expect(after.page.map((row) => String(row["label"]))).toStrictEqual(ordered.page.slice(pivotIndex + 1).map((row) => String(row["label"])));
+
+        // And the rows it selects are the numerically greater ones. Under text
+        // order over the marked JSON this returned neither `d` (10) nor `e`
+        // (100), because `"1"` sorts below `"9"`.
+        expect(after.page.filter((row) => typeof row["value"] === "number").map((row) => row["value"])).toStrictEqual([10, 100]);
+    });
+});
+
+/**
+ * A `.global()` untyped column at a scale the planner actually has to choose a
+ * strategy for.
+ *
+ * The lexicographic-order defect this pins is invisible at five rows whose
+ * values are single digits — text order and numeric order agree there, so a
+ * small fixture reads correct against broken storage. The values below span
+ * 1e-3 to 1e6 with both signs across 2,000 rows, so the two orders disagree on
+ * most adjacent pairs, and a range predicate's MEMBERSHIP — not just its
+ * ordering — differs between the two encodings.
+ */
+const UNTYPED_SCALE_ROWS = 2000;
+
+/** A spread of magnitudes and signs whose text order is nothing like their numeric order. */
+const untypedScaleValue = (index: number): number => {
+    const magnitude = 10 ** (index % 10) / 1000;
+
+    return index % 3 === 0 ? -magnitude - index : magnitude + index;
+};
+
+/** A raw-SQL harness: the same in-memory database the store runs on, plus the statements it emitted. */
+const createRecordingSqliteHarness = (): {
+    close: () => void;
+    exec: SqlCtxExec;
+    raw: (query: string, ...parameters: unknown[]) => Record<string, unknown>[];
+    statements: { params: ReadonlyArray<unknown>; sql: string }[];
+} => {
+    const database = new DatabaseSync(":memory:");
+    const statements: { params: ReadonlyArray<unknown>; sql: string }[] = [];
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => {
+        statements.push({ params: parameters, sql: query });
+
+        return database.prepare(query).all(...(parameters as never[]));
+    };
+
+    return {
+        close: () => {
+            database.close();
+        },
+        exec: {
+            all: (query, parameters) => Promise.resolve(all(query, parameters)),
+            run: (query, parameters) => {
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        },
+        raw: (query, ...parameters) => database.prepare(query).all(...(parameters as never[])),
+        statements,
+    };
+};
+
+describe("createSqlCtxDb — an untyped column orders numerically at scale", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+    let writer: ReturnType<typeof createSqlCtxDb>;
+    let values: number[];
+
+    // Seeded once: every case below only reads, and 2,000 inserts per case would
+    // buy nothing but wall-clock.
+    beforeAll(async () => {
+        harness = createRecordingSqliteHarness();
+        writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        values = [];
+
+        for (let index = 0; index < UNTYPED_SCALE_ROWS; index += 1) {
+            const value = untypedScaleValue(index);
+
+            values.push(value);
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; sequential writes keep `_creationTime` and `id` deterministic.
+            await writer.insert("readings", { label: String(index).padStart(5, "0"), value });
+        }
+    }, 120_000);
+
+    afterAll(() => {
+        harness.close();
+    });
+
+    const numerically = (): number[] => values.toSorted((left, right) => left - right);
+
+    it("returns 2,000 rows in numeric order, which is not their text order", async () => {
+        expect.assertions(2);
+
+        const ordered = await writer.findMany("readings", { limit: UNTYPED_SCALE_ROWS, orderBy: [{ value: "asc" }] });
+
+        expect(ordered.page.map((row) => row["value"])).toStrictEqual(numerically());
+
+        // The assertion that makes the fixture worth its size: sorting the same
+        // values by the form an earlier build stored gives a DIFFERENT answer,
+        // so a pass above cannot be an accident of small, same-width numbers.
+        const byMarkedJson = values.toSorted((left, right) => `$lunora.wire$${JSON.stringify(left)}`.localeCompare(`$lunora.wire$${JSON.stringify(right)}`));
+
+        expect(byMarkedJson).not.toStrictEqual(numerically());
+    });
+
+    it("selects exactly the numerically-matching rows for a range spanning magnitudes", async () => {
+        expect.assertions(2);
+
+        const between = await writer.findMany("readings", { limit: UNTYPED_SCALE_ROWS, where: { value: { gt: 5, lt: 1000 } } });
+        const expected = values.filter((value) => value > 5 && value < 1000).toSorted((left, right) => left - right);
+
+        expect(between.page.map((row) => Number(row["value"])).toSorted((left, right) => left - right)).toStrictEqual(expected);
+
+        // Membership, not only order: text order puts `-1000.001` inside
+        // `(5, 1000)` and `9.009` outside it, so the count alone separates the
+        // two encodings.
+        expect(expected.length).toBeGreaterThan(100);
+    });
+
+    it("binds the range as the stored key and lets SQL order the column itself", async () => {
+        expect.assertions(5);
+
+        harness.statements.length = 0;
+
+        await writer.findMany("readings", { limit: 25, orderBy: [{ value: "asc" }], where: { value: { gt: 5 } } });
+
+        const select = harness.statements.find((statement) => statement.sql.startsWith("SELECT") && statement.sql.includes("ORDER BY"));
+
+        expect(select).toBeDefined();
+        // Ordering is delegated to SQL over the raw column — there is no
+        // decode-then-sort step that could paper over a wrong storage order, so
+        // the stored form IS the answer's order.
+        expect(select?.sql).toContain(`ORDER BY "value" ASC`);
+        // And the bound bound is the order-preserving key, so the comparison SQL
+        // makes is the one the caller asked for. A bare `5` (the kind-blind
+        // binding) or `$lunora.wire$5` (the marked JSON) compares as text.
+        // Spelled out rather than re-derived from `sqliteEncode`, which would
+        // make the assertion agree with whatever the encoder currently does.
+        expect(select?.params).toContain("$lunora.wire$#c014000000000000");
+        expect(sqliteEncode(5, "union")).toBe("$lunora.wire$#c014000000000000");
+        expect(select?.params).not.toContain(5);
+    });
+
+    it("walks every row across keyset pages in the same numeric order", async () => {
+        expect.assertions(2);
+
+        const seen: unknown[] = [];
+        let cursor: null | string = null;
+
+        for (let page = 0; page < 100; page += 1) {
+            // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction.
+            const result: { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] } = await writer.findMany("readings", {
+                cursor,
+                limit: 100,
+                orderBy: [{ value: "asc" }],
+            });
+
+            seen.push(...result.page.map((row) => row["value"]));
+            cursor = result.continueCursor;
+
+            if (result.isDone) {
+                break;
+            }
+        }
+
+        // A cursor pivot bound in a form that disagrees with `ORDER BY` drops
+        // every row after the page it first disagrees on.
+        expect(seen).toHaveLength(UNTYPED_SCALE_ROWS);
+        expect(seen).toStrictEqual(numerically());
+    });
+});
+
+describe("createSqlCtxDb — an untyped column stays totally ordered across types", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createRecordingSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("places null, then every number, then booleans, then strings and composites, then bytes", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedMixedSchema });
+
+        for (const [label, value] of [
+            ["a-null", null],
+            ["b-neg", -5],
+            ["c-frac", 0.25],
+            ["d-nine", 9],
+            ["e-big", 1000],
+            ["f-false", false],
+            ["g-true", true],
+            ["h-string", "zulu"],
+            ["i-object", { nested: 1 }],
+            ["j-bytes", new Uint8Array([1, 2, 3]).buffer],
+        ] as [string, unknown][]) {
+            // eslint-disable-next-line no-await-in-loop -- a seed loop; ordering the writes keeps `_creationTime` deterministic.
+            await writer.insert("readings", { label, value });
+        }
+
+        const ordered = await writer.findMany("readings", { limit: 100, orderBy: [{ value: "asc" }] });
+
+        /*
+         * The order this pins, and why each boundary lands where it does:
+         *
+         * - NULL is a real SQL NULL, which SQLite sorts below every value. Matches
+         *   the reference order `index-key-codec.ts` reproduces.
+         * - Every number is `$lunora.wire$#` + a fixed-width order-preserving key,
+         *   so the block is internally NUMERIC and contiguous.
+         * - `false`/`true` follow, because `#` sorts below `f` and `t`. That is the
+         *   position they already held when numbers were marked JSON too, so this
+         *   change moved the numbers without moving the boundary.
+         * - A string is stored verbatim (which is what `contains`/`startsWith` run
+         *   their substring test against) and a composite as its JSON, so both sort
+         *   by their own text.
+         * - Bytes bind as a BLOB, and SQLite sorts every BLOB above every TEXT.
+         *
+         * Across the whole column the order is therefore total, deterministic and
+         * stable — but it is NOT SQLite's own class order, because numbers live in
+         * the TEXT class at the `$` position rather than below every string. That
+         * is the price of storing strings verbatim, and it is the right way round:
+         * moving strings into a tagged encoding would order the classes correctly
+         * and break every substring filter in exchange.
+         */
+        expect(ordered.page.map((row) => row["label"])).toStrictEqual([
+            "a-null",
+            "b-neg",
+            "c-frac",
+            "d-nine",
+            "e-big",
+            "f-false",
+            "g-true",
+            "h-string",
+            "i-object",
+            "j-bytes",
+        ]);
+        // `9` before `1000`: the number block is internally numeric, not the
+        // text order (`0.25`, `1000`, `9`) the marked JSON gave it.
+        expect(ordered.page.slice(1, 5).map((row) => row["value"])).toStrictEqual([-5, 0.25, 9, 1000]);
+    });
+});
+
+/**
+ * The storage-format change above is only half a fix. A table written before it
+ * holds the marked JSON, and the new binding does not match that — so `eq` would
+ * start missing rows it used to find, and a range would run against a column
+ * holding two incomparable encodings. The rewrite walk in `ctx-db-migrations.ts`
+ * converts the stragglers from the same provisioning pass that creates the table.
+ */
+describe("createSqlCtxDb — a table written before the key encoding still reads back", () => {
+    let harness: ReturnType<typeof createRecordingSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createRecordingSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    /** Comfortably more than the 100 rows the rewrite converts per round trip, so the keyset walk pages several times. */
+    const LEGACY_ROWS = 450;
+
+    /**
+     * Provision the table, then fill it the way a pre-change build would have:
+     * the marked JSON form written straight in, with the completion marker
+     * cleared so the next ctx-db sees an unconverted table.
+     */
+    const seedLegacyTable = async (): Promise<number[]> => {
+        const provisioner = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await provisioner.insert("readings", { label: "provision", value: 1 });
+
+        harness.raw(`DELETE FROM "readings"`);
+        harness.raw(`DELETE FROM "__lunora_migration_state"`);
+
+        const legacyValues: number[] = [];
+
+        for (let index = 0; index < LEGACY_ROWS; index += 1) {
+            const value = untypedScaleValue(index);
+
+            legacyValues.push(value);
+            harness.raw(
+                `INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`,
+                `r${String(index).padStart(5, "0")}`,
+                1,
+                String(index).padStart(5, "0"),
+                `$lunora.wire$${JSON.stringify(value)}`,
+            );
+        }
+
+        // A marked boolean and a wire-encoded composite ride along: the probe
+        // matches both (SQL cannot tell them from a number) and the pass must
+        // leave them byte-identical rather than mangle them.
+        harness.raw(`INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`, "zz-bool", 1, "zz-bool", "$lunora.wire$true");
+        harness.raw(`INSERT INTO "readings" ("id", "_creationTime", "label", "value") VALUES (?, ?, ?, ?)`, "zz-json", 1, "zz-json", '{"a":1}');
+
+        return legacyValues;
+    };
+
+    it("converts every legacy row on the next cold start and reads it back numerically ordered", async () => {
+        expect.assertions(4);
+
+        const legacyValues = await seedLegacyTable();
+        // A fresh ctx-db over the same database IS the cold start that runs the
+        // provisioning pass.
+        const reader = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        const ordered = await reader.findMany("readings", { limit: LEGACY_ROWS + 10, orderBy: [{ value: "asc" }] });
+
+        expect(ordered.page.filter((row) => typeof row["value"] === "number").map((row) => row["value"])).toStrictEqual(
+            legacyValues.toSorted((left, right) => left - right),
+        );
+        expect(ordered.page).toHaveLength(LEGACY_ROWS + 2);
+
+        // Every number is in the new form on disk, and the row that is correct
+        // as stored was not touched.
+        const stillLegacy = harness.raw(`SELECT "value" FROM "readings" WHERE "value" LIKE '$lunora.wire$%' AND "value" NOT LIKE '$lunora.wire$#%'`);
+
+        expect(stillLegacy.map((row) => row["value"])).toStrictEqual(["$lunora.wire$true"]);
+        expect(harness.raw(`SELECT "name" FROM "__lunora_migration_state" WHERE "name" = 'untyped-number-key:readings'`)).toHaveLength(1);
+    });
+
+    it("matches an equality and a range against a converted row, which the format change alone would have broken", async () => {
+        expect.assertions(3);
+
+        const legacyValues = await seedLegacyTable();
+        const reader = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+        const target = legacyValues[7] ?? 0;
+
+        // `eq` binds the key. Against an unconverted row it matches nothing —
+        // that row is still marked JSON — which is the silent read break the
+        // rewrite exists to prevent.
+        const matched = await reader.findMany("readings", { where: { value: target } });
+
+        expect(matched.page).toHaveLength(legacyValues.filter((value) => value === target).length);
+
+        const above = await reader.findMany("readings", { limit: LEGACY_ROWS + 10, where: { value: { gt: 100 } } });
+        const expected = legacyValues.filter((value) => value > 100);
+
+        expect(above.page.filter((row) => typeof row["value"] === "number")).toHaveLength(expected.length);
+        expect(expected.length).toBeGreaterThan(0);
+    });
+
+    it("does not re-scan a converted table on the cold start after it", async () => {
+        expect.assertions(2);
+
+        await seedLegacyTable();
+
+        const first = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await first.findMany("readings", { limit: 1 });
+
+        harness.statements.length = 0;
+
+        const second = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: untypedFilterSchema });
+
+        await second.findMany("readings", { limit: 1 });
+
+        // The walk's probe can use no index, so leaving it armed would be a full
+        // table scan on every request against a Hyperdrive binding, forever, on
+        // a table where it can never match again.
+        expect(harness.statements.filter((statement) => statement.sql.includes("NOT LIKE"))).toHaveLength(0);
+        expect(
+            harness.statements.filter((statement) => statement.sql.includes("__lunora_migration_state") && statement.sql.startsWith("SELECT")).length,
+        ).toBeGreaterThan(0);
+    });
+});
+
+describe("createSqlCtxDb — groupBy decodes its group key", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("groups a boolean column on `false`/`true`, not on the stored 0/1", async () => {
+        expect.assertions(2);
+
+        // SQLite stores a boolean as 1/0 and the SQL `GROUP BY` hands those
+        // straight back, while the companion-indexed groupBy decodes its key
+        // tuple and returns real booleans. The answer's TYPE depended on whether
+        // an aggregate index covered the request, and
+        // `groups.find((group) => group.key.archived === true)` was `undefined`
+        // on the scan.
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema });
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: true, body: "b", priority: 2, slug: "b" });
+        await writer.insert("notes", { archived: true, body: "c", priority: 3, slug: "c" });
+
+        const groups = await writer.groupBy("notes", { by: ["archived"] });
+
+        expect(groups.find((group) => group.key["archived"] === true)).toStrictEqual({ key: { archived: true }, value: 2 });
+        expect(groups.find((group) => group.key["archived"] === false)).toStrictEqual({ key: { archived: false }, value: 1 });
     });
 });

@@ -98,6 +98,7 @@ Webhook signature verification needs the raw request body, so the endpoint runs 
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -109,12 +110,12 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
 
-`handleWebhook` always returns `200` once the signature verifies, so the provider stops retrying — a duplicate or no-op event is acknowledged, not re-applied.
+Once the signature verifies, `handleWebhook` acknowledges with `200` — a duplicate or no-op event is not re-applied — with one deliberate exception: an **orphaned** event, one patching a row whose create event has not arrived yet, answers `500` so the provider retries it (bounded to a single retry). That is why the route must use `webhookResponse`: `Response.json(result)` would answer `200` for every outcome, and an out-of-order delivery would be lost for good.
 
 > This README covers the basics. For the full API — entitlements, usage metering, reconciliation, and the stored tables — see the [documentation](https://lunora.sh/docs/packages/payment).
 

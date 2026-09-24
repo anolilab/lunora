@@ -52,8 +52,9 @@ different user (see [real-time](/docs/concepts/realtime)).
 configures a better-auth instance and Lunora forwards requests to it. Out of the
 box that gives you:
 
-- **Email / password**: PBKDF2-SHA-256 hashing that runs in WebCrypto, with no
-  Node polyfills.
+- **Email / password**: better-auth's scrypt hashing, which runs on Workers with
+  no Node polyfills. Swap the algorithm by passing
+  `emailAndPassword.password: { hash, verify }` to `createAuth`.
 - **OAuth**: GitHub and Google social providers (real code → token → userinfo
   exchanges, with `id_token` signatures verified against the provider's JWKS),
   plus any other provider via `genericOAuth`.
@@ -61,6 +62,13 @@ box that gives you:
   more**: curated better-auth plugins re-exported from
   [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
   import paths.
+- **Invite-only sign-up**: `inviteOnly()` closes self-serve registration to
+  addresses an administrator invited, on every path that mints a user. The
+  invitation carries a 256-bit secret token, so read the security section before
+  you rely on it: the link is a bearer credential anyone who receives it can
+  spend, and without `requireEmailVerification` whoever spends it holds a session
+  immediately. See
+  [invite-only sign-up](/docs/packages/auth/plugins#invite-only-sign-up).
 
 ```ts
 // lunora/auth.ts
@@ -76,9 +84,47 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
     });
 ```
 
-User records live in D1; session lifecycle lives in a dedicated `SessionDO`. The
-full configuration surface (providers, rate limiting, migrations, the studio
-user dashboard) is in the [package reference](/docs/packages/auth).
+User **and session** records live in D1 — better-auth's `session` table, through
+the D1 adapter. (`SessionDO` is a standalone TTL'd token store that ships with
+`@lunora/do`; `@lunora/auth` has never called it, so binding it gets you a
+correctly-configured object nothing uses. Back up and export the auth database,
+not that DO.) The Durable Object path for auth is `LunoraAuthDO` /
+`.auth({ namespace })`, which puts the whole better-auth schema in one object
+with real transactions. The full configuration surface (providers, rate
+limiting, migrations, the studio user dashboard) is in the
+[package reference](/docs/packages/auth).
+
+### Side effects on your own tables
+
+better-auth's `databaseHooks` receive the row and better-auth's own context —
+never a Lunora `MutationCtx`, and there is no seam to add one. The hook runs
+inside better-auth's write path, and a ctx is per-request state that `createAuth`
+(called once, at worker setup) does not have.
+
+So a side effect on an app table is a **separate write**, dispatched as an
+internal mutation over the shard client. That is the part worth designing for: a
+failure between the auth write and yours must leave a state the next attempt can
+repair, so key the mutation on the user id and make re-running it a no-op rather
+than assuming it runs exactly once.
+
+```ts
+databaseHooks: {
+    user: {
+        create: {
+            after: async (user) => {
+                // Idempotent by construction: upsert on the user id, never insert.
+                // `shard` is a createShardClient(env.SHARD).forShard(user.id) handle.
+                await shard.call(internal.profiles.ensureForUser, { userId: user.id });
+            },
+        },
+    },
+},
+```
+
+`lunoraDoAdapter` is the only configuration where the auth writes are themselves
+transactional (a Durable Object has real transactions; D1 does not) — and even
+there your app-table write sits outside that transaction, so the idempotency
+requirement does not go away.
 
 ## Routing `/api/auth/*`
 
@@ -110,6 +156,28 @@ export default {
 Because the routes are mounted, the browser talks to better-auth directly. Your
 functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
 
+Two things about `ensureMigrated`, both of which bite exactly once:
+
+It drives better-auth's own migrator, which speaks **only** Kysely, so it needs
+the raw D1 binding as `database` — as above. Hand it a Lunora adapter
+(`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) and it throws
+`AUTH_MIGRATOR_UNSUPPORTED`. Build a second, migration-only instance over the raw
+binding and keep the adapter on the one that serves requests; the adapter exists
+to dodge a dev-runner hang in `$context`, which the migration instance never
+resolves.
+
+And call it **once per isolate**, holding the promise rather than a flag, because
+better-auth emits a bare `CREATE TABLE`: two concurrent runs against a fresh
+database leave the loser with `table user already exists`, and since this sits
+ahead of the router that 500s every route. `defineApp().auth(...)` does both for
+you.
+
+better-auth owns those tables. Don't also declare `user` / `session` / `account`
+/ `verification` / `rateLimit` in `lunora/schema.ts` — two owners for one table
+means Lunora creates it with its own column layout and better-auth then plans an
+`ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright. Lunora's
+`.global()` tables are for your data.
+
 ## The client side
 
 On the client, identity is a token carried on the shared `LunoraClient`. After a
@@ -122,20 +190,32 @@ In React, [`@lunora/react`](/docs/packages/react)'s `useAuth` wraps this:
 import { useAuth } from "@lunora/react";
 
 function Account() {
-    const { user, token, setToken } = useAuth();
+    const { setToken, status, user } = useAuth();
 
-    if (!user) return <SignInForm onToken={setToken} />;
+    if (status === "loading") return <Spinner />;
+    if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
     return (
         <div>
-            <span>{user.email}</span>
+            <span>{user?.email}</span>
             <button onClick={() => setToken(null)}>Sign out</button>
         </div>
     );
 }
 ```
 
-`setToken(jwt)` makes every later query/mutation/subscription authenticate as
-that user; `setToken(null)` signs out. `user` is resolved from better-auth's
+**Branch on `status`, not on whether `user` is null.** `user` is null both when
+there is no session and when a credential is held whose identity has not
+resolved — a reload while offline, or the window while a cookie session
+resolves. Gating on `user` renders the sign-in form to a signed-in user in both
+cases. The four states and what each one means are tabulated in the
+[`@lunora/client` reference](/docs/packages/client); `unreachable` is the one
+worth knowing about, and it gates as **authenticated**.
+
+`setToken(jwt)` stamps the bearer on every later **query, mutation and action**;
+`setToken(null)` signs out. It does **not** re-authenticate an open
+subscription: the WebSocket credential is fixed at upgrade time and lives in the
+URL, so rotating it is `client.setWsToken(token)`, which closes the shard
+sockets to force a reconnect. `user` is resolved from better-auth's
 `get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are

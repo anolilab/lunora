@@ -55,6 +55,7 @@ interface AuthImpersonation {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;
@@ -125,6 +126,7 @@ interface AuthAdmin {
         slug?: string;
     }) => Promise<Record<string, unknown>>;
     createOrgRole?: (input: { organizationId: string; permission: Record<string, string[]>; role: string }) => Promise<Record<string, unknown>>;
+    createSignUpInvitation?: (input: { email: string; expiresInSeconds?: number; invitedBy?: string }) => Promise<Record<string, unknown>>;
     createTeam?: (input: { name: string; organizationId: string }) => Promise<Record<string, unknown>>;
     createUser?: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthUser>;
     deleteOrganization?: (input: { organizationId: string }) => Promise<void>;
@@ -143,6 +145,7 @@ interface AuthAdmin {
     // read-only browse surface every implementation must provide. Every other
     // op is optional and guarded at dispatch (`AUTH_OP_NOT_SUPPORTED`).
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
+    listSignUpInvitations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
     listTeamMembers?: (options: { limit?: number; offset?: number; teamId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listTeams?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listUsers: (options: ListAuthUsersOptions) => Promise<AuthPage<AuthUser>>;
@@ -150,6 +153,7 @@ interface AuthAdmin {
     removeTeam?: (input: { teamId: string }) => Promise<void>;
     removeTeamMember?: (input: { teamMemberId: string }) => Promise<void>;
     removeUser?: (input: { userId: string }) => Promise<void>;
+    revokeSignUpInvitation?: (input: { email: string }) => Promise<void>;
     revokeUserSession?: (input: { sessionId: string }) => Promise<void>;
     revokeUserSessions?: (input: { userId: string }) => Promise<void>;
     setRole?: (input: { role: string | string[]; userId: string }) => Promise<AuthUser>;
@@ -367,6 +371,32 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         },
         http: "GET",
         method: "listInvitations",
+    },
+    [`${AUTH_BASE}/sign-up-invitations`]: {
+        build: ({ paging }) => {
+            return { ...paging };
+        },
+        http: "GET",
+        method: "listSignUpInvitations",
+    },
+    [`${AUTH_BASE}/sign-up-invitations/create`]: {
+        build: ({ body }) => {
+            return {
+                email: requireBodyString(body, "email"),
+                expiresInSeconds: typeof body["expiresInSeconds"] === "number" ? body["expiresInSeconds"] : undefined,
+                invitedBy: optionalBodyString(body, "invitedBy"),
+            };
+        },
+        http: "POST",
+        method: "createSignUpInvitation",
+    },
+    [`${AUTH_BASE}/sign-up-invitations/revoke`]: {
+        build: ({ body }) => {
+            return { email: requireBodyString(body, "email") };
+        },
+        http: "POST",
+        method: "revokeSignUpInvitation",
+        returns: "void",
     },
     [`${AUTH_BASE}/config`]: {
         build: () => {

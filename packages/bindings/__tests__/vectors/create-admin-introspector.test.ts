@@ -94,7 +94,7 @@ describe("createVectorAdminIntrospector", () => {
         expect(result?.matches).toEqual([{ id: "row-1", metadata: { title: "hi" }, score: 0.91 }]);
     });
 
-    it("clamps topK to the 20-neighbour ceiling that applies with returnMetadata:'all'", async () => {
+    it("serves the same 50-neighbour ceiling the user query path enforces", async () => {
         expect.assertions(1);
 
         const index = fakeIndex();
@@ -104,12 +104,28 @@ describe("createVectorAdminIntrospector", () => {
             registry: REGISTRY,
         });
 
-        // Admin queries always request full metadata, which lowers Vectorize's
-        // topK ceiling to 20 — an over-large request must be clamped to 20, not
-        // 100, or Vectorize rejects it remotely.
+        // Admin queries always request full metadata, which lowers Vectorize
+        // V2's topK ceiling from 100 to 50 — the same bound `createVectors`
+        // enforces and the docs publish. A silent `Math.min` at 20 truncated
+        // every studio query the user path would have served in full.
         await introspector.queryIndex?.({ name: "by_body", text: "hello", topK: 50 });
 
-        expect(index.query).toHaveBeenCalledWith([1, 0, 0], { returnMetadata: "all", topK: 20 });
+        expect(index.query).toHaveBeenCalledWith([1, 0, 0], { returnMetadata: "all", topK: 50 });
+    });
+
+    it("rejects an over-ceiling topK instead of silently truncating the result", async () => {
+        expect.assertions(1);
+
+        const introspector = createVectorAdminIntrospector({
+            embedders: { by_body: async () => [1, 0, 0] },
+            indexes: { by_body: fakeIndex() },
+            registry: REGISTRY,
+        });
+
+        // Clamping made the studio show 20 rows for a 100-row request and say
+        // nothing, so the caller could not tell a truncated page from an
+        // exhausted index. The user path throws; so does this one.
+        await expect(introspector.queryIndex?.({ name: "by_body", text: "hello", topK: 100 })).rejects.toThrow(/topK must be an integer in \[1, 50\]/);
     });
 
     it("throws on a query for an index with no embedder", async () => {

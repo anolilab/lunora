@@ -78,7 +78,9 @@ describe("schema-drift", () => {
             );
 
             expect(snapshot.tables.a?.shardMode).toBe("root");
-            expect(snapshot.tables.b?.shardMode).toBe("global");
+            // `.global()` carries its BACKEND, because that is which physical
+            // store it lives in — see `schema-drift-table-modifiers.test.ts`.
+            expect(snapshot.tables.b?.shardMode).toBe("global:d1");
             expect(snapshot.tables.c?.shardMode).toBe("shardBy:tenantId");
         });
     });
@@ -177,6 +179,30 @@ describe("schema-drift", () => {
                 },
             ]);
             expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
+        });
+
+        it("treats an added non-unique index as safe but an added UNIQUE index as breaking", () => {
+            // A non-unique index is pure DDL over rows that already satisfy it.
+            // A UNIQUE one is a constraint the stored rows may already violate,
+            // and `CREATE UNIQUE INDEX` throws inside the shard's cold-start
+            // migration when they do — so it needs a de-dup backfill first, the
+            // same classification an added `.unique()` COLUMN already gets.
+            expect.assertions(2);
+
+            const plain = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []),
+            );
+            const unique = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(
+                    schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                    [],
+                ),
+            );
+
+            expect(plain.changes.some((c) => c.type === "addedIndex" && c.severity === "safe" && c.remediation === "none")).toBe(true);
+            expect(unique.changes.some((c) => c.type === "addedIndex" && c.severity === "breaking" && c.remediation === "backfill")).toBe(true);
         });
 
         it("flags a dropped table, removed index, removed relation, and changed shard mode as breaking", () => {
@@ -651,6 +677,77 @@ describe("schema-drift", () => {
             // Widening accepts everything the old shape did, so nothing stored becomes invalid.
             expect(widened.changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
             expect(narrowed.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("does not call a union widened when a retained member gained a refinement or lost its optional", () => {
+            expect.assertions(2);
+
+            // Both narrow what the column accepts while keeping the member SET
+            // identical. The widening check compared members with their column
+            // flags stripped, so each read as an unchanged member set and was
+            // reported `widenedFieldShape` — "every stored value stays valid" —
+            // for a change that invalidates stored rows.
+            const refined = compare(
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            const deoptionalized = compare(
+                { value: { kind: "union", members: [{ inner: { kind: "string" }, kind: "optional" }, { kind: "number" }] } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(refined.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+            expect(deoptionalized.changes.map((change) => change.severity)).toStrictEqual(["breaking"]);
+        });
+
+        it("still reads an added union member as a widening when the column is optional", () => {
+            expect.assertions(1);
+
+            // The column's own `optional` is diffed on its own and is unchanged
+            // here, so it must not stop the shape comparison from matching
+            // `v.string()` against the `string` member it became one of.
+            const { changes } = compare(
+                { value: { inner: { kind: "string" }, kind: "optional" } },
+                { value: { inner: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] }, kind: "optional" } },
+            );
+
+            expect(changes.map((change) => [change.severity, change.type])).toStrictEqual([["safe", "widenedFieldShape"]]);
+        });
+
+        it("reads a refined column folded into a union as a widening, and a member that gained one as not", () => {
+            expect.assertions(3);
+
+            // The column's refinement travels WITH it into the union: the member
+            // it becomes carries the same `.max(10)`, so nothing on disk stops
+            // being valid. Normalizing the old side to `refined: false` made it
+            // unable to match its own member, and a change that invalidates no
+            // stored row demanded a backfill migration.
+            const carried = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+            // Only the PRESENCE of a predicate is knowable, so dropping one can
+            // only widen…
+            const dropped = compare(
+                { value: { hasRefinement: true, kind: "string" } },
+                { value: { kind: "union", members: [{ kind: "string" }, { kind: "number" }] } },
+            );
+            // …while gaining one narrows the strings the column still accepts,
+            // however many members were added alongside it.
+            const gained = compare(
+                { value: { kind: "string" } },
+                { value: { kind: "union", members: [{ hasRefinement: true, kind: "string" }, { kind: "number" }] } },
+            );
+
+            expect(carried.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(dropped.changes.map((change) => [change.severity, change.type])).toStrictEqual([
+                ["safe", "widenedFieldShape"],
+                ["safe", "relaxedFieldConstraint"],
+            ]);
+            expect(gained.changes.map((change) => [change.severity, change.type])).toStrictEqual([["breaking", "changedFieldKind"]]);
         });
 
         it("treats a reordered union as no change at all — a union is a set", () => {

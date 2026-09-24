@@ -30,8 +30,9 @@ const EDGES_TABLE: "agent_edges" = `${AGENT_EXTENSION_KEY}_${EDGES_BARE_TABLE}`;
 const graphTables: Record<string, TableDefinition> = {
     /**
      * Graph-memory nodes — one per normalized entity name per owner. `weight` is
-     * salience (last-write-wins, absolute set → replay-idempotent),
-     * `firstMessageKey` is provenance.
+     * salience, set once at insert and never updated (absolute, so replay is
+     * idempotent); `firstMessageKey` is provenance. Edge weight, by contrast, is
+     * bumped to `max(prior, confidence)`.
      */
     [ENTITIES_BARE_TABLE]: defineTable({
         createdAt: v.number(),

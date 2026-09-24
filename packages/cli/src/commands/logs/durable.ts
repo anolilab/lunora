@@ -16,10 +16,19 @@ import { createR2Sql } from "@lunora/bindings/r2sql";
 import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
 import { createPipelineLogReader } from "@lunora/runtime";
 
+import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 
-/** The severities the reader accepts, for `--level` / `--min-level` validation. */
-const LOG_LEVELS = new Set(["debug", "error", "fatal", "info", "log", "trace", "warn"]);
+/**
+ * The severities the reader accepts, for `--level` / `--min-level` validation.
+ *
+ * Derived from `LOG_LEVEL_ORDER` rather than re-listed: the reader ranks
+ * `--min-level` by that array's index, so a hand-kept copy here would let a
+ * level pass validation and then rank `-1` (silently meaning "no floor").
+ * Membership only — the ordering is the reader's concern.
+ */
+const LOG_LEVELS: ReadonlySet<string> = new Set<string>(LOG_LEVEL_ORDER);
 
 /** A bare epoch-millis value: all digits (anything else is parsed as a date string). */
 const EPOCH_MILLIS_RE = /^\d+$/;
@@ -256,7 +265,7 @@ const runDurableLogsCommand = async (options: DurableLogsCommandOptions): Promis
             `logs --durable: R2 SQL not configured (missing ${missing.join(", ")}). The Pipeline must write to an R2 Data Catalog (Iceberg) table, and you must supply R2_SQL_ACCOUNT_ID / R2_SQL_TOKEN / R2_SQL_BUCKET plus --table — see the observability docs.`,
         );
 
-        return { code: 1, error: "not configured" };
+        return { code: EXIT_CODE.USAGE, error: "not configured" };
     }
 
     let query: PipelineLogQuery;
@@ -266,7 +275,7 @@ const runDurableLogsCommand = async (options: DurableLogsCommandOptions): Promis
     } catch (error: unknown) {
         options.logger.error(error instanceof Error ? error.message : String(error));
 
-        return { code: 1, error: "invalid option" };
+        return { code: EXIT_CODE.USAGE, error: "invalid option" };
     }
 
     // Non-null: the guard above returned when any credential/table was missing.

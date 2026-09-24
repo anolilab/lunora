@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
@@ -18,6 +18,9 @@ import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
+
+/** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
 /** `.storage(...)` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs `ctx.storage` AND the studio file browser. */
 interface StorageDeclaration<Env> {
@@ -74,6 +77,9 @@ class AppBuilder<Env extends object> {
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
+    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
+    private observabilitySink?: ShardConfig["observability"];
+    private relationExistsPushDownMode?: ShardConfig["relationExistsPushDown"];
     private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
@@ -110,6 +116,31 @@ class AppBuilder<Env extends object> {
      */
     public reactiveCache(config: boolean | { maxBytes?: number; maxEntries?: number } = true): this {
         this.reactiveCacheConfig = config;
+
+        return this;
+    }
+
+    /** Ceiling on the join keys ONE relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
+    public maxRelationKeys(limit: NonNullable<ShardConfig["maxRelationKeys"]>): this {
+        this.maxRelationKeysLimit = limit;
+
+        return this;
+    }
+
+    /**
+     * Route the shard's `ctx.log` lines, `ctx.trace` spans and `ctx.metrics` measurements to a telemetry sink.
+     *
+     * The DO half of observability: without it every in-handler signal stays in the shard's local ring buffer (the studio Logs panel) and reaches no collector. The worker half — one `onRpc` event per dispatched RPC — is a `createWorker` option; pass the SAME sink to both via `.extend((env) => ({ observability: sink(env) }))` to correlate them.
+     */
+    public observability(selector: NonNullable<ShardConfig["observability"]>): this {
+        this.observabilitySink = selector;
+
+        return this;
+    }
+
+    /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
+    public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
+        this.relationExistsPushDownMode = mode;
 
         return this;
     }
@@ -197,6 +228,9 @@ class AppBuilder<Env extends object> {
         const ShardDO = createShardDO({
             cdc: this.cdcEnabled,
             reactiveCache: this.reactiveCacheConfig,
+            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
+            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
                       d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
@@ -222,6 +256,10 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // The binding outlives this per-request writer, so the
+                              // provisioning sweep runs once per isolate rather than
+                              // once per request. See `SqlCtxDbOptions.provisionScope`.
+                              provisionScope: database,
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -235,9 +273,10 @@ class AppBuilder<Env extends object> {
         // the same isolate reuses them.
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
+        let authInit: Promise<void> | null = null;
 
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
@@ -250,11 +289,40 @@ class AppBuilder<Env extends object> {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives `ensureMigrated`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving `/api/auth/*` against tables the
+            // migrator has not created yet. See `emit-app.ts` in @lunora/codegen for
+            // the full reasoning.
+            //
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+
+            auth = requestAuth;
         };
+
+        // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare `CREATE TABLE` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with `table user already exists` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 
         const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
 
@@ -367,7 +435,15 @@ class AppBuilder<Env extends object> {
             }
         }
 
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? fallbackStorage;
+        // `Object.hasOwn`, not a bare lookup: `buckets` is a plain object, so a
+        // prototype key (`?bucket=constructor`, `__proto__`, `toString`) resolves
+        // to an inherited Object.prototype member, `??` never engages, and the
+        // caller gets a method-less value instead of the default bucket.
+        const pick = (name?: string): Storage => {
+            const wanted = name !== undefined && name !== "" ? name : "default";
+
+            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+        };
         const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
 
         return {
@@ -494,10 +570,18 @@ class AppBuilder<Env extends object> {
                 // is anonymous. better-auth hands back a `Date`; anything else means
                 // the adapter did not hydrate it, and omitting beats guessing.
                 const expiresAt = session.session.expiresAt;
+                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
+                // documented to carry ("email, name, roles, custom claims"). Without
+                // them the documented `me` query — `identity?.email` — resolves
+                // `undefined` on the built-in wiring. Empty strings are dropped so an
+                // absent claim reads as absent rather than as "".
+                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
 
                 return {
+                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
                     ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    role: (session.user as { role?: unknown }).role,
+                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
+                    role: user.role,
                     userId: session.user.id,
                 };
             };
@@ -521,8 +605,8 @@ class AppBuilder<Env extends object> {
  * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
  * last-known write, when supplied) so reads observe it — read-your-writes
  * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
- * produced by each write so the caller (the generated DO) can record it via
- * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ * produced by each write so the caller (the generated DO) can record it on the
+ * dispatch's bookmark sink and echo `x-d1-bookmark` on the response.
  *
  * Wrapped in `retryingExec` so D1's documented baseline of transient failures
  * (storage-object resets, isolate memory evictions, dropped connections) does
@@ -530,6 +614,13 @@ class AppBuilder<Env extends object> {
  * read-only retry; writes — including the `UPDATE … RETURNING` the store's
  * optimistic-concurrency check issues through `all` — pass straight through,
  * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own `meta` accounting (`rows_read` /
+ * `rows_written` / `duration`) against a low-cardinality `verb:table` tag.
+ * Rows READ is rows SCANNED, not returned, so this is the number that explains
+ * a D1 bill and the one a missing index inflates without anything being
+ * deployed; the dashboard's own metric is per-database and can't name the query.
+ * The emit is best-effort — instrumentation must never fail a served query.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes `withSession`; guarded the same way as `batch`
@@ -540,6 +631,13 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
+    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+        try {
+            emitD1QueryCost(sql, meta);
+        } catch {
+            // Best-effort: never let cost accounting fail the query it measures.
+        }
+    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -557,9 +655,10 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // read could pin a replica that has not seen them: read-your-writes
             // lost on the exact path the bookmark exists for. Reporting it after
             // a plain `SELECT` too is harmless and correct — the session's
-            // bookmark only ever moves forward, and `setOutboundBookmark` takes
-            // the last value.
+            // bookmark only ever moves forward, and the sink takes the last
+            // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
+            meter(sql, result.meta);
 
             return result.results;
         },
@@ -577,18 +676,34 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         // `const fn = target.batch; fn(...)` capture would.
         batch: batchFn
             ? async (statements) => {
-                  await batchFn.call(
+                  const results = await batchFn.call(
                       target,
                       statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
                   );
+
+                  // Meter each leg. D1 returns one result per statement, in
+                  // order, each with its own `meta` — and a batch is where the
+                  // expensive writes live (`@lunora/sql-store` runs its
+                  // backfills through here), so discarding it left exactly the
+                  // statements worth costing unaccounted. Guarded on the array
+                  // because `batch` is optional in the structural type and a
+                  // test double may resolve to anything.
+                  if (Array.isArray(results)) {
+                      for (const [index, statement] of statements.entries()) {
+                          meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
+                      }
+                  }
+
                   onBookmark?.(session?.getBookmark() ?? undefined);
               }
             : undefined,
         run: async (sql, parameters) => {
-            await target
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+
+            meter(sql, result.meta);
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
@@ -720,6 +835,23 @@ const buildGlobalCdcApplier =
     };
 
 /**
+ * Shape of the project's root `lunora.config.*`.
+ *
+ * Declared HERE, not in a package, so the `app` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = object> {
+    /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
+    remote?: boolean;
+    /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
+    target?: string;
+}
+
+/**
  * Start composing the app. Chain the capability methods, then `.build()`.
  *
  * `Env` is constrained to `object`, not `Record<string, unknown>`: an `interface Env`
@@ -732,4 +864,4 @@ const buildGlobalCdcApplier =
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, GlobalDeclaration, Selector, StorageDeclaration };
+export type { AuthDeclaration, ComposedApp, GlobalDeclaration, LunoraConfig, Selector, StorageDeclaration };

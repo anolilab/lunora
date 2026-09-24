@@ -1,13 +1,10 @@
+import { generateText, streamText } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { otlpTelemetry } from "../../src/telemetry/otlp";
-
-/**
- * The ai@7 telemetry event shapes are broad and churn across patch releases;
- * `evt` widens a minimal fixture to the callback's event type without
- * fabricating (and maintaining) every unrelated field.
- */
-const evt = (fixture: Record<string, unknown>): never => fixture as unknown as never;
+import type { GenerateResult } from "./model-fixtures";
+import { drain, generatingModel, settle, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
 
 interface CapturedPost {
     body: { resourceSpans: unknown[] };
@@ -31,15 +28,25 @@ const captureFetch = (): CapturedPost[] => {
     return calls;
 };
 
+/** One captured OTLP span. */
+interface CapturedSpan {
+    attributes: { key: string; value: Record<string, unknown> }[];
+    endTimeUnixNano: string;
+    name: string;
+    startTimeUnixNano: string;
+    status: { code: number };
+    traceId: string;
+}
+
 /** The single span in a captured OTLP trace body. */
-const spanOf = (post: CapturedPost): { attributes: { key: string; value: Record<string, unknown> }[]; name: string; status: { code: number } } => {
+const spanOf = (post: CapturedPost): CapturedSpan => {
     const resource = post.body.resourceSpans[0] as { scopeSpans: { spans: unknown[] }[] };
 
-    return resource.scopeSpans[0]?.spans[0] as { attributes: { key: string; value: Record<string, unknown> }[]; name: string; status: { code: number } };
+    return resource.scopeSpans[0]?.spans[0] as CapturedSpan;
 };
 
 /** Read one attribute's scalar value off a span by key. */
-const attribute = (span: ReturnType<typeof spanOf>, key: string): unknown => {
+const attribute = (span: CapturedSpan, key: string): unknown => {
     const found = span.attributes.find((entry) => entry.key === key);
 
     if (!found) {
@@ -48,6 +55,9 @@ const attribute = (span: ReturnType<typeof spanOf>, key: string): unknown => {
 
     return Object.values(found.value)[0];
 };
+
+/** A span's wall-clock duration in milliseconds, from the OTLP nanosecond stamps. */
+const durationMs = (span: CapturedSpan): number => (Number(span.endTimeUnixNano) - Number(span.startTimeUnixNano)) / 1e6;
 
 // A fixed 32-hex trace id used to assert span grouping. Not a credential — the
 // `no-secrets` heuristic just sees a high-entropy hex run.
@@ -59,41 +69,128 @@ describe(otlpTelemetry, () => {
         vi.unstubAllGlobals();
     });
 
-    it("emits a language-model span with model + token attributes and returns the result", async () => {
+    it("emits a language-model span with model + token attributes through generateText", async () => {
         const calls = captureFetch();
-        const telemetry = otlpTelemetry({ endpoint: "https://collector.test/", token: "ingest-key" });
 
-        const result = await telemetry.executeLanguageModelCall?.(
-            evt({
-                execute: () => Promise.resolve({ content: [{ text: "answer", type: "text" }], usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 } }),
-                modelId: "@cf/meta/llama",
-                provider: "workers-ai",
-            }),
-        );
+        const result = await generateText({
+            model: generatingModel(),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test/", token: "ingest-key" })),
+        });
 
-        expect(result).toStrictEqual({ content: [{ text: "answer", type: "text" }], usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 } });
+        await settle();
+
+        expect(result.text).toBe("answer");
         expect(calls).toHaveLength(1);
         expect(calls[0]?.url).toBe("https://collector.test/v1/traces");
         expect(calls[0]?.headers.authorization).toBe("Bearer ingest-key");
 
         const span = spanOf(calls[0] as CapturedPost);
 
-        expect(span.name).toBe("chat @cf/meta/llama");
+        expect(span.name).toBe("chat mock-model-id");
         expect(span.status.code).toBe(1);
-        expect(attribute(span, "gen_ai.request.model")).toBe("@cf/meta/llama");
-        expect(attribute(span, "gen_ai.system")).toBe("workers-ai");
-        // OTLP encodes int64 as a decimal string (proto3 JSON) — this is the wire
-        // form the cloud decoder parses back to a number.
+        expect(attribute(span, "gen_ai.request.model")).toBe("mock-model-id");
+        expect(attribute(span, "gen_ai.system")).toBe("mock-provider");
+        // Usage is read off the SDK's NORMALIZED end event, not off the raw value
+        // the provider call resolved with — a LanguageModelV4 provider reports
+        // `{ inputTokens: { total } }`, which the flat reader saw as no usage at all.
+        // OTLP encodes int64 as a decimal string (proto3 JSON).
         expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("12");
         expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("3");
+    });
+
+    it("measures a STREAMED call to the end of the stream, with its usage", async () => {
+        const calls = captureFetch();
+
+        const stream = streamText({
+            model: streamingModel({ chunks: 3, gapMs: 30 }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+
+        let text = "";
+
+        for await (const delta of stream.textStream) {
+            text += delta;
+        }
+
+        await stream.usage;
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // Floor at half the STREAM's own delay budget (3 chunks x 30 ms), not at a
+        // fraction of wall clock: `wallMs` starts before the span does, so a slow
+        // runner inflates the divisor past the span and the assertion fails on
+        // timing alone (CI hit `expected 94 to be greater than 96`). The defect
+        // this guards is a span that ends at time-to-first-byte — ~1 ms — which
+        // any floor in this range separates decisively.
+        const minStreamedMs = (3 * 30) / 2;
+
+        expect(text).toBe("xxx");
+        // `execute()` resolves the moment `doStream` returns, so a span closed
+        // there measured ~1 ms of a ~100 ms call and reported no tokens at all.
+        expect(durationMs(span)).toBeGreaterThan(minStreamedMs);
+        expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("12");
+        expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("3");
+    });
+
+    it("marks a stream that dies mid-way as failed", async () => {
+        expect.assertions(3);
+
+        const calls = captureFetch();
+
+        const stream = streamText({
+            model: streamingModel({ chunks: 3, failAfter: 1, gapMs: 5 }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+
+        // The error arrives as a stream part, so the text stream ends rather than
+        // throwing; `finishReason` is what carries the failure.
+        let drained = 0;
+
+        for await (const delta of stream.textStream) {
+            drained += delta.length;
+        }
+
+        expect(drained).toBeGreaterThan(0);
+
+        await expect(stream.finishReason).resolves.toBe("error");
+
+        await settle();
+
+        // The old shape reported status 1 for this: `execute()` had already
+        // resolved successfully at first byte, so the failure never reached a span.
+        expect(spanOf(calls[0] as CapturedPost).status.code).toBe(2);
+    });
+
+    it("marks the span errored when the provider call itself rejects", async () => {
+        const calls = captureFetch();
+
+        await expect(
+            generateText({
+                model: new MockLanguageModelV4({ doGenerate: () => Promise.reject(new Error("model down")) }),
+                maxRetries: 0,
+                prompt: "hi",
+                telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+            }),
+        ).rejects.toThrow("model down");
+
+        await settle();
+
+        expect(spanOf(calls[0] as CapturedPost).status.code).toBe(2);
     });
 
     it("tags the generation span with gen_ai.conversation.id when a conversation id is set", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ conversationId: "thread-42", endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({ execute: () => Promise.resolve({}), modelId: "m" }),
-        );
+        await generateText({
+            model: generatingModel(),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ conversationId: "thread-42", endpoint: "https://collector.test" })),
+        });
+        await settle();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBe("thread-42");
     });
@@ -101,7 +198,8 @@ describe(otlpTelemetry, () => {
     it("omits gen_ai.conversation.id when no conversation id is set", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(evt({ execute: () => Promise.resolve({}), modelId: "m" }));
+        await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+        await settle();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBeUndefined();
     });
@@ -110,22 +208,22 @@ describe(otlpTelemetry, () => {
         const calls = captureFetch();
         const telemetry = otlpTelemetry({ endpoint: "https://collector.test", traceId: FIXED_TRACE_ID });
 
-        await telemetry.executeLanguageModelCall?.(evt({ execute: () => Promise.resolve({}), modelId: "m" }));
-        await telemetry.executeTool?.(evt({ execute: () => Promise.resolve("ok"), toolCall: { toolName: "lookup" }, toolCallId: "tc-1" }));
+        await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(telemetry) });
+        await telemetry.executeTool?.({ callId: "c-1", execute: () => Promise.resolve("ok"), toolCallId: "tc-1" });
+        await settle();
 
-        const traceIds = calls.map(
-            (post) => (post.body.resourceSpans[0] as { scopeSpans: { spans: { traceId: string }[] }[] }).scopeSpans[0]?.spans[0]?.traceId,
-        );
-
-        expect(traceIds).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
+        expect(calls.map((post) => spanOf(post).traceId)).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
     });
 
     it("does not record the prompt unless recordInputs is set", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({ execute: () => Promise.resolve({}), messages: [{ content: "SENSITIVE", role: "user" }], modelId: "m" }),
-        );
+        await generateText({
+            model: generatingModel(),
+            prompt: "SENSITIVE",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
 
         expect(JSON.stringify(calls)).not.toContain("SENSITIVE");
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.prompt")).toBeUndefined();
@@ -134,43 +232,25 @@ describe(otlpTelemetry, () => {
     it("records the prompt as a serialized attribute when recordInputs is set", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test", recordInputs: true }).executeLanguageModelCall?.(
-            evt({ execute: () => Promise.resolve({}), messages: [{ content: "hello", role: "user" }], modelId: "m" }),
-        );
+        await generateText({
+            model: generatingModel(),
+            prompt: "hello",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test", recordInputs: true })),
+        });
+        await settle();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.prompt")).toContain("hello");
-    });
-
-    it("marks the span errored and re-throws when the model call throws", async () => {
-        const calls = captureFetch();
-
-        await expect(
-            otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-                evt({
-                    execute: () => Promise.reject(new Error("model down")),
-                    modelId: "m",
-                }),
-            ),
-        ).rejects.toThrow("model down");
-
-        const span = spanOf(calls[0] as CapturedPost);
-
-        expect(span.status.code).toBe(2);
     });
 
     it("attaches AI Gateway cost/cache/log-id from providerMetadata when present", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({
-                execute: () =>
-                    Promise.resolve({
-                        providerMetadata: { gateway: { cached: false, cost: 0.000_123, logId: "aig-log-42" } },
-                        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
-                    }),
-                modelId: "@cf/meta/llama",
-            }),
-        );
+        await generateText({
+            model: generatingModel({ providerMetadata: { gateway: { cached: false, cost: 0.000_123, logId: "aig-log-42" } } }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -180,15 +260,42 @@ describe(otlpTelemetry, () => {
         expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-42");
     });
 
+    it("derives cached + log-id from the gateway's cf-aig-* response headers", async () => {
+        const calls = captureFetch();
+
+        await generateText({
+            model: generatingModel({ response: { headers: { "cf-aig-cache-status": "HIT", "cf-aig-log-id": "aig-log-7" } } }),
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
+
+        const span = spanOf(calls[0] as CapturedPost);
+
+        // The headers ride the value `execute()` resolved with and nowhere else, so
+        // this is what pins the wrapper's result being kept alongside the end event.
+        expect(attribute(span, "gen_ai.response.cached")).toBe(true);
+        expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-7");
+    });
+
     it("estimates the cost from token usage when no gateway reported one", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({
-                execute: () => Promise.resolve({ usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 } }),
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
+                    Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
+                        usage: usageOf(1_000_000, 0),
+                        warnings: [],
+                    }),
                 modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
             }),
-        );
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -202,16 +309,22 @@ describe(otlpTelemetry, () => {
     it("prefers a gateway-reported cost over the estimate and says so", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({
-                execute: () =>
+        await generateText({
+            model: new MockLanguageModelV4({
+                doGenerate: (): Promise<GenerateResult> =>
                     Promise.resolve({
+                        content: [{ text: "answer", type: "text" }],
+                        finishReason: STOP,
                         providerMetadata: { gateway: { cost: 0.5 } },
-                        usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 },
+                        usage: usageOf(1_000_000, 0),
+                        warnings: [],
                     }),
                 modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
             }),
-        );
+            prompt: "hi",
+            telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
+        });
+        await settle();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -219,35 +332,14 @@ describe(otlpTelemetry, () => {
         expect(attribute(span, "lunora.usage.cost.source")).toBe("provider");
     });
 
-    it("derives cached + log-id from the gateway's cf-aig-* response headers", async () => {
-        const calls = captureFetch();
-
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({
-                execute: () =>
-                    Promise.resolve({
-                        response: { headers: { "cf-aig-cache-status": "HIT", "cf-aig-log-id": "aig-log-7" } },
-                    }),
-                modelId: "m",
-            }),
-        );
-
-        const span = spanOf(calls[0] as CapturedPost);
-
-        expect(attribute(span, "gen_ai.response.cached")).toBe(true);
-        expect(attribute(span, "cf.aig.log_id")).toBe("aig-log-7");
-    });
-
     it("emits no gateway attributes when the call did not route through a gateway", async () => {
         const calls = captureFetch();
 
-        await otlpTelemetry({ endpoint: "https://collector.test" }).executeLanguageModelCall?.(
-            evt({ execute: () => Promise.resolve({ usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }), modelId: "m" }),
-        );
+        await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
+        await settle();
 
         const span = spanOf(calls[0] as CapturedPost);
 
-        expect(attribute(span, "gen_ai.usage.cost")).toBeUndefined();
         expect(attribute(span, "gen_ai.response.cached")).toBeUndefined();
         expect(attribute(span, "cf.aig.log_id")).toBeUndefined();
     });
@@ -255,9 +347,14 @@ describe(otlpTelemetry, () => {
     it("emits a tool-execution span named from the tool", async () => {
         const calls = captureFetch();
 
-        const result = await otlpTelemetry({ endpoint: "https://collector.test" }).executeTool?.(
-            evt({ execute: () => Promise.resolve("tool-value"), toolCall: { toolName: "lookup" }, toolCallId: "tc-1" }),
-        );
+        const result = await otlpTelemetry({ endpoint: "https://collector.test" }).executeTool?.({
+            callId: "c-1",
+            execute: () => Promise.resolve("tool-value"),
+            toolCall: { dynamic: true, input: {}, toolCallId: "tc-1", toolName: "lookup", type: "tool-call" },
+            toolCallId: "tc-1",
+        });
+
+        await settle();
 
         expect(result).toBe("tool-value");
 
@@ -265,5 +362,44 @@ describe(otlpTelemetry, () => {
 
         expect(span.name).toBe("execute_tool lookup");
         expect(attribute(span, "gen_ai.tool.name")).toBe("lookup");
+    });
+
+    it("an abort in one run does not close a concurrent run's span on a SHARED integration", async () => {
+        const calls = captureFetch();
+        // The documented app-wired shape — `defineAgent({ telemetry: { integrations:
+        // [otlpTelemetry(...)] } })` — evaluates once at module scope, so ONE
+        // integration instance (and one in-flight map) is shared by every
+        // concurrent agent run in the isolate.
+        const shared = otlpTelemetry({ endpoint: "https://collector.test" });
+
+        const abortController = new AbortController();
+        const aborted = streamText({
+            abortSignal: abortController.signal,
+            model: streamingModel({ chunks: 20, gapMs: 10 }),
+            prompt: "A",
+            telemetry: withTelemetry(shared),
+        });
+        const healthy = streamText({ model: streamingModel({ chunks: 4, gapMs: 10 }), prompt: "B", telemetry: withTelemetry(shared) });
+
+        await Promise.all([
+            drain(aborted.textStream, (index) => {
+                if (index === 2) {
+                    abortController.abort();
+                }
+            }),
+            drain(healthy.textStream),
+        ]);
+        await settle();
+
+        const spans = calls.map((post) => spanOf(post));
+        const ok = spans.filter((span) => span.status.code === 1);
+        const failed = spans.filter((span) => span.status.code === 2);
+
+        // Closing every open call on abort reported the healthy run as aborted too
+        // and dropped its real span — two failures, no success.
+        expect(failed).toHaveLength(1);
+        expect(ok).toHaveLength(1);
+        // The surviving span is the healthy run's, with its real token usage.
+        expect(attribute(ok[0] as CapturedSpan, "gen_ai.usage.input_tokens")).toBe("12");
     });
 });

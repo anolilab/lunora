@@ -27,13 +27,19 @@ describe("buildSecurityAudit", () => {
         expect(findings.some((finding) => finding.kind === "admin-token-weak")).toBe(false);
     });
 
-    it("flags an open WS gate as an error in production (no dev env)", () => {
-        expect.assertions(1);
+    // An unset `LUNORA_WS_BEARER` opens the gate for ordinary USER subscriptions
+    // only — admin subscriptions need the socket's `admin` stamp, which comes
+    // from `LUNORA_ADMIN_TOKEN` alone. So this is a posture note at the same
+    // weight as the other deployment-var findings, not an `error`: the loudest
+    // level was carrying a claim about admin exposure that the runtime never had.
+    it("flags an open WS gate as a warning in production (no dev env)", () => {
+        expect.assertions(2);
 
         const { findings } = buildSecurityAudit({ LUNORA_ADMIN_TOKEN: STRONG_TOKEN }, { dev: false });
         const gate = findings.find((finding) => finding.kind === "ws-gate-open");
 
-        expect(gate?.level).toBe("error");
+        expect(gate?.level).toBe("warning");
+        expect(findings.some((finding) => finding.level === "error")).toBe(false);
     });
 
     it("downgrades the open WS gate to info on a dev worker and flags unredacted request args", () => {
@@ -57,13 +63,14 @@ describe("buildSecurityAudit", () => {
         expect(findings).toHaveLength(0);
     });
 
-    it("sorts findings worst-first (error before warning before info)", () => {
+    it("sorts findings worst-first (warning before info)", () => {
         expect.assertions(1);
 
-        // Short token (warning) + open gate in prod (error) → error must lead.
-        const { findings } = buildSecurityAudit({ LUNORA_ADMIN_TOKEN: "short" }, { dev: false });
+        // On a dev worker: short token + unredacted request args (both warnings)
+        // and the open gate (info) — the warnings must lead.
+        const { findings } = buildSecurityAudit({ LUNORA_ADMIN_TOKEN: "short" }, { dev: true });
 
-        expect(findings.map((finding) => finding.level)).toStrictEqual(["error", "warning"]);
+        expect(findings.map((finding) => finding.level)).toStrictEqual(["warning", "warning", "info"]);
     });
 });
 

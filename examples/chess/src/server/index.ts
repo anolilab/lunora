@@ -1,8 +1,8 @@
 import type { D1DatabaseLike } from "@lunora/d1";
-import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
+import type { ShardNamespaceLike } from "lunorash/runtime";
 
-import { authOptions } from "../../lunora/auth.js";
 import { defineApp } from "../../lunora/_generated/app.js";
+import { authOptions } from "../../lunora/auth.js";
 
 interface Env {
     AUTH_SECRET: string;
@@ -30,10 +30,12 @@ const app = defineApp<Env>()
     .auth({ d1: (env) => env.DB, options: authOptions })
     .build();
 
-export const ShardDO = app.ShardDO;
+export const { ShardDO } = app;
 
-export default {
-    async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
-        return app.fetch(request, env, context);
-    },
-};
+// The composed app IS the module worker — exported wholesale rather than
+// re-wrapped, so every handler `.build()` composes reaches Cloudflare. A
+// hand-built `{ fetch }` object drops `scheduled`/`queue`/`email`, and those
+// appear the moment a `lunora/crons.ts`, a `defineQueue` or `.onEmail(...)` is
+// added — while `lunora deploy` provisions the matching trigger from the same
+// discovery, so the trigger fires into nothing.
+export default app;

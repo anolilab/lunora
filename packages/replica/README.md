@@ -142,7 +142,9 @@ machine, and pushes the resulting diffs to the mirror:
 import { EventsSync } from "@lunora/replica";
 
 const sync = new EventsSync({
-    fetchEventsSince: (seq) => eventLogClient.getSince(seq),
+    // `getSince` answers ONE bounded page; EventsSync keeps calling with the
+    // advanced watermark until the log is exhausted.
+    fetchEventsSince: async (seq) => (await eventLogClient.getSince(seq)).entries,
     applyEvents: (events) => {
         /* feed events into your state machine */
     },
@@ -235,9 +237,10 @@ const client = new EventLogDOClient({
 const [entry] = await client.append([{ type: "order:placed", payload: { orderId: "123" } }]);
 
 // Read back by sequence number — the log is append-only and ordered, so
-// there is no filter-by-type query. `getSince(0)` is the whole log.
-const events = await client.getSince(entry.seq);
-const { entries, hasMore } = await client.getRange(0, 50);
+// there is no filter-by-type query. Every read is ONE bounded page (500
+// entries by default, 1000 max): walk `cursor` while `truncated` is true.
+const { entries, truncated, cursor } = await client.getSince(entry.seq);
+const page = await client.getSince(0, 50);
 const size = await client.getSize();
 ```
 

@@ -75,6 +75,17 @@ describe("public_mutation_without_ratelimit", () => {
         });
     });
 
+    it("does not call a benign write auth-sensitive on a substring match", () => {
+        expect.assertions(2);
+
+        // "reset" inside `updatePresets`, "subscribe" inside `unsubscribeAll`.
+        const procedures = [procedure({ exportName: "updatePresets" }), procedure({ exportName: "unsubscribeAll" })];
+        const findings = publicMutationWithoutRatelimit.run({ procedureProtections: procedures, schema: schema() });
+
+        expect(findings.map((finding) => finding.metadata?.sensitive)).toStrictEqual([false, false]);
+        expect(findings.every((finding) => !finding.detail.includes("auth/abuse-sensitive"))).toBe(true);
+    });
+
     it("ignores rate-limited writes, internal functions, and queries", () => {
         expect.assertions(1);
 
@@ -226,6 +237,15 @@ describe("public_arg_uses_any", () => {
 });
 
 describe("unbounded_string_arg", () => {
+    it("recommends an enforced bound, never metadata", () => {
+        expect.assertions(2);
+
+        // `.meta({ maxLength })` publishes a cap the parser never enforces; the
+        // remediation once recommended exactly that, and ~90 call sites followed it.
+        expect(unboundedStringArgument.remediation).toMatch(/^Add an enforced max-length bound with `\.max\(n\)`/u);
+        expect(unboundedStringArgument.remediation).toContain("`.meta({ maxLength })` only documents a cap — the parser does not enforce it");
+    });
+
     it("flags one INFO finding per unbounded string arg", () => {
         expect.assertions(2);
 
@@ -512,6 +532,34 @@ describe("allow_unauthenticated_shard_access_enabled", () => {
         const calls = [configCall({ callee: "extend", presentKeys: ["allowUnauthenticatedShardAccess"], trueKeys: ["allowUnauthenticatedShardAccess"] })];
 
         expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: gapSchema })).toHaveLength(1);
+    });
+
+    // The `lunora()` Vite-plugin callee is the ONLY place a class-A app (the
+    // default Vite path — sveltekit / astro / react-router / tanstack-start) can
+    // set the flag, since it has no worker entry to `.extend()` from. Its feeder
+    // row keeps the config's file extension (`discover/config-calls.ts`'s
+    // `viteConfigCalls`), unlike the `lunora/`-relative paths.
+    it("flags a lunora() Vite-plugin call that sets allowUnauthenticatedShardAccess: true", () => {
+        expect.assertions(3);
+
+        const calls = [
+            configCall({
+                callee: "lunora",
+                file: "vite.config.ts",
+                line: 18,
+                presentKeys: ["allowUnauthenticatedShardAccess"],
+                trueKeys: ["allowUnauthenticatedShardAccess"],
+            }),
+        ];
+        const findings = allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "allow_unauthenticated_shard_access_enabled:vite.config.ts:18",
+            level: "WARN",
+            metadata: { callee: "lunora" },
+        });
+        expect(findings[0]?.detail).toContain("`lunora(...)` in vite.config.ts:18");
     });
 
     it("ignores an .extend() call that only names the key without setting it true, an opaque config, and other callees", () => {

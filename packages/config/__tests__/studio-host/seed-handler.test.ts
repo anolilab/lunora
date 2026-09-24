@@ -74,6 +74,21 @@ describe("handleSeedRequest", () => {
         expect(body.rows.every((row) => row["authorId"] === "user-a" || row["authorId"] === "user-b")).toBe(true);
     });
 
+    it("refuses rather than return children whose parents it would then drop", () => {
+        expect.assertions(2);
+
+        // With no ids for `users`, the planner FABRICATES parent rows and points the
+        // posts at them. Only the requested table's rows are returned, so those
+        // parents never reach the writer and every returned `authorId` names a row
+        // that does not exist — a dangling FK the insert then either rejects or,
+        // worse, accepts. The refusal lives in the studio client today, so a request
+        // that does not come from it gets the dangling rows.
+        const result = handleSeedRequest({ body: { count: 4, table: "posts" }, method: "POST", projectRoot });
+
+        expect(result.status).toBe(409);
+        expect(result.body).toStrictEqual({ error: "fk-parents-empty", ok: false, tables: ["users"] });
+    });
+
     it("clamps the count to the safety bound", () => {
         expect.assertions(1);
 

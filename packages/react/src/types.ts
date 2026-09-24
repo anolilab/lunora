@@ -1,4 +1,5 @@
-import type { OptimisticUpdate, SubscriptionErrorCallback, User } from "@lunora/client";
+import type { OptimisticUpdate, SubscriptionError, SubscriptionErrorCallback, User } from "@lunora/client";
+import type { AuthStatus } from "@lunora/client/auth";
 import type { PaginationStatus } from "@lunora/client/pagination";
 
 export interface UseQueryOptions {
@@ -12,6 +13,14 @@ export interface UseQueryOptions {
 }
 
 export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    /**
+     * Single-query shortcut forwarded to `client.mutation`: the transform is
+     * layered onto the subscription registered under **this write's own**
+     * `(reference, args, shardKey)` and nothing else. A `messages:send` mutation
+     * and a `messages:list` query share neither, so for that shape — nearly every
+     * shape — reach for {@link UseMutationCallOptions.optimisticUpdate}, whose
+     * store names the query it patches.
+     */
     optimistic?: (current: TCurrent | undefined) => TValue;
 
     /**
@@ -31,10 +40,21 @@ export interface UseSubscriptionResult<T> {
 export interface UsePaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+
+    /** Called when a page subscription (or its initial fetch) fails; also surfaced on `error`. */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 export interface UsePaginatedQueryResult<T> {
+    /**
+     * The last page failure, or `undefined`. A tail page that fails before its
+     * first frame is dropped so `status` returns to `"CanLoadMore"` and
+     * `loadMore` can retry it; the first page has nothing to fall back to and
+     * stays `"LoadingFirstPage"` with this set. Cleared by the next successful
+     * frame, by `loadMore`, or by an args change.
+     */
+    error: SubscriptionError | undefined;
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: boolean;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
@@ -47,10 +67,15 @@ export interface UsePaginatedQueryResult<T> {
 export interface UseInfiniteQueryOptions {
     /** Page size for the first page (and the default for `fetchNextPage`). */
     initialNumItems: number;
+
+    /** Called when a page subscription (or its initial fetch) fails; also surfaced on `error`. */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 export interface UseInfiniteQueryResult<T> {
+    /** The last page failure, or `undefined` — see `UsePaginatedQueryResult.error`. */
+    error: SubscriptionError | undefined;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */
@@ -66,6 +91,13 @@ export interface UseInfiniteQueryResult<T> {
 
 export interface UseAuthResult {
     setToken: (token: string | null) => void;
+
+    /**
+     * The resolved auth state. Branch on this, not on `user === null` — see the
+     * contract in `@lunora/client/auth`; `user` is `null` both when signed out
+     * and when a held credential's identity could not be resolved.
+     */
+    status: AuthStatus;
     token: string | null;
     user: User | null;
 }
@@ -89,4 +121,5 @@ export {
     type SubscriptionErrorCallback,
     type User,
 } from "@lunora/client";
+export { type AuthStatus } from "@lunora/client/auth";
 export { type PaginationResult, type PaginationStatus } from "@lunora/client/pagination";

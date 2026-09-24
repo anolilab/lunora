@@ -7,7 +7,7 @@
  * and error) lives in Cloudflare's control plane and is reachable only over the
  * account-scoped REST API: `GET .../workflows/{name}/instances` lists them,
  * `GET .../instances/{id}` returns one with its step array, and
- * `PATCH .../instances/{id}` pauses, resumes, or terminates it.
+ * `PATCH .../instances/{id}/status` pauses, resumes, or terminates it.
  *
  * Auth mirrors the `@lunora/bindings/analytics` SQL-API client: a Cloudflare account id
  * plus an API token (scoped `Workflows: Read`, or `Edit` for the status PATCH),
@@ -20,6 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../shared/cap-error-body";
 import type { WorkflowInstanceStatus } from "./types";
 
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -140,10 +141,21 @@ export interface WorkflowInstancePage {
     totalCount?: number;
 }
 
-/** Thrown when the REST API responds non-2xx or `success: false`; carries the status plus body for the caller to surface. */
+/**
+ * Thrown when the REST API responds non-2xx or `success: false`; carries the
+ * status plus a capped body preview, with the full body on `cause`.
+ *
+ * The preview is capped because the Cloudflare API's auth/authorization error
+ * text (and its HTML gateway pages) would otherwise ride out verbatim —
+ * `WORKFLOWS_REST_ERROR` is non-internal, so the message reaches the browser.
+ */
 export class WorkflowsRestError extends LunoraError {
     public constructor(status: number, body: string) {
-        super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${body}`, { name: "WorkflowsRestError", status });
+        super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${capErrorBody(body)}`, {
+            cause: body,
+            name: "WorkflowsRestError",
+            status,
+        });
     }
 }
 
@@ -235,7 +247,13 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             };
         },
         setInstanceStatus: async ({ action, instanceId, workflowName }) => {
-            const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}`, {
+            // The lifecycle action lives on the instance's `/status` SUB-resource,
+            // not on the instance itself — Cloudflare's API reference:
+            // PATCH /accounts/{account_id}/workflows/{workflow_name}/instances/{instance_id}/status
+            // (https://developers.cloudflare.com/api/resources/workflows/subresources/instances/subresources/status/methods/edit/).
+            // The instance path has no PATCH handler, so pausing/resuming/terminating
+            // from the studio reached an endpoint that could never act on it.
+            const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/status`, {
                 body: JSON.stringify({ status: action }),
                 method: "PATCH",
             });

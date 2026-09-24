@@ -11,13 +11,22 @@ from typing import Any, Optional
 
 
 class LunoraError(Exception):
-    """A coded error raised from an RPC ``{ "error": { code, message, data } }`` envelope."""
+    """A coded error raised from an RPC ``{ "error": { code, message, data } }`` envelope.
 
-    def __init__(self, code: str, message: str, data: Any = None) -> None:
+    ``transient`` says the call did not reach a verdict — a 5xx, or a non-2xx
+    carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
+    set where the STATUS is still in scope, because nothing downstream can
+    recover it: ``code`` alone cannot tell a ``BAD_REQUEST`` the function
+    returned from the ``INTERNAL`` this client synthesises for a body that never
+    came from one.
+    """
+
+    def __init__(self, code: str, message: str, data: Any = None, transient: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.data = data
+        self.transient = transient
 
 
 class SubscriptionError:

@@ -23,9 +23,6 @@ export interface AuthNamespaceLike {
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
-    /** Base path the auth routes are served under. Defaults to `/api/auth`. */
-    basePath?: string;
-
     /**
      * Shared secret presented on the object's internal session route. `undefined`
      * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
@@ -55,7 +52,14 @@ export interface DoAuthWiring {
      */
     auditReader: AuthAuditReader;
 
-    /** Forwards `/api/auth/*` to the object; `undefined` for anything else. */
+    /**
+     * Forwards `/api/auth/*` to the object; `undefined` for anything else.
+     *
+     * The base path is fixed. It was configurable on both halves of DO-backed auth
+     * and settable on neither: codegen's `AuthDeclaration` has no field for it, so
+     * the emitted `createDoAuthWiring(...)` never passed one and an `AuthDO`
+     * subclass that set its own served nothing.
+     */
     authHandler: (request: Request) => Promise<Response | undefined>;
 
     /**
@@ -64,10 +68,11 @@ export interface DoAuthWiring {
      *
      * `expiresAtMs` (epoch ms) is the session's expiry, which the runtime forwards as
      * the socket's credential expiry so the DO can drop a subscriber whose session has
-     * lapsed; `role` is better-auth's `admin()` column, which RLS role grants read.
-     * Both are absent when the session carries neither.
+     * lapsed; `role` is better-auth's `admin()` column, which RLS role grants read;
+     * `email` and `name` are the profile claims `ctx.auth.getIdentity()` is documented
+     * to carry. Each is absent when the session does not carry it.
      */
-    resolveIdentity: (request: Request) => Promise<null | { expiresAtMs?: number; role?: string; userId: string }>;
+    resolveIdentity: (request: Request) => Promise<null | { email?: string; expiresAtMs?: number; name?: string; role?: string; userId: string }>;
 }
 
 /**
@@ -81,7 +86,7 @@ export interface DoAuthWiring {
  * @experimental
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
-    const { basePath = DEFAULT_AUTH_BASE_PATH, internalSecret, namespace, objectName = "auth" } = options;
+    const { internalSecret, namespace, objectName = "auth" } = options;
 
     /** The object's stub, or `undefined` when the binding is missing. */
     const stub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {
@@ -137,7 +142,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         authHandler: async (request) => {
             // Only auth routes go to the object; everything else falls through to the
             // Lunora worker exactly as it does in D1 mode.
-            if (!isAuthRoutePath(new URL(request.url).pathname, basePath)) {
+            if (!isAuthRoutePath(new URL(request.url).pathname, DEFAULT_AUTH_BASE_PATH)) {
                 return undefined;
             }
 
@@ -170,7 +175,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             }
 
             // `Response.json()` resolves to `unknown`, so narrow once here.
-            const body: null | { expiresAtMs?: number; role?: string; userId?: string } = await response.json();
+            const body: null | { email?: string; expiresAtMs?: number; name?: string; role?: string; userId?: string } = await response.json();
 
             if (!body?.userId) {
                 return null;
@@ -178,11 +183,14 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
 
             // `expiresAtMs` becomes the socket's credential expiry
             // (`x-lunora-identity-exp`) so the DO drops a subscriber whose session has
-            // lapsed; `role` is what RLS role grants are read from. Both are dropped
-            // when absent rather than forwarded as `undefined`, so the claims header
-            // stays byte-identical to before for a session that carries neither.
+            // lapsed; `role` is what RLS role grants are read from; `email`/`name` are
+            // the claims `ctx.auth.getIdentity()` is documented to carry. Each is
+            // dropped when absent rather than forwarded as `undefined`, so the claims
+            // header stays minimal for a session that carries none of them.
             return {
+                ...(typeof body.email === "string" && body.email.length > 0 ? { email: body.email } : {}),
                 ...(typeof body.expiresAtMs === "number" && Number.isFinite(body.expiresAtMs) ? { expiresAtMs: body.expiresAtMs } : {}),
+                ...(typeof body.name === "string" && body.name.length > 0 ? { name: body.name } : {}),
                 ...(typeof body.role === "string" && body.role.length > 0 ? { role: body.role } : {}),
                 userId: body.userId,
             };

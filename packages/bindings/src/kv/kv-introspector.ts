@@ -10,6 +10,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { assertMetadataWithinLimit, assertOneExpirationForm, validateKey } from "./create-kv";
 import type { KVNamespaceLike } from "./types";
 
 /** One KV namespace as the studio's KV browser surfaces it (mirrors the runtime's KvNamespaceSummary). */
@@ -122,6 +123,9 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
 
     const getValue = async (getOptions: { key: string; namespace: string }): Promise<KvValueResultLike> => {
         const ns = resolveNamespace(getOptions.namespace);
+
+        validateKey(getOptions.key);
+
         const result = await ns.getWithMetadata(getOptions.key, "text");
 
         // eslint-disable-next-line unicorn/no-null -- mirrors KV API: null when absent
@@ -140,6 +144,21 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
 
         // `expiration` (absolute) lets the studio round-trip a key's existing TTL
         // on edit so saving a value doesn't silently make an expiring key permanent.
+        // It cannot be combined with `expirationTtl`, which KV would silently
+        // prefer — same rule `createKv` enforces, same helper.
+        assertOneExpirationForm(putOptions);
+
+        // The studio's KV browser builds `key` and `metadata` from free-text
+        // boxes, so the key rules and the 1,024-byte metadata ceiling `createKv`
+        // applies must apply here too — otherwise an over-long key or an
+        // oversized metadata object reaches `ns.put` and comes back as whatever
+        // opaque error the binding raises, naming no limit.
+        validateKey(putOptions.key);
+
+        if (putOptions.metadata !== undefined) {
+            assertMetadataWithinLimit(putOptions.metadata);
+        }
+
         await ns.put(putOptions.key, putOptions.value, {
             expiration: putOptions.expiration,
             expirationTtl: putOptions.expirationTtl,
@@ -149,6 +168,8 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
 
     const deleteKey = async (deleteOptions: { key: string; namespace: string }): Promise<void> => {
         const ns = resolveNamespace(deleteOptions.namespace);
+
+        validateKey(deleteOptions.key);
 
         await ns.delete(deleteOptions.key);
     };

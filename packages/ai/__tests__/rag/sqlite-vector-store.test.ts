@@ -73,6 +73,27 @@ describe("sqliteVectorStore", () => {
         }
     });
 
+    it("refuses a query whose embedding is a different width than the stored vectors", async () => {
+        expect.assertions(2);
+
+        const vectorStore = store();
+
+        // Stored under a 3-dimension model.
+        await vectorStore.upsert({ embed: async () => [1, 0, 0], id: "doc#0", input: "A", metadata: { __ragText: "unrelated A" } });
+        await vectorStore.upsert({ embed: async () => [0, 1, 0], id: "doc#1", input: "B", metadata: { __ragText: "unrelated B" } });
+
+        // Scoring every mismatched row 0 made the ranking degenerate to table
+        // order, so this returned the first `topK` rows — unrelated passages, no
+        // error — which is exactly what changing `embeddingModel` without a
+        // reindex looked like.
+        await expect(vectorStore.query({ embed: async () => [0.5, 0.5, 0.5, 0.5], input: "q", topK: 5 })).rejects.toThrow(
+            /the stored vectors are 3-dimension but the query embedding is 4-dimension/u,
+        );
+        await expect(vectorStore.query({ embed: async () => [0.5, 0.5, 0.5, 0.5], input: "q", topK: 5 })).rejects.toMatchObject({
+            code: "RAG_DIMENSION_MISMATCH",
+        });
+    });
+
     it("declares no dimension or metadata ceiling", () => {
         expect.assertions(2);
 

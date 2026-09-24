@@ -1,10 +1,10 @@
 import type { D1DatabaseLike } from "@lunora/d1";
 import type { R2BucketLike } from "@lunora/storage";
 import { verifySignedUrl } from "@lunora/storage";
-import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
+import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 
-import { authOptions } from "../../lunora/auth.js";
 import { defineApp } from "../../lunora/_generated/app.js";
+import { authOptions } from "../../lunora/auth.js";
 
 interface Env {
     AUTH_SECRET: string;
@@ -57,19 +57,21 @@ const app = defineApp<Env & { PUBLIC_STORAGE_BASE_URL: string }>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .extend(() => ({
-        /**
-         * Shard keys come from the client, so the worker decides who may address
-         * which shard. Channels are open to every signed-in member, so any
-         * authenticated caller may address any channel — and an anonymous one may
-         * address none. Without this the runtime rejects client-named shards
-         * outright (403), which is the safe default.
-         */
-        authorizeShard: ({ identity }) => Boolean(identity?.userId),
-    }))
+    .extend(() => {
+        return {
+            /**
+             * Shard keys come from the client, so the worker decides who may address
+             * which shard. Channels are open to every signed-in member, so any
+             * authenticated caller may address any channel — and an anonymous one may
+             * address none. Without this the runtime rejects client-named shards
+             * outright (403), which is the safe default.
+             */
+            authorizeShard: ({ identity }) => Boolean(identity?.userId),
+        };
+    })
     .build();
 
-export const ShardDO = app.ShardDO;
+export const { ShardDO } = app;
 
 /**
  * Serve the signed object URLs that `ctx.storage.generateUploadUrl` /
@@ -150,12 +152,33 @@ const handleStorageAsset = async (request: Request, env: Env & { PUBLIC_STORAGE_
     });
 };
 
+/**
+ * This entry cannot `export default app` (the signed-asset route has to run
+ * ahead of the worker and the origin has to be threaded onto `env`), so every
+ * other handler `.build()` composes is forwarded by hand. `scheduled`, `queue`
+ * and `email` appear the moment a `lunora/crons.ts`, a `defineQueue` or
+ * `.onEmail(...)` is added, and `lunora deploy` provisions the matching trigger
+ * from the same discovery — an entry exporting only `fetch` gets the trigger
+ * without the handler and Cloudflare fires it into nothing.
+ *
+ * `scheduled`/`queue`/`email` take the raw `env`: `PUBLIC_STORAGE_BASE_URL` is
+ * derived from the inbound request, and there is no request on those paths.
+ */
 export default {
+    email(message: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
+        return app.email?.(message, env, context) ?? Promise.resolve();
+    },
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
         // The builder reads `publicBaseUrl` off `env`, so the request-derived
         // origin is threaded in here rather than shipped in `wrangler.jsonc`.
         const scoped = { ...env, PUBLIC_STORAGE_BASE_URL: storageOrigin(request) };
 
         return (await handleStorageAsset(request, scoped)) ?? app.fetch(request, scoped, context);
+    },
+    queue(batch: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
+        return app.queue?.(batch, env, context) ?? Promise.resolve();
+    },
+    scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
+        return app.scheduled(controller, env, context);
     },
 };

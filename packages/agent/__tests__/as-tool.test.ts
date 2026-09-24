@@ -18,6 +18,18 @@ const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
 const QUOTA_EXCEEDED = /quota exceeded/u;
 const MAX_POLLS_PATTERN = /`maxPolls` must be a positive integer/u;
 const DEPTH_EXCEEDED = /delegation depth/u;
+const TURN_CAP_PATTERN = /Sub-agent "research" hit its turn cap \(maxTurns\)/u;
+
+/**
+ * The Workflows engine's own instance-id check, mirrored so the double rejects
+ * what `binding.create` rejects: at most 100 characters (tested FIRST) matching
+ * `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`, in which `:` is not allowed. A double that
+ * accepts any string is why a sub-agent id carrying a `:` looked fine here and
+ * failed on every attempt in production.
+ */
+const ENGINE_INSTANCE_ID_PATTERN = /^\w[\w-]*$/u;
+
+const engineRejectsInstanceId = (id: unknown): boolean => typeof id !== "string" || id.length > 100 || !ENGINE_INSTANCE_ID_PATTERN.test(id);
 
 /**
  * A mock `AGENT_<NAME>` Workflow binding: `create` records the params + id, and
@@ -25,14 +37,16 @@ const DEPTH_EXCEEDED = /delegation depth/u;
  * (models a run progressing to a terminal state) and whose thread the caller
  * seeds via `finalMessages`.
  */
-const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBindingLike & { created: { id?: string; params?: unknown }[] } => {
+const mockAgentBinding = (statuses: ReadonlyArray<string>, output?: unknown): AgentWorkflowBindingLike & { created: { id?: string; params?: unknown }[] } => {
     const created: { id?: string; params?: unknown }[] = [];
     const remaining = [...statuses];
 
     const instance: AgentWorkflowInstanceLike = {
         sendEvent: async () => {},
         status: async () => {
-            return { status: remaining.length > 1 ? remaining.shift() : remaining[0] };
+            // A real `InstanceStatus` carries the workflow's return value — for an
+            // agent run, the `AgentRunResult` saying why the loop stopped.
+            return { output, status: remaining.length > 1 ? remaining.shift() : remaining[0] };
         },
         terminate: async () => {},
     };
@@ -40,6 +54,11 @@ const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBinding
     return {
         created,
         create: async (options) => {
+            if (engineRejectsInstanceId(options?.id)) {
+                // The engine's exact rejection: `throw new WorkflowError("Workflow instance has invalid id")`.
+                throw new Error("Workflow instance has invalid id");
+            }
+
             created.push({ id: options?.id, params: options?.params });
 
             return { id: options?.id ?? "generated-id" };
@@ -112,9 +131,31 @@ describe(agentAsTool, () => {
 
         expect(output).toBe("the answer");
         expect(binding.created).toHaveLength(1);
-        // Derived from the parent's threadKey + toolCallId — same inputs replay identically.
-        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+        // Derived from the parent's threadKey + toolCallId — same inputs replay
+        // identically. The call id is hashed into the instance id (the thread key
+        // keeps it raw), so no caller's id shape can make it unacceptable to `create`.
+        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
         expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9" });
+    });
+
+    it("starts the child under an id the engine accepts when the caller is codeTool", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
+
+        // `codeTool` hands each script step a per-step tool-call id built as
+        // `${context.toolCallId}:${step.id}` (pinned by code-tool.test.ts's
+        // `toolCallId: "call_1:a"`), and its `tools` map takes any `AnyAgentTool`
+        // — `agentAsTool`'s result included. Spliced straight into the instance
+        // id, that colon is rejected by `create`; the rejection is not a
+        // duplicate, so it rethrows, the enclosing `step.do` burns its retries,
+        // and `codeTool` + `asTool` never worked together at all.
+        const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
+        const output = await tool.execute({ prompt: "find X" }, context({ AGENT_RESEARCH: binding }, run, { toolCallId: "call_9:fetch" }));
+
+        expect(output).toBe("the answer");
+        expect(binding.created[0]?.id).toStrictEqual(expect.stringMatching(ENGINE_INSTANCE_ID_PATTERN));
+        // The thread key is not an instance id and keeps carrying the raw call id.
+        expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "find X", threadKey: "thread-1::sub::research::call_9:fetch" });
     });
 
     it("polls the child run's status until it reaches a terminal state", async () => {
@@ -213,7 +254,7 @@ describe(agentAsTool, () => {
 
         expect(result.stopped).toBe("final");
         expect(journal.invoked).toStrictEqual(["llm:turn:0", "tool:research:call_9", "llm:turn:1"]);
-        expect(binding.created[0]?.id).toBe("sub-research-call_9");
+        expect(binding.created[0]?.id).toBe("sub-research-97062c995ebfee41");
 
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
 
@@ -345,5 +386,36 @@ describe("sub-agent recursion bound", () => {
         const tool = agentAsTool({ description: "d", maxPolls: 2, name: "research", wait: immediate });
 
         await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+    });
+});
+
+describe("child-run reporting", () => {
+    it("says the child hit its turn cap instead of returning an empty answer", async () => {
+        // A run that stops on `maxTurns` still COMPLETES its workflow, and it has no
+        // assistant turn without pending tool calls — so `finalAnswer` came back "".
+        const binding = mockAgentBinding(["complete"], { stopped: "maxTurns", turns: 8 });
+        const { run } = runWithChildThread([{ content: "", role: "assistant", seq: 1, toolCalls: [{ id: "c", input: {}, name: "t" }] }]);
+
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(TURN_CAP_PATTERN);
+    });
+
+    it("creates the child thread under the PARENT run's owner", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 1 }]);
+
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { owner: "user-7" }));
+
+        // Created ownerless, the sub-thread of an owned conversation was readable by
+        // anyone who knew its (derivable) key.
+        expect(binding.created[0]?.params).toStrictEqual({
+            depth: 1,
+            input: "go",
+            owner: "user-7",
+            threadKey: "thread-1::sub::research::call_9",
+        });
     });
 });

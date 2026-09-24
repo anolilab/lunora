@@ -476,6 +476,10 @@ class LunoraClient {
     final frames = <Map<String, Object?>>[
       for (final entry in _subscriptions.entries)
         buildSubscribeFrame(entry.key, entry.value.functionPath, entry.value.args, sinceSeq: entry.value.cursor, sinceEpoch: entry.value.epoch),
+      // BOTH registries. A resend that walks only the queries leaves every shape
+      // view subscribed to a socket that no longer exists, so after the first
+      // drop it stops receiving pokes forever and nothing says so.
+      ..._shapeRegistry.resendFrames(),
     ];
 
     for (final frame in frames) {
@@ -511,8 +515,20 @@ class LunoraClient {
     switch (kind) {
       case 'data':
       case 'delta':
-        final value = decodeWire(frame['data'] ?? frame['delta']);
         final entry = id == null ? null : _subscriptions[id];
+        final Object? value;
+
+        try {
+          value = decodeWire(frame['data'] ?? frame['delta']);
+        } on WireFormatException catch (error) {
+          // A malformed payload belongs on the subscription's error callback,
+          // not on the socket read loop's stack. Letting it escape ended that
+          // loop — and with it every OTHER subscription on this client — over one
+          // bad frame.
+          entry?.onError?.call(LunoraSubscriptionError('INVALID_FRAME', error.message));
+
+          return 'error';
+        }
 
         if (entry != null) {
           // Order matters, and matches the reference client: record the
@@ -565,8 +581,15 @@ class LunoraClient {
 
         return kind;
       case 'complete':
+        // NON-DESTRUCTIVE, and that is the whole point: removing the entry
+        // takes it out of the map `resendSubscriptions` walks, so the query
+        // froze for the life of the process across every future reconnect, with
+        // nothing reported. Fan a cancellation to the listener and leave the
+        // registration in place; the next reconnect resubscribes it.
+        const cancelled = LunoraSubscriptionError('SUBSCRIPTION_CANCELLED', 'subscription was cancelled by the server');
+
         if (id != null) {
-          _subscriptions.remove(id);
+          _subscriptions[id]?.onError?.call(cancelled);
         }
 
         return kind;
@@ -601,7 +624,12 @@ class LunoraClient {
   /// Called for you on the transition to connected; public because a caller that
   /// knows connectivity came back some other way may want to trigger it. See
   /// [OfflineReplayer], which owns the ordering and classification rules.
-  Future<void> flushOfflineQueue({String? shardKey}) => _replayer.flush(shardKey: shardKey);
+  ///
+  /// Returns the milliseconds the server asked the caller to wait before
+  /// flushing again, when a replay came back rate-limited, and null otherwise.
+  /// The client enforces it too — a flush inside the window is a no-op — so this
+  /// is for a caller that schedules its own retry.
+  Future<int?> flushOfflineQueue({String? shardKey}) => _replayer.flush(shardKey: shardKey);
 
   // ─── Optimistic updates ───────────────────────────────────────────────────
 

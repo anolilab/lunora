@@ -7,7 +7,7 @@
 declare module "sql.js" {
     interface SqlJsDatabase {
         close: () => void;
-        exec: (sql: string, params?: unknown[]) => { columns: string[]; values: unknown[][] }[];
+        exec: (sql: string, params?: unknown[], config?: { useBigInt?: boolean }) => { columns: string[]; values: unknown[][] }[];
         run: (sql: string, params?: unknown[]) => void;
     }
 
@@ -25,6 +25,7 @@ declare module "better-sqlite3" {
         all: (params?: unknown[]) => unknown[];
         get: (params?: unknown[]) => unknown;
         run: (params?: unknown[]) => { lastInsertRowid: number | bigint };
+        safeIntegers: (toggle?: boolean) => unknown;
     }
 
     class Database {

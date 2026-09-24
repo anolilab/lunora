@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
@@ -28,6 +28,7 @@ import {
     inferLunoraBindings,
     isInteractive,
     packageNamesFromBindings,
+    parseDevVariableEntries,
     readLiveDevServerState,
     readProjectRemotePreference,
     resolveDeployDriver,
@@ -47,6 +48,7 @@ import { defineHandler } from "../../util/command";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
+import { EXIT_CODE } from "../../util/exit-code";
 import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -57,6 +59,7 @@ import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
+import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import {
@@ -124,6 +127,8 @@ interface DevCommandOptions {
     flavor?: DevFlavor;
     /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
     hasIpv6Loopback?: () => boolean;
+    /** `wrangler dev` devtools inspector port (`--inspector-port`). Wrangler flavor only — see {@link resolveInspectorPort}. */
+    inspectorPort?: number;
 
     /**
      * Logs are NDJSON on stdout (`--json`, or a detected AI agent). Forwarded to
@@ -150,7 +155,7 @@ interface DevCommandOptions {
 
     /** Disable the embedded studio server. */
     studio?: boolean;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
+    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 
     /**
@@ -308,18 +313,63 @@ const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean, sidecarCon
     return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
 };
 
+/** Hosts a `.dev.vars` origin can name that resolve to this machine. */
+const LOOPBACK_ORIGIN_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
+
+/**
+ * `.dev.vars` keys whose value is a loopback origin on `port` — i.e. the keys
+ * that pin the project to the worker serving there. `AUTH_URL`,
+ * `BETTER_AUTH_URL` and the templates' app-origin vars are all written as
+ * `http://localhost:8787` by the scaffolds.
+ */
+const devVariablesPinningPort = (cwd: string, port: number): string[] => {
+    let content: string;
+
+    try {
+        content = readFileSync(join(cwd, DEV_VARS_FILE), "utf8");
+    } catch {
+        // No `.dev.vars` (or unreadable) — nothing is pinned.
+        return [];
+    }
+
+    const pinned: string[] = [];
+
+    for (const entry of parseDevVariableEntries(content)) {
+        let parsed: URL;
+
+        try {
+            parsed = new URL(entry.value);
+        } catch {
+            continue;
+        }
+
+        if (LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port)) {
+            pinned.push(entry.key);
+        }
+    }
+
+    return pinned;
+};
+
 /**
  * Resolve the port `wrangler dev` binds, so Lunora knows the worker origin up
  * front (the studio proxies to it). Precedence — an explicit choice always wins:
  *
- * 1. `--port` / `--worker-port` on the CLI (`options.workerPort`).
+ * 1. `--worker-port` on the CLI (`options.workerPort`).
  * 2. `dev.port` pinned in the project's wrangler config.
  * 3. The first free port at/above 8787.
  *
- * Step 3 restores the free-port fallback that a fixed `--port` would otherwise
+ * Step 3 restores the free-port fallback that a fixed port would otherwise
  * disable: `wrangler dev` only auto-probes for an open port when none is passed,
  * so without this two projects both defaulting to 8787 would collide (the second
  * crashing with `EADDRINUSE`) instead of the second one landing on 8788.
+ *
+ * That fallback is silent, though, and a project whose `.dev.vars` names
+ * `http://localhost:8787` has committed to that port: OAuth callbacks and the
+ * client's own origin are registered against it, and a worker on 8788 answers
+ * none of them. Refuse rather than drift, naming the keys that disagree —
+ * `--worker-port` is the escape when the operator means it. Projects that pin
+ * nothing keep the silent fallback, which is the case it was added for.
  */
 const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promise<number> => {
     if (options.workerPort !== undefined) {
@@ -336,7 +386,56 @@ const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promi
         }
     }
 
-    return (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
+    const port = await (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
+
+    if (port === DEFAULT_WORKER_PORT) {
+        return port;
+    }
+
+    const pinned = devVariablesPinningPort(cwd, DEFAULT_WORKER_PORT);
+
+    if (pinned.length > 0) {
+        throw new Error(
+            `port ${String(DEFAULT_WORKER_PORT)} is in use, but ${DEV_VARS_FILE} pins the worker origin to it (${pinned.join(", ")}). ` +
+                `Serving on ${String(port)} would leave those URLs pointing at nothing. Stop whatever holds ${String(DEFAULT_WORKER_PORT)}, ` +
+                `or run \`lunora dev --worker-port ${String(port)}\` and update those values to match.`,
+        );
+    }
+
+    return port;
+};
+
+/**
+ * Resolve the port `wrangler dev` exposes its devtools inspector on. Precedence
+ * mirrors {@link resolveWorkerPort} — an explicit choice always wins:
+ *
+ * 1. `--inspector-port` on the CLI (`options.inspectorPort`).
+ * 2. `dev.inspector_port` pinned in the project's wrangler config.
+ * 3. `undefined` — no `--inspector-port` reaches wrangler, which keeps its own default: 9229, probing upward while that is taken.
+ *
+ * Step 3 is deliberately NOT the free-port probe the worker port falls back to.
+ * Wrangler already walks upward on its own, and pinning a port from here would
+ * claim one nothing asked for. The walk is what makes this worth configuring at
+ * all: in a repo where other `wrangler dev` processes pin 9230+ in their own dev
+ * scripts, an unpinned inspector climbs into one of THEIR ports and kills a
+ * worker that named the port in its config — so the fix is to make pinning
+ * possible, not to start pinning by default.
+ */
+const resolveInspectorPort = (options: DevCommandOptions, cwd: string): number | undefined => {
+    if (options.inspectorPort !== undefined) {
+        return options.inspectorPort;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath === undefined) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<{ dev?: { inspector_port?: unknown } }>(wranglerPath);
+    const pinned = parsed?.dev?.inspector_port;
+
+    return typeof pinned === "number" ? pinned : undefined;
 };
 
 /**
@@ -394,6 +493,17 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             );
         }
 
+        // `--inspector-port` is a `wrangler dev` flag and this branch spawns no
+        // `wrangler dev` of its own, so say where the knob actually lives rather
+        // than accepting the flag and dropping it.
+        if (options.inspectorPort !== undefined) {
+            options.logger.warn(
+                flavor === "framework-worker"
+                    ? `--inspector-port does not apply to the ${flavor} flavor: pin \`dev.inspector_port\` in ${DEV_WRANGLER_CONFIG} — that is the config the worker sidecar runs.`
+                    : `--inspector-port does not apply to the ${flavor} flavor: Vite owns the worker. Pin it in vite.config — \`lunora({ cloudflare: { inspectorPort: ${String(options.inspectorPort)} } })\`.`,
+            );
+        }
+
         return {
             runsCodegenWatch: false,
             flavor,
@@ -442,7 +552,20 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     // On a host without IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't
     // abort trying to bind its default `[::1]` (see resolveLoopbackArgs).
     const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), ...loopbackArgs, "--var", "WORKER_ENV:development", ...remote.args]);
+    // Only when something actually asked for a port. Passing wrangler's own
+    // default here would pin 9229 for every project — including the ones relying
+    // on wrangler walking off it — which is the opposite of what #689 needs.
+    const inspectorArgs = options.inspectorPort === undefined ? [] : ["--inspector-port", String(options.inspectorPort)];
+    const exec = execArgsFor(manager, "wrangler", [
+        "dev",
+        "--port",
+        String(workerPort),
+        ...inspectorArgs,
+        ...loopbackArgs,
+        "--var",
+        "WORKER_ENV:development",
+        ...remote.args,
+    ]);
 
     return {
         runsCodegenWatch: codegenRequested(options),
@@ -546,8 +669,13 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
                 logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
                 resolve(1);
             });
-            child.on("exit", (code) => {
-                resolve(code ?? 0);
+            child.on("exit", (code, signal) => {
+                // A signal-killed child reports `code === null`; treat that as a
+                // failure rather than a clean exit, matching `util/spawn.ts` and
+                // `lifecycle.ts`. An OOM-SIGKILLed or segfaulting `wrangler dev`
+                // used to make `lunora dev` exit 0, so a task runner supervising
+                // it saw a crashed worker as a successful run.
+                resolve(code ?? (signal ? 1 : 0));
             });
         }),
         kill: (signal) => {
@@ -900,8 +1028,12 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
     // The vite flavor lets Vite resolve its own port; only the wrangler flavor
     // needs a pre-picked free port passed through as `--port`.
     const workerPort = flavor === "wrangler" ? await resolveWorkerPort(options, cwd) : options.workerPort;
+    // Same split for the inspector: the other flavors get the flag back as a
+    // warning (see `planDevCommand`), so the wrangler-config fallback is only
+    // read where a `wrangler dev` argv exists to carry it.
+    const inspectorPort = flavor === "wrangler" ? resolveInspectorPort(options, cwd) : options.inspectorPort;
 
-    return planDevCommand({ ...options, cwd, flavor, workerPort });
+    return planDevCommand({ ...options, cwd, flavor, inspectorPort, workerPort });
 };
 
 /**
@@ -1035,6 +1167,10 @@ const startStudioBestEffort = async (
 
     try {
         return await (options.startStudio ?? startStudioServer)({
+            // The studio's schema-edit / policy-scaffold endpoints regenerate
+            // in-process, so they need the SAME apiSpec this run's own codegen uses
+            // — codegen deletes the spec file its mode does not name.
+            apiSpec: options.apiSpec,
             cwd,
             logger: {
                 warnOnce: (message) => {
@@ -1094,9 +1230,12 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
  * studio, codegen) are injectable so this is testable without real I/O.
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
-    const plan = await buildDevPlan(options);
     const { logger } = options;
-    const cwd = plan.wrangler.cwd ?? process.cwd();
+    // Resolved the same way `buildDevPlan` / `planDevCommand` resolve them, so
+    // the pre-plan work below sees exactly the project (and flavor) the plan
+    // will describe.
+    const cwd = options.cwd ?? process.cwd();
+    const flavor = options.flavor ?? detectDevFlavor(cwd);
     // Resolved for every flavor, not just the ones that run the codegen watcher:
     // the `vite` and `framework-worker` flavors have `runsCodegenWatch === false`,
     // so gating on it accepted `--target` and then used it nowhere — while
@@ -1109,6 +1248,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // spawn, and `toolchain?.dev(...)` used to fall through to `wrangler dev` —
     // serving a Node-target app on Cloudflare's runtime, then hard-failing at
     // deploy.
+    //
+    // Ahead of `buildDevPlan`, so a bad `--target` throws before the `--remote`
+    // temp config is written rather than orphaning that file in the project root
+    // (where the templates' exact-name `.wrangler` ignore does not match it).
+    // There is nothing to tear down yet on this path.
     const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
 
     if (resolvedTarget.target === undefined) {
@@ -1116,8 +1260,29 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     }
 
     const { target } = resolvedTarget;
-    // Register the remote temp-config disposer up front so it's torn down on
-    // every exit path — including a throw during startup below (the `finally`).
+
+    // Auto-provision the bindings the project's code implies, the same way
+    // `@lunora/vite` does on every dev-server start — for the wrangler flavor
+    // there is no plugin to do it, so a newly exported `SchedulerDO` /
+    // `defineWorkflow` / `defineQueue` used to get its binding only at
+    // `lunora deploy`, and `lunora dev` ran a worker missing it until then.
+    // Idempotent and best-effort (it logs and moves on), so it is safe on every
+    // start. No cron argument: dev has no codegen result to prove the project's
+    // cron set here, and clearing a committed `triggers.crons` on a guess would
+    // stop production crons.
+    //
+    // BEFORE `buildDevPlan`, which under `--remote` snapshots `wrangler.jsonc`
+    // into the temp config the spawned wrangler runs with (`--config`). Taken
+    // first, that copy is a binding short — the worker booted without the
+    // binding this call had just written. Same ordering the Vite plugin's remote
+    // path had to adopt.
+    if (flavor === "wrangler") {
+        await provisionBindings(cwd, logger, undefined, target, undefined);
+    }
+
+    const plan = await buildDevPlan({ ...options, flavor });
+    // Torn down on every exit path, including a throw during startup (the
+    // `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
 
     try {
@@ -1201,7 +1366,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (emitted.error !== undefined) {
             logger.error(emitted.error);
 
-            return { code: 1, plan };
+            return { code: EXIT_CODE.USAGE, plan };
         }
 
         // After the studio start, so the two overlap, but before the worker below:
@@ -1298,6 +1463,30 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     }
 };
 
+/**
+ * The three negatable `lunora dev` booleans, mapped from parsed cerebro options
+ * onto {@link DevCommandOptions}.
+ *
+ * cerebro parses `--no-codegen` / `--no-studio` / `--no-worker` as the negation
+ * of the positive boolean (the runtime key drops the `no-` prefix), so a passed
+ * flag arrives as `false` and an absent one as `undefined` — which every reader
+ * treats as "on" via `!== false`.
+ *
+ * All three map here, in one place returning the whole slice, because this is
+ * exactly what went wrong: the mapping was written per flag and `worker` was
+ * never added, so `--no-worker` was declared, documented and forwarded to the
+ * daemon while the foreground path always spawned `wrangler dev` anyway — and
+ * the documented monorepo recipe died with `EADDRINUSE`. A slice-shaped mapper
+ * makes a missing key a type error rather than a silent no-op.
+ */
+const negatableDevFlags = (options: Pick<DevOptions, "codegen" | "studio" | "worker">): Pick<DevCommandOptions, "codegen" | "studio" | "worker"> => {
+    return {
+        codegen: options.codegen === false ? false : undefined,
+        studio: options.studio === false ? false : undefined,
+        worker: options.worker === false ? false : undefined,
+    };
+};
+
 /** `lunora dev` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ argument, cwd, logger, options }) => {
     const json = options.json === true;
@@ -1329,7 +1518,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     // Remote-binding mode obeys a clear precedence: an explicit `--remote`
     // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
-    // key in the project's `lunora.json` (a project default). See
+    // key in the project's `lunora.config.*` (a project default). See
     // `resolveRemoteEnabled` in @lunora/config.
     const remote = resolveRemoteEnabled({
         configPreference: readProjectRemotePreference(cwd),
@@ -1352,19 +1541,16 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     return runDevCommand({
         apiSpec: parseApiSpec(options.apiSpec),
-        // cerebro parses `--no-codegen`/`--no-studio` as the negation of the
-        // `codegen`/`studio` booleans (runtime key drops the `no-` prefix), so a
-        // passed flag arrives as `false`, absent as `true` (the option default).
-        codegen: options.codegen === false ? false : undefined,
         cwd,
         emitBindings: options.emitBindings,
+        inspectorPort: options.inspectorPort,
         jsonLogs,
         logger,
         port: options.port,
         remote,
-        studio: options.studio === false ? false : undefined,
         target: options.target,
         workerPort: options.workerPort,
+        ...negatableDevFlags(options),
     });
 });
 
@@ -1374,4 +1560,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { planDevCommand, resolveWorkerPort, runDevCommand };
+export { defaultWorkerSpawner, negatableDevFlags, planDevCommand, resolveInspectorPort, resolveWorkerPort, runDevCommand };

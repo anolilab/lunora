@@ -1,3 +1,141 @@
+## @lunora/platform-cloudflare [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.47...@lunora/platform-cloudflare@1.0.0-alpha.48) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/platform-cloudflare [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.46...@lunora/platform-cloudflare@1.0.0-alpha.47) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/platform-cloudflare [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.45...@lunora/platform-cloudflare@1.0.0-alpha.46) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/platform-cloudflare [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.44...@lunora/platform-cloudflare@1.0.0-alpha.45) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/platform-cloudflare [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.43...@lunora/platform-cloudflare@1.0.0-alpha.44) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/platform-cloudflare [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.42...@lunora/platform-cloudflare@1.0.0-alpha.43) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/platform-cloudflare [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.41...@lunora/platform-cloudflare@1.0.0-alpha.42) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/platform-cloudflare [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.40...@lunora/platform-cloudflare@1.0.0-alpha.41) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/platform-cloudflare [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.39...@lunora/platform-cloudflare@1.0.0-alpha.40) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/platform-cloudflare [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.38...@lunora/platform-cloudflare@1.0.0-alpha.39) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/platform-cloudflare [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.37...@lunora/platform-cloudflare@1.0.0-alpha.38) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
+## @lunora/platform-cloudflare [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.36...@lunora/platform-cloudflare@1.0.0-alpha.37) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
+## @lunora/platform-cloudflare [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.35...@lunora/platform-cloudflare@1.0.0-alpha.36) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/platform-cloudflare [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.34...@lunora/platform-cloudflare@1.0.0-alpha.35) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/platform-cloudflare [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.33...@lunora/platform-cloudflare@1.0.0-alpha.34) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.27
+
+## @lunora/platform-cloudflare [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.32...@lunora/platform-cloudflare@1.0.0-alpha.33) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/platform-cloudflare [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.31...@lunora/platform-cloudflare@1.0.0-alpha.32) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/platform:** upgraded to 1.0.0-alpha.26
+
+## @lunora/platform-cloudflare [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.30...@lunora/platform-cloudflare@1.0.0-alpha.31) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/platform:** upgraded to 1.0.0-alpha.25
+
 ## @lunora/platform-cloudflare [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/platform-cloudflare@1.0.0-alpha.29...@lunora/platform-cloudflare@1.0.0-alpha.30) (2026-09-02)
 
 

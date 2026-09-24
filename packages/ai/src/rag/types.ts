@@ -226,10 +226,91 @@ export interface RagLexicalStore {
      * Rank chunks by lexical relevance to `query`. `filter` carries the same
      * (RLS-merged) metadata predicate handed to the vector leg — a store that
      * indexes metadata MUST honour it so hybrid retrieval can't surface a row
-     * the RLS filter would exclude; a namespace-only store (the reference
-     * adapter) isolates by `namespace` and documents that it ignores `filter`.
+     * the RLS filter would exclude. The shipped `bm25LexicalStore` does — it
+     * evaluates the predicate against each document's stored `metadata`. A store
+     * that indexes no metadata has nothing to filter on and must fail CLOSED on
+     * every filtered query rather than ignore the predicate.
      */
     search: (query: string, options: { filter?: Record<string, unknown>; namespace?: string; topK: number }) => Promise<ReadonlyArray<LexicalMatch>>;
+}
+
+/**
+ * One graph hit returned by {@link RagGraphStore.related}.
+ * @experimental
+ */
+export interface GraphMatch {
+    /** The chunk vector id — the same id scheme the other legs use, so RRF can fuse the three. */
+    id: string;
+
+    /**
+     * Depth-decaying PROXIMITY, not relevance: `1` for a direct neighbour,
+     * halving per hop — exactly what `ctx.db.related` puts on each node. `hybridRank`
+     * scales this leg's RRF term by it, so a leg of distant hits weighs less than
+     * a leg of direct ones even when the two rank identically among themselves.
+     * Values outside `[0, 1]` are clamped.
+     */
+    score: number;
+    /** The chunk text, returned so a graph-only hit needs no extra hydration round-trip. */
+    text: string;
+}
+
+/**
+ * Pluggable relation-graph store — the third retrieval signal, alongside the
+ * vector (semantic) and lexical (keyword) legs.
+ *
+ * Keyword and embedding search both answer "which passages look like this
+ * question". Neither can answer "what is this connected to" when the connecting
+ * fact lives in a foreign key rather than in the text — a ticket's customer, a
+ * customer's other tickets, those tickets' messages. `ctx.db.related` walks
+ * exactly that graph, and this is the seam that feeds its result into retrieval.
+ *
+ * Implement it over a Lunora app whose RAG source ids ARE document ids: expand
+ * from the seed ids with `ctx.db.related`, then return the indexed chunks of the
+ * documents it reached, each carrying that node's `score`. Mirrors the
+ * {@link RagLexicalStore} shape (namespace-partitioned, `topK`-bounded).
+ * @experimental
+ */
+export interface RagGraphStore {
+    /**
+     * Whether {@link RagGraphStore.related} applies the `filter` it is handed to
+     * every document it returns.
+     *
+     * Required, and asked rather than assumed, because the honest answer is not
+     * derivable: `related` is somebody else's traversal and this package cannot
+     * see whether it narrows. `retrieve()` passes the SAME effective filter to
+     * all three legs — the caller's filter with `RagConfig.rlsFilter` merged
+     * over it — and the vector and lexical stores enforce it. A graph store that
+     * ignored it would return the neighbours of a document the caller may see
+     * even when those neighbours belong to another tenant, which is a leak the
+     * other two legs are specifically built to prevent. So a store that answers
+     * `false` is SKIPPED whenever a filter is in play, rather than trusted:
+     * retrieval loses its third signal and keeps its isolation. With no filter
+     * (no `rlsFilter`, no `RetrieveOptions.filter`) there is nothing to enforce
+     * and `false` costs nothing.
+     *
+     * Answer `true` only if every returned chunk's document really is matched
+     * against the filter — `ctx.db.related` under a schema with RLS policies
+     * does not count on its own, because the filter here is RAG metadata, not a
+     * row policy. The stricter reading is the safe one: if in doubt, `false`.
+     */
+    enforcesFilter: boolean;
+
+    /**
+     * Expand from the SOURCE document ids the search legs found and return
+     * chunks of the documents they connect to, best (nearest) first.
+     *
+     * Seeded rather than queried: the graph has no notion of a query string, so
+     * it widens a ranking the other legs produced instead of ranking on its own.
+     * A seed id that is not a graph node simply contributes nothing.
+     *
+     * `options.filter` is the effective metadata filter for this retrieval, and
+     * is present only for stores that declared {@link RagGraphStore.enforcesFilter}
+     * — see there for what declaring it commits you to.
+     */
+    related: (
+        sourceIds: ReadonlyArray<string>,
+        options: { filter?: Record<string, unknown>; namespace?: string; topK: number },
+    ) => Promise<ReadonlyArray<GraphMatch>>;
 }
 
 /**
@@ -361,6 +442,17 @@ export interface RagConfig {
      * name is not found here — catches spelling mistakes early.
      */
     filters?: Record<string, RagNamedFilter>;
+
+    /**
+     * Pluggable relation-graph store — the third retrieval signal. When set,
+     * `retrieve()` seeds a traversal from the source documents the vector and
+     * lexical legs found and fuses the connected documents' chunks into the same
+     * RRF ranking, weighted by how far away they are. See {@link RagGraphStore}.
+     */
+    graphStore?: RagGraphStore;
+
+    /** Retrieval depth for the graph leg. Defaults to the effective candidate pool. */
+    graphTopK?: number;
 
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
@@ -514,7 +606,8 @@ export interface IndexInput {
     onChunk?: (info: { chunkIndex: number; id: string; text: string; total: number }) => void;
 
     /**
-     * Index this source even when its content hash is unchanged.
+     * Index this source even when its identity hash (`text` + `metadata` +
+     * `importance`) is unchanged.
      *
      * The hash short-circuit skips chunking, embedding and every write — which
      * is what makes a cron re-sync cheap, and also what makes attaching a
@@ -540,8 +633,11 @@ export interface IndexResult {
     ids: ReadonlyArray<string>;
 
     /**
-     * True when the source's content hash matched the previously indexed hash —
+     * True when the source's identity hash — its `text`, `metadata` and
+     * `importance` together — matched the previously indexed one, so
      * chunking/embedding/upserts were skipped entirely (a no-op re-sync).
+     * Changing `metadata` alone (a tenant move, an ACL correction) therefore
+     * re-indexes: the old values are what `rlsFilter` scopes retrieval on.
      */
     unchanged: boolean;
 }
@@ -575,7 +671,18 @@ export interface RetrieveOptions {
      * call time, catching spelling mistakes early.
      */
     filter?: Record<string, unknown> | string;
-    /** Drop matches whose (importance-adjusted) score falls below this threshold. */
+
+    /**
+     * Drop matches whose (importance-adjusted) score falls below this threshold.
+     *
+     * Applied to the VECTOR leg, where the score is still the cosine scale this
+     * option is documented against — every fusion below replaces `score` with an
+     * RRF score, and thresholding that against a cosine number keeps or drops
+     * chunks essentially at random. A chunk the vector leg rejected here stays
+     * rejected even if the lexical leg also ranks it; a lexical-only hit the
+     * vector leg never scored is NOT gated, since its BM25 score is not on this
+     * scale (see `hybridRank`).
+     */
     minScore?: number;
     namespace?: string;
 

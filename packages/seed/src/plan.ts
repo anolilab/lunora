@@ -6,7 +6,7 @@ import { generateValue } from "./generate-value";
 import type { FieldSpec } from "./introspect";
 import { fkParentClosure, introspectSchema, orderTables } from "./introspect";
 import type { UniqueDeal } from "./unique-value";
-import { planUniqueDeal } from "./unique-value";
+import { planUniqueDeal, planUniqueFkDeal } from "./unique-value";
 
 /**
  * The pure, I/O-free core of seeding. {@link seedPlan} introspects a schema,
@@ -130,6 +130,39 @@ const fkPool = (
 };
 
 /**
+ * The parent a SELF-referencing `.unique()` foreign key points at.
+ *
+ * Its pool is not known at plan time (it is the rows this very batch has yet to
+ * generate), so it carries no {@link UniqueDeal} and the choice is made here —
+ * and it has to be distinct for every row by construction, since a UNIQUE index
+ * covers the column.
+ *
+ * Candidates are ordered `[...alreadyInTheStore, ...earlierRowsOfThisBatch]`
+ * and row `localIndex` takes the entry at that position: the list has grown to
+ * exactly `existing.length + localIndex` entries by the time the row needs one,
+ * so the position is in range whenever the table already holds a row, and every
+ * row lands on a different candidate. Taking the pool's LAST entry instead —
+ * which is what `fkPool` appends `existingIds` to the end for — handed EVERY row
+ * the same pre-existing id and violated the constraint on the second row.
+ *
+ * With nothing pre-existing the list is just this batch's earlier rows and the
+ * position runs off its end; the last of them (the immediately preceding row) is
+ * then the one choice distinct for every row. Row 0 of an empty table has no
+ * candidate at all and never reaches here — `generateField` has already taken
+ * the empty-pool branch.
+ */
+const selfReferenceParent = (
+    table: string,
+    localIndex: number,
+    idsByTable: ReadonlyMap<string, ReadonlyArray<string>>,
+    existingIds: Readonly<Record<string, ReadonlyArray<string>>>,
+): string | undefined => {
+    const candidates = [...(existingIds[table] ?? []), ...(idsByTable.get(table) ?? []).slice(0, localIndex)];
+
+    return candidates[localIndex] ?? candidates.at(-1);
+};
+
+/**
  * The canonical copycat hash input for one cell: a stable tuple per
  * `(seed, table, row index, column)`. Both the primary key and every column
  * value derive from this same shape so the two can never silently drift.
@@ -170,7 +203,16 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
             return fkFallback(field, input);
         }
 
-        return copycat.oneOf(input, pool);
+        if (!field.unique) {
+            return copycat.oneOf(input, pool);
+        }
+
+        const fkDeal = uniqueDeals.get(field.name);
+
+        // A self-reference's pool is not known at plan time, so it carries no
+        // deal (see `planUniqueDeals`) and `selfReferenceParent` picks the one
+        // candidate that is distinct for every row.
+        return fkDeal === undefined ? selfReferenceParent(table, localIndex, idsByTable, existingIds) : fkDeal.valueAt(index, () => copycat.oneOf(input, pool));
     }
 
     // Columns the server fills (.default()/.$defaultFn()) are left out so the
@@ -191,6 +233,42 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
 };
 
 /**
+ * Refuse a `.unique()` SELF-referencing foreign key into a table that already
+ * holds rows.
+ *
+ * A self-reference is dealt the preceding row rather than from a pool, which is
+ * distinct within one batch and says nothing across calls: `existingIds` carries
+ * the table's row IDS, never the values those rows already store IN this column,
+ * so nothing here can tell which parents are taken — and `indexOffset` only keeps
+ * `_id` from repeating. Inserting anyway violates the constraint the deal exists
+ * to satisfy, so it is refused with the column named, as the pool-capacity check
+ * already does.
+ *
+ * An override is the escape hatch: the caller then owns the values, and the
+ * planner does not need to know what is stored.
+ * @param field The self-referencing field.
+ * @param table The table being seeded.
+ * @param poolOf The parent pool resolver — for a self-reference this is the
+ * table's pre-existing ids, since its own batch has generated none yet.
+ * @param tableOverrides Caller-supplied column values for this table.
+ */
+const assertSelfReferenceDealable = (
+    field: FieldSpec,
+    table: string,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
+    tableOverrides: Record<string, unknown>,
+): void => {
+    if (poolOf(field).length === 0 || Object.hasOwn(tableOverrides, field.name)) {
+        return;
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `cannot seed into the non-empty table "${table}": unique self-referencing column "${field.name}" cannot be dealt across calls, because the values already stored in it are not knowable from the row ids. Seed the table in one call, or supply "${field.name}" yourself.`,
+    );
+};
+
+/**
  * Decide how every `.unique()` column of one table deals its values, and fail
  * fast when a column cannot produce as many distinct values as the batch asks
  * for — otherwise the collision only surfaces later as a raw UNIQUE-constraint
@@ -202,10 +280,18 @@ const generateField = (field: FieldSpec, context: RowContext): unknown => {
  * batches of 2 over a 3-value domain pass and then collide (index 3 wraps onto
  * index 0), which is the exact scenario the offset feature enables.
  *
- * FK and server-defaulted columns are skipped entirely (their values never come
- * from the generator). An overridden column still gets a deal — an override may
- * resolve to `undefined` and defer back to the generator — but its capacity is
- * not asserted, since the caller supplying the values decides their uniqueness.
+ * Server-defaulted columns are skipped (their values never reach the generator)
+ * — but a FOREIGN KEY does reach it, default or not, since `generateField`
+ * resolves the FK before it consults the default. A foreign key is dealt from
+ * its parent pool, whose size is the capacity; a SELF-referencing one is dealt
+ * the preceding row by `generateField` instead, because its pool is the rows this
+ * very batch has yet to generate — and is REFUSED once the table
+ * already holds rows, since the values they store in that column cannot be read
+ * back from the row ids and a repeat would violate the constraint.
+ *
+ * An overridden column still gets a deal — an override may resolve to
+ * `undefined` and defer back to the generator — but its capacity is not
+ * asserted, since the caller supplying the values decides their uniqueness.
  */
 const planUniqueDeals = (
     fields: ReadonlyArray<FieldSpec>,
@@ -214,15 +300,32 @@ const planUniqueDeals = (
     offset: number,
     now: number,
     tableOverrides: Record<string, unknown>,
+    poolOf: (field: FieldSpec) => ReadonlyArray<string>,
 ): ReadonlyMap<string, UniqueDeal> => {
     const deals = new Map<string, UniqueDeal>();
 
     for (const field of fields) {
-        if (!field.unique || field.fkTable !== undefined || field.hasServerDefault) {
+        if (!field.unique || (field.hasServerDefault && field.fkTable === undefined)) {
             continue;
         }
 
-        const deal = planUniqueDeal(field, { now, table });
+        if (field.fkTable === table) {
+            assertSelfReferenceDealable(field, table, poolOf, tableOverrides);
+
+            continue;
+        }
+
+        const pool = field.fkTable === undefined ? undefined : poolOf(field);
+
+        // An FK with no parent to point at never reaches the pool: every row
+        // takes `fkFallback`, which is a fresh uuid (distinct), or an absent /
+        // null cell (which no UNIQUE constraint counts). Nothing to deal, and
+        // nothing to refuse.
+        if (pool?.length === 0) {
+            continue;
+        }
+
+        const deal = pool === undefined ? planUniqueDeal(field, { now, table }) : planUniqueFkDeal(pool, table, field.name);
         const required = offset + count;
 
         if (required > deal.capacity && !Object.hasOwn(tableOverrides, field.name)) {
@@ -297,7 +400,12 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
         // Absolute index base — lets a client seed the same table across calls
         // without colliding ids (each id/value hashes from the absolute index).
         const offset = indexOffset[table] ?? 0;
-        const uniqueDeals = planUniqueDeals(spec.fields, table, count, offset, now, tableOverrides);
+        // A parent table is fully generated before its children (`orderTables`),
+        // so a non-self FK's pool is already final here — `localIndex` only
+        // matters for the self-reference `planUniqueDeals` skips.
+        const uniqueDeals = planUniqueDeals(spec.fields, table, count, offset, now, tableOverrides, (field) =>
+            fkPool(field, table, 0, idsByTable, existingIds),
+        );
 
         const ids: string[] = [];
         idsByTable.set(table, ids);

@@ -6,8 +6,9 @@ import type { FunctionReference } from "@lunora/client";
 
 export interface ApiTypes {
     notes: {
-        add: FunctionReference<"mutation", { body: string; boardId: string }, unknown>;
-        list: FunctionReference<"query", { boardId: string }, unknown>;
+        add: FunctionReference<"mutation", { body: string; boardId: string }, import("@lunora/values").Id<"notes">>;
+        list: FunctionReference<"query", { boardId: string }, import("./dataModel.js").Doc_notes[]>;
+        summary: FunctionReference<"query", {}, ({ body?: string | undefined; } & { title: string; }) | null>;
     };
 }
 

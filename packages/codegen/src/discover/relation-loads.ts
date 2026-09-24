@@ -79,11 +79,12 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
 /**
  * Discover `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating
  * list reads under the lunora source directory — the `masked_relation_leak_via_with`
- * lint input. Column masking is applied per-procedure to the top-level rows of
- * the table named in the read; it does **not** descend into `with`-hydrated
- * relations (documented in `@lunora/server`'s `mask/middleware`), so a masked
- * table surfaced only through a `with` on an unprotected parent read is returned
- * in the clear. This feeder records the parent table + relation accessor names +
+ * lint input. Column masking is **per-procedure**: `@lunora/server`'s
+ * `mask/middleware` threads a `relationMask` hook down and `@lunora/shard-engine`'s
+ * relation loader applies it to every `with` hop, so what leaks is a read whose
+ * OWN procedure declares no policy for the related table — a mask on that table's
+ * other procedures does not carry over. This feeder records the parent table +
+ * relation accessor names +
  * visibility; the lint resolves the relation target and joins it against the
  * discovered mask evidence before flagging.
  */

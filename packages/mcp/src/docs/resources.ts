@@ -13,6 +13,7 @@
  * across docs deployments and can't be confused for a fetchable URL.
  */
 import type { McpResourceProvider, McpResourceSummary } from "../compose";
+import { normalizeDocUrl } from "./tools";
 import type { DocsIndex } from "./types";
 
 /** URI scheme identifying a Lunora documentation page. */
@@ -40,14 +41,22 @@ const docsResources = (index: DocsIndex): McpResourceProvider => {
             });
         },
 
+        /**
+         * A resource uri is client-supplied, so its path gets the same
+         * treatment `lunora_get_doc` gives a model-supplied one: `normalizeDocUrl`
+         * throws on a `..` segment, literal or percent-encoded, before the path
+         * reaches an index that appends it to a URL. Sharing the tool's guard
+         * rather than repeating its checks here is the point — this resource
+         * path shipped as the sibling caller that had no guard at all.
+         */
         read: async (uri: string): Promise<{ mimeType?: string; text: string } | undefined> => {
-            const url = fromDocsUri(uri);
+            const raw = fromDocsUri(uri);
 
-            if (url === undefined) {
+            if (raw === undefined) {
                 return undefined;
             }
 
-            const page = await index.getPage(url);
+            const page = await index.getPage(normalizeDocUrl(raw));
 
             return page === undefined ? undefined : { mimeType: "text/markdown", text: `# ${page.title} (${page.url})\n\n${page.content}` };
         },

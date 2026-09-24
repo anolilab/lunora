@@ -1,7 +1,8 @@
+import { LunoraClient } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import useAuth from "../src/use-auth";
@@ -70,12 +71,10 @@ describe("useAuth", () => {
         expect(mock.setAuthToken).toHaveBeenLastCalledWith(null);
     });
 
-    it("user is null when no token is set", () => {
-        expect.assertions(2);
+    it("still asks the server who is signed in when no token is held", async () => {
+        expect.hasAssertions();
 
         const mock = createMockClient();
-
-        mock.setCurrentUser({ id: "u_1" });
 
         render(
             <LunoraProvider client={mock.asClient}>
@@ -83,9 +82,18 @@ describe("useAuth", () => {
             </LunoraProvider>,
         );
 
-        // No token ⇒ getCurrentUser is short-circuited, user stays anon.
+        // A cookie session carries no bearer token, so "no token" is not an
+        // answer about who is signed in — only the server has one. Skipping the
+        // round trip here is what left `identityFingerprint()` null for every
+        // user of every cookie app, and a fingerprint nobody differs on is what
+        // collapsed the identity gates into `null === null`.
+        await waitFor(() => {
+            expect(mock.getCurrentUser).toHaveBeenCalledTimes(1);
+        });
+
+        // The mock answers "no session", so the user settles anon — reached by
+        // asking, not by assuming.
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
-        expect(mock.getCurrentUser).not.toHaveBeenCalled();
     });
 
     it("populates user after a token is set and the session fetch resolves", async () => {
@@ -144,43 +152,46 @@ describe("useAuth", () => {
         });
     });
 
-    it("unsubscribes the store's token-change listener once the last hook unmounts", async () => {
+    // Against a REAL `LunoraClient`, not the mock: `setToken` takes no subject
+    // (and no shipped adapter passes one), so the offline-queue identity has to
+    // come from somewhere else or a routine JWT refresh reads as a user switch
+    // and discards the user's queued writes and read cache. The client
+    // establishes it from the session resolve this hook already triggers.
+    it("keys the client's offline identity on the resolved user id, not the token bytes", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient();
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            const authorization = ((init?.headers ?? {}) as Record<string, string>)["authorization"] ?? "";
 
-        mock.setCurrentUser({ id: "u_9" });
+            const url = input instanceof Request ? input.url : String(input);
 
-        const view = render(
-            <LunoraProvider client={mock.asClient}>
+            return url.includes("get-session") && authorization !== ""
+                ? Response.json({ user: { id: "u_42" } }, { status: 200 })
+                : Response.json({ result: null }, { status: 200 });
+        });
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        render(
+            <LunoraProvider client={client}>
                 <Display />
             </LunoraProvider>,
         );
 
-        // Resolve identity once so the store is live.
         act(() => {
-            setTokenHandle!("tok-1");
+            setTokenHandle!("jwt-1");
         });
 
         await waitFor(() => {
-            expect(screen.getByTestId("display").textContent).toBe("tok-1|u_9");
+            expect(client.currentIdentity()).toBe("subj:u_42");
         });
 
-        const callsBeforeUnmount = mock.getCurrentUser.mock.calls.length;
-
-        // Unmount the only hook: the store's token-change listener must be torn
-        // down so it no longer fires (no dangling fetch-on-change side effect).
-        view.unmount();
-
-        // A token rotation after unmount must NOT trigger another identity
-        // resolve — the listener is gone. (The cached store stays in the WeakMap;
-        // only its live subscription comes and goes with subscriber presence.)
+        // The refresh every app does. Same identity ⇒ nothing is discarded.
         act(() => {
-            mock.asClient.setAuthToken("tok-2");
+            setTokenHandle!("jwt-2");
         });
 
-        await Promise.resolve();
+        expect(client.currentIdentity()).toBe("subj:u_42");
 
-        expect(mock.getCurrentUser).toHaveBeenCalledTimes(callsBeforeUnmount);
+        client.close();
     });
 });

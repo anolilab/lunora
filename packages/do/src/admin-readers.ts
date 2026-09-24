@@ -199,7 +199,23 @@ const readAdminFacetColumn = (sql: SqlExec, args: Record<string, unknown>): { re
  * Resolve a `runSql` admin read: execute a read-only SQL query against the
  * shard's SQLite via {@link runReadonlySql} (which rejects every mutating
  * statement). Carries the {@link ADMIN_WILDCARD} since an arbitrary query can
- * touch any table; it is a one-shot read, never a live subscription.
+ * touch any table.
+ *
+ * It is NOT only a one-shot read, whatever the studio happens to call it with.
+ * This reader is shared with the subscription bridge, so an admin socket may
+ * subscribe to a `runSql` path and the shard re-runs the statement on every
+ * write flush for the life of that socket — the {@link ADMIN_WILDCARD} dep
+ * matches every write, so nothing ever filters it out.
+ *
+ * That is affordable only because of what surrounds it, and each part is
+ * load-bearing: the statement is read-only, the result is capped at
+ * `MAX_SQL_ROWS`, the socket's admin credential is re-derived from `env` on
+ * every flush (so a rotated token revokes the subscription rather than only the
+ * HTTP plane), and identical `(path, args)` reads are shared across sockets by
+ * the flush-local reactive cache. What it is NOT is bounded in EXECUTION cost:
+ * the statement is planned and scanned in full before the row cap applies, so a
+ * subscribed table scan re-runs per write, unattended. Weigh that before adding
+ * a caller that subscribes one.
  */
 const readAdminRunSql = (sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } => {
     const query = typeof args["sql"] === "string" ? args["sql"] : "";

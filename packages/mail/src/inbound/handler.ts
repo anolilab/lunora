@@ -21,10 +21,14 @@
  *   *sender*. The envelope `from` and message body are trivially spoofable, so a
  *   handler MUST NOT make trust/authorization decisions on `email.from`. Gate on
  *   `email.authentication` (DKIM/SPF/DMARC verdicts) and/or the `verify` hook.
- * - `dispatchToLunoraFunction` authenticates the shard RPC with the admin bearer
- *   (`LUNORA_ADMIN_TOKEN`), so the target function runs in a **system/admin
- *   context with RLS bypassed**. Combined with the spoofable sender, this means
- *   an inbound function must treat its input as fully attacker-controlled.
+ * - `dispatchToLunoraFunction` marks the shard RPC a **trusted system dispatch**
+ *   (the same marker the scheduler/cron path sets), so the target may be an
+ *   `internalMutation`/`internalAction` — and it should be, because a public
+ *   `mutation` reachable this way is equally reachable from any browser client,
+ *   which can forge the whole message. The dispatch carries no caller identity,
+ *   so an `rls()` policy on the target sees an anonymous caller rather than
+ *   being bypassed. Combined with the spoofable sender, an inbound function must
+ *   treat its input as fully attacker-controlled and do its own authorization.
  * - `onError` reasons are delivered to the (attacker-controlled) sender as a
  *   bounce, so the default never reflects internal error detail (see
  *   `rejectOnError`).
@@ -85,8 +89,11 @@ type InboundDispatch<TEnv = Record<string, unknown>> = (email: InboundEmail, con
  * Opt-in sender-verification gate. Runs after `parse` and before `dispatch` with
  * the parsed message. Return `false` (or throw) to reject the message before it
  * reaches the privileged dispatch — use it to enforce DKIM/SPF/DMARC via
- * `email.authentication`, an allow-list, etc. Returning `true`/`undefined`
- * proceeds.
+ * `email.authentication`, an allow-list, etc.
+ *
+ * `true` and `undefined` are the ONLY answers that proceed — `undefined` so a
+ * `(): void` hook that rejects by throwing type-checks. Anything else is read as a
+ * rejection: this is the gate whose failure mode would otherwise grant.
  */
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a verify hook with no explicit return (`() => {}`) type-check; `undefined` alone wouldn't accept a `(): void` arrow
 type InboundVerify<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>) => Promise<boolean | void> | boolean | void;
@@ -226,6 +233,19 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
  * bounces without being handed to `retain` (see `@lunora/agent`'s inbound
  * handler for both cases).
  */
+
+/**
+ * Whether a `verify` hook's answer admits the message — deny by default.
+ *
+ * `true` and `undefined` are the two documented "proceed" answers (`undefined` so
+ * a `(): void` hook that rejects by throwing type-checks). EVERYTHING else — a
+ * `null`, a `0`, an empty string out of a hook that forgot a branch — is a
+ * rejection. Testing only for `=== false` made this the one gate in the package
+ * whose failure mode granted access to the privileged dispatch.
+ */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
+const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
+
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
 
@@ -239,7 +259,7 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
             if (options.verify) {
                 const verified = await options.verify(parsed, context);
 
-                if (verified === false) {
+                if (!verifyPassed(verified)) {
                     throw new LunoraError("INTERNAL", "@lunora/mail/inbound: sender verification rejected the message");
                 }
             }
@@ -371,10 +391,11 @@ const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
  * and then hands the message to `retain` if one is configured, bouncing only
  * when there is nowhere durable to put it (see {@link createInboundEmailHandler}).
  *
- * SECURITY: the RPC carries the admin bearer, so the target function runs with
- * RLS bypassed over fully attacker-controlled, spoofable input — see the module
- * docstring. Verify the sender (`verify` hook / `email.authentication`) before
- * making any trust decision in the target function.
+ * SECURITY: the RPC is marked a trusted system dispatch, so `functionPath` may
+ * (and should) name an `internalMutation`/`internalAction` — a public `mutation`
+ * target is callable by any browser client with a forged message. The input is
+ * fully attacker-controlled and spoofable; verify the sender (`verify` hook /
+ * `email.authentication`) before making any trust decision in the target.
  */
 const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<string, unknown>>(
     options: DispatchToLunoraFunctionOptions<TEnv>,

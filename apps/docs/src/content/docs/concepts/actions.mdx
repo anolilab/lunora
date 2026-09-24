@@ -13,14 +13,15 @@ An **action** runs outside Lunora's transaction. A `query` reads only and a
 `mutation` does transactional reads and writes, but an action can `fetch()` a
 third-party API, send an email, talk to a queue, or drive an AI model. Two
 things give way in return: actions are not reactive (clients don't auto-subscribe
-to them), and they have no transactional `db` for reading or writing your tables.
+to them), and their `ctx.db` writes are not wrapped in a transaction — each one
+commits on its own.
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
 import { api, internal } from "@/lunora/_generated/api";
 
 export const syncWithStripe = action.input({ customerId: v.string() }).action(async ({ ctx, args }) => {
-    // 1. Read current state via a query (no direct ctx.db).
+    // 1. Read current state via a query, so the read runs in a transaction.
     const customer = await ctx.runQuery(internal.customers.byStripeId, { stripeId: args.customerId });
 
     // 2. Talk to the outside world.
@@ -42,9 +43,9 @@ export const syncWithStripe = action.input({ customerId: v.string() }).action(as
 | Drive an AI model, browser, or BYO database                   | `action`   |
 
 A mutation runs inside the shard's transaction, so its `ctx.db` writes commit
-atomically and broadcast reactive deltas. An action runs in the worker (the
-action runtime), outside that transaction, so it can do unbounded I/O without
-holding the shard open. Reach for a mutation first, and promote to an action only
+atomically and broadcast reactive deltas. An action runs inside the shard's
+Durable Object too, but outside a storage transaction, so it can do unbounded I/O
+without holding one open. Reach for a mutation first, and promote to an action only
 when you need a side effect a mutation can't safely perform.
 
 ## `ActionCtx`
@@ -61,9 +62,10 @@ The handler receives `ctx: ActionCtx`. Its surface (from `@lunora/server`):
 - `ctx.log`: structured, function-attributed logger.
 - `ctx.ip`: the caller's IP (`undefined` for server-initiated dispatch).
 
-There is no transactional `ctx.db` reader/writer the way a mutation has one. An
-action reaches your data through `runQuery` and `runMutation`, each of which
-forwards to the owning shard and runs as its own transaction.
+An action does have a `ctx.db` writer, but it is **not** transactional: each write
+commits on its own and none of them roll back together. Use it for one-off writes,
+and route anything that must commit atomically through `runQuery` / `runMutation`,
+each of which forwards to the owning shard and runs as its own transaction.
 
 ## Calling queries and mutations from an action
 

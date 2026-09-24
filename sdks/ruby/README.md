@@ -47,8 +47,8 @@ unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, meth
 ```
 
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
-`client.resend_subscriptions` re-subscribes everything after a reconnect,
-carrying each subscription's resume cursor.
+`client.resend_subscriptions` re-subscribes everything after a reconnect —
+queries and shape views alike — carrying each one's resume cursor or checkpoint.
 
 ## Optimistic updates and offline writes
 
@@ -67,10 +67,16 @@ client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 outcome = client.submit(
   "messages:send",
   { "channel" => "general", "text" => "hi" },
-  # Layered onto the subscription registered under the same (path, args, shard).
-  # Re-run on every server frame, so derive from `current` rather than closing
-  # over a value.
-  optimistic: ->(current) { [*current, { "text" => "hi", "pending" => true }] },
+  # Names the query the write affects. `optimistic:` is the shorthand for the
+  # narrower case where the write and the subscription share a path and args
+  # (a counter, a document by id) — it patches nothing here, where `send` and
+  # `list` are different functions. Each transform is re-run on every server
+  # frame, so derive from what it is handed rather than closing over a value.
+  optimistic_update: lambda { |store, args|
+    current = store.get_query("messages:list", { "channel" => args["channel"] }) || []
+    store.set_query("messages:list", { "channel" => args["channel"] },
+                    [*current, { "text" => args["text"], "pending" => true }])
+  },
   # Re-checked just before a QUEUED write replays: false drops it instead of
   # replaying a write that can only fail.
   precondition: -> { channel_still_exists?("general") },
@@ -90,6 +96,17 @@ A queued write whose args cannot be wire-encoded settles terminally on the first
 flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
+
+The durable record holds the **wire** form of the args, so a store that
+serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
+`WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose
+args no longer decode is purged and settled `OFFLINE_WRITE_UNDECODABLE` rather
+than replayed with substitute args.
+
+A replay the server rate-limits (`RATE_LIMITED` / `TOO_MANY_REQUESTS`) is
+re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
+`data.retryAfterMs`, and a flush inside that window is a no-op that reports the
+time remaining.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

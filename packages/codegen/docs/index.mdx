@@ -92,9 +92,17 @@ These files are derived from your schema and overwritten on every run, so any
 hand edit is lost the next time codegen runs. Change `schema.ts` or your
 function files instead, then let codegen catch up.
 
-Commit `lunora/_generated/`. The output is deterministic, and CI re-runs codegen
-and diffs the result (`lunora verify` / `lunora prepare`) to catch drift between
-your schema and the committed types.
+Commit `lunora/_generated/`. The output is deterministic, so a stale committed
+copy is a real diff — but no command checks that for you: `lunora verify` runs
+codegen as a **dry run** (writing nothing) and `lunora prepare` silently
+overwrites the files. The schema-drift gate both run measures a different
+artifact, the committed `.lunora-schema.json` baseline. To gate the generated
+types in CI, regenerate and diff:
+
+```bash
+lunora codegen
+git diff --exit-code lunora/_generated
+```
 
 ## The `.js` extension exception
 

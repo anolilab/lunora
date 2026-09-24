@@ -6,13 +6,21 @@ import { discoverSandboxUsage } from "@lunora/codegen";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { inferLunoraBindings } from "../src/infer-bindings";
+import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
     users: defineTable({ email: v.string() }).global(),
+});
+`;
+
+const SCHEMA_HYPERDRIVE_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+    users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
 });
 `;
 
@@ -115,6 +123,22 @@ describe("inferLunoraBindings", () => {
         expect(result.needsD1).toBe(false);
     });
 
+    it("does not infer D1 for a Hyperdrive-backed .global() table", async () => {
+        expect.assertions(1);
+
+        // `.global({ backend: "hyperdrive" })` lives on Postgres/MySQL behind the
+        // HYPERDRIVE binding and touches no D1 database. Reading "declares a global
+        // table" as "needs D1" provisioned a database the app never opens, and the
+        // wrangler validator then demanded a `DB` binding of a project with none.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_HYPERDRIVE_GLOBAL);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.needsD1).toBe(false);
+    });
+
     it("falls back to a known entry path when wrangler has no main", async () => {
         expect.assertions(1);
 
@@ -124,6 +148,96 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("prefers src/server.ts over src/index.ts when nothing names the entry", async () => {
+        expect.assertions(2);
+
+        // This list decides what `reconcile` PROVISIONS, so the precedence is
+        // load-bearing beyond the export cross-check that shares it:
+        // `src/server.ts` is where the astro / solid-v2 / standalone templates
+        // compose, and reading `src/index.ts` instead saw no exported class and
+        // provisioned nothing — green deploy, missing binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "compatibility_date": "2026-04-07" }');
+        write("src/index.ts", "export const clientEntry = 1;\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Same order as `lunora registry`'s reconcile probe, which had it first.
+        expect(result.durableObjects).toHaveLength(1);
+    });
+
+    it("lexes src/worker.ts over an adapter-built main, matching what deploy bundles", async () => {
+        expect.assertions(1);
+
+        // Class-B (SvelteKit/Astro): `main` points at the framework adapter's
+        // build output, which exists after `vite build` and exports only the SSR
+        // fetch handler — while `lunora deploy` bundles `src/worker.ts` as the
+        // positional entry. Lexing `main` there reads every class as unexported.
+        write("wrangler.jsonc", '{ "name": "app", "main": "build/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("build/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/worker.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("provisions off a `./`-prefixed main rather than treating it as build output", async () => {
+        expect.assertions(1);
+
+        // The build-output gate read `.` as a tool-state directory, so a `./`
+        // main was discarded and inference ran on whichever fallback existed —
+        // provisioning nothing at all, not even SHARD. Green deploy, missing
+        // binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "main": "./src/entry.ts", "compatibility_date": "2026-04-07" }');
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it.each([
+        ["a traversal that cancels a build directory", "dist/../src/entry.ts"],
+        ["a `./` prefix", "./src/entry.ts"],
+        ["no prefix at all", "src/entry.ts"],
+    ])("provisions off a main written with %s", async (_label, main) => {
+        expect.assertions(1);
+
+        // The build-output gate classifies by path segment, so it has to resolve
+        // the path first: dropping `..` on its own left `dist` behind and read
+        // `dist/../src/entry.ts` as build output, discarding the declared entry.
+        write("wrangler.jsonc", `{ "name": "app", "main": "${main}", "compatibility_date": "2026-04-07" }`);
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
+        expect.assertions(2);
+
+        // The sibling test above is the case where `src/worker.ts` shadows the
+        // artifact. Without one, an existing `main` was accepted as the entry —
+        // and an adapter bundle exports only the SSR handler, so every class read
+        // as unexported and reconcile wrote NO bindings, not even SHARD. A green
+        // deploy that fails at runtime on a missing binding.
+        write("wrangler.jsonc", '{ "name": "app", "main": "dist/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Read off the authored entry, not the artifact.
+        expect(result.durableObjects).toHaveLength(1);
     });
 
     it("reports no Durable Objects when the worker entry cannot be found", async () => {
@@ -158,6 +272,27 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("binds a class the entry also names in a type-only IMPORT", async () => {
+        expect.assertions(1);
+
+        // `import { type ShardDO, createShardDO }` is the ordinary way to reach
+        // the generated class's type. The old detector was a whole-file
+        // `/\btype\s+ShardDO\b/` with no `export` anchor, so that import read as
+        // a type-only EXPORT and reconcile refused the SHARD binding — after
+        // which `wrangler-validator` failed the deploy telling the user "your
+        // dev server auto-reconciles this on startup", which is precisely what
+        // it had just declined to do.
+        write("wrangler.jsonc", WRANGLER);
+        write(
+            "src/server/index.ts",
+            `import type { ShardDO } from "../../lunora/_generated/shard.js";\nimport { type SchedulerDO, createShardDO } from "../../lunora/_generated/shard.js";\n\nexport const ShardDO = createShardDO({});\nexport const SchedulerDO = createShardDO({});\n\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding).toSorted((a, b) => a.localeCompare(b))).toEqual(["SCHEDULER", "SHARD"]);
     });
 
     it("infers D1 from an env.DB access even without a global schema", async () => {
@@ -715,6 +850,39 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         // No extra Cloudflare binding — mail secret lives in .dev.vars only.
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
         expect(result.signals.some((signal) => signal.includes("RESEND_API_KEY"))).toBe(true);
+    });
+
+    it("infers notify from a @lunora/notify import so its VAPID/FCM secrets reach the pre-flights", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/notify.ts", `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ webPush: webPushFromEnv });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        // `packageNamesFromBindings` is the ONLY producer feeding `requiredSecrets`,
+        // and it can only emit a CAPABILITY_SOURCES source — so with no notify entry
+        // the five secrets declared in `package-secrets-registry.ts` reached nothing:
+        // not `.dev.vars.example`, not the missing-secret pre-flight. Web Push then
+        // failed silently on the deployed worker.
+        expect(result.usesNotify).toBe(true);
+        expect(packageNamesFromBindings(result)).toContain("@lunora/notify");
+    });
+
+    it("infers r2sql from a ctx.r2sql access so its R2_SQL_* secrets reach the pre-flights", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // `ctx.r2sql` is codegen-wired onto ActionCtx (nothing imports the subpath),
+        // exactly like `ctx.pipelines` — so the signal is the access, not an import.
+        write("lunora/reports.ts", `export const handler = (ctx) => ctx.r2sql.query("select 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesR2sql).toBe(true);
+        expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
     });
 
     it("does not infer mail for a project that does not import @lunora/mail", async () => {

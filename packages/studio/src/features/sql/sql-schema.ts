@@ -18,12 +18,28 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * up front. All best-effort: a failed probe simply leaves that table's columns
  * absent. Re-loads when `shardKey` changes; a fast shard switch discards a stale
  * in-flight list via the cancel token.
+ *
+ * ## The probe reads `sqlColumns`, not `columns`
+ *
+ * `readTablePage` reports two lists. `columns` is what the DATA BROWSER shows:
+ * every `__doc__` field lifted to a top-level column. `sqlColumns` is what the
+ * table physically has — `id`, `_creationTime`, `__doc__`.
+ *
+ * This is a SQL surface, so it takes the second. Feeding it the first offered
+ * `status` and `zip` as columns and taught the linter they resolved, so the
+ * editor completed `SELECT status FROM posts`, lint-checked it clean, and the
+ * database rejected it — or worse: workerd's SQLite resolves a bare `"status"`
+ * that names nothing to the string literal `'status'` rather than raising, so
+ * the quoted spelling comes back with `status` in every row and no error at all.
+ * The lifted names are still loaded, as `docFields`, which is how the linter
+ * names that mistake precisely.
  */
 const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
     const client = useLunora();
 
     const [tables, setTables] = useState<string[]>([]);
     const [columns, setColumns] = useState<Record<string, string[]>>({});
+    const [documentFields, setDocumentFields] = useState<Record<string, string[]>>({});
     // Tables a probe has already been kicked off for, so `probe` is idempotent
     // without nesting the fetch inside a setState updater. Cleared on shard switch.
     const probed = useRef<Set<string>>(new Set());
@@ -38,12 +54,14 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
                 if (!token.cancelled) {
                     setTables(result.map((table) => table.name));
                     setColumns({});
+                    setDocumentFields({});
                     probed.current = new Set();
                 }
             } catch {
                 if (!token.cancelled) {
                     setTables([]);
                     setColumns({});
+                    setDocumentFields({});
                     probed.current = new Set();
                 }
             }
@@ -69,9 +87,29 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
         const fetchColumns = async (): Promise<void> => {
             try {
                 const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
+                const { sqlColumns } = page;
+
+                if (sqlColumns === undefined) {
+                    // An older shard that reports only the display list. Leave
+                    // the table UNPROBED rather than record the lifted names: a
+                    // wrong column list is worse here than none, because the
+                    // linter treats a recorded list as authoritative and would
+                    // certify a statement SQLite cannot run.
+                    probed.current.delete(table);
+
+                    return;
+                }
+
+                // Whatever the display list carries beyond the physical
+                // columns IS the set of lifted `__doc__` fields.
+                const physical = new Set(sqlColumns);
+                const lifted = page.columns.filter((column) => !physical.has(column));
 
                 setColumns((previous) => {
-                    return { ...previous, [table]: page.columns };
+                    return { ...previous, [table]: sqlColumns };
+                });
+                setDocumentFields((previous) => {
+                    return { ...previous, [table]: lifted };
                 });
             } catch {
                 // Best-effort: drop the in-flight marker so a later probe can retry.
@@ -96,8 +134,8 @@ const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schem
     // Deleting this one while keeping that one defeats it.
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: see above; the CI suite runs without the compiler transform
     const schema = useMemo(() => {
-        return { columns, tables };
-    }, [columns, tables]);
+        return { columns, docFields: documentFields, tables };
+    }, [columns, documentFields, tables]);
 
     return { probe, schema };
 };

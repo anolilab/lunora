@@ -1,13 +1,18 @@
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 import { test as base, request as requestApi } from "@playwright/test";
 
+import { BASE_URL } from "../origin";
+
 /**
  * Lunora-specific Playwright fixtures.
  *
  * These centralise the bits of plumbing that every test needs:
  *   - `resetServer`  — call the `/test/reset` route exposed by the playground
- *     worker (gated by `LUNORA_E2E === "true"`). Clears DO state so tests are
- *     order-independent.
+ *     worker (gated by `LUNORA_E2E === "true"`). Clears the shared **D1** state
+ *     (users, channels, every `.global()` table). It does NOT clear Durable
+ *     Object state — shard-local rows such as `messages` survive it, and stay
+ *     out of each other's way only because every spec mints a fresh channel. A
+ *     spec that needs a clean shard has to mint one, not rely on this.
  *   - `signedInPage` — a Page whose BrowserContext already holds the
  *     better-auth `session_token` cookie. Most chat tests skip the signup
  *     form and use this.
@@ -20,7 +25,6 @@ import { test as base, request as requestApi } from "@playwright/test";
  *     shouldn't re-test that flow — they want a deterministic logged-in user
  *     in O(1) steps.
  */
-const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 
 export interface TestUser {
     readonly email: string;
@@ -45,7 +49,7 @@ export interface LunoraFixtures {
 }
 
 export const resetServer = async (): Promise<void> => {
-    const response = await fetch(`${WORKER_URL}/test/reset`, { method: "POST" });
+    const response = await fetch(`${BASE_URL}/test/reset`, { method: "POST" });
 
     if (!response.ok) {
         throw new Error(`/test/reset failed (${response.status})`);
@@ -60,7 +64,7 @@ export const resetServer = async (): Promise<void> => {
  * in automatically.
  */
 const signUp = async (request: APIRequestContext, email: string, password: string, name: string): Promise<void> => {
-    const response = await request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const response = await request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email, name, password },
     });
 
@@ -87,7 +91,7 @@ export const test = base.extend<LunoraFixtures>({
             const email = `e2e+${slug}-${Date.now()}@lunora.test`;
             const password = "test-password-1234"; // gitleaks:allow
             const name = `e2e ${slug}`;
-            const request = await requestApi.newContext({ baseURL: WORKER_URL, extraHTTPHeaders: { Origin: WORKER_URL } });
+            const request = await requestApi.newContext({ baseURL: BASE_URL, extraHTTPHeaders: { Origin: BASE_URL } });
 
             contexts.push(request);
             await signUp(request, email, password, name);
@@ -123,7 +127,7 @@ export const test = base.extend<LunoraFixtures>({
         // Real browsers send an `Origin` header; Playwright's API context does
         // not. better-auth's CSRF check requires it, so set a trusted one (the
         // worker origin) for these setup-only API calls.
-        const request = await requestApi.newContext({ baseURL: WORKER_URL, extraHTTPHeaders: { Origin: WORKER_URL } });
+        const request = await requestApi.newContext({ baseURL: BASE_URL, extraHTTPHeaders: { Origin: BASE_URL } });
 
         await signUp(request, email, password, name);
 

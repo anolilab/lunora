@@ -80,27 +80,69 @@ structurally identical tree — a pre-codec peer interops unchanged.
 Notes that a port MUST honour:
 
 - **base64** is standard (padded) base64, as produced by `btoa` /
-  `base64.b64encode`.
+  `base64.b64encode`, and it is **canonical**: on decode, a `bytes` payload must
+  be exactly the string an encoder would have written for those bytes. That is
+  one line in every implementation — decode, re-encode, compare — and nothing
+  weaker will do, because the standard-library decoders are each lenient in a
+  different direction. Concretely, all of these are refused: a length of 1 or 3
+  mod 4 (truncated or unpadded), `=` anywhere but the end, ASCII whitespace
+  anywhere, the base64url alphabet, and a non-zero unused low bit in a short
+  final quantum. That last one is not leniency but a silent rewrite: `"AQJ="`
+  decodes to the two bytes `01 02` and re-encodes as `"AQI="`, so accepting it
+  hands the peer back different bytes than it wrote.
 - **Date** epoch-ms is routed back through the encoder, so an _invalid_ Date
   (`NaN` time) encodes as `[TAG, "date", [TAG, "nan"]]` and round-trips exactly.
-- **Error** omits `stack` (untrusted-peer redaction). `ownProps` is an object of
-  the error's own enumerable keys (e.g. a `LunoraError`'s `code`/`data`). A 6th
-  element carries `cause` when present.
+  The epoch is put through ECMAScript **TimeClip** on decode: `NaN` when
+  non-finite or past ±8.64e15, otherwise `ToIntegerOrInfinity`. That is _not_
+  truncation, and the two differ on exactly one window — an epoch in `(-1, 0]`
+  clips to `+0`, where truncation keeps the sign and yields `-0`. One value
+  wide, and load-bearing: §3's key spells `-0` as its own token, so a port that
+  truncates opens a different subscription than the TS client for the same
+  `Date`.
+- **URL** hrefs must be **absolute** — an RFC 3986 scheme (an ASCII letter, then
+  letters/digits/`+`/`-`/`.`), then `:`, then the rest. The reference builds a
+  real `URL` and so refuses more than that; a port is held to the floor, because
+  no language's URL parser reproduces WHATWG in the deep end and a
+  half-validator would be one more behaviour rather than one fewer. A port
+  carries the href through VERBATIM; it does not normalise. A conforming encoder
+  therefore puts an already-normalised href on the wire (which is what
+  `new URL(href).href` produces), since `"HTTPS://EXAMPLE.COM"` survives a port
+  unchanged and comes back from the reference as `"https://example.com/"`.
+- **Error** omits `stack` (untrusted-peer redaction). `name` and `message` are
+  both **strings** on the wire: type-checked on decode like every other slot —
+  neither coerced nor defaulted to `""` — and coerced on ENCODE, because both
+  are writable and unchecked in the dynamic ports and an encoder must never emit
+  a frame its own decoder refuses. `ownProps` is an object of the error's own enumerable keys
+  (e.g. a `LunoraError`'s `code`/`data`). A 6th element carries `cause` when
+  present.
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit
   string is rejected beyond 1024 digits, and `__proto__` keys are assigned as
   plain data properties (never via the prototype setter).
 - **Map entries** are exactly two elements. A shorter or LONGER entry is
   refused — a decoder that reads slots 0 and 1 out of a 3-element entry accepts
   a frame the reference throws on.
+- **A `bigint` digit string is canonicalised on decode.** The reference decodes
+  to a real `bigint` and re-encodes with `toString()`, so `"007"` re-encodes as
+  `"7"` and `"-0"` as `"0"`. A decoder carrying the digits verbatim emits a
+  spelling the reference never produces, and keys a subscription differently on
+  a value both ends agree about.
+- **A `set` de-duplicates.** The reference decodes into a real `Set`, so its
+  items collapse under the same SameValueZero rule as map keys below, keeping
+  the FIRST occurrence's position: `[TAG, "set", [1, 1, 2]]` re-encodes as
+  `[TAG, "set", [1, 2]]`, while two structurally identical `Date` items stay two.
 - **Duplicate map keys collapse, last value wins, at the FIRST occurrence's
   position** — the reference decodes into a real `Map`, and `Map.prototype.set`
-  on a key already present overwrites in place. So
+  on a key already present overwrites in place. It overwrites the VALUE only:
+  the key already stored is kept, so `[[0,"a"],[-0,"b"]]` re-encodes with the
+  `0` it first held, not the `-0` that collapsed onto it. So
   `[TAG, "map", [["a",1],["b",2],["a",3]]]` decodes to two entries and
   re-encodes as `[["a",3],["b",2]]`. Keys collapse under SameValueZero: the
   scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
   string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
   a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
-  structurally identical non-scalar keys stay two entries.
+  structurally identical non-scalar keys stay two entries. SameValueZero holds
+  `-0` equal to `0`, so a signed zero is never its own key — a port whose number
+  formatting keeps the sign must clear it before comparing.
 - **Error** `ownProps` is neither optional nor nullable: the reference reads it
   with `Object.keys`, which throws on a missing or `null` slot, so a 4-element
   error tag and `[TAG, "error", n, m, null]` are both refused.
@@ -112,7 +154,11 @@ Notes that a port MUST honour:
   typed-array ctor name decodes to raw bytes, DROPPING the name — so it
   re-encodes as the 3-element `Uint8Array` form, not as the 4-element form it
   arrived in. (A name it does not recognise carries no element size, so the
-  alignment rule above does not apply to it.)
+  alignment rule above does not apply to it.) An unknown tag is not a fixed
+  point: decoded as an ordinary array whose first element is the sentinel, it
+  re-encodes through the `"arr"` escape, so `[TAG, "futuretag", 1]` comes back
+  as `[TAG, "arr", [TAG, "futuretag", 1]]`. A `bytes` ctor slot holding `null`
+  is the absent slot (`?? "Uint8Array"`) and likewise re-encodes 3-element.
 
 ### 2.2 Native-type mapping for a non-TS SDK
 
@@ -135,11 +181,12 @@ authoritative description; this is the summary.
 
 - **`cases[].reencoded`** — the expected re-encoding, for the shapes that are
   legitimately NOT fixed points of `encode(decode(encoded)) == encoded`. There
-  are four: a bare `[TAG]` array, which is escaped on the way back out as
+  are five: a bare `[TAG]` array, which is escaped on the way back out as
   `[TAG, "arr", [TAG]]`; an object field holding the `undefined` tag, which is
   dropped (matching `JSON.stringify`); a `bytes` tag naming an unknown
   typed-array ctor, which decodes to raw bytes and re-encodes without the name;
-  and a `map` carrying a duplicate key, which collapses last-wins. When a case
+  a `map` carrying a duplicate key, which collapses last-wins; and a `date`
+  epoch, which comes back TimeClipped rather than verbatim. When a case
   carries `reencoded` the assertion becomes
   `encode(decode(encoded)) == reencoded`. Without it those shapes were
   untestable, so no port was held to them — and four ports decoded the first two
@@ -147,12 +194,11 @@ authoritative description; this is the summary.
 - **`rejected[]`** — wire values every conforming codec MUST refuse to decode.
   These are data for the same reason the case list is: a rejection each suite
   hard-codes for itself is a rejection only some suites have. The base64 entries
-  are what a lenient hand-rolled decoder lets through — the reference decodes via
-  `atob`, which fails any input whose length is 1 mod 4 once ASCII whitespace is
-  removed, so a truncated or padding-corrupted payload is an error rather than
-  valid-looking short bytes. (Whitespace INSIDE the payload is deliberately not
-  listed: `atob` strips it, so the reference accepts it, and a fixture demanding
-  rejection would be asserting against the reference.)
+  walk every shape of the canonicity rule above; the `url-href-*` entries walk
+  the absolute-href floor; the `error-name-*`/`error-message-*` entries pin the
+  two label slots. Each group started as an unpinned leniency that the nine
+  implementations resolved several different ways, which is what an unpinned
+  leniency always becomes.
 
 Language-native construction checks — a native bigint `7` producing the bigint
 tag, an integer past the exact-`float64` range being refused — live in each SDK's
@@ -174,6 +220,14 @@ stableWireKey(v) = stableStringify(encodeWire(v))
 depth** (UTF-16 **code-unit** order), arrays keep order, `null` fields are kept,
 and `undefined` object fields are dropped. Two structurally-equal arg records
 with different key insertion order collapse to one key.
+
+It is NOT `JSON.stringify` over the encoded tree, and one value separates them:
+a **negative zero keys as the bare token `-0`**, distinct from `0`, because
+`JSON.stringify` renders both as `"0"` and would collide the two args. A port
+whose value model narrows an integral float to an integer drops the sign before
+the key is spelled and must keep it here; `negative-zero` in the fixture below
+is what catches that. (Every other spelling divergence — `1e+21`, `1e-7`,
+non-finite tokens — is `String(v)`'s, which the key follows exactly.)
 
 Code-unit order, not code-point order: the reference implementation is
 `Object.keys(record).sort()`, whose default comparator compares UTF-16 code
@@ -229,9 +283,13 @@ Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
-`INTERNAL` transport error.
+`INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
+envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
+— and takes the same path, rather than being read as one: a client that indexes
+it unchecked raises its own language's error past every handler the caller
+wrote.
 
-Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`.
+Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`.
 
 ### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
 
@@ -274,7 +332,12 @@ twice. The single-call endpoint carries the same value in the
 `x-lunora-client-id` header. Reserved
 `__lunora_relation__:` / `__lunora_admin__` paths cannot be batched. A batch is
 capped at **500** entries; a longer flush chunks, and the chunks must be sent
-sequentially to preserve order.
+sequentially to preserve order. That number is normative and lives in
+`protocol/fixtures/offline-optimistic.json` as `offlineQueue.batchReplay.maxEntries`;
+the `batch_entry_cap_matches_protocol` conformance case makes every port compare
+its own constant against it, because a client still chunking at a superseded cap
+takes the coded 400 below — a terminal verdict — and discards durable writes
+rather than retrying them.
 
 Response:
 
@@ -284,20 +347,59 @@ Response:
 
 Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` — so
 a client classifies a slot the way it classifies a whole single-call response.
-Three rules a conforming client MUST follow, because each one is a durable write:
+Four rules a conforming client MUST follow, because each one is a durable write:
 
-- A slot whose `error.code` is `SHARD_UNAVAILABLE` or `SHARD_ERROR` is
-  **transient**: the server reached no verdict on that entry, so it is retried
-  rather than reported failed. Every other coded error is a verdict, and terminal.
+- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
+  or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
+  entry — it could not reach the shard, or a limiter refused to look — so it is
+  retried rather than reported failed. Every other coded error is a verdict, and
+  terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
+  `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
+  as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
+  must treat the second as absent rather than as `NaN`. A transient refusal that
+  carried NO hint still needs one: the socket stays open through a 429 or a 503,
+  so nothing reconnects to trigger the next flush, and a client MUST fall back to
+  a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
-  committed, and the entry's `mutationId` is what makes that safe.
-- A body with **no** `results` array is a whole-batch outcome: a coded `{ error }`
-  is a verdict on every entry and terminal, anything else (a non-JSON body, a
-  bare 5xx) is transient and retries the whole chunk.
+  committed, and the entry's `mutationId` is what makes that safe. So is a slot
+  whose `error` key holds no envelope: a slot carries no HTTP status of its own,
+  so there is nothing to classify it by, which leaves the entry in exactly the
+  position of one that never came back.
+- A body with **no** `results` array is a whole-batch outcome, classified by the
+  same rule: a transient code retries the whole chunk, and any other coded
+  `{ error }` is a verdict on every entry and terminal. A reply carrying no
+  envelope to read at all — a non-JSON body, an edge's HTML page, or an `error`
+  slot that is not an object (§4.2) — is classified by HTTP STATUS instead, per
+  the paragraph below. This is the sharpest edge the §4.2 rule has: a codeless
+  failure here settles every write in the chunk, so reading a proxy's
+  `{"error": "bad gateway"}` as an envelope discards durable writes that the
+  same reply, classified by its 502, keeps.
+- A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
+  more than one entry MUST be split and retried rather than settled. A client
+  also holds the request body under the 1 MiB cap up front, splitting before it
+  sends — chunking by the 500-entry cap alone refuses a whole chunk of durable
+  writes as soon as they average a couple of KiB each.
 
-No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
-optional, so requiring it would fail the seven SDKs that correctly do not
-implement it. `sdks/README.md` records which do.
+The same classification governs a **single-call** replay, so a durable write's
+fate never depends on how many siblings were queued alongside it.
+
+A response carrying no `{ error }` envelope to classify — a proxy's HTML page, a
+captive portal, a truncated body — is classified by its HTTP status, and MUST be:
+unclassified, it is neither retried nor discarded, and it parks the head of the
+outbox in front of every write behind it. `408`, any `5xx`, and any status outside
+400-599 leave the write's fate UNKNOWN (it may have committed at the origin behind
+the proxy) and are transient. `429` is transient too, with any `Retry-After` it
+carried. Every other `4xx` is a refusal of the REQUEST that resending can only
+reproduce, and is terminal for the write: dropping a write the edge refused is the
+lesser harm against replaying it forever.
+
+The endpoint is optional for a client, but every SDK here implements it, so it
+is held to goldens like the rest: `offlineQueue.batchReplay` in
+[`fixtures/offline-optimistic.json`](./fixtures/offline-optimistic.json) carries
+the calls, the slot outcomes and the normative entry cap, and
+`conformance-cases.json` requires `offline_flush_batches_multiple_writes`,
+`offline_flush_batch_splits_on_payload_too_large` and
+`batch_entry_cap_matches_protocol`. `sdks/README.md` records the per-port state.
 
 ## 5. WebSocket subscription protocol (`GET /_lunora/ws`)
 
@@ -318,10 +420,24 @@ are ignored by the client parser.
 | `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
 | `whisper`                                   | `{ type, topic, data? }`                                                            |
 
-`subscribe.query.args` is `encodeWire(args)`. `table` defaults to
-`functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
+`subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
+the server re-executes; `table` addresses the legacy raw-delta fan-out
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+that has no table name to give sends the function path there — `@lunora/client`
+always does, because a function reference carries only its `namespace:fn` id — so
+those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
+`buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
+`subscribe` in any of the eight takes it, and every one of them passes that
+default. So `broadcastDelta` is not addressable from any client in this tree —
+only by a consumer that builds the frame itself. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
+
+`whisper_subscribe` and `whisper` are authorized per topic when the app declares
+an `onWhisper` authorizer; with none declared the topic's only boundary is the
+shard. A denied frame is **dropped silently** — neither has an ack frame, and
+adding an error frame for a denial would let a client probe which topics exist.
 
 `stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
 to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
@@ -408,6 +524,19 @@ Run `pageDeltaFrames` only once you announce the token.
 | `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
 | `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
 | `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
+
+A `complete` naming a live SUBSCRIPTION is a cancellation, NOT a de-registration:
+a client MUST report it to that subscription's error listener (the reference and
+all eight `sdks/*` ports use the code `SUBSCRIPTION_CANCELLED`) and MUST KEEP the
+registration, so the next reconnect resubscribes it under §5.1's resume rules.
+Dropping the state instead takes it out of the set the resubscribe loop walks,
+which freezes the query for the life of the process across every future
+reconnect — and reports nothing, because the listener was dropped with it. Today
+only `stream_*` ids receive this frame, so the two id spaces do not overlap and a
+stream's own completion is unaffected; the rule is what makes a
+user-subclassed shard, or a future server that sends it for a `sub_*` id, safe.
+`serverFrames`'s `complete` case in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins both halves.
 
 ### 5.3 Shape poke protocol (partial replication)
 

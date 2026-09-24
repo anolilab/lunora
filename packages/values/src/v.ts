@@ -784,6 +784,17 @@ const nullValidator = (): ColumnValidator<null, null> =>
 const bytes = (): ColumnValidator<ArrayBuffer, ArrayBuffer> =>
     asColumn(
         createValidator<ArrayBuffer>("bytes", (value, context) => {
+            // A view (`Uint8Array`, `DataView`, …) normalises to its OWN bytes.
+            // The wire codec round-trips a view as a view, so one reaches a
+            // `v.bytes()` argument or column whenever a caller passes one; the
+            // SQL layer binds either form as a BLOB. Copying through
+            // `byteOffset`/`byteLength` is the load-bearing half: a subarray
+            // views a window of a larger buffer, and handing back `value.buffer`
+            // would store bytes the caller never passed.
+            if (ArrayBuffer.isView(value)) {
+                return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+            }
+
             if (!(value instanceof ArrayBuffer)) {
                 fail(context, "ArrayBuffer", value);
             }
@@ -934,6 +945,15 @@ const array = <V extends Validator>(inner: V): ArrayColumnValidator<Infer<V>> =>
  * inference (`InferValidatorMap` in `./validator-map`), so the two can never
  * drift. (`InsertShape` stays separate — it additionally `Exclude`s `undefined`
  * from the optional value, a deliberate insert-type difference.)
+ *
+ * `undefined extends M[K]` is the type-level spelling of "the parser accepts
+ * this field absent" — the same question `acceptsAbsent` in
+ * `./json-schema-core` answers structurally. It is broader than
+ * `v.optional(...)` on purpose: `v.any()` returns its input unchanged, so it
+ * parses an absent field happily, and a `v.union(...)` with an `any`/optional
+ * member does too. Anything narrower would mark a key required that the runtime
+ * does not require — which is how a generated `_generated/api.ts` came to reject
+ * args the server accepts (issue #688).
  */
 type OptionalizeShape<M> = {
     [K in keyof M as undefined extends M[K] ? K : never]?: M[K];
@@ -1092,6 +1112,12 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
     const { path } = context;
     // Keep the deepest (longest-path) branch failure — the most specific detail.
     let deepestError: ValidationError | undefined;
+    // A member that redacted the value (a `.check()` miss on a secret-bearing
+    // field) described it by its bare type tag. The union's own diagnostic wraps
+    // that miss and must withhold the same literal, whichever member it was —
+    // otherwise `v.union(password, …)` echoed what `password` alone did not.
+    const bareTag = describeValue(value, { literal: false });
+    let redactValue = false;
 
     for (const member of memberInternals) {
         try {
@@ -1102,6 +1128,7 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
             }
 
             path.length = baseDepth;
+            redactValue ||= error.received === bareTag;
 
             if (deepestError === undefined || error.path.length > deepestError.path.length) {
                 deepestError = error;
@@ -1117,7 +1144,7 @@ const failUnion = (memberInternals: ReadonlyArray<InternalValidator<unknown>>, v
 
     const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
 
-    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value);
+    return fail(context, `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
 };
 
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {

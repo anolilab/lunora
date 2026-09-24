@@ -1,3 +1,494 @@
+## @lunora/auth [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.152...@lunora/auth@1.0.0-alpha.153) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/values:** upgraded to 1.0.0-alpha.51
+* **@lunora/server:** upgraded to 1.0.0-alpha.139
+
+## @lunora/auth [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.151...@lunora/auth@1.0.0-alpha.152) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
+## @lunora/auth [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.150...@lunora/auth@1.0.0-alpha.151) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+
+## @lunora/auth [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.149...@lunora/auth@1.0.0-alpha.150) (2026-09-23)
+
+### Bug Fixes
+
+* **auth:** qualify the account.issuer column probe ([#798](https://github.com/anolilab/lunora/issues/798)) ([631e727](https://github.com/anolilab/lunora/commit/631e72793268499d0713f9abc9439833aa7e0d09))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.136
+
+## @lunora/auth [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.148...@lunora/auth@1.0.0-alpha.149) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.135
+
+## @lunora/auth [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.147...@lunora/auth@1.0.0-alpha.148) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+
+## @lunora/auth [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.146...@lunora/auth@1.0.0-alpha.147) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.133
+
+## @lunora/auth [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.145...@lunora/auth@1.0.0-alpha.146) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/auth [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.144...@lunora/auth@1.0.0-alpha.145) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/auth [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.143...@lunora/auth@1.0.0-alpha.144) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
+## @lunora/auth [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.142...@lunora/auth@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/auth [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.141...@lunora/auth@1.0.0-alpha.142) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** `AuthDoOptions.basePath`, `DoAuthWiringOptions.basePath` and
+`PluginFlags.apiKey` are removed. `sinceSeq` reads now return oldest-first.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the SAML assertion consumer service
+
+`/sso/saml2/sp/acs/:providerId` is where a SAML sign-in completes —
+`processSAMLResponse` validates the assertion, resolves the user and calls
+`setSessionCookie` — but it carries no `/callback/` segment and matched no
+other branch, so it classified as `undefined`. The one endpoint that issues
+every SAML session left no audit row at all, the same hole as the SSO dispatch
+next to it.
+
+Also regenerates the six `registry/auth-ui-*` copies of `core/config.ts` and
+`core/flow-gate.ts`, which `scripts/sync-auth-ui-registry.mjs` mirrors verbatim
+from `packages/auth-ui/src` and `lint:registry:sync` guards. Dropping the inert
+`apiKey` flow flag changed both files; the registry copies had gone stale.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the two SAML logout endpoints
+
+Neither ends in `/sign-out`, so both went unrecorded while the SAML sign-in next
+to them is now recorded — a trail that shows a session opening and never closing
+cannot tell "still signed in" from "we stopped watching".
+
+Both terminate the local session before redirecting, so both are `sign-out`
+rather than an initiated event:
+
+- `/sso/saml2/logout/:providerId` is SP-initiated. It deletes the SAML session
+  keys, calls `deleteSession` on the current session token and
+  `deleteSessionCookie`, then redirects to the IdP's logout URL.
+- `/sso/saml2/sp/slo/:providerId` is the SP's single-logout receiver, serving
+  the IdP-initiated direction and the response leg of an SP-initiated one.
+  `handleLogoutRequest` and `handleLogoutResponse` both call `deleteSession`
+  and `deleteSessionCookie`.
+
+The test pins `/sso/providers` and `/sso/saml2/sp/metadata` as still unaudited,
+so neither substring can widen into a provider-config read.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **auth:** close six defects on the auth surface ([#747](https://github.com/anolilab/lunora/issues/747)) ([974a1a4](https://github.com/anolilab/lunora/commit/974a1a4072ad63ffbd07d53d5899c2a83b9ddf49))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/auth [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.140...@lunora/auth@1.0.0-alpha.141) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/auth [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.139...@lunora/auth@1.0.0-alpha.140) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/auth [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.138...@lunora/auth@1.0.0-alpha.139) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/auth [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.137...@lunora/auth@1.0.0-alpha.138) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/auth [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.136...@lunora/auth@1.0.0-alpha.137) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.123
+
+## @lunora/auth [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.135...@lunora/auth@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+
+## @lunora/auth [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.134...@lunora/auth@1.0.0-alpha.135) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
+## @lunora/auth [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.133...@lunora/auth@1.0.0-alpha.134) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/auth [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.132...@lunora/auth@1.0.0-alpha.133) (2026-09-11)
+
+### Features
+
+* **auth:** check the schema before the first write ([#692](https://github.com/anolilab/lunora/issues/692)) ([82329ea](https://github.com/anolilab/lunora/commit/82329ea7bac0e1002535bfe21b7a56df18929821))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
+## @lunora/auth [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.131...@lunora/auth@1.0.0-alpha.132) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
+## @lunora/auth [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.130...@lunora/auth@1.0.0-alpha.131) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/auth [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.129...@lunora/auth@1.0.0-alpha.130) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/auth [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.128...@lunora/auth@1.0.0-alpha.129) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/auth [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.127...@lunora/auth@1.0.0-alpha.128) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/auth [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.126...@lunora/auth@1.0.0-alpha.127) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+
+## @lunora/auth [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.125...@lunora/auth@1.0.0-alpha.126) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
+## @lunora/auth [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.124...@lunora/auth@1.0.0-alpha.125) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/auth [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.123...@lunora/auth@1.0.0-alpha.124) (2026-09-07)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** the `@better-auth/core`, `better-auth` and `@better-auth/sso` peer
+ranges narrow from `>=1.7.1` to `>=1.7.3`. Now that no `issuer` is written, installing
+against 1.7.1 or 1.7.2 resolves cleanly and then fails at runtime, because those
+versions declare the column required.
+
+Verified in a real Durable Object: workerd accepts `ALTER TABLE ... DROP COLUMN`, and
+the test fails without the fix rather than passing either way.
+
+### Bug Fixes
+
+* **auth:** remove the reverted account.issuer column on migrate ([#661](https://github.com/anolilab/lunora/issues/661)) ([7d5cda9](https://github.com/anolilab/lunora/commit/7d5cda9a91ea873e8c62ac40930202ce20a0d4ab)), closes [#659](https://github.com/anolilab/lunora/issues/659)
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
+## @lunora/auth [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.122...@lunora/auth@1.0.0-alpha.123) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+
+## @lunora/auth [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.121...@lunora/auth@1.0.0-alpha.122) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.107
+
+## @lunora/auth [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.120...@lunora/auth@1.0.0-alpha.121) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.106
+
+## @lunora/auth [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.119...@lunora/auth@1.0.0-alpha.120) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/values:** upgraded to 1.0.0-alpha.41
+* **@lunora/server:** upgraded to 1.0.0-alpha.105
+
+## @lunora/auth [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.118...@lunora/auth@1.0.0-alpha.119) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.104
+
+## @lunora/auth [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.117...@lunora/auth@1.0.0-alpha.118) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **ratelimit,auth:** `accessRoles()` and the `@lunora/cloudflare-access/roles` subpath are removed. Use
+`createAccessResolver({ roles })` instead. `AccessRoleMap` now exports from the package root.
+
+Corrects the three places that told a reader the two paths agree: the emit.ts comment claiming
+`composeShapeReadWhere` is "exactly the request-time path", the package docs, and the RLS concept
+page. The golden `_generated/shard.ts` fixture is regenerated for the emitted comment.
+
+Second fix in the same resolver: a platform identity carrying no usable id suppressed the
+configured JWT fallback. `??` falls through on nullish only, and `readPlatformIdentity` returns an
+object for any non-null object result, `{}` included — so a caller presenting a valid
+Cf-Access-Jwt-Assertion resolved anonymous with nothing verified and `onError` never firing. The
+resolver now falls through whenever the platform identity yields no identity, and stays fail-closed
+when neither path does. That trigger was reasoned from the code rather than observed — whether
+Cloudflare ever returns such an identity is unverified — so the fix is deliberately defensive.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(ratelimit): stop a reserve stranding a key and misreporting retry
+
+Three defects on the reserve path, all reachable through the public API and through
+`token-budget.ts`, which clamps an oversized charge to capacity and reserves it.
+
+A fixed window granted exactly one period's `rate` however many periods had elapsed, while the
+rejection path persists nothing. A debt of at least `rate` therefore re-projected against that same
+lone grant on every later call and the key stayed denied forever, told "retry next window" every
+window. The projection now grants one `rate` per elapsed window, the way the token bucket refills
+per elapsed millisecond; the existing capacity cap still bounds the result. The old test reserved 2
+against rate 5 — a debt smaller than `rate`, which is the case that recovers — so it passed
+throughout, and now covers a debt of a full `rate`.
+
+The deny-list was stored verbatim while the incoming key was checked both normalized and raw, under
+a comment claiming either form worked. Only a byte-exact repeat of the stored string matched: with
+a trim+lowercase normalizer, `denyList: ["Abuse@Example.com"]` admitted a request keyed
+`abuse@example.com` that consumed from the same storage bucket, so a banned caller shed the ban by
+lower-casing their own email. Entries are now stored in both forms at construction.
+
+A sliding-window reserve derived its `retryAfter` from the pre-reserve count while persisting
+`currentCount + count`, so the time it reported was still denied when it arrived and the caller
+burned a rejected attempt — a re-queued durable write wakes on that hint verbatim. It is now
+derived from the count the call actually stores. The old assertion pinned 1200 under the title
+"reports when the pressure clears"; the true clear time is 1334, and the test now re-evaluates at
+the reported time to prove it is honoured.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): trust cf-connecting-ip only behind Cloudflare
+
+`resolveIp` in the audit hooks returned `cf-connecting-ip` before consulting `trustProxyHeaders`,
+though that option's own docblock promises the opposite: "Defaults to false: off Cloudflare, with
+no trusted proxy configured, the audit record's ip is omitted rather than populated from a
+spoofable header."
+
+Off Cloudflare nothing overwrites that header, so an attacker setting it per request owned the `ip`
+on every sign-in, password-reset and mfa-disable row they generated — rows Studio surfaces through
+`getAuthAuditLog`. Forensic impact only: nothing enforces on the audit ip.
+
+It now applies the same `onCloudflareEdge()` gate that `create-auth.ts`'s
+`defaultIpAddressHeaders` already applies, so this package's two client-IP resolvers cannot
+disagree about who a request came from. `onCloudflareEdge` moves from a file-private const to a
+named export of `create-auth.ts`; it is not re-exported from the package index, so the public API
+is unchanged.
+
+The existing cases asserting `cf-connecting-ip` did not say which runtime they ran on and passed
+under Node's `navigator.userAgent`; they now stub the Cloudflare one explicitly, alongside two new
+cases for the off-Cloudflare behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): key IP-less REST callers and 403 a deny-list hit
+
+`createRestRateLimit` charged its limit with no key at all when `cf-connecting-ip` was absent,
+putting every such caller in that limit's UNKEYED bucket — the same one a deliberately-global
+charge of the name uses — so one anonymous caller could drain an app-wide limit. This is the
+caller-pooling `@lunora/ratelimit`'s own middleware refuses outright. They now share a named
+`no-trusted-ip` bucket, which keeps the blast radius to the IP-less callers themselves and makes
+the pooling visible in storage; pass `options.key` to key them properly.
+
+A deny-list hit carries `retryAfter: Infinity` and was mapped to 429 with the header
+`Retry-After: Infinity`, inviting a client to keep retrying a denial that never clears. It now
+answers 403 FORBIDDEN with no Retry-After, matching what both `@lunora/ratelimit` entry points
+produce. `RateLimiterLike` gains the optional `reason` the limiter already returns.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **auth,sql-store,codegen:** stop the auth migrator killing the isolate, and the global sweep re-running per request ([#613](https://github.com/anolilab/lunora/issues/613)) ([f170c82](https://github.com/anolilab/lunora/commit/f170c82b07857dad3053660d558a513e484309e8)), closes [#599](https://github.com/anolilab/lunora/issues/599) [#601](https://github.com/anolilab/lunora/issues/601) [#600](https://github.com/anolilab/lunora/issues/600) [#601](https://github.com/anolilab/lunora/issues/601)
+* **ratelimit,auth:** unstick a bricked limiter and close the deny-list bypass ([#606](https://github.com/anolilab/lunora/issues/606)) ([fd7d6ad](https://github.com/anolilab/lunora/commit/fd7d6ad78e0b02d76c8e9a4f6807c4b95dda88ac))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+
+## @lunora/auth [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.116...@lunora/auth@1.0.0-alpha.117) (2026-09-05)
+
+### Features
+
+* **auth:** put sign-up invitations on the admin plane and in the studio ([#598](https://github.com/anolilab/lunora/issues/598)) ([4e5a38c](https://github.com/anolilab/lunora/commit/4e5a38cb48e5122c682c96dc1bc1c889d1604603)), closes [#602](https://github.com/anolilab/lunora/issues/602)
+
+## @lunora/auth [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.115...@lunora/auth@1.0.0-alpha.116) (2026-09-04)
+
+### Features
+
+* **auth:** add invite-only sign-up ([#593](https://github.com/anolilab/lunora/issues/593)) ([88699b7](https://github.com/anolilab/lunora/commit/88699b7294756152e06721147483d5fa82912e5d))
+
+## @lunora/auth [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.114...@lunora/auth@1.0.0-alpha.115) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/values:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.102
+
+## @lunora/auth [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.113...@lunora/auth@1.0.0-alpha.114) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.101
+
+## @lunora/auth [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.112...@lunora/auth@1.0.0-alpha.113) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/values:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.100
+
 ## @lunora/auth [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.111...@lunora/auth@1.0.0-alpha.112) (2026-09-02)
 
 ### Bug Fixes

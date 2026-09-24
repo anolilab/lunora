@@ -86,16 +86,16 @@ Two are yours to respect, because no rewrite can absorb them:
 
 ## Queues
 
-| Limit               | Value                 | Implication                                            |
-| ------------------- | --------------------- | ------------------------------------------------------ |
-| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                |
-| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count |
-| Consumer batch      | **100 messages**      | Per consumer invocation                                |
-| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                           |
-| Retries             | **100**               | Then the message goes to the DLQ                       |
-| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                 |
-| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                          |
-| `delaySeconds`      | **24 h**              | Longer schedules → `@lunora/scheduler`                 |
+| Limit               | Value                 | Implication                                             |
+| ------------------- | --------------------- | ------------------------------------------------------- |
+| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                 |
+| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count  |
+| Consumer batch      | **100 messages**      | Per consumer invocation                                 |
+| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                            |
+| Retries             | **100**               | Then the message goes to the DLQ                        |
+| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                  |
+| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                           |
+| `delaySeconds`      | **12 h**              | `ctx.queues` refuses more; longer → `@lunora/scheduler` |
 
 ## Pipelines
 
@@ -115,11 +115,16 @@ than by Lunora. Split large batches across calls.
 
 ## Workers AI + Vectorize
 
-| Limit                     | Value      | Implication                                                        |
-| ------------------------- | ---------- | ------------------------------------------------------------------ |
-| Vector metadata           | **10 KiB** | The whole object per vector, not just the chunk text               |
-| `topK` with full metadata | **50**     | Cloudflare's ceiling; `defineRag` caps at 20, a legacy-V1 holdover |
-| `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata         |
+| Limit                     | Value      | Implication                                                |
+| ------------------------- | ---------- | ---------------------------------------------------------- |
+| Vector metadata           | **10 KiB** | The whole object per vector, not just the chunk text       |
+| `topK` with full metadata | **50**     | Cloudflare V2's ceiling, and what `defineRag` clamps to    |
+| `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata |
+
+Legacy Vectorize **V1** indexes cap `topK` at 20 and reject a larger value
+remotely. A binding handle does not expose its index version, so `defineRag`
+cannot branch on it and does not clamp to 20 — on a V1 index, keep `topK` at or
+below 20 yourself.
 
 The ceiling covers the **whole** metadata object (chunk text, Lunora's
 bookkeeping keys, and any `metadata` you attach), so `defineRag` checks it in
@@ -193,5 +198,7 @@ in the request that fails.
 The statement limits above are different in kind: there is no warning band,
 because there is no gradual degradation to warn about. A statement either fits
 or it raises `SQLITE_ERROR`. Where Lunora can keep you under one it does so
-silently; where it cannot (the 2 MB document, the 100-column table) it raises
-an error naming the limit and what to do instead.
+silently; where it cannot it raises an error naming the limit and what to do
+instead — a `PAYLOAD_TOO_LARGE` (413) for an oversized document on a
+shard-local table, and a create-time error for the 100-column global table.
+Nothing pre-measures a document, so the check happens on the write.

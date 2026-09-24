@@ -1,6 +1,6 @@
 # workflow
 
-Durable, long-running workflows for Lunora. Declare a `defineWorkflow` export in `lunora/workflows.ts` and `@lunora/codegen` discovers it — generating a typed `WorkflowEntrypoint` class, `ctx.workflows.<name>.start(params)` on mutation/action context, and the matching `workflows[]` entries in `wrangler.jsonc`.
+Durable, long-running workflows for Lunora. Declare a `defineWorkflow` export in `lunora/workflows.ts` and `@lunora/codegen` discovers it — generating a typed `WorkflowEntrypoint` class, a typed `ctx.workflows.get("<name>")` on mutation/action context, and the matching `workflows[]` entries in `wrangler.jsonc`.
 
 Built on [`@lunora/workflow`](../../packages/workflow) — the durable workflow runtime over Cloudflare Workflows.
 
@@ -23,7 +23,7 @@ lunora codegen
 
 Codegen discovers the `defineWorkflow()` calls and emits:
 
-- **`ctx.workflows.<name>.start(params)`** — typed producer on Mutation and Action contexts.
+- **`ctx.workflows.get("<name>")`** — a typed `WorkflowHandle` on Mutation and Action contexts. The generated overload accepts only your declared export names, and infers each one's `params`.
 - **`WorkflowEntrypoint`** subclass in the generated Worker entry.
 - **`workflows[]`** — wrangler bindings, auto-reconciled.
 
@@ -53,27 +53,26 @@ export const orderPipeline = defineWorkflow<{ orderId: string }, { status: strin
 - **`ctx.params`** — the input parameters passed when starting the workflow.
 - **`ctx.run(func, args)`** (calling a Lunora function from within a step) — dispatches a query, mutation, or action and awaits its result.
 
-Start a workflow from any mutation or action:
+Start a workflow from any mutation or action. `get(name)` resolves the handle; `create()` starts an instance:
 
 ```ts
-const handle = await ctx.workflows.orderPipeline.start({ orderId: "ord_123" });
-const status = await handle.status();
+const instance = await ctx.workflows.get("orderPipeline").create({ params: { orderId: "ord_123" } });
+const status = await instance.status();
 ```
+
+`createBatch([...])` starts many in one RPC, `get(id)` returns a handle to a running instance, and `sendEvent(id, event, payload)` delivers a `defineWorkflowEvent` the body is waiting on.
 
 ### Fan-out with `branch()`
 
-For parallel work, use `branch()` to spawn concurrent branches:
+Parallel work runs as **separate child workflow instances**, not as closures — each branch names another declared workflow. Build them with the top-level `branch()` and await them through `ctx.parallel`:
 
 ```ts
+import { branch, defineWorkflow } from "@lunora/workflow";
+
 export const reportWorkflow = defineWorkflow<{ userIds: string[] }, { results: unknown[] }>({
     handler: async (ctx) => {
-        const branches = ctx.params.userIds.map((userId) =>
-            ctx.step.branch(`process-${userId}`, async () => {
-                // Each branch runs independently
-                return { userId, processed: true };
-            }),
-        );
-        const results = await Promise.all(branches);
+        const results = await ctx.parallel(ctx.params.userIds.map((userId) => branch<{ processed: boolean }>("processUser", { userId })));
+
         return { results };
     },
 });
@@ -81,10 +80,12 @@ export const reportWorkflow = defineWorkflow<{ userIds: string[] }, { results: u
 
 ## Configuration
 
-| Option    | Type                                 | Description                                    |
-| --------- | ------------------------------------ | ---------------------------------------------- |
-| `handler` | `(ctx: WorkflowCtx) => Promise\<T\>` | The workflow logic — a function of steps.      |
-| `timeout` | `string`                             | Max wall-clock duration (e.g. `"15 minutes"`). |
+| Option    | Type                                 | Description                                                                                             |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `handler` | `(ctx: WorkflowCtx) => Promise\<T\>` | The workflow logic — a function of steps.                                                               |
+| `name`    | `string`                             | Override the deployed `workflows[].name` (defaults to the kebab-cased export name). Not a timeout knob. |
+
+`defineWorkflow` takes no `timeout`: a wall-clock bound belongs to a step (`ctx.step.do(name, { timeout }, fn)`), a `waitForEvent`, or a `branch(..., { timeout })`.
 
 Wrangler-level config (max concurrency, retry delays) is managed via the generated `wrangler.jsonc`.
 
@@ -98,7 +99,7 @@ export const onboardingFlow = defineWorkflow<...>({ handler: ... });
 export const dataSyncJob = defineWorkflow<...>({ handler: ... });
 ```
 
-Codegen generates a separate `ctx.workflows.<name>` starter for each and syncs all wrangler bindings.
+Codegen adds a `ctx.workflows.get("<name>")` overload for each — so a typo is a compile error, not a runtime one — and syncs all wrangler bindings.
 
 ## What you own
 

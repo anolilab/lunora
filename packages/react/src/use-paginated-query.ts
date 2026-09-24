@@ -14,6 +14,10 @@ type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
 /**
  * Subscribe to a reactively-paginated query and grow the feed page by page.
  *
+ * Pass `onError` (and read `error`) to see a page failure: without it the hook
+ * only reports `status`, and a first page that fails reads as an eternal
+ * `isLoading`.
+ *
  * The query function must accept a `paginationOpts: { numItems, cursor,
  * endCursor }` arg and return a `PaginationResult` (the shape
  * `ctx.db.query(...).paginate` yields). Pages are tracked as an ordered list of
@@ -32,13 +36,19 @@ type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
  * Changing `fn`, the base `args`, `initialNumItems`, or `shardKey` resets the
  * feed to its first page. The public return shape (`results` / `status` /
  * `loadMore`) is unchanged from the legacy keyset implementation.
+ *
+ * There is no total-row count here, and deliberately not: `paginate()` never
+ * counts the tail, which is what keeps a page O(page) rather than O(table). For
+ * a "42 of 1,203" label, subscribe to a `ctx.db.<table>.count(where)` query with
+ * the same filter args via `useQuery` — it is live, so it moves with the
+ * list. See the pagination concept page.
  */
 const usePaginatedQuery = <F extends FunctionReference>(
     function_: F,
     args: "skip" | PaginatedArgs<F>,
     options: UsePaginatedQueryOptions,
 ): UsePaginatedQueryResult<PageItemOf<F>> => {
-    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
+    const { error, loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
 
     const results: PageItemOf<F>[] = [];
 
@@ -51,6 +61,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
     const skipped = args === "skip";
 
     return {
+        error,
         isLoading: !skipped && (status === "LoadingFirstPage" || status === "LoadingMore"),
         loadMore,
         results,

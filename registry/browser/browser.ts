@@ -11,7 +11,7 @@
  * Usage:
  *   const png = await ctx.browser.screenshot("https://example.com");
  *   const pdf = await ctx.browser.pdf("https://example.com/report");
- *   const text = await ctx.browser.scrape("https://example.com", (page) => page.innerText("body"));
+ *   const text = await ctx.browser.scrape("https://example.com", () => document.body.innerText);
  *
  * **Rendering a caller-supplied URL is a server-side request forgery (SSRF)
  * sink, and a metered one.** Lunora `action`s are public RPC, so an unguarded
@@ -39,10 +39,21 @@
  * });
  * ```
  *
- * `createBrowser`'s `allowedHosts` is the hard guarantee (it is enforced on
- * every navigation *and* every subresource request, and it is what satisfies the
- * `browser_user_url_without_allowlist` advisor lint); the check in this file is
- * the fail-closed default for the window before you have configured it.
+ * That factory call is the hard guarantee, and it is a strictly stronger one
+ * than the check below: `allowedHosts` is enforced on every navigation *and*
+ * every subresource request, so it survives a 3xx redirect and a page that
+ * fetches somewhere else. {@link assertAllowedTarget} sees only the URL you
+ * hand it, once, which is why it cannot be the last word.
+ *
+ * Until you add that call, `lunora codegen` reports
+ * `browser_user_url_without_allowlist` (WARN) against the two `ctx.browser.*`
+ * calls here. That is accurate, not noise: the advisor suppresses on a
+ * `createBrowser({ allowedHosts })` in your project, because that is the only
+ * shape that covers redirects and subresources — and this file, shipped on its
+ * own, does not install one. Leaving the warning standing is deliberate; a
+ * scaffold that silenced it would be claiming a guarantee it cannot make. The
+ * `ctx.browser` you get from the `BROWSER` wrangler binding alone carries no
+ * host allowlist.
  */
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, createMemoryStore, rateLimit } from "@lunora/ratelimit";
@@ -152,7 +163,10 @@ export const screenshot = action
             viewport: width !== undefined && height !== undefined ? { width, height } : undefined,
         });
 
-        return { png: [...png] };
+        // The Uint8Array itself, NOT `[...png]`: the wire codec carries a typed
+        // array as base64, while spreading it turns every byte into its own JSON
+        // number — 3-4x the payload for a screenshot that is already megabytes.
+        return { png };
     });
 
 /** Capture a PDF of an allowlisted URL. */
@@ -164,5 +178,6 @@ export const pdf = action
 
         const pdfBytes = await ctx.browser.pdf(assertAllowedTarget(url), { format: "A4" });
 
-        return { pdf: [...pdfBytes] };
+        // See `screenshot`: return the typed array, not a JSON number array.
+        return { pdf: pdfBytes };
     });

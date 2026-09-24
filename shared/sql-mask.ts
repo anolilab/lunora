@@ -1,7 +1,7 @@
 /**
  * The canonical "where is this character actually code?" scanner for SQL, shared
  * by the read-only gate (`shared/sql-readonly.ts`) and the Studio's statement
- * splitter (`@lunora/studio`'s `split-statements.ts`).
+ * splitter (`shared/sql-split-statements.ts`).
  *
  * Its one job is BOUNDARY DETECTION: deciding whether a given `;` starts a new
  * statement or is content inside a literal, a quoted identifier, or a comment.
@@ -24,14 +24,24 @@
  * `@lunora/studio` share it without a dependency edge stops working.
  */
 
-/** Filler for masked content. A letter, so it can never look like a `;`, a quote, or a comment opener. */
+/** Filler for masked literal / identifier content. A letter, so it can never look like a `;`, a quote, or a comment opener. */
 const MASK_CHAR = "x";
+
+/**
+ * Filler for a masked COMMENT. A space rather than {@link MASK_CHAR} because a
+ * comment is whitespace to SQLite, and the read-only gate reads the masked copy
+ * to decide whether a `;` is the allowed TRAILING one — with a letter filler,
+ * `SELECT 1; -- note` masked to `SELECT 1;xxxxxxx` and the gate refused a single
+ * statement as a multi-statement batch. Same length, and equally incapable of
+ * looking like a `;`, a quote, or a comment opener.
+ */
+const COMMENT_MASK_CHAR = " ";
 
 /** Closing delimiter per quote opener. SQLite doubles the delimiter to escape it, except for `[...]`. */
 const QUOTE_CLOSERS: Readonly<Record<string, string>> = { '"': '"', "'": "'", "[": "]", "`": "`" };
 
 /** Index just past a `-- …` line comment at `from` (the newline itself is left alone). */
-const skipLineComment = (sql: string, from: number): number => {
+export const skipLineComment = (sql: string, from: number): number => {
     let index = from + 2;
 
     while (index < sql.length && sql[index] !== "\n") {
@@ -42,16 +52,17 @@ const skipLineComment = (sql: string, from: number): number => {
 };
 
 /** Index just past a block comment at `from`, or `-1` when it never closes. */
-const skipBlockComment = (sql: string, from: number): number => {
+export const skipBlockComment = (sql: string, from: number): number => {
     const close = sql.indexOf("*/", from + 2);
 
     return close === -1 ? -1 : close + 2;
 };
 
 /**
- * A same-length copy of `sql` with the CONTENT of string literals, quoted
- * identifiers and comments replaced by {@link MASK_CHAR}, or `undefined` when a
- * quote or block comment never closes.
+ * A same-length copy of `sql` with the CONTENT of string literals and quoted
+ * identifiers replaced by {@link MASK_CHAR}, comments by
+ * {@link COMMENT_MASK_CHAR}, or `undefined` when a quote or block comment never
+ * closes.
  *
  * A `;` inside `'…'`, `"…"`, `` `…` ``, `[…]`, `-- …` or a block comment is
  * content, not a statement boundary — SQLite's own parser never sees a second
@@ -84,7 +95,7 @@ const maskSqlNonCode = (sql: string): string | undefined => {
         if (char === "-" && sql[index + 1] === "-") {
             const end = skipLineComment(sql, index);
 
-            out.fill(MASK_CHAR, index, end);
+            out.fill(COMMENT_MASK_CHAR, index, end);
             index = end;
         } else if (char === "/" && sql[index + 1] === "*") {
             const end = skipBlockComment(sql, index);
@@ -93,7 +104,7 @@ const maskSqlNonCode = (sql: string): string | undefined => {
                 return undefined;
             }
 
-            out.fill(MASK_CHAR, index, end);
+            out.fill(COMMENT_MASK_CHAR, index, end);
             index = end;
         } else if (closer !== undefined) {
             let scan = index + 1;

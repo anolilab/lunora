@@ -13,5 +13,5 @@
         "noEmit": true,
         "types": ["@cloudflare/workers-types", "vite/client", "vinext/types"]
     },
-    "include": ["pages/**/*", "lunora/**/*", "vite.config.ts", "next.config.mjs"]
+    "include": ["pages/**/*", "lunora/**/*", "vite.config.ts", "next.config.mjs", "lunora.config.ts"]
 }

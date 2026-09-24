@@ -8,8 +8,8 @@ import type { Lint } from "../../types";
  * Hyperdrive (`@lunora/hyperdrive`) points at an **external** Postgres/MySQL
  * database Lunora does not own. A `ctx.sql` query is a network round-trip with a
  * mutable result — non-deterministic, exactly like `fetch` — so it breaks the
- * determinism the coordinator relies on when it re-runs a query on subscription
- * re-evaluation or a mutation on OCC retry. Worse, external writes are invisible
+ * determinism a `query` handler needs: a live subscription re-runs it whenever a
+ * table it reads changes. Worse, external writes are invisible
  * to the DO/SQLite change-feed, so a subscription will never re-fire on them.
  * `ctx.sql` is therefore wired onto `ActionCtx` **only** and belongs exclusively
  * in `action(...)` handlers; using it in a query/mutation is the same class of

@@ -209,7 +209,7 @@ describe("createScheduler — paging over the DO's bounded pages", () => {
 
         const state = createFakeState();
         const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
-        const client = createScheduler({ namespace: doNamespace(scheduler), originUrl: "https://app.test" });
+        const client = createScheduler({ namespace: doNamespace(scheduler) });
 
         for (let index = 0; index < 150; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- 150 sequential enqueues against one in-process DO
@@ -234,7 +234,7 @@ describe("createScheduler — paging over the DO's bounded pages", () => {
         }
 
         const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
-        const client = createScheduler({ namespace: doNamespace(scheduler), originUrl: "https://app.test" });
+        const client = createScheduler({ namespace: doNamespace(scheduler) });
 
         await expect(client.dead()).resolves.toHaveLength(250);
     });

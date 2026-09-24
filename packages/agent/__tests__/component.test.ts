@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentComponent, agentExtension } from "../src/component";
+import { assertNoExplicitUndefined } from "./loop-harness";
 
 const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
 const ANOTHER_OWNER_PATTERN = /another owner/u;
@@ -138,17 +139,13 @@ const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: str
             return id;
         },
         patch: async (id: string, patch: Record<string, unknown>) => {
+            assertNoExplicitUndefined(patch);
+
             for (const tableContent of rows.values()) {
                 const row = tableContent.find((candidate) => candidate["_id"] === id);
 
                 if (row) {
-                    for (const [key, value] of Object.entries(patch)) {
-                        if (value === undefined) {
-                            Reflect.deleteProperty(row, key);
-                        } else {
-                            row[key] = value;
-                        }
-                    }
+                    Object.assign(row, patch);
                 }
             }
         },
@@ -179,6 +176,20 @@ describe(agentComponent, () => {
             "run_queue",
             "threads",
         ]);
+    });
+
+    it("declares the thread `error` column nullable — the only way a run can clear it", () => {
+        const { error } = (agentExtension.tables["threads"] as unknown as { shape: Record<string, { parse: (value: unknown) => unknown }> }).shape;
+
+        // `ctx.db.patch` clears a column by writing `null`; an explicit
+        // `undefined` is rejected outright. So the column a starting run has to
+        // clear MUST admit null, or the declared row type lies about what the
+        // store holds. Nothing else pins this: the engine tolerates a stored null
+        // on any optional column when patching, so reverting `.nullable()` keeps
+        // every other test green while the generated type says `string`.
+        expect(error?.parse(null)).toBeNull();
+        expect(error?.parse(undefined)).toBeUndefined();
+        expect(error?.parse("boom")).toBe("boom");
     });
 
     it("marks the mutations internal and the queries public", () => {
@@ -1273,6 +1284,37 @@ describe("concurrency guard", () => {
         expect(result).toStrictEqual({ outcome: "replaced", priorInstanceId: "wf-old" });
         expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-new");
         expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
+    });
+
+    it("clears a prior run's error on every path that restarts a thread", async () => {
+        const { ctx, rows } = fakeDatabase();
+        const { functions } = agentComponent();
+        const thread = () => rows.get("agent_threads")?.[0];
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        await callMutation(functions.agentCompleteRun, ctx, { error: "the model provider is down", instanceId: "wf-a", key: "t-1", status: "error" });
+
+        expect(thread()).toMatchObject({ error: "the model provider is down", status: "error" });
+
+        // CONTINUE. Every second and later run on a thread lands here — a durable
+        // run following another, a voice turn, the greeting path. Clearing with an
+        // explicit `undefined` made all of them throw `Cannot patch field 'error'
+        // to undefined`: the merge behind `ctx.db.patch` would DELETE the column,
+        // so the store rejects it outright. `null` is the one value that clears.
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" });
+
+        expect(thread()?.["error"]).toBeNull();
+
+        // REPLACE. Same clear, from `applyConcurrencyPolicy`. The error is put
+        // back through `agentPatchThread` first, since the continue above has
+        // already cleared it.
+        await callMutation(functions.agentPatchThread, ctx, { error: "a tool timed out", key: "t-1" });
+
+        expect(thread()?.["error"]).toBe("a tool timed out");
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-c", key: "t-1", onConcurrentRun: "replace" });
+
+        expect(thread()?.["error"]).toBeNull();
     });
 
     it("cancels a thread by instance id: patchThread sets status cancelled", async () => {

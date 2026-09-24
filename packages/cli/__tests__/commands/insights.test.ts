@@ -1,7 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FetchLike, FunctionStatRow } from "../../src/commands/insights/handler";
 import { buildInsightsReport, formatInsightsReport, runInsightsCommand } from "../../src/commands/insights/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -118,13 +123,17 @@ describe("formatInsightsReport", () => {
 
 describe("runInsightsCommand", () => {
     let savedToken: string | undefined;
+    let workdir: string;
 
     beforeEach(() => {
         savedToken = process.env.LUNORA_ADMIN_TOKEN;
         delete process.env.LUNORA_ADMIN_TOKEN;
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-insights-"));
     });
 
     afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+
         if (savedToken === undefined) {
             delete process.env.LUNORA_ADMIN_TOKEN;
         } else {
@@ -135,9 +144,28 @@ describe("runInsightsCommand", () => {
     it("fails without an admin token", async () => {
         expect.assertions(1);
 
-        const result = await runInsightsCommand({ logger: silentLogger(), url: "http://localhost:8787" });
+        const result = await runInsightsCommand({ cwd: workdir, logger: silentLogger(), url: "http://localhost:8787" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.AUTH);
+    });
+
+    it("falls back to the .dev.vars token against a local worker", async () => {
+        expect.assertions(2);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+        writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+
+        const calls: { body: unknown; headers?: Record<string, string>; url: string }[] = [];
+
+        const result = await runInsightsCommand({
+            cwd: workdir,
+            fetchImpl: statsFetch([], calls),
+            logger: silentLogger(),
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(calls[0]?.headers?.authorization).toBe("Bearer local");
     });
 
     it("refuses --prod without an explicit --url", async () => {
@@ -145,7 +173,7 @@ describe("runInsightsCommand", () => {
 
         const result = await runInsightsCommand({ logger: silentLogger(), prod: true, token: "secret" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("pOSTs the admin RPC with the bearer token and returns the report", async () => {
@@ -208,6 +236,6 @@ describe("runInsightsCommand", () => {
 
         const result = await runInsightsCommand({ fetchImpl, logger: silentLogger(), token: "secret" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.PERMISSION);
     });
 });

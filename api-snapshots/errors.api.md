@@ -137,6 +137,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Run depth exceeded";
     };
+    readonly RUN_KIND_FORBIDDEN: {
+        readonly status: 500;
+        readonly title: "Function kind may not be composed from a query";
+    };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
         readonly hint: readonly [
             "A single mutation may only read and write a bounded amount before it is stopped.",
@@ -168,6 +172,22 @@ const ERROR_CATALOG: {
         readonly status: 503;
         readonly title: "Shard unavailable";
     };
+    readonly SHARD_TIMEOUT: {
+        readonly status: 504;
+        readonly title: "Shard timeout";
+    };
+    readonly SHARD_HTTP_ERROR: {
+        readonly status: 502;
+        readonly title: "Shard HTTP error";
+    };
+    readonly SUBSCRIPTION_PERSIST_FAILED: {
+        readonly status: 500;
+        readonly title: "Subscription persist failed";
+    };
+    readonly TOO_MANY_SUBSCRIPTIONS: {
+        readonly status: 429;
+        readonly title: "Too many subscriptions";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
@@ -194,7 +214,7 @@ const ERROR_CATALOG: {
         readonly hint: readonly [
             "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
             "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`)."
+            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`)."
         ];
         readonly status: 400;
         readonly title: "Email domain not allowed";
@@ -220,6 +240,31 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Cloudflare Workflows REST API error";
     };
+    readonly CONFIG_INVALID: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Payment configuration invalid";
+    };
+    readonly CURRENCY_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Currency mismatch";
+    };
+    readonly PROVIDER_ERROR: {
+        readonly status: 502;
+        readonly title: "Payment provider error";
+    };
+    readonly WEBHOOK_EVENT_ID_MISSING: {
+        readonly status: 400;
+        readonly title: "Webhook event id missing";
+    };
+    readonly WEBHOOK_SIGNATURE_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook signature invalid";
+    };
+    readonly WEBHOOK_TIMESTAMP_INVALID: {
+        readonly status: 400;
+        readonly title: "Webhook timestamp outside tolerance";
+    };
     readonly ADMIN_FORBIDDEN: {
         readonly status: 403;
         readonly title: "Admin access forbidden";
@@ -227,6 +272,17 @@ const ERROR_CATALOG: {
     readonly ADMIN_TOKEN_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Admin token not configured";
+    };
+    readonly AUTH_MIGRATOR_UNSUPPORTED: {
+        readonly hint: readonly [
+            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
+            "",
+            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
+            "",
+            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all."
+        ];
+        readonly status: 500;
+        readonly title: "Auth migrator cannot drive the configured database";
     };
     readonly AUTH_NOT_CONFIGURED: {
         readonly status: 400;
@@ -268,6 +324,15 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Cron job not found";
     };
+    readonly EXPORT_SHARD_FAILED: {
+        readonly hint: readonly [
+            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
+            "",
+            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows."
+        ];
+        readonly status: 502;
+        readonly title: "Export failed on one or more shards";
+    };
     readonly EXPORT_TAP_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Export tap not configured";
@@ -279,6 +344,15 @@ const ERROR_CATALOG: {
     readonly GLOBALS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global-table introspector not configured";
+    };
+    readonly ID_COLLISION: {
+        readonly hint: readonly [
+            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
+            "",
+            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it."
+        ];
+        readonly status: 409;
+        readonly title: "Document id already belongs to another table";
     };
     readonly KV_NOT_CONFIGURED: {
         readonly status: 400;
@@ -333,6 +407,15 @@ const ERROR_CATALOG: {
     readonly STORAGE_URL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
+    };
+    readonly RAG_DIMENSION_MISMATCH: {
+        readonly hint: readonly [
+            "A stored vector and the query embedding have different widths, so they cannot be compared.",
+            "",
+            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
+        ];
+        readonly status: 409;
+        readonly title: "Embedding dimension mismatch";
     };
     readonly VECTORS_NOT_CONFIGURED: {
         readonly status: 400;
@@ -444,6 +527,16 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
     };
+    readonly DISPATCH_UNAUTHENTICATED: {
+        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
+        readonly status: 403;
+        readonly title: "Dispatch caller not authenticated";
+    };
+    readonly DISPATCH_IN_PROGRESS: {
+        readonly hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.";
+        readonly status: 409;
+        readonly title: "Dispatch already in progress";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";
@@ -467,6 +560,10 @@ const ERROR_CATALOG: {
     readonly INVALID_INPUT: {
         readonly status: 400;
         readonly title: "Invalid input";
+    };
+    readonly INVALID_SCHEDULE_ID: {
+        readonly status: 400;
+        readonly title: "Invalid schedule id";
     };
     readonly RATE_LIMITED: {
         readonly status: 429;
@@ -504,6 +601,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Could not decode a server frame";
     };
+    readonly WIRE_ENCODE_FAILED: {
+        readonly status: 500;
+        readonly title: "Could not encode a return value";
+    };
     readonly UNKNOWN_COLUMN: {
         readonly status: 404;
         readonly title: "Unknown column";
@@ -511,6 +612,10 @@ const ERROR_CATALOG: {
     readonly CDC_LOG_TRIMMED: {
         readonly status: 409;
         readonly title: "CDC log trimmed";
+    };
+    readonly CDC_TIMELINE_FORKED: {
+        readonly status: 409;
+        readonly title: "CDC timeline forked";
     };
     readonly CDC_PAYLOAD_COMPACTED: {
         readonly status: 409;
@@ -546,6 +651,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "SQL storage unavailable";
     };
+    readonly STREAM_ID_IN_USE: {
+        readonly status: 409;
+        readonly title: "Stream id already in use";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";
@@ -561,6 +670,11 @@ const ERROR_CATALOG: {
     readonly TOO_MANY_STREAMS: {
         readonly status: 429;
         readonly title: "Too many streams";
+    };
+    readonly TOO_MANY_WHISPER_TOPICS: {
+        readonly hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.";
+        readonly status: 429;
+        readonly title: "Too many whisper topics";
     };
     readonly UNKNOWN_ADMIN_OP: {
         readonly status: 404;
@@ -647,6 +761,15 @@ const ERROR_CATALOG: {
     readonly UNKNOWN_MUTATION_FN: {
         readonly status: 404;
         readonly title: "Unknown mutation function";
+    };
+    readonly LOCAL_DEPENDENCY_MISSING: {
+        readonly hint: readonly [
+            "The command Lunora tried to run is not on your PATH, so nothing ran.",
+            "",
+            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately."
+        ];
+        readonly status: 500;
+        readonly title: "Required local tool not found";
     };
 };
 ```
@@ -813,6 +936,12 @@ const findSolutionByMessage: (message: string) => Solution | undefined;
 
 ```ts
 const flattenHint: (hint: ErrorHint) => string;
+```
+
+### `getCatalogEntry` (const)
+
+```ts
+const getCatalogEntry: (code: string) => ErrorCatalogEntry | undefined;
 ```
 
 ### `invariant` (const)

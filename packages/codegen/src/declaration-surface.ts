@@ -49,11 +49,13 @@ import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueues } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
+import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
-import { emitDataModel, emitServer } from "./emit";
+import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, resolveCodegenTarget } from "./platform-target";
+import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
+import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
  * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
@@ -134,6 +136,14 @@ interface DeclarationSurface {
     declaredDependencies: ReadonlySet<string> | undefined;
     /** The same names with the absent case flattened to an empty set. */
     dependencies: ReadonlySet<string>;
+
+    /**
+     * Cron expressions the worker entry pins outside `lunora/crons.ts` —
+     * `createWorker({ backupCron })` and the keys of `createWorker({ crons })`.
+     * Not jobs (`createWorker` dispatches them itself), only schedules that must
+     * reach wrangler's `triggers.crons`.
+     */
+    entryCronTriggers: ReadonlyArray<string>;
     env: EnvIR | undefined;
 
     /**
@@ -219,6 +229,13 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // it earlier cannot change what it finds.
     const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
+    // The other two cron surfaces, which are configured on `createWorker` rather
+    // than registered through `cronJobs()` and so are invisible to the discoverer
+    // above. They produce no job — only schedules the wrangler reconciler has to
+    // know it generated. Read beside the crons for that reason alone; nothing in
+    // this phase consumes them.
+    const entryCronTriggers = discoverWorkerEntryCrons(project, lunoraDirectory);
+
     // Intersect what the app uses with what the deploy target supports. For the
     // default Cloudflare target the matrix marks nothing unsupported, so the gate
     // is the identity and the emitted surface (and goldens) is unchanged; a target
@@ -266,6 +283,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,
+        // Read off the schema like `globalTables`: `ctx.db.related` is a core
+        // `ctx.db` method with no capability row to notice, and the thing that
+        // makes it meaningful — a `v.id("target")` column — is a schema
+        // declaration. A schema with no foreign key declares no graph, so a host
+        // that cannot serve the traversal only refuses apps that would use one.
+        relationGraph: schemaDeclaresRelationGraph(schema),
         secrets: codeSignals.secrets,
         // Read off the schema for the same reason `globalTables` is — and it has
         // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`
@@ -274,6 +297,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         vectorStore: schema.vectorIndexes.length > 0,
     });
     const featureUsage = platformGate.usage;
+    // The gate's `vectorStore` verdict, named once for both consumers below.
+    // `undefined` means the app never declared a vector index, which must not
+    // withhold anything; only an explicit `false` is a rejection.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
 
     const declaredDependencies = readPackageDependencies(projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
@@ -282,7 +309,21 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Before either render: a schema needing an uninstalled add-on must fail as an
     // actionable error naming the package, not as a `tsc` failure reported inside
     // a generated file the user did not write.
-    assertRequiredPackages(schema, declaredDependencies);
+    //
+    // The two signal-driven entries mirror how `run-codegen` builds the app
+    // emitter's `hasScheduler` / `hasStorage` — minus its `dependencies.has(...)`
+    // arm, which is the very question being asked here.
+    assertRequiredPackages(schema, declaredDependencies, {
+        hasVectors: vectorStoreSupported,
+        scheduler: featureUsage.scheduler || crons.length > 0,
+        storage: featureUsage.storage || storageRulesMetadata.rules.length > 0 || Object.keys(buildStorageColumns(schema)).length > 0,
+        // The POST-gate usage, the same record the emitters read: a bare
+        // `ctx.kv` / `ctx.ai` read pulls that capability's package into
+        // `_generated/` with nothing else declaring it, and a target that rates
+        // the capability unsupported withholds the surface and must not be told
+        // to install a package for it.
+        usage: featureUsage,
+    });
 
     const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
     const hasNotify = existsSync(join(lunoraDirectory, "notify.ts"));
@@ -294,12 +335,18 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         dataModelContent: emitDataModel(schema),
         declaredDependencies,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
         hasFlags,
         hasNotify,
         identity,
-        platformGate,
+        platformGate: {
+            ...platformGate,
+            // Prepended, not appended: "your target was not read" explains every
+            // feature diagnostic that follows it, so it has to be read first.
+            diagnostics: [...readTargetDiagnostics(projectRoot, options.target), ...platformGate.diagnostics],
+        },
         queues,
         serverContent: emitServer({
             agents,
@@ -311,9 +358,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             hasBrowser: featureUsage.browser,
             // The gate's verdict, not the raw declaration: a `.vectorize()` column
             // declares the feature without importing anything, so `featureUsage`
-            // never sees it. `false` only when the signal was REJECTED — absent
-            // means never declared, which must not withhold the surface.
-            hasVectors: platformGate.signals.vectorStore !== false,
+            // never sees it. The emitter AND's it with `schema.vectorIndexes`.
+            hasVectors: vectorStoreSupported,
             hasFlags,
             hasHyperdrive: featureUsage.hyperdrive,
             hasImages: featureUsage.images,

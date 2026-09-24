@@ -7,6 +7,7 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -80,7 +81,11 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "node ./patch.mjs" } }),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" },
+                    name: "app",
+                    scripts: { postcodegen: "node ./patch.mjs" },
+                }),
                 "utf8",
             );
 
@@ -105,7 +110,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { postcodegen: "exit 1" } }),
                 "utf8",
             );
 
@@ -113,7 +118,7 @@ describe("lunora prepare", () => {
             const { logger } = silentLogger();
             const result = await runPrepareCommand({ cwd: workdir, logger, spawner });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(result.error).toContain("postcodegen");
         });
 
@@ -123,7 +128,7 @@ describe("lunora prepare", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
-                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
+                JSON.stringify({ dependencies: { "@lunora/d1": "1.0.0", "@lunora/storage": "1.0.0" }, name: "app", scripts: { build: "tsc" } }),
                 "utf8",
             );
 
@@ -154,7 +159,7 @@ describe("lunora prepare", () => {
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.error).toBe("wrangler validation failed");
         expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
     });
@@ -166,7 +171,7 @@ describe("lunora prepare", () => {
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.length).toBeGreaterThan(0);
     });
 
@@ -199,7 +204,7 @@ describe("lunora prepare", () => {
         const { logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(result.error).toContain("placeholder database_id");
         // And it names the fix, rather than leaving the user to discover it at
         // deploy time.
@@ -238,9 +243,11 @@ export default crons;
         expect(written).toContain("0 * * * *");
     });
 
-    it("clears a stale triggers.crons array when the project declares no crons", async () => {
+    it("keeps a triggers.crons entry the project never generated", async () => {
         expect.assertions(2);
 
+        // A hand-written `backupCron` trigger: codegen cannot see it, so prepare
+        // must not treat "not generated" as "stale".
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
             VALID_WRANGLER.replace('"d1_databases"', '"triggers": { "crons": ["0 0 * * *"] },\n    "d1_databases"'),
@@ -254,10 +261,10 @@ export default crons;
 
         const parsed = parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { triggers?: { crons?: string[] } };
 
-        expect(parsed.triggers?.crons).toEqual([]);
+        expect(parsed.triggers?.crons).toStrictEqual(["0 0 * * *"]);
     });
 
-    it("returns code 1 when codegen fails (no schema.ts)", async () => {
+    it("exits usage when codegen fails (no schema.ts)", async () => {
         expect.assertions(3);
 
         // Remove the schema so codegen has nothing to process — some codegen
@@ -274,10 +281,10 @@ export default crons;
         const { errors, logger } = silentLogger();
         const result = await runPrepareCommand({ cwd: workdir, logger });
 
-        // Codegen failure returns code 1; or if codegen succeeds despite missing
-        // schema (no-op), validation may fail — either way code must be non-zero
-        // because no schema means SHARD binding can't be validated.
-        expect(result.code === 1 || result.code === 0).toBe(true);
+        // A missing schema is the project source being wrong, which is exit 2 —
+        // and if codegen somehow succeeds despite it, validation fails on the
+        // unverifiable SHARD binding, which is the same bucket.
+        expect(result.code === EXIT_CODE.USAGE || result.code === 0).toBe(true);
         // No assertion on specific error — codegen vs validator may differ, but
         // the plumbing (logger.error called on non-zero) is tested.
         expect(typeof result.code).toBe("number");
@@ -309,12 +316,53 @@ export default crons;
 
         const blocked = await runPrepareCommand({ cwd: workdir, logger });
 
-        expect(blocked.code).toBe(1);
+        expect(blocked.code).toBe(EXIT_CODE.USAGE);
         expect(blocked.schemaDrift?.blocked).toBe(true);
 
         const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
 
         expect(reblessed.code).toBe(0);
         expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+    });
+
+    describe("advisory gate", () => {
+        /** `index_references_unknown_field` is an ERROR-level advisory. */
+        const addBogusIndexToSchema = (): void => {
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const schema = readFileSync(schemaPath, "utf8");
+            const patched = schema.replace(
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+            );
+
+            expect(patched).not.toBe(schema);
+
+            writeFileSync(schemaPath, patched, "utf8");
+        };
+
+        it("blocks on an ERROR-level advisory under --strict-advisories", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(result.error).toContain("ERROR-level");
+        });
+
+        it("passes the same project under --no-strict-advisories, the opt-out the docs name", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            addBogusIndexToSchema();
+
+            const { logger } = silentLogger();
+            const result = await runPrepareCommand({ cwd: workdir, logger, strictAdvisories: false });
+
+            expect(result.code).toBe(0);
+        });
     });
 });

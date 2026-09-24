@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
 
 /**
  * Auth + Row-Level Security E2E — two real users, each with their own session
@@ -15,7 +16,6 @@ import { expect, test } from "../fixtures/lunora.js";
  * positive control (B's own note arriving live) so a dead subscription can't
  * fake a pass.
  */
-const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
@@ -123,9 +123,9 @@ test("anonymous callers can neither read nor write notes", async ({ request, use
     expect(seeded.ok()).toBe(true);
 
     // `request` here is Playwright's plain, cookie-less API context.
-    const readResponse = await request.post(`${WORKER_URL}/_lunora/rpc`, {
+    const readResponse = await request.post(`${BASE_URL}/_lunora/rpc`, {
         data: { args: {}, functionPath: "notes:list" },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     if (readResponse.ok()) {
@@ -139,9 +139,9 @@ test("anonymous callers can neither read nor write notes", async ({ request, use
     }
 
     // The insert policy pins ownerId to the caller's id; anonymous has none.
-    const writeResponse = await request.post(`${WORKER_URL}/_lunora/rpc`, {
+    const writeResponse = await request.post(`${BASE_URL}/_lunora/rpc`, {
         data: { args: { createdAt: Date.now(), text: `anon-write-${stamp}` }, functionPath: "notes:add" },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(writeResponse.status()).toBeGreaterThanOrEqual(400);

@@ -1,3 +1,396 @@
+## @lunora/ratelimit [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.71...@lunora/ratelimit@1.0.0-alpha.72) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/server:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.51
+
+## @lunora/ratelimit [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.70...@lunora/ratelimit@1.0.0-alpha.71) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
+## @lunora/ratelimit [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.69...@lunora/ratelimit@1.0.0-alpha.70) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+
+## @lunora/ratelimit [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.68...@lunora/ratelimit@1.0.0-alpha.69) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.135
+
+## @lunora/ratelimit [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.67...@lunora/ratelimit@1.0.0-alpha.68) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+
+## @lunora/ratelimit [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.66...@lunora/ratelimit@1.0.0-alpha.67) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.133
+
+## @lunora/ratelimit [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.65...@lunora/ratelimit@1.0.0-alpha.66) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/ratelimit [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.64...@lunora/ratelimit@1.0.0-alpha.65) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/ratelimit [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.63...@lunora/ratelimit@1.0.0-alpha.64) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
+## @lunora/ratelimit [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.62...@lunora/ratelimit@1.0.0-alpha.63) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+
+## @lunora/ratelimit [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.61...@lunora/ratelimit@1.0.0-alpha.62) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+
+## @lunora/ratelimit [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.60...@lunora/ratelimit@1.0.0-alpha.61) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+
+## @lunora/ratelimit [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.59...@lunora/ratelimit@1.0.0-alpha.60) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/ratelimit [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.58...@lunora/ratelimit@1.0.0-alpha.59) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/ratelimit [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.57...@lunora/ratelimit@1.0.0-alpha.58) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/ratelimit [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.56...@lunora/ratelimit@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+
+## @lunora/ratelimit [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.55...@lunora/ratelimit@1.0.0-alpha.56) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
+## @lunora/ratelimit [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.54...@lunora/ratelimit@1.0.0-alpha.55) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/ratelimit [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.53...@lunora/ratelimit@1.0.0-alpha.54) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+
+## @lunora/ratelimit [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.52...@lunora/ratelimit@1.0.0-alpha.53) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
+## @lunora/ratelimit [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.51...@lunora/ratelimit@1.0.0-alpha.52) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/ratelimit [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.50...@lunora/ratelimit@1.0.0-alpha.51) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/ratelimit [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.49...@lunora/ratelimit@1.0.0-alpha.50) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/ratelimit [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.48...@lunora/ratelimit@1.0.0-alpha.49) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/ratelimit [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.47...@lunora/ratelimit@1.0.0-alpha.48) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+
+## @lunora/ratelimit [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.46...@lunora/ratelimit@1.0.0-alpha.47) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
+## @lunora/ratelimit [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.45...@lunora/ratelimit@1.0.0-alpha.46) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/ratelimit [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.44...@lunora/ratelimit@1.0.0-alpha.45) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
+## @lunora/ratelimit [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.43...@lunora/ratelimit@1.0.0-alpha.44) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+
+## @lunora/ratelimit [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.42...@lunora/ratelimit@1.0.0-alpha.43) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.107
+
+## @lunora/ratelimit [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.41...@lunora/ratelimit@1.0.0-alpha.42) (2026-09-06)
+
+### Bug Fixes
+
+* **agent,ai,ratelimit,x402:** point prettier at the repo ignore file ([#638](https://github.com/anolilab/lunora/issues/638)) ([bf2a8e7](https://github.com/anolilab/lunora/commit/bf2a8e7e50019149ddf3a50f38adbb91f6e0351b))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.106
+
+## @lunora/ratelimit [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.40...@lunora/ratelimit@1.0.0-alpha.41) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/server:** upgraded to 1.0.0-alpha.105
+* **@lunora/values:** upgraded to 1.0.0-alpha.41
+
+## @lunora/ratelimit [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.39...@lunora/ratelimit@1.0.0-alpha.40) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.104
+
+## @lunora/ratelimit [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.38...@lunora/ratelimit@1.0.0-alpha.39) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **ratelimit,auth:** `accessRoles()` and the `@lunora/cloudflare-access/roles` subpath are removed. Use
+`createAccessResolver({ roles })` instead. `AccessRoleMap` now exports from the package root.
+
+Corrects the three places that told a reader the two paths agree: the emit.ts comment claiming
+`composeShapeReadWhere` is "exactly the request-time path", the package docs, and the RLS concept
+page. The golden `_generated/shard.ts` fixture is regenerated for the emitted comment.
+
+Second fix in the same resolver: a platform identity carrying no usable id suppressed the
+configured JWT fallback. `??` falls through on nullish only, and `readPlatformIdentity` returns an
+object for any non-null object result, `{}` included — so a caller presenting a valid
+Cf-Access-Jwt-Assertion resolved anonymous with nothing verified and `onError` never firing. The
+resolver now falls through whenever the platform identity yields no identity, and stays fail-closed
+when neither path does. That trigger was reasoned from the code rather than observed — whether
+Cloudflare ever returns such an identity is unverified — so the fix is deliberately defensive.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(ratelimit): stop a reserve stranding a key and misreporting retry
+
+Three defects on the reserve path, all reachable through the public API and through
+`token-budget.ts`, which clamps an oversized charge to capacity and reserves it.
+
+A fixed window granted exactly one period's `rate` however many periods had elapsed, while the
+rejection path persists nothing. A debt of at least `rate` therefore re-projected against that same
+lone grant on every later call and the key stayed denied forever, told "retry next window" every
+window. The projection now grants one `rate` per elapsed window, the way the token bucket refills
+per elapsed millisecond; the existing capacity cap still bounds the result. The old test reserved 2
+against rate 5 — a debt smaller than `rate`, which is the case that recovers — so it passed
+throughout, and now covers a debt of a full `rate`.
+
+The deny-list was stored verbatim while the incoming key was checked both normalized and raw, under
+a comment claiming either form worked. Only a byte-exact repeat of the stored string matched: with
+a trim+lowercase normalizer, `denyList: ["Abuse@Example.com"]` admitted a request keyed
+`abuse@example.com` that consumed from the same storage bucket, so a banned caller shed the ban by
+lower-casing their own email. Entries are now stored in both forms at construction.
+
+A sliding-window reserve derived its `retryAfter` from the pre-reserve count while persisting
+`currentCount + count`, so the time it reported was still denied when it arrived and the caller
+burned a rejected attempt — a re-queued durable write wakes on that hint verbatim. It is now
+derived from the count the call actually stores. The old assertion pinned 1200 under the title
+"reports when the pressure clears"; the true clear time is 1334, and the test now re-evaluates at
+the reported time to prove it is honoured.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): trust cf-connecting-ip only behind Cloudflare
+
+`resolveIp` in the audit hooks returned `cf-connecting-ip` before consulting `trustProxyHeaders`,
+though that option's own docblock promises the opposite: "Defaults to false: off Cloudflare, with
+no trusted proxy configured, the audit record's ip is omitted rather than populated from a
+spoofable header."
+
+Off Cloudflare nothing overwrites that header, so an attacker setting it per request owned the `ip`
+on every sign-in, password-reset and mfa-disable row they generated — rows Studio surfaces through
+`getAuthAuditLog`. Forensic impact only: nothing enforces on the audit ip.
+
+It now applies the same `onCloudflareEdge()` gate that `create-auth.ts`'s
+`defaultIpAddressHeaders` already applies, so this package's two client-IP resolvers cannot
+disagree about who a request came from. `onCloudflareEdge` moves from a file-private const to a
+named export of `create-auth.ts`; it is not re-exported from the package index, so the public API
+is unchanged.
+
+The existing cases asserting `cf-connecting-ip` did not say which runtime they ran on and passed
+under Node's `navigator.userAgent`; they now stub the Cloudflare one explicitly, alongside two new
+cases for the off-Cloudflare behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): key IP-less REST callers and 403 a deny-list hit
+
+`createRestRateLimit` charged its limit with no key at all when `cf-connecting-ip` was absent,
+putting every such caller in that limit's UNKEYED bucket — the same one a deliberately-global
+charge of the name uses — so one anonymous caller could drain an app-wide limit. This is the
+caller-pooling `@lunora/ratelimit`'s own middleware refuses outright. They now share a named
+`no-trusted-ip` bucket, which keeps the blast radius to the IP-less callers themselves and makes
+the pooling visible in storage; pass `options.key` to key them properly.
+
+A deny-list hit carries `retryAfter: Infinity` and was mapped to 429 with the header
+`Retry-After: Infinity`, inviting a client to keep retrying a denial that never clears. It now
+answers 403 FORBIDDEN with no Retry-After, matching what both `@lunora/ratelimit` entry points
+produce. `RateLimiterLike` gains the optional `reason` the limiter already returns.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **ratelimit,auth:** unstick a bricked limiter and close the deny-list bypass ([#606](https://github.com/anolilab/lunora/issues/606)) ([fd7d6ad](https://github.com/anolilab/lunora/commit/fd7d6ad78e0b02d76c8e9a4f6807c4b95dda88ac))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+
+## @lunora/ratelimit [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.37...@lunora/ratelimit@1.0.0-alpha.38) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/server:** upgraded to 1.0.0-alpha.102
+* **@lunora/values:** upgraded to 1.0.0-alpha.39
+
+## @lunora/ratelimit [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.36...@lunora/ratelimit@1.0.0-alpha.37) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.101
+
+## @lunora/ratelimit [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.35...@lunora/ratelimit@1.0.0-alpha.36) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/server:** upgraded to 1.0.0-alpha.100
+* **@lunora/values:** upgraded to 1.0.0-alpha.38
+
 ## @lunora/ratelimit [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.34...@lunora/ratelimit@1.0.0-alpha.35) (2026-09-02)
 
 

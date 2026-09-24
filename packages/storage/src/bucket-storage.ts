@@ -47,7 +47,7 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
         throw new LunoraError("INTERNAL", "@lunora/storage: createBucketStorage requires at least one bucket");
     }
 
-    if (options.default !== undefined && !buckets[options.default]) {
+    if (options.default !== undefined && !Object.hasOwn(buckets, options.default)) {
         throw new LunoraError("INTERNAL", `@lunora/storage: default bucket "${options.default}" is not in the bucket map (have: ${names.join(", ")})`);
     }
 
@@ -74,7 +74,14 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
     // throw). Spreading the target's (closure-based, `this`-free) methods, then
     // layering the bucket identity + selector, keeps each accessor independent.
     const make = (name: string): BucketStorage => {
-        const target = name === defaultTag ? defaultBinding : buckets[name];
+        // Own-property check, not truthiness: a prototype key ("constructor",
+        // "toString", "__proto__", …) resolves to an inherited Object.prototype
+        // member on this plain map, passes the guard, and yields an accessor
+        // that is an empty spread of a function — no `delete`/`download`, but a
+        // `bucketName` tag `storageRules` would then match rules against.
+        // Mirrors `@lunora/bindings`' vector and KV introspectors.
+        const registered = Object.hasOwn(buckets, name) ? buckets[name] : undefined;
+        const target = name === defaultTag ? defaultBinding : registered;
 
         if (!target) {
             throw new LunoraError("INTERNAL", `@lunora/storage: no bucket registered for "${name}". Known buckets: ${addressable.join(", ")}`);

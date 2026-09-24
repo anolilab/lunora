@@ -73,7 +73,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "body": {
                         "type": "string"
@@ -139,7 +138,6 @@
                 "additionalProperties": false,
                 "properties": {
                   "args": {
-                    "additionalProperties": false,
                     "properties": {
                       "boardId": {
                         "type": "string"
@@ -184,6 +182,59 @@
           }
         },
         "summary": "query: notes:list",
+        "tags": [
+          "notes"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#notes:summary": {
+      "post": {
+        "description": "Invoke the `query` `notes:summary` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notes:summary",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notes:summary",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: notes:summary",
         "tags": [
           "notes"
         ],

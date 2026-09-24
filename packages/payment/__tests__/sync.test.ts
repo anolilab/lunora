@@ -55,6 +55,26 @@ describe("applyWebhookAction", () => {
         expect(session?.state).toBe("captured");
     });
 
+    it("captures a payment that succeeds on a retry of the same declined intent (regression)", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        // Card declined: `payment_intent.payment_failed` on `pi_1`.
+        await expect(
+            applyWebhookAction(store, { eventId: "evt_1", provider: "stripe", referenceId: "user_1", sessionId: "pi_1", type: "payment.failed" }),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
+
+        // The customer retries with a working card on the SAME intent, which Stripe returned to
+        // `requires_payment_method` — `payment_intent.succeeded` must capture, not be dropped.
+        await expect(applyWebhookAction(store, captureEvent("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        expect(session?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
     it("treats Stripe-style cumulative (absolute) refunds without over-counting across partials", async () => {
         expect.assertions(5);
 
@@ -213,6 +233,163 @@ describe("applyWebhookAction", () => {
         expect(session?.refundedAmount.minorUnits).toBe(1000n);
     });
 
+    it("books a delta provider's refund once when two events restate the same refund id", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), amount: money(10_000, "USD"), provider: "polar" });
+
+        // Polar maps `refund.created` and `refund.updated` to the same delta `payment.refunded`,
+        // carrying the refund's own id both times. The two deliveries have distinct event ids, so
+        // the `markEventProcessed` dedupe lets both through, and a delta ADDS — so one $40 refund
+        // booked $80 and the over-refund guard then blocked every legitimate refund after it.
+        const refunded = (eventId: string): WebhookAction => {
+            return {
+                amount: money(4000, "USD"),
+                eventId,
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            };
+        };
+
+        await expect(applyWebhookAction(store, refunded("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
+
+        await applyWebhookAction(store, refunded("evt_3"));
+
+        const session = await store.getPaymentSession("polar", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(4000n);
+        expect(session?.state).toBe("partially_refunded");
+
+        // A genuinely SECOND refund carries its own id and must still accumulate.
+        await applyWebhookAction(store, { ...refunded("evt_4"), refundId: "ref_2" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(8000n);
+    });
+
+    it("releases the kept refund claim when the amount is rejected, so a corrected restatement books", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { amount: money(1000, "EUR"), eventId: "evt_1", provider: "polar", sessionId: "pi_1", type: "payment.captured" });
+
+        // A refund event whose currency disagrees with the row is rejected without writing anything
+        // (a payload that omitted `currency` falls back to "usd" in the adapter). The refund id is
+        // real, so the claim was taken — and it has to come back, or the provider's corrected
+        // restatement of the SAME refund is zeroed and the money never reaches the ledger.
+        const rejected = await applyWebhookAction(store, {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(rejected).toEqual({ applied: false, reason: "invalid_refund_amount" });
+
+        const corrected = await applyWebhookAction(store, {
+            amount: money(400, "EUR"),
+            eventId: "evt_3",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(corrected).toEqual({ applied: true, reason: "ok" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
+    it("still accumulates two same-amount refunds from a provider that reports no refund id", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
+
+        const refund = (eventId: string): WebhookAction => {
+            return { amount: money(400, "USD"), eventId, provider: "polar", sessionId: "pi_1", type: "payment.refunded" };
+        };
+
+        // With no refund id the marker key is only `(session, amount)`, which two genuinely distinct
+        // same-amount refunds SHARE. Keeping that claim the way a per-refund-id one is kept would
+        // silently swallow the second refund, so this case stays test-and-release.
+        await applyWebhookAction(store, refund("evt_2"));
+        await applyWebhookAction(store, refund("evt_3"));
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(800n);
+    });
+
+    it("releases the kept refund claim when the row write fails, so the retry still books it", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
+
+        let failNextUpsert = true;
+        const original = store.upsertPaymentSession.bind(store);
+
+        store.upsertPaymentSession = (session) => {
+            if (failNextUpsert) {
+                failNextUpsert = false;
+
+                return Promise.reject(new Error("store write failed"));
+            }
+
+            return original(session);
+        };
+
+        const refund: WebhookAction = {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        // The claim that makes a refund book once is taken BEFORE the row is written. A failed write
+        // must give it back, or the provider's retry sees this refund as already booked, zeroes the
+        // amount, and the money never reaches the ledger at all.
+        await expect(applyWebhookAction(store, refund)).rejects.toThrow("store write failed");
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
+
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
+    it("releases the kept refund claim on an out-of-order refund, so the redelivery books it", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { amount: money(1000, "USD"), eventId: "evt_1", provider: "polar", sessionId: "pi_1", type: "payment.authorized" });
+
+        const refund: WebhookAction = {
+            amount: money(400, "USD"),
+            eventId: "evt_2",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        // The refund lands on a row that exists but has not captured yet, so nothing is written and
+        // the event is released for ONE redelivery. The refund claim has to come back with it.
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "orphaned" });
+
+        await applyWebhookAction(store, { ...captureEvent("evt_3"), provider: "polar" });
+
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+    });
+
     it("rejects an over-refund without mutating state and still applies a valid partial refund", async () => {
         expect.assertions(6);
 
@@ -275,6 +452,34 @@ describe("applyWebhookAction", () => {
 
         expect(session?.state).toBe("captured");
         expect(session?.refundedAmount.minorUnits).toBe(0n);
+    });
+
+    it("resumes a paused subscription from the provider's `subscription.active` event", async () => {
+        expect.assertions(4);
+
+        // Every provider that supports pause/resume (Stripe, Creem, Dodo) reports the resume
+        // as the same `subscription.active` event it reports a renewal with. Mapping that to
+        // the FSM's `activate` — illegal from `paused` — rejected every resume, so a customer
+        // who resumed and paid stayed denied by `check`/`hasActivePrice` until somebody ran
+        // `reconcile` by hand.
+        const store = new MemoryPaymentStore();
+        const base = { priceId: "price_1", provider: "stripe" as const, quantity: 1, referenceId: "user_1", subscriptionId: "sub_1" };
+
+        await applyWebhookAction(store, { ...base, eventId: "e1", type: "subscription.active" });
+        await applyWebhookAction(store, { ...base, eventId: "e2", type: "subscription.paused" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "paused" });
+
+        const resumed = await applyWebhookAction(store, { ...base, eventId: "e3", type: "subscription.active" });
+
+        expect(resumed).toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+
+        // …and the renewal self-loop it shares an event type with still works.
+        await expect(applyWebhookAction(store, { ...base, eventId: "e4", type: "subscription.active" })).resolves.toStrictEqual({
+            applied: true,
+            reason: "ok",
+        });
     });
 
     it("creates then cancels a subscription", async () => {
@@ -405,32 +610,132 @@ describe("applyWebhookAction", () => {
         expect(subscription?.cancelAtPeriodEnd).toBe(true);
     });
 
-    it("absorbs an out-of-order refund-before-capture without losing the later capture", async () => {
+    it("carries a multi-item price set through all three subscription upsert paths (regression)", async () => {
         expect.assertions(4);
 
         const store = new MemoryPaymentStore();
 
-        // The refund webhook arrives first (provider reordering): from "initiated" a refund is
-        // illegal, so it is dropped as a no-op rather than corrupting state.
-        const earlyRefund = await applyWebhookAction(store, {
+        // 1. the create path — no existing row.
+        await applyWebhookAction(store, {
+            eventId: "e1",
+            priceId: "price_base",
+            priceIds: ["price_base", "price_addon"],
+            provider: "stripe",
+            referenceId: "user_1",
+            subscriptionId: "sub_1",
+            type: "subscription.active",
+        });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_base", "price_addon"]);
+
+        // 2. the `subscription.updated` metadata patch — a plan change REPLACES the set.
+        await applyWebhookAction(store, {
+            eventId: "e2",
+            priceId: "price_base",
+            priceIds: ["price_base", "price_metered"],
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.updated",
+        });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_base", "price_metered"]);
+
+        // 3. the state-transition path.
+        await applyWebhookAction(store, {
+            eventId: "e3",
+            priceIds: ["price_base", "price_addon", "price_metered"],
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.past_due",
+        });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_base", "price_addon", "price_metered"]);
+
+        // An action that reports NO set means "unknown", not "empty": it must leave the stored set
+        // standing. An adapter that cannot see the whole set (a paginated Stripe item list on a
+        // webhook, which cannot page) reports nothing, and a partial set here would delete prices
+        // the row already had.
+        await applyWebhookAction(store, {
+            cancelAtPeriodEnd: true,
+            eventId: "e4",
+            provider: "stripe",
+            subscriptionId: "sub_1",
+            type: "subscription.updated",
+        });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceIds)).resolves.toEqual(["price_base", "price_addon", "price_metered"]);
+    });
+
+    it("leaves priceIds absent (not empty) when no adapter reported a set", async () => {
+        expect.assertions(2);
+
+        // Every single-price provider. Absent is what makes the entitlement read fall back to
+        // `[priceId]`; an empty set would grant nothing.
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, {
+            eventId: "e1",
+            priceId: "price_solo",
+            provider: "stripe",
+            referenceId: "user_1",
+            subscriptionId: "sub_solo",
+            type: "subscription.active",
+        });
+
+        const subscription = await store.getSubscription("stripe", "sub_solo");
+
+        expect(subscription?.priceIds).toBeUndefined();
+        expect(subscription?.priceId).toBe("price_solo");
+    });
+
+    it("retries an out-of-order refund-before-capture instead of losing it", async () => {
+        expect.assertions(5);
+
+        const store = new MemoryPaymentStore();
+        const refund: WebhookAction = {
+            amount: money(400, "USD"),
+            eventId: "evt_refund",
+            provider: "stripe",
+            referenceId: "user_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        // The refund webhook arrives first (Stripe does not guarantee ordering). It is out-of-order,
+        // not illegal: report `orphaned` so the claim is released and the provider redelivers —
+        // dropping it would burn the event id and lose the refund for good.
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "orphaned" });
+
+        // The capture lands.
+        await expect(applyWebhookAction(store, captureEvent("evt_capture"))).resolves.toEqual({ applied: true, reason: "ok" });
+
+        // The redelivery is NOT deduped away, and now applies.
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("partially_refunded");
+        expect(session?.refundedAmount.minorUnits).toBe(400n);
+    });
+
+    it("bounds the refund-before-capture retry to one redelivery", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const refund: WebhookAction = {
             amount: money(400, "USD"),
             eventId: "evt_refund",
             provider: "stripe",
             sessionId: "pi_1",
             type: "payment.refunded",
-        });
+        };
 
-        expect(earlyRefund).toEqual({ applied: false, reason: "illegal_transition" });
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "orphaned" });
 
-        // The capture then lands and is applied normally — the dropped refund did not poison the row.
-        const capture = await applyWebhookAction(store, captureEvent("evt_capture"));
-
-        expect(capture).toEqual({ applied: true, reason: "ok" });
-
-        const session = await store.getPaymentSession("stripe", "pi_1");
-
-        expect(session?.state).toBe("captured");
-        expect(session?.refundedAmount.minorUnits).toBe(0n);
+        // The capture never arrives (a payment made before the integration existed, a store reset).
+        // The second sighting keeps the claim and acknowledges, so the provider stops retrying rather
+        // than hammering the endpoint until it disables it.
+        await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "unhandled" });
     });
 
     it("ignores unhandled actions without consuming the event id", async () => {

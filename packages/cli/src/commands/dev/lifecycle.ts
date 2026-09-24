@@ -39,6 +39,7 @@ import {
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
@@ -427,7 +428,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             "Check `lunora dev status` and `lunora dev logs`; `lunora dev stop` shuts it down.",
     );
 
-    return { code: 1 };
+    return { code: EXIT_CODE.UNAVAILABLE };
 };
 
 /**
@@ -485,6 +486,13 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--worker-port", String(options.workerPort));
     }
 
+    // The daemon is the process that spawns `wrangler dev`, so an unforwarded
+    // `--inspector-port` would leave the background run on wrangler's own
+    // upward walk — the exact failure the flag exists to stop.
+    if (options.inspectorPort !== undefined) {
+        args.push("--inspector-port", String(options.inspectorPort));
+    }
+
     // Forwarded, or a `--background` run would emit nothing: the daemon child is
     // the process that knows the resolved origin, and the supervisor asking for
     // the manifest is the same one that wanted the server detached.
@@ -506,7 +514,7 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
 
     // Forwarded explicitly, like every other flag here: the daemon is a fresh
     // process that re-parses argv, so an unforwarded flag is silently dropped.
-    // `lunora.json`'s target still reaches it (the daemon re-reads the config),
+    // `lunora.config.*`'s target still reaches it (the daemon re-reads the config),
     // which is what makes a missing `--target` look accepted and do nothing.
     if (options.target !== undefined) {
         args.push("--target", options.target);
@@ -916,7 +924,7 @@ const runLifecycleSubcommand = (parameters: {
     if (subcommand !== undefined) {
         logger.error(`dev: unknown subcommand "${subcommand}" — expected stop | status | logs (or no subcommand to start the dev server)`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return undefined;

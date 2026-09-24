@@ -3,6 +3,7 @@ import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 import { getIP } from "better-auth/api";
 
+import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
 import { validateSessionPolicy } from "./session";
 
 /**
@@ -23,19 +24,6 @@ import { validateSessionPolicy } from "./session";
  * in.
  */
 const CLOUDFLARE_CLIENT_IP_HEADER = "cf-connecting-ip";
-
-/**
- * Whether this process runs behind Cloudflare's edge — the only condition under
- * which {@link CLOUDFLARE_CLIENT_IP_HEADER} is a header the client cannot write.
- *
- * workerd sets `navigator.userAgent` to `"Cloudflare-Workers"`; Node and every
- * other host this framework now targets do not. Read at call time rather than
- * module scope so a test can stand the global up, and off `globalThis` with an
- * optional chain because it is absent on older runtimes — where the honest
- * answer is "not Cloudflare", which is also the safe one.
- */
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- read defensively off globalThis precisely because the runtime may not have it; this is a Workers-vs-Node probe, not a Node API call
-const onCloudflareEdge = (): boolean => (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers";
 
 /**
  * Which headers better-auth may resolve a client IP from, when the caller has
@@ -378,6 +366,10 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
  *
  * (Lunora can't set this for you — `ctx.waitUntil` is per-request, but
  * `createAuth` runs once at worker setup.)
+ *
+ * `databaseHooks` never receives a Lunora `MutationCtx` — the hook runs inside
+ * better-auth's own write path. A side effect on an app table is therefore a
+ * separate write and has to be idempotent; see `concepts/authentication`.
  */
 export type LunoraAuthOptions = BetterAuthOptions;
 

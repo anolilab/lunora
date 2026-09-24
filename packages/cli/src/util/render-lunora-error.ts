@@ -11,6 +11,8 @@
 import { flattenHint, isLunoraError, resolveHint } from "@lunora/errors";
 import { renderError, VisulimaError } from "@visulima/error";
 
+import { exitCodeForError } from "./exit-code";
+
 /** `renderError` options that suppress the (usually uninformative) internal stack. */
 const NO_STACK = { filterStacktrace: () => false, hideErrorCodeView: true } as const;
 
@@ -26,11 +28,24 @@ export interface RenderLunoraErrorOptions {
 export const renderLunoraError = (error: unknown, options: RenderLunoraErrorOptions = {}): string => {
     const message = error instanceof Error ? error.message : String(error);
     const hint = resolveHint(isLunoraError(error) ? { code: error.code, hint: error.hint, message } : message);
+    const hintLines = hint === undefined ? [] : flattenHint(hint).split("\n");
+
+    // A coded error also names the code it will exit with, so the number a
+    // script branches on and the block a human reads say the same thing. Only
+    // for a coded error: a bare `Error` carries no classification, and
+    // "exits 1" under every generic failure is noise.
+    if (isLunoraError(error)) {
+        if (hintLines.length > 0) {
+            hintLines.push("");
+        }
+
+        hintLines.push(`\`${error.code}\` — exits ${String(exitCodeForError(error))}. Run \`lunora docs exit-codes\` for the table.`);
+    }
 
     const rendered = new VisulimaError({
         // `renderError` iterates `hint` as lines; the shared flattener returns one
         // string, so split it back to lines for the terminal renderer.
-        hint: hint === undefined ? undefined : flattenHint(hint).split("\n"),
+        hint: hintLines.length === 0 ? undefined : hintLines,
         message: options.reason === undefined ? message : `${options.reason}: ${message}`,
         name: error instanceof Error && error.name.length > 0 ? error.name : "Error",
     });

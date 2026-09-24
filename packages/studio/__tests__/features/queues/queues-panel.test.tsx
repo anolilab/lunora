@@ -192,4 +192,35 @@ describe("queuesPanel", () => {
             expect(screen.queryByTestId("queues-message-msg-1")).toBeNull();
         });
     });
+
+    // The panel holds ONE page of the log (`DEFAULT_MESSAGE_LIMIT`), while the
+    // clear empties the whole reserved table — up to `QUEUE_RETENTION` rows. The
+    // confirm used to quote the page length, which is a number it never measured
+    // and is smaller than what the click destroys whenever the log is full.
+    it("confirms by scope, not by the loaded page's length", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: [message()] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+        await screen.findByTestId("queues-message-msg-1");
+
+        fireEvent.click(screen.getByTestId("queues-clear"));
+
+        expect(screen.getByTestId("queues-clear-confirm").textContent).toBe("Clear the whole message log?");
+    });
 });

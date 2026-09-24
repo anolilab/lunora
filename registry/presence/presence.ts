@@ -22,6 +22,7 @@
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
  */
+import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
@@ -93,7 +94,13 @@ export const heartbeat = mutation
         // *different* authenticated user; an anonymous caller (no `userId`)
         // likewise may not patch a row that belongs to an authenticated user.
         if (existing && existing["userId"] !== undefined && existing["userId"] !== userId) {
-            throw new Error("presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.");
+            // Coded, not a bare `Error`: an uncoded throw is redacted to a
+            // generic 500, so the caller sees a server fault instead of the
+            // ownership refusal.
+            throw new LunoraError(
+                "FORBIDDEN",
+                "presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.",
+            );
         }
 
         const row: Record<string, unknown> = {

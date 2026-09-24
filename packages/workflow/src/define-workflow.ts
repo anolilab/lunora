@@ -45,7 +45,11 @@ const workflowDefaultName = (exportName: string): string => exportName.replaceAl
  *     handler: async (ctx) => {
  *         const order = await ctx.step.do("load", () => ctx.run(api.orders.get, { id: ctx.params.orderId }));
  *         await ctx.step.sleep("cool-off", "1 minute");
- *         await ctx.step.do("charge", () => ctx.run(api.payments.charge, { orderId: ctx.params.orderId }));
+ *         // A raw `step.do` retries its callback in place, so a WRITE made through
+ *         // it needs an explicit dedup id (or use `ctx.runStep`, which pins one).
+ *         await ctx.step.do("charge", () =>
+ *             ctx.run(api.payments.charge, { orderId: ctx.params.orderId }, { dedupId: `charge:${ctx.params.orderId}` }),
+ *         );
  *         return order;
  *     },
  * });

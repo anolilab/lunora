@@ -8,5 +8,7 @@ dist
 lunora/_generated
 
 # local env files
-.env*.local
+.env
+.env.*
+!.env.example
 .dev.vars

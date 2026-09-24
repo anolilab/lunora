@@ -54,6 +54,9 @@ describe(createExecutorOutboxSink, () => {
         expect(outbox).toHaveLength(1);
         expect(committed[0]).toStrictEqual({
             args: { text: "m1" },
+            // Persisted with the transaction, so the replay hands the composing
+            // cursor back instead of sampling a newer one.
+            baselineSeq: undefined,
             clientId: "c1",
             functionPath: "messages:send",
             idempotencyKey: "c1:1",
@@ -61,6 +64,18 @@ describe(createExecutorOutboxSink, () => {
             mutationId: 1,
             shardKey: "room-7",
         });
+    });
+
+    // The baseline is the one field a replay cannot re-derive: by the time it
+    // runs, the client has advanced to a newer cursor, which is exactly the state
+    // a `.dropStalePatches()` table must judge the write against.
+    it("persists the write's CDC baseline alongside it", async () => {
+        const { committed, executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        await sink.enqueue({ ...outboxMutation(1), baselineSeq: 10 });
+
+        expect(committed[0]).toMatchObject({ baselineSeq: 10 });
     });
 
     it("rejects with OFFLINE_QUEUE_OVERFLOW at capacity instead of evicting", async () => {
@@ -89,6 +104,21 @@ describe(createExecutorOutboxSink, () => {
         await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));
 
         expect(seen).toStrictEqual([OUTBOX_MUTATION_FN_NAME]);
+    });
+
+    it("reports pending writes so the client keeps a live mutation behind them", async () => {
+        const { executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        // Nothing durable yet — a fresh write may go out live.
+        expect(sink.pending?.()).toBe(false);
+
+        await sink.enqueue(outboxMutation(1));
+
+        // A write is persisted and unreplayed: the client must queue behind it
+        // rather than send past it (which would invert FIFO if this one is
+        // deferred on an identity that isn't re-confirmed yet).
+        expect(sink.pending?.()).toBe(true);
     });
 });
 
@@ -162,12 +192,15 @@ describe(makeDiffEmit, () => {
         expect(ops).toStrictEqual([]);
     });
 
-    it("does not emit spurious updates for unchanged rows after a sync restart", () => {
-        // Simulates the sync-restart path in collection-options: syncedJson is
-        // owned at the outer closure level and shared across makeDiffEmit calls.
-        // A new `emit` closure (representing a sync.sync restart) must receive
-        // the same syncedJson reference so already-committed rows are seen as
-        // known, not inserted/updated anew.
+    it("does not emit spurious updates for unchanged rows across emit closures sharing one cache", () => {
+        // The map, not the closure, is the unit of synced state: a second
+        // `makeDiffEmit` over the same populated map sees already-committed rows
+        // as known. NOT a simulation of the sync-RESTART path — the sole
+        // production caller clears the map in its `sync.sync` teardown (a
+        // restart must re-insert the full snapshot, since TanStack drops its
+        // synced store on gc cleanup). That lifecycle is covered end to end by
+        // `collection-options.test.ts`'s "re-inserts the full snapshot after a
+        // sync restart", which drives the real `sync.sync` seam.
         const syncedJson = new Map<string, string>();
         const { ops: ops1, writer: writer1 } = recordingWriter();
 
@@ -189,8 +222,8 @@ describe(makeDiffEmit, () => {
         ]);
         expect(syncedJson.size).toBe(2);
 
-        // Sync restart: a new writer (and therefore a new emit closure) is created,
-        // but the same syncedJson is passed — the committed state must be preserved.
+        // A new writer (and therefore a new emit closure) over the same
+        // syncedJson — the committed state must be preserved.
         const { ops: ops2, writer: writer2 } = recordingWriter();
         const emit2 = makeDiffEmit(syncedJson, writer2);
 
@@ -209,15 +242,16 @@ describe(makeDiffEmit, () => {
         expect(ops2).toStrictEqual([]);
     });
 
-    it("correctly detects a change on the first emit after a sync restart", () => {
-        // After restart, a row whose value actually changed must still emit "update".
+    it("correctly detects a change on the first emit through a new closure", () => {
+        // A row whose value actually changed must still emit "update" when the
+        // next emit comes from a different closure over the same cache.
         const syncedJson = new Map<string, string>();
         const { writer: writer1 } = recordingWriter();
         const emit1 = makeDiffEmit(syncedJson, writer1);
 
         emit1(toMap([{ _id: "a", text: "v1" }] satisfies Row[], (r) => r._id));
 
-        // Restart with a new writer/closure, same syncedJson.
+        // New writer/closure, same syncedJson.
         const { ops: ops2, writer: writer2 } = recordingWriter();
         const emit2 = makeDiffEmit(syncedJson, writer2);
 

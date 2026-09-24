@@ -26,6 +26,7 @@ import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream";
 
+import type { CodegenOptions } from "@lunora/codegen";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
@@ -224,7 +225,12 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // (`@lunora/config/studio-host`), so the CLI and Vite hosts stay in lockstep.
     const serveLoopbackOnly = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, deniedMessage: string): void => {
         if (isLoopback) {
-            serveJsonHandler(request, response, handle, options.cwd);
+            // `apiSpec` travels with the request for the same reason the Vite host
+            // forwards it: codegen writes the spec its mode names and DELETES the
+            // other, so an edit that regenerated with the default deleted the
+            // `openrpc.json` the host's own run had just written. (`schemaDirectory`
+            // is moot here — `lunora dev` hardcodes `"lunora"`.)
+            serveJsonHandler(request, response, handle, options.cwd, { apiSpec: options.apiSpec });
 
             return;
         }
@@ -432,6 +438,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 };
 
 export interface StudioServerOptions {
+    /**
+     * API-spec mode the host runs codegen with, forwarded to the local endpoints
+     * so a studio edit regenerates the SAME spec files the host's own codegen run
+     * writes. Codegen writes the spec its mode names and deletes the other, so
+     * omitting it made every studio edit delete an `apiSpec: "openrpc"` project's
+     * `openrpc.json`.
+     */
+    apiSpec?: CodegenOptions["apiSpec"];
     /** Project root — `.dev.vars` is read from here for the admin token. */
     cwd: string;
     /** Loopback host to bind. Defaults to `127.0.0.1` (admin tooling stays local). */

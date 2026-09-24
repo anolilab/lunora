@@ -100,4 +100,30 @@ describe(presence, () => {
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
         expect(fake.connectionContexts[0]?.released).toBe(true);
     });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const seen: { code?: string; message: string }[] = [];
+
+        const { error, present } = presence("room:1", {
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            heartbeat: heartbeatRef,
+            listPresent: listPresentRef,
+            onError: (subscriptionError) => seen.push(subscriptionError),
+            sessionId: "sess-1",
+        });
+
+        fake.subscriptions[0]?.push([{ sessionId: "sess-1" }]);
+        fake.subscriptions[0]?.emitError({ code: "FORBIDDEN", message: "denied" });
+
+        expect(error()?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(present()).toStrictEqual([{ sessionId: "sess-1" }]);
+    });
 });

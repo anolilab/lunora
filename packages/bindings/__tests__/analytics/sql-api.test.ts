@@ -104,6 +104,29 @@ describe("createAnalyticsSqlClient", () => {
         expect(error).toBeInstanceOf(AnalyticsSqlError);
         expect((error as AnalyticsSqlError).status).toBe(403);
     });
+
+    it("caps the upstream body in the message and keeps the whole of it on cause", async () => {
+        expect.assertions(5);
+
+        // `ANALYTICS_SQL_ERROR` is a catalogued (non-internal) code, so
+        // `toErrorBody` echoes this message VERBATIM to whoever called the
+        // action. An uncapped body puts a multi-KB gateway page — or AE's SQL
+        // error text, which quotes the query — on the wire to a browser.
+        const body = `<html>${"A".repeat(10_000)}</html>`;
+        const fetchMock = vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => new Response(body, { status: 502 }));
+        const client = createAnalyticsSqlClient({ accountId: "a", apiToken: "t", fetch: fetchMock });
+
+        const error = (await client.query("SELECT 1").catch((error_: unknown) => error_)) as AnalyticsSqlError;
+
+        expect(error).toBeInstanceOf(AnalyticsSqlError);
+        expect(error.status).toBe(502);
+        // Status preserved, body preview bounded well under the 10 KB it read.
+        expect(error.message).toContain("502");
+        expect(error.message.length).toBeLessThan(400);
+        // The full text is still available server-side, on `cause` — which
+        // `toErrorBody` never serialises.
+        expect(error.cause).toBe(body);
+    });
 });
 
 describe("timeout", () => {

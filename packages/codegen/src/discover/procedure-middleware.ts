@@ -12,6 +12,13 @@ import { classifyProcedureCall } from "./functions/classify-procedure-call";
  * callee name of a `.use(factory(...))` argument (bare identifier or property
  * access), mirroring how the RLS feeder matches `rls(...)` — by name, not import
  * origin, so degraded type info doesn't blind the lint.
+ *
+ * `verifyTurnstile` is deliberately ABSENT. It is `@lunora/auth`'s async verdict
+ * FUNCTION (`(options) => Promise<TurnstileVerifyResult>`), not a middleware:
+ * `.use(verifyTurnstile({...}))` puts a Promise in the middleware chain and
+ * verifies nothing. Counting it as protection cleared
+ * `user_creating_mutation_without_captcha` for a procedure that has no captcha
+ * check at all. The `.use()`-able guard is `verifyTurnstileMiddleware`.
  */
 const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMask" | "usesRateLimit" | "usesRls"> = {
     dbRateLimit: "usesRateLimit",
@@ -19,7 +26,6 @@ const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesEmailGate" | "usesMa
     mask: "usesMask",
     rateLimit: "usesRateLimit",
     rls: "usesRls",
-    verifyTurnstile: "usesCaptcha",
     verifyTurnstileMiddleware: "usesCaptcha",
 };
 
@@ -111,7 +117,7 @@ interface Protections {
  * Fold a `protectPublic({ rateLimit, captcha })` bundle into the protection flags
  * it sets by reading which keys its object-literal argument declares — the bundle
  * composes `rateLimit` + `captcha`, so a present (non-`undefined`) key counts
- * exactly as the standalone `.use(rateLimit(...))` / `.use(verifyTurnstile(...))`
+ * exactly as the standalone `.use(rateLimit(...))` / `.use(verifyTurnstileMiddleware(...))`
  * step would.
  *
  * A non-object-literal argument (e.g. a spread variable `protectPublic(cfg)`) is
@@ -845,7 +851,7 @@ const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): P
 
 /**
  * Discover, per exported query/mutation/action under the lunora source directory,
- * which protective middlewares (`rateLimit`, `verifyTurnstile`/captcha, `rls`,
+ * which protective middlewares (`rateLimit`, `verifyTurnstileMiddleware`/captcha, `rls`,
  * `mask` — plus the `protectPublic` bundle) its builder chain installs and whether
  * its handler writes a user/session table or sends mail. Feeds the
  * `public_mutation_without_ratelimit` and `user_creating_mutation_without_captcha`
@@ -853,7 +859,7 @@ const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): P
  * those procedures carry no protections — exactly what the lints flag.
  *
  * Best-effort: middleware is matched by callee NAME (not import origin), so a local
- * no-op `rateLimit`/`rls`/`verifyTurnstile` shadowing the real `@lunora` factory
+ * no-op `rateLimit`/`rls`/`verifyTurnstileMiddleware` shadowing the real `@lunora` factory
  * would be counted as protection. The trade-off favours recall under degraded type
  * info; a `protectPublic()` call with a non-literal (statically opaque) config is
  * treated as carrying NEITHER guard so the abuse lints fail closed rather than

@@ -14,6 +14,7 @@ import type {
     ProviderCapabilities,
     ProviderId,
     RefundInput,
+    RefundResult,
     ReportUsageInput,
     Subscription,
     SubscriptionPatch,
@@ -81,7 +82,8 @@ export interface PaymentAdapter {
     readonly identifier: ProviderId;
     /** Verify the signature over the raw body, then normalize the event. Throws on invalid signature. */
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
-    refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    /** Issue the refund and report the provider's id for it (see {@link RefundResult.refundId}). */
+    refundPayment: (input: RefundInput) => Promise<RefundResult>;
 
     /**
      * Forward metered usage to the provider's billing API. Optional — present only on providers
@@ -89,7 +91,12 @@ export interface PaymentAdapter {
      * absent, `track` still records usage durably and `check` enforces limits locally.
      */
     reportUsage?: (input: ReportUsageInput) => Promise<void>;
-    resumeSubscription: (subscriptionId: string) => Promise<Subscription>;
+
+    /**
+     * Clear a pending cancellation. `options.idempotencyKey` overrides the adapter's own stable key
+     * and is honoured by the Stripe adapter only — no other provider's endpoint accepts one.
+     */
+    resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 

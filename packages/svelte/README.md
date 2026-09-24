@@ -104,9 +104,9 @@ All functions that require a component lifecycle (presence, rate-limit) return a
 | `query`            | `useQuery`            | Live readable store — updates on every server delta.                                   |
 | `mutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset` stores).     |
 | `subscription`     | `useSubscription`     | Raw subscription readable — unbounded live stream.                                     |
-| `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results` stores.                |
+| `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` stores.       |
 | `infiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `paginatedQuery`.                                           |
-| `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`) plus `setToken`.                                |
+| `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`, `status`) plus `setToken`.                      |
 | `presence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members readable + `teardown`.      |
 | `flag`             | `useFlag`             | Live OpenFeature flag readable store — holds `default` until the server answers.       |
 | `flags`            | `useFlags`            | Batch variant — a readable store of one value per key in the defaults map.             |

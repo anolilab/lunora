@@ -111,15 +111,31 @@ def parse_rpc_response(body: dict, status: int) -> Any:
     surfaced as an ``INTERNAL`` transport error. Without the check, a 502 with
     body ``{"message": "bad gateway"}`` returns ``None`` and no exception — the
     caller believes its mutation committed.
+
+    An ``error`` slot that is not an OBJECT is not an envelope either — a proxy's
+    ``{"error": "bad gateway"}`` page is the common one — so it falls through to
+    the same ``INTERNAL``/transient verdict rather than being read as one. Read
+    unguarded it raised ``AttributeError``/``TypeError`` past every
+    :class:`LunoraError` handler the caller has, and classified the very response
+    ``lunora.submit``'s batch path already treats as transport.
     """
 
-    if "error" in body:
-        err = body["error"]
-        data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
-        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data)
+    err = body.get("error")
+
+    if isinstance(err, dict):
+        data = decode_wire(err["data"]) if err.get("data") is not None else None
+        # A 5xx is the shard or the edge failing under the call, not a verdict on
+        # it, so a queued write replayed under the same idempotency key is still
+        # good. See `lunora.submit.is_transient`.
+        raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data, transient=status >= 500)
 
     if not 200 <= status <= 299:
-        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope")
+        # No envelope at all, so this body never came from a Lunora function: an
+        # edge error page, a WAF block, a proxy. Nothing reached the shard, which
+        # makes it transport rather than a verdict — the batch path already
+        # classified the identical response that way, and a lone queued write
+        # must not be dropped for being alone.
+        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope", transient=True)
 
     return decode_wire(body.get("result"))
 
@@ -269,6 +285,10 @@ class LunoraClient:
         #: itself an identity a write can be stamped with.
         self.identity = identity
         self._settled_listeners: list[Callable[[MutationSettled], None]] = []
+        #: `time.monotonic()` before which a flush is a no-op, set when a replay
+        #: came back rate-limited and the envelope named a delay. Monotonic, so a
+        #: wall-clock adjustment cannot strand a queue for hours.
+        self._flush_not_before = 0.0
         self._was_ever_connected = False
         self._closed = False
         self._subs: dict[str, _Subscription] = {}
@@ -526,9 +546,14 @@ class LunoraClient:
         A subscription error is raised into the loop rather than delivered as a
         value, which is what stops a caller from mistaking it for data.
 
-        Frames must be dispatched on the running loop (which :meth:`connect`
-        does): the buffer is an :class:`asyncio.Queue`, filled from
-        :meth:`handle_frame` without a hop.
+        Frames must be dispatched on the running loop, which
+        :meth:`connect_and_run` does — there is no ``connect``; its read loop is
+        the only caller of :meth:`handle_frame` this transport ships. The buffer
+        is an :class:`asyncio.Queue` filled from :meth:`handle_frame` without a
+        hop, so a frame dispatched from another thread would be enqueued off the
+        loop, which :class:`asyncio.Queue` does not support. The subscribe frame
+        this opens goes out as soon as it is produced; it does not wait on an
+        inbound one.
         """
 
         values: asyncio.Queue = asyncio.Queue()
@@ -679,7 +704,17 @@ class LunoraClient:
             return self._handle_poke_end(frame, deferred)
 
         if kind == "complete":
-            self._subs.pop(frame.get("id"), None)
+            # NON-DESTRUCTIVE, and that is the whole point: dropping the state
+            # takes it out of ``_subs``, which is the set
+            # :meth:`resend_subscriptions` walks — so the query froze for the
+            # life of the process, across every future reconnect, with nothing
+            # reported. Fan a cancellation to the listener and mark the
+            # registration un-acked instead; the next reconnect resubscribes it.
+            sub = self._subs.get(frame.get("id"))
+            if sub is not None:
+                sub.acked = False
+                cancelled = SubscriptionError("subscription was cancelled by the server", "SUBSCRIPTION_CANCELLED")
+                deferred.extend(partial(cb, cancelled) for cb in sub.error_callbacks)
             return {"kind": "complete", "id": frame.get("id")}
 
         return {"kind": "ignored", "type": kind}
@@ -805,6 +840,16 @@ class LunoraClient:
         """Open the live WS, announce ``connect``, resend subscriptions, and dispatch frames.
 
         Runs until the socket closes. Requires the ``websockets`` package.
+
+        Outbound frames are written WHEN THEY ARE PRODUCED, by a writer task
+        running alongside the read loop. Draining them only after each inbound
+        frame — which is what this did — starves a client whose server has
+        nothing to say: a ``subscribe`` issued once the socket was up sat in
+        memory until something unrelated arrived, and a server with no
+        subscriptions sends nothing, so it sat there forever. The quickstart
+        subscribes BEFORE connecting, which is the one order that hides it
+        (:meth:`resend_subscriptions` re-sends those on connect), and the
+        conformance suites inject a sender and never reach this method at all.
         """
 
         try:
@@ -814,29 +859,24 @@ class LunoraClient:
 
         token = await self.resolve_ws_token()
         async with websockets.connect(self.ws_url_for(shard_key, token)) as socket:  # pragma: no cover - live I/O
-            queue: list[dict] = []
+            loop = asyncio.get_running_loop()
+            outbox: asyncio.Queue = asyncio.Queue()
 
+            # One FIFO drained by one writer, so frames reach the socket in the
+            # order they were produced. The hand-off has to be thread-safe:
+            # `subscribe`, `unsubscribe` and `subscribe_shape` are plain
+            # synchronous methods a consumer calls from its own thread — that is
+            # why this client's lock is a `threading.Lock` — and
+            # `asyncio.Queue.put_nowait` off the loop is not safe.
+            # `call_soon_threadsafe` is, and it preserves call order.
             def send(frame: dict) -> None:
-                queue.append(frame)
+                loop.call_soon_threadsafe(outbox.put_nowait, frame)
 
-            self.attach_socket(send)
-            send(build_connect_frame(self.client_id, context))
-            self.resend_subscriptions()
+            async def write_outbound() -> None:
+                while True:
+                    await socket.send(json.dumps(await outbox.get()))
 
-            async def flush() -> None:
-                while queue:
-                    await socket.send(json.dumps(queue.pop(0)))
-
-            try:
-                await flush()
-                # The socket is back, so the backlog replays now — among itself in
-                # submission order. It is NOT ordered against concurrent writes:
-                # `attach_socket` above has already cleared the queue-it decision,
-                # so a `submit` racing this flush goes straight over HTTP and can
-                # land ahead of the backlog still replaying. The reference client
-                # has the same window; closing it needs a flushing flag in the
-                # queue-it decision, which is a protocol change, not a port fix.
-                await self.flush_offline_queue(shard_key)
+            async def read_inbound() -> None:
                 async for raw in socket:
                     if raw == "lunora-pong":
                         continue
@@ -852,10 +892,40 @@ class LunoraClient:
                     # subscription on the client.
                     with contextlib.suppress(Exception):
                         self.handle_frame(frame)
-                    await flush()
+
+            self.attach_socket(send)
+            send(build_connect_frame(self.client_id, context))
+            self.resend_subscriptions()
+
+            writer = loop.create_task(write_outbound())
+            reader = loop.create_task(read_inbound())
+
+            try:
+                # The socket is back, so the backlog replays now — among itself in
+                # submission order. It is NOT ordered against concurrent writes:
+                # `attach_socket` above has already cleared the queue-it decision,
+                # so a `submit` racing this flush goes straight over HTTP and can
+                # land ahead of the backlog still replaying. The reference client
+                # has the same window; closing it needs a flushing flag in the
+                # queue-it decision, which is a protocol change, not a port fix.
+                await self.flush_offline_queue(shard_key)
+
+                done, _ = await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
+
+                # Re-raise whichever finished first. A `socket.send` that fails
+                # has LOST that frame, so it must not leave a dead writer behind
+                # a read loop still running as though the client were connected:
+                # the caller sees the failure, reconnects, and
+                # `resend_subscriptions` puts the subscriptions back.
+                for task in done:
+                    task.result()
             finally:
-                # Writes submitted after this point queue instead of failing.
+                # Writes submitted after this point queue instead of failing, and
+                # the writer never outlives the socket it writes to.
                 self.detach_socket()
+                for task in (reader, writer):
+                    task.cancel()
+                await asyncio.gather(reader, writer, return_exceptions=True)
 
 
 def _percent(value: str) -> str:
@@ -864,14 +934,56 @@ def _percent(value: str) -> str:
     return quote(value, safe="")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so the bearer token is never replayed.
+
+    CPython's default handler copies EVERY request header except ``content-*``
+    onto the redirected request — ``authorization: Bearer ...`` included — and
+    sends it to whatever host the ``Location`` names. The reference client's
+    ``fetch`` drops ``Authorization`` on a cross-origin redirect per the Fetch
+    standard, so a WAF challenge page, a misconfigured proxy or an open
+    redirect on the real endpoint would harvest the caller's token here and
+    nowhere else. An RPC POST has no legitimate 3xx: 301/302/303 also turn the
+    POST into a GET, which would drop the call's own body. Refuse, and let the
+    status surface as the non-2xx it is.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None
+
+
+#: Module-level so the handler chain is built once; it holds no per-call state.
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = DEFAULT_HTTP_TIMEOUT) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
-        raw = exc.read().decode("utf-8")
-        return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+        try:
+            raw = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            # A refused redirect or a proxy's challenge page often closes the
+            # socket with no body — and resets a POST whose body it never read.
+            # The STATUS is what the caller needs; a failed body read must not
+            # replace it with a socket error.
+            raw = ""
+        finally:
+            exc.close()
+
+        try:
+            return exc.code, json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            # An HTML error page from a proxy, or a refused redirect's empty
+            # body. Reported as the status with NO envelope, never a synthesized
+            # one: `parse_rpc_response` raises an envelope-less non-2xx as
+            # `transient=True` precisely because nothing reached the shard, and
+            # a manufactured `INTERNAL` verdict is in neither of `submit`'s
+            # replayable code sets — it settles a queued durable write
+            # terminally against a body no Lunora function wrote.
+            return exc.code, {}
     # A timeout raises `socket.timeout` (`TimeoutError` from 3.10+), which is not
     # an `HTTPError` and so is left to propagate — it is not a server response
     # and must not be dressed up as one.

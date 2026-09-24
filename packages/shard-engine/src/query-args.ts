@@ -94,6 +94,94 @@ const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | 
     return validator.kind === "optional" || validator._meta?.column?.notNull === false;
 };
 
+/** Boolean combinator keys in a `where` tree — never a column, so never a pin. */
+const WHERE_COMBINATORS = new Set(["AND", "NOT", "OR"]);
+
+/**
+ * The fields a `where` fixes to ONE value, from its top-level conjunction.
+ *
+ * A top-level `where` object is an implicit AND of its keys, so a bare literal
+ * or a lone `{ eq: … }` on any of them holds across every row the read returns.
+ * Deliberately shallow and deliberately conservative: a combinator key
+ * contributes nothing (its members are alternatives, not pins) and so does every
+ * other operator, including a one-element `in`. Over-reporting a pin drops a
+ * real sort key, so "not sure" must mean "not pinned".
+ * @returns the set of equality-pinned field names
+ */
+const equalityPinnedFields = (where: undefined | WhereInput): ReadonlySet<string> => {
+    const pinned = new Set<string>();
+
+    if (typeof where !== "object" || Array.isArray(where)) {
+        return pinned;
+    }
+
+    for (const [field, value] of Object.entries(where)) {
+        if (WHERE_COMBINATORS.has(field)) {
+            continue;
+        }
+
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+            pinned.add(field);
+
+            continue;
+        }
+
+        const operators = Object.keys(value);
+
+        if (operators.length === 1 && operators[0] === "eq") {
+            pinned.add(field);
+        }
+    }
+
+    return pinned;
+};
+
+/**
+ * The field tuples this table is UNIQUE on: its `unique: true` declared indexes,
+ * plus the single-column `.unique()` constraints, which synthesize a UNIQUE
+ * index of their own (`migrateSecondaryIndexes`). Both are created WITHOUT the
+ * `(…, _creationTime, id)` sort keys, which is what {@link normalizeOrderKeys}
+ * needs to know.
+ * @returns one entry per unique constraint, holding its field names in index order
+ */
+const uniqueIndexFields = (
+    indexes: ReadonlyArray<{ fields: ReadonlyArray<string>; unique?: boolean }> | undefined,
+    shape: Record<string, ValidatorLike> | undefined,
+): ReadonlyArray<ReadonlyArray<string>> => {
+    const tuples: ReadonlyArray<string>[] = [];
+
+    for (const index of indexes ?? []) {
+        if (index.unique === true) {
+            tuples.push(index.fields);
+        }
+    }
+
+    for (const [field, validator] of Object.entries(shape ?? {})) {
+        if (validator._meta?.column?.unique === true) {
+            tuples.push([field]);
+        }
+    }
+
+    return tuples;
+};
+
+/**
+ * Whether the fields the read has already fixed cover some unique constraint —
+ * in which case no two returned rows can tie on the sort key and a further
+ * tiebreak is redundant. An empty tuple is not a constraint and never counts.
+ * @returns true when some unique tuple is wholly determined by `determined`
+ */
+const uniquelyOrdered = (determined: ReadonlySet<string>, uniqueBy: ReadonlyArray<ReadonlyArray<string>> | undefined): boolean =>
+    (uniqueBy ?? []).some((fields) => fields.length > 0 && fields.every((field) => determined.has(field)));
+
+/** What a read knows about its own shape, beyond the `orderBy` itself — see {@link normalizeOrderKeys}. */
+interface OrderKeyConstraints {
+    /** Fields an equality in the read's `where` (or `.withIndex()` range) fixes to one value. */
+    pinned?: ReadonlySet<string>;
+    /** The table's unique field tuples, from {@link uniqueIndexFields}. */
+    uniqueBy?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
 /**
  * Flatten the `{ field: dir }[]` authoring form into an ordered list of sort
  * keys. An absent or empty `orderBy` defaults to creation order, matching the
@@ -102,22 +190,57 @@ const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | 
  * `shape` is the ordered table's declared columns, used only to stamp each key's
  * `nullable` — see {@link columnIsNullable}. Omitting it makes every user column
  * read as nullable, which is correct but costs the slow seek plan on every page.
+ *
+ * `constraints` is what the read knows that the `orderBy` alone does not, and
+ * both halves exist to keep the emitted sort on an index rather than in a temp
+ * B-tree. Omitting it is always CORRECT — every key stays, the order is the same
+ * — it just costs the sort. See the two comments in the body.
  */
-const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>): OrderKey[] => {
+const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>, constraints?: OrderKeyConstraints): OrderKey[] => {
     const keys: OrderKey[] = [];
+    // Every field the read has already fixed, by an equality or by ordering on
+    // it — what {@link uniquelyOrdered} tests the unique-index cover against.
+    const determined = new Set<string>(constraints?.pinned);
+    let lastDirection: SortDirection = "asc";
 
     for (const entry of orderBy ?? []) {
         for (const [field, direction] of Object.entries(entry)) {
+            lastDirection = direction;
+            determined.add(field);
+
+            // An equality-pinned column holds ONE value across every row this
+            // read can return, so ordering by it is semantically a no-op — but
+            // SQLite does not treat it as one over an expression index, and
+            // repeating the pinned field in `orderBy` sorted every match into a
+            // temp B-tree (`ORDER BY <pinned>, priority` measured 93x the plain
+            // `ORDER BY priority` at 50k rows). The fluent reader has dropped
+            // these since `unpinnedIndexFields`; dropping them here is the same
+            // rule for the object form.
+            if (constraints?.pinned?.has(field)) {
+                continue;
+            }
+
             keys.push({ direction, field, nullable: columnIsNullable(field, shape) });
         }
     }
 
     if (keys.length === 0) {
-        return [{ direction: "asc", field: "_creationTime", nullable: false }];
+        // `lastDirection` rather than a pinned `asc`: an `orderBy` whose every
+        // key was pinned away still asked for a direction, and the fallback
+        // creation order should honour it (the rows tie on the real key, so any
+        // total order is a correct answer — but the paging direction is not).
+        return [{ direction: lastDirection, field: "_creationTime", nullable: false }];
     }
 
-    // Every declared index is built `(<fields>, _creationTime, id)` — see
-    // `INDEX_SORT_KEYS` in `ctx-db-migrations.ts`. An ORDER BY that jumps
+    // Skipped when an id field is already ordered: `id` is unique, so nothing
+    // after it can change the order, and the extra key would only cost a cursor
+    // column and a seek disjunct.
+    if (keys.some((key) => ID_FIELDS.has(key.field) || key.field === "_creationTime")) {
+        return keys;
+    }
+
+    // Every NON-unique declared index is built `(<fields>, _creationTime, id)` —
+    // see `INDEX_SORT_KEYS` in `ctx-db-migrations.ts`. An ORDER BY that jumps
     // straight from the declared fields to `id` skips the index's middle column,
     // so the index cannot answer the sort and SQLite sorts every match into a
     // temp B-tree instead. Splicing `_creationTime` in here — the one place both
@@ -126,10 +249,17 @@ const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<
     // agreement. Doing it in the ORDER BY builders alone would give the seek a
     // different total order than the sort it pages, which skips or repeats rows.
     //
-    // Skipped when an id field is already ordered: `id` is unique, so nothing
-    // after it can change the order, and the extra key would only cost a cursor
-    // column and a seek disjunct.
-    if (!keys.some((key) => ID_FIELDS.has(key.field) || key.field === "_creationTime")) {
+    // A UNIQUE index is the exception, and splicing into one was strictly
+    // harmful: it gets NO sort keys (they would join what is unique, and
+    // `(email, _creationTime, id)` is unique for every row, so the constraint
+    // would stop rejecting duplicates), so `ORDER BY email DESC, _creationTime
+    // DESC, id DESC` cannot walk `(email)` at all. Measured at 50k rows: a full
+    // `SCAN … USE TEMP B-TREE FOR ORDER BY` at 10.8ms against `SCAN … USING
+    // INDEX m_by_email` at 0.02ms once `_creationTime` is left out. It is also
+    // redundant there — the index's own fields already order the rows totally —
+    // and the `id` tiebreak the ORDER BY builders and {@link buildSeek} append
+    // still breaks a tie among the multiple NULLs a SQL UNIQUE index permits.
+    if (!uniquelyOrdered(determined, constraints?.uniqueBy)) {
         keys.push({ direction: tiebreakDirectionFor(keys), field: "_creationTime", nullable: false });
     }
 
@@ -195,8 +325,15 @@ const fromBase64 = (encoded: string): string => {
  * arity check in {@link buildSeek} cannot catch it, and the old payload would be
  * seeked as a `_creationTime` pivot with a channel id in it. Silently, and
  * shaped like a correct page.
+ *
+ * Bumped `~3` -> `~4` when {@link normalizeOrderKeys} learned to drop an
+ * equality-pinned `orderBy` key and to skip the `_creationTime` splice over a
+ * unique index. Both make the key list SHORTER, and {@link buildSeek} only
+ * refuses a cursor with too FEW values — a longer legacy payload is accepted and
+ * its leading value read as the wrong column's pivot. Mandatory for the same
+ * reason as last time: silent, and shaped like a correct page.
  */
-const CURSOR_PREFIX = "~3";
+const CURSOR_PREFIX = "~4";
 
 /**
  * Encode the sort key of `doc` (the values of each `orderBy` field, then its
@@ -523,13 +660,16 @@ export {
     CURSOR_PREFIX,
     decodeCursor,
     encodeCursor,
+    equalityPinnedFields,
     fromBase64,
     invalidCursor,
     isLiveForCompanion,
     normalizeOrderKeys,
+    type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
     toBase64,
+    uniqueIndexFields,
 };
 
 export { type OrderByInput, type OrderKey, type QueryArgs, type QueryPage, type SortDirection } from "./schema-types";

@@ -817,6 +817,25 @@ describe("mask — custom strategies & bypass", () => {
         expect(result?.["email"]).toBe("a@x.com");
     });
 
+    it("bypass returning a truthy NON-boolean does not skip the mask", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
+
+        // The canonical mistake: a `bypass` that forgets the `.can(...)`/`=== "admin"`
+        // and hands back the claim itself. A truthy string is NOT a grant — evaluated
+        // by truthiness it served every masked column in the clear, with no error and
+        // nothing in the logs. Same narrowing every sibling gate uses (`rls`,
+        // `storageRules`, `http-storage`'s serve gate, the runtime's `grants`).
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }, { bypass: (() => "admin") as unknown as () => boolean }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.["email"]).toBeNull();
+    });
+
     it("fails closed: a throwing MaskFn redacts the cell to null", async () => {
         expect.assertions(1);
 
@@ -2094,6 +2113,31 @@ describe("mask — get() table resolution", () => {
         const result = await handler.handler(makeContext(database, "u1"), {});
 
         expect(result?.row["email"]).toBe("raw@x.com");
+    });
+
+    /**
+     * `lookupById` is SHARD-LOCAL: a `.global()` row lives in D1, so it misses
+     * the seam while `get`/`findFirst` still resolve it through the writer's own
+     * global fallback. Reading that miss as "no such row" made `ctx.db.get(id)`
+     * answer `null` for every global row inside a `mask()` procedure.
+     */
+    it("falls back to the probe path when lookupById misses (a .global() row is not absent)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "u1", email: "a@x.com", table: "users" }];
+        const database = createFakeDatabase(rows);
+
+        // The seam is installed but resolves nothing — exactly a global row.
+
+        database.writer.lookupById = async () => null;
+
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.["_id"]).toBe("u1");
+
+        expect(result?.["email"]).toBeNull();
     });
 });
 

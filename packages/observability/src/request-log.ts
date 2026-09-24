@@ -61,7 +61,7 @@ const REQUEST_LOG_EVENT_SOURCE = "lunora";
  * {@link ensureRequestLogTable}. A new column is one entry here plus the matching
  * line in the `CREATE`; nothing else needs a migration.
  */
-const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT"];
+const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT", "deployment_id TEXT", "version_tag TEXT"];
 
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
@@ -70,6 +70,8 @@ type RequestOutcome = "error" | "ok";
 interface RequestLogEntry {
     /** Whether the result was served from the reactive cache; `undefined` when the cache is disabled or the path isn't cached (a write/action). */
     cacheHit?: boolean;
+    /** Worker deployment id from the `CF_VERSION_METADATA` binding; `undefined` when the binding isn't declared. Group on this to answer "did this start with a deploy?". */
+    deploymentId?: string;
     /** Handler wall-clock duration in milliseconds (before the subscription write-flush, matching the per-function metrics). */
     durationMs: number;
     /** Error message when `outcome === "error"`, redacted like args/identity; absent on success. */
@@ -99,11 +101,14 @@ interface RequestLogEntry {
     ts: number;
     /** Acting userId forwarded by the runtime, or `undefined` when anonymous. */
     userId?: string;
+    /** Worker version tag from the `CF_VERSION_METADATA` binding; `undefined` when the binding isn't declared or the deploy carried no tag. */
+    versionTag?: string;
 }
 
 /** Fields accepted when appending one request-log entry; `seq` is assigned by the table. */
 interface AppendRequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -117,6 +122,7 @@ interface AppendRequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 
 /** Knobs the dispatch site threads into a request-log write. */
@@ -137,7 +143,13 @@ interface ReadRequestLogOptions {
     outcome?: RequestOutcome;
     /** Exact shard-key match. */
     shardKey?: string;
-    /** Only entries strictly after this cursor (forward paging). */
+
+    /**
+     * Only entries strictly after this cursor. Setting it switches the read to
+     * ASCENDING order — see {@link readRequestLog} — because that is the only
+     * ordering under which advancing the cursor to the last returned `seq`
+     * actually pages forward without a hole.
+     */
     sinceSeq?: number;
     /** Keep only entries whose read OR written table set contains this table. */
     tableTouched?: string;
@@ -145,7 +157,7 @@ interface ReadRequestLogOptions {
     userId?: string;
 }
 
-/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first — or oldest first when the request paged forward with `sinceSeq` (see {@link readRequestLog}). */
 interface RequestLogResult {
     entries: RequestLogEntry[];
 }
@@ -259,6 +271,22 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
 };
 
 /**
+ * SQL handles whose request-log table (and its back-filled columns) have already
+ * been ensured in this isolate. Every read and write path calls
+ * {@link ensureRequestLogTable} defensively and `appendRequestLogEntry` runs once
+ * per RPC dispatch, so without memoizing, every dispatch re-ran `CREATE TABLE IF
+ * NOT EXISTS` plus the two back-fill `ALTER TABLE`s below — and an `ALTER` for a
+ * column that already exists THROWS, so two SQLite errors were being constructed
+ * and swallowed per dispatch forever. `getRequestLog`/`getIssues` pay it twice
+ * per read, and `getIssues` is a wildcard subscription re-run on every flush.
+ *
+ * A `WeakSet` so a torn-down shard's handle is collectable, and a fresh handle (a
+ * new isolate after hibernation) re-ensures, which is correct — the same pattern
+ * and the same reasoning as `function-metrics.ts` and `metric-history.ts`.
+ */
+const ensuredHandles = new WeakSet<SqlExec>();
+
+/**
  * Create the `__lunora_reqlog__` table. `seq` is an `AUTOINCREMENT` primary
  * key, giving each shard a monotonic cursor the Logs tab pages through; the
  * `args`/`identity`/`tables_read`/`tables_written` columns hold JSON and are
@@ -280,6 +308,10 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
  * next column's add.
  */
 const ensureRequestLogTable = (sql: SqlExec): void => {
+    if (ensuredHandles.has(sql)) {
+        return;
+    }
+
     runSql(
         sql,
         `CREATE TABLE IF NOT EXISTS "${REQUEST_LOG_TABLE}" (
@@ -294,6 +326,8 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             error_message TEXT,
             error_fingerprint TEXT,
             trace_id TEXT,
+            deployment_id TEXT,
+            version_tag TEXT,
             duration_ms REAL NOT NULL,
             tables_read TEXT NOT NULL DEFAULT '[]',
             tables_written TEXT NOT NULL DEFAULT '[]',
@@ -309,6 +343,8 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             // Column already exists — no-op.
         }
     }
+
+    ensuredHandles.add(sql);
 };
 
 /** Serialise a table list to a sorted, de-duplicated JSON array so the `LIKE` table-touched filter matches deterministically. */
@@ -361,8 +397,8 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     runSql(
         sql,
         `INSERT INTO "${REQUEST_LOG_TABLE}"
-            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, trace_id, deployment_id, version_tag, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         entry.ts,
         entry.functionPath,
         // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for a request with no shard key / anonymous caller / absent field.
@@ -387,6 +423,14 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         // data, and redacting it would destroy the only thing it is for.
         // eslint-disable-next-line unicorn/no-null -- dispatch with no ambient trace, or a legacy row appended before this column existed.
         entry.traceId ?? null,
+        // Deploy attribution, never redacted for the same reason as `trace_id`:
+        // an opaque deployment id / version tag is Cloudflare's own identifier,
+        // not user data, and it is the whole point of the column — grouping the
+        // log by it is what answers "did this start with a deploy?".
+        // eslint-disable-next-line unicorn/no-null -- `version_metadata` binding not declared, or a legacy row appended before this column existed.
+        entry.deploymentId ?? null,
+        // eslint-disable-next-line unicorn/no-null -- binding absent, or the deploy carried no version tag.
+        entry.versionTag ?? null,
         entry.durationMs,
         encodeTables(entry.tablesRead),
         encodeTables(entry.tablesWritten),
@@ -420,6 +464,11 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
     const event = {
         args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
+        // Deploy attribution on EVERY invocation, so "did this start with a
+        // specific deploy?" is a group-by in the Workers Logs Query Builder
+        // rather than a correlation against a deploy timeline. Requires the
+        // `version_metadata` binding; absent from the event when unbound.
+        deploymentId: entry.deploymentId,
         durationMs: entry.durationMs,
         error: entry.errorMessage === undefined ? undefined : redactArgs(entry.errorMessage, captureRaw),
         function: entry.functionPath,
@@ -437,6 +486,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         ts: entry.ts,
         type: "request",
         userId: entry.userId,
+        versionTag: entry.versionTag,
     };
 
     const line = JSON.stringify(event);
@@ -638,6 +688,7 @@ const pushScopeFilters = (conjuncts: string[], parameters: unknown[], options: {
 interface RequestLogRow {
     args: null | string;
     cache_hit: null | number;
+    deployment_id: null | string;
     duration_ms: number;
     error_message: null | string;
     function_path: string;
@@ -651,6 +702,7 @@ interface RequestLogRow {
     trace_id: null | string;
     ts: number;
     user_id: null | string;
+    version_tag: null | string;
 }
 
 /** Parse a JSON string array column back to `string[]`, tolerating a malformed/empty value. */
@@ -685,12 +737,21 @@ const decodeRedactedArgs = (raw: string): unknown => {
 };
 
 /**
- * Read request-log entries newest-first, AND-combining the supplied filters
- * (function-path prefix, exact userId/shardKey/outcome, and a table-touched
- * match against the read OR written table sets), up to `limit` (clamped to
- * [1, 10000]). Each value is a bound parameter, so no filter can inject SQL.
- * Creates the table first so reads on a never-logged shard return `[]` instead
- * of throwing. Mirrors `readAuditLog`/`readCdcChanges`.
+ * Read request-log entries, AND-combining the supplied filters (function-path
+ * prefix, exact userId/shardKey/outcome, and a table-touched match against the
+ * read OR written table sets), up to `limit` (clamped to [1, 10000]). Each value
+ * is a bound parameter, so no filter can inject SQL. Creates the table first so
+ * reads on a never-logged shard return `[]` instead of throwing. Mirrors
+ * `readAuditLog`/`readCdcChanges`.
+ *
+ * **Ordering follows `sinceSeq`.** Without a cursor this is a "show me the tail"
+ * read and returns NEWEST FIRST, which is what the studio's Logs tab renders.
+ * With `sinceSeq` it is forward paging and returns OLDEST FIRST, starting at the
+ * cursor: descending there silently loses rows, because `ORDER BY seq DESC LIMIT
+ * n` answers "the newest n after the cursor", so a consumer that advances to the
+ * largest returned `seq` skips everything between `sinceSeq` and that page
+ * whenever more than `limit` rows accumulated between polls — the more traffic
+ * the shard takes, the more it drops.
  */
 const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): RequestLogEntry[] => {
     ensureRequestLogTable(sql);
@@ -719,10 +780,13 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
     parameters.push(limit);
 
+    // See the ordering paragraph above: a cursored read pages FORWARD from it.
+    const direction = options.sinceSeq === undefined ? "DESC" : "ASC";
+
     const rows = runSql<RequestLogRow>(
         sql,
-        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
-         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, deployment_id, version_tag, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
+         FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq ${direction} LIMIT ?`,
         ...parameters,
     ).toArray();
 
@@ -772,6 +836,14 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
         if (row.trace_id !== null) {
             base.traceId = row.trace_id;
+        }
+
+        if (row.deployment_id !== null) {
+            base.deploymentId = row.deployment_id;
+        }
+
+        if (row.version_tag !== null) {
+            base.versionTag = row.version_tag;
         }
 
         return base;

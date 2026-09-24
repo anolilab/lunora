@@ -213,6 +213,24 @@ describe("deny list", () => {
 
         await expect(limiter.limit("send", { key: "Banned" })).resolves.toMatchObject({ ok: false, reason: "deny" });
     });
+
+    it("matches a raw deny-list entry against an equivalent normalized key", async () => {
+        expect.assertions(1);
+
+        // The deny-list holds the raw form and the request arrives already in
+        // the normalized form — the ban must still hold. Both forms route to
+        // the SAME storage bucket, so admitting here would let a banned caller
+        // shed the ban simply by lower-casing their own email.
+        const limiter = new RateLimiter({
+            config,
+            denyList: ["Abuse@Example.com "],
+            normalize: (key) => key.trim().toLowerCase(),
+            now: () => 0,
+            store: createMemoryStore(),
+        });
+
+        await expect(limiter.limit("send", { key: "abuse@example.com" })).resolves.toMatchObject({ ok: false, reason: "deny" });
+    });
 });
 
 describe("normalize", () => {

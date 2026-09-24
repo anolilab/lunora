@@ -53,6 +53,14 @@ const buildBatchEntryRequest = (batchRequest: Request, entry: BatchEntry): Reque
         headers.set("x-lunora-client-seq", String(entry.clientSeq));
     }
 
+    // Per entry, for the same reason `clientSeq` is: the batch's writes were
+    // composed at different cursors, so a `.dropStalePatches()` table has to judge
+    // each against its own. `!== undefined`, not truthiness — `0` is a valid
+    // baseline ("had seen nothing").
+    if (entry.baselineSeq !== undefined) {
+        headers.set("x-lunora-base-seq", String(entry.baselineSeq));
+    }
+
     return new Request("https://shard.internal/rpc", {
         body: JSON.stringify({ args: entry.args ?? {}, functionPath: entry.functionPath }),
         headers,

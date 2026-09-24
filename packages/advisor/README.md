@@ -36,7 +36,7 @@
 
 Schema and query lints for Lunora, modeled on Supabase's splinter. Each lint is a pure rule over a normalized `LintContext`; `runAdvisor()` runs a set and flattens their findings for the CLI, the Vite plugin, and the Studio Advisors view.
 
-Most lints are `static`: they run against the declared schema (and the query reads / inserts the codegen feeder discovers in your function bodies), so a problem surfaces at codegen time before it ships — the edge over a live-database-only advisor. A smaller `runtime` tier (`hot_shard`, `index_utilization`, `constraint_validator`) reads observed signal from a running deployment.
+Most lints are `static`: they run against the declared schema (and the query reads / inserts the codegen feeder discovers in your function bodies), so a problem surfaces at codegen time before it ships — the edge over a live-database-only advisor. A smaller `runtime` tier (`hot_shard`, `index_utilization`, `fan_out_breadth`) reads observed signal from a running deployment.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -79,18 +79,16 @@ for (const finding of findings) {
 
 ### Runtime lints
 
-The runtime tier (`hot_shard`, `index_utilization`, `fan_out_breadth`, `constraint_validator`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`, `tableSamples`). The Studio backend fills `shardTraffic` / `tableScans` / `indexHits` from the shards' admin signal.
-
-`tableSamples` has **no shipped feeder**: nothing in the runtime or the Studio reads bounded row samples out of a shard, so `constraint_validator` is a no-op unless _you_ pass samples yourself (the Studio excludes it from the lint set it runs, rather than running it against an input it cannot fill). It is exported and driveable — the sample shape is `AdvisorTableSample` — but wiring it to a deployment means adding a sampling admin read first.
+The runtime tier (`hot_shard`, `index_utilization`, `fan_out_breadth`) reads observed signal off the `LintContext` (`shardTraffic`, `tableScans`, `indexHits`). The Studio backend fills all three from the shards' admin signal.
 
 ```ts
 import { fromServerSchema, runAdvisor } from "@lunora/advisor";
 
 import schema from "./lunora/schema";
 
-// `shardTraffic` / `tableScans` / `indexHits` / `tableSamples` come from wherever
-// you read your shards' durable counters — the Studio backend reads its own.
-const findings = runAdvisor({ schema: fromServerSchema(schema), shardTraffic, tableScans, indexHits, tableSamples }, { source: "runtime" });
+// `shardTraffic` / `tableScans` / `indexHits` come from wherever you read your
+// shards' durable counters — the Studio backend reads its own.
+const findings = runAdvisor({ schema: fromServerSchema(schema), shardTraffic, tableScans, indexHits }, { source: "runtime" });
 ```
 
 An Analytics-Engine-backed alternative feeder (querying AE SQL for `lunora.index.hit`/`lunora.shard.request`/`lunora.table.scan` events instead of the in-DO counters) was quarantined off the package root: nothing in the runtime ever writes those AE events, so `shardTraffic` and `tableScans` always came back empty. `indexHits` came back empty too, unless the caller passed `declaredIndexes` — then it listed every declared index with `reads: 0`, a real zero-reads fact rather than a stand-in for "no data". The `AnalyticsMetricsOptions` / `AnalyticsMetricsSource` / `AnalyticsRuntimeMetrics` types it would have produced are still exported from `@lunora/advisor` — they describe the still-valid, still-optional shape of `runAdvisor`'s runtime input — but the loader function itself is not, until something actually emits those events.
@@ -114,7 +112,7 @@ console.log(map.score, map.grade); // e.g. 84 "good"
 console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
 ```
 
-Each procedure starts at 100 and loses each fired **rule's** weight (`Lint.weight`, else a severity ladder: `ERROR` 20 / `WARN` 10 / `INFO` 5) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
+Each procedure starts at 100 and loses each fired **rule's** severity weight (`ERROR` 20 / `WARN` 10 / `INFO` 5 — severity is the only input; a lint carries no weight of its own) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
 
 The verdicts are `clean` / `warned` / `failing` / `exempt` — named for severity, because the score is driven by every lint family rather than an observability family.
 
@@ -126,8 +124,10 @@ import { compareToBaseline, parseAdvisorMap } from "@lunora/advisor";
 const baseline = parseAdvisorMap(JSON.parse(await readFile("lunora.advisor.map.json", "utf8")));
 
 if (baseline === undefined) {
-    // Missing, hand-edited, or written by an older MAP_VERSION. Fail loudly —
-    // treating it as "no regression" would silently disable the gate forever.
+    // Missing or unreadable (hand-edited, truncated). Fail loudly — treating it
+    // as "no regression" would silently disable the gate forever. A version
+    // mismatch is not rejected here: `compareToBaseline` reports it as
+    // `comparable: false`.
     throw new Error("advisor baseline is unreadable; regenerate lunora.advisor.map.json");
 }
 

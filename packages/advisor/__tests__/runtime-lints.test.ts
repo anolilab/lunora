@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AdvisorShardTraffic, LintContext } from "../src";
 import { ALL_LINTS, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
-/**
- * A minimal context with an empty schema. `constraint_validator` also reads
- * `schema` and `tableSamples`; this base supplies neither, so it is covered by
- * `constraint-validator.test.ts` rather than here.
- */
+/** A minimal context with an empty schema — no observed signal, so every runtime lint is a no-op against it. */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema: { tables: [] }, ...overrides };
 };
@@ -18,6 +14,18 @@ const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ s
 const shardsInGroup = (group: string, count: number): AdvisorShardTraffic[] =>
     Array.from({ length: count }, (_unused, index) => {
         return { group, requests: 1, shardKey: `${group}-${String(index)}` };
+    });
+
+/**
+ * The shape the shipped feeder actually emits: `{ requests, shardKey }` with no
+ * `group` at all, and `""` for the unnamed root DO. `@lunora/runtime`'s
+ * `ShardTrafficEntry` has no `group` field, and the studio hands
+ * `rollUpShardTraffic`'s rows straight through, so this — not
+ * {@link shardsInGroup} — is what every real run sees.
+ */
+const liveShards = (count: number): AdvisorShardTraffic[] =>
+    Array.from({ length: count }, (_unused, index) => {
+        return { requests: 1, shardKey: index === 0 ? "" : `tenant-${String(index)}` };
     });
 
 describe("fan_out_breadth", () => {
@@ -55,6 +63,25 @@ describe("fan_out_breadth", () => {
         // Two groups of 400: 800 shards live, but no single shard set is wide
         // enough for a fan-out over it to approach the ceiling.
         expect(fanOutBreadth.run(traffic([...shardsInGroup("listRooms", 400), ...shardsInGroup("listUsers", 400)]))).toHaveLength(0);
+    });
+
+    // The shape production emits: no `group` on any row (the runtime's
+    // `ShardTrafficEntry` has no such field) and `""` for the root DO. Every
+    // finding-producing case above supplies a group, so the ungrouped
+    // deployment-wide prose and cacheKey were asserted nowhere.
+    it("flags the ungrouped deployment-wide shard set the shipped feeder emits", () => {
+        expect.assertions(3);
+
+        const findings = fanOutBreadth.run(traffic(liveShards(500)));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "fan_out_breadth:",
+            level: "WARN",
+            metadata: { group: "", shards: 500 },
+            name: "fan_out_breadth",
+        });
+        expect(findings[0]?.detail).toContain("This deployment has 500 active shards");
     });
 
     it("finds nothing for a static caller with no traffic feeder", () => {
@@ -147,6 +174,23 @@ describe("hot_shard", () => {
         );
 
         expect(findings[0]).toMatchObject({ cacheKey: "hot_shard:rooms:room-42", metadata: { group: "rooms" } });
+    });
+
+    // `rollUpShardTraffic` reports the unnamed root DO as `shardKey: ""`, and on
+    // the shipped (ungrouped) feed that is the label and cacheKey every real run
+    // would produce for a root-dominant deployment.
+    it("names the unnamed root DO as `the root shard` on the ungrouped feed", () => {
+        expect.assertions(2);
+
+        const findings = hotShard.run(
+            traffic([
+                { requests: 900, shardKey: "" },
+                { requests: 100, shardKey: "tenant-a" },
+            ]),
+        );
+
+        expect(findings[0]).toMatchObject({ cacheKey: "hot_shard::", metadata: { shardKey: "" } });
+        expect(findings[0]?.detail).toContain("the root shard handled 900 of 1000 requests");
     });
 
     it("measures each shard's share against its own group, not the combined total (Finding 5)", () => {
@@ -260,7 +304,7 @@ describe("runtime lint registration", () => {
     it("includes all runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator", "fan_out_breadth"]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "fan_out_breadth"]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

@@ -84,7 +84,11 @@ pub(crate) fn format_number(value: f64) -> String {
     }
 
     if value == value.trunc() && value.abs() < 1e21 {
-        return format!("{:.0}", value);
+        // `{}` prints the SHORTEST digits that read back as the same f64, which
+        // is ECMAScript's rule; `{:.0}` prints the EXACT expansion, so 2^60 came
+        // out as 1152921504606846976 where `String(2**60)` is
+        // 1152921504606847000. Both spell a negative zero "-0".
+        return format!("{}", value);
     }
 
     let magnitude = value.abs();

@@ -254,6 +254,43 @@ describe("runExternalSourceTick — CDC delete pins to its own table (DO-02)", (
         await expect(writer.get("dup1", "documents")).resolves.toBeNull();
         await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
     });
+
+    it("a sourced-table update never rewrites a same-id row living in a different table", async () => {
+        expect.assertions(3);
+
+        const writer = setupTwoTableWriter();
+
+        // Same id string, deliberately present in BOTH tables — same premise as
+        // the delete case above, but this time the upstream row CHANGES rather
+        // than disappearing, which is the incremental tick's normal update path.
+        await writer.insert("otherTable", { _id: "dup1", note: "unrelated row, must survive" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "dup1", orgId: "org_1", title: "before" }, { allowExplicitId: true });
+
+        // Upstream still holds dup1, retitled -> the diff emits `op: "update"`,
+        // whose replay is insert-then-replace. The replace must carry the table.
+        await runExternalSourceTick(twoTableHarness.sql, writer, [{ _id: "dup1", orgId: "org_1", title: "after" }], { table: "documents" });
+
+        await expect(writer.get("dup1", "documents")).resolves.toMatchObject({ title: "after" });
+        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
+        // The documents shape must not have leaked into the otherTable row.
+        await expect(writer.get("dup1", "otherTable")).resolves.not.toHaveProperty("title");
+    });
+
+    it("an incremental sourced-table tick never rewrites a same-id row living in a different table", async () => {
+        expect.assertions(2);
+
+        const writer = setupTwoTableWriter();
+
+        await writer.insert("otherTable", { _id: "dup1", note: "unrelated row, must survive" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "dup1", orgId: "org_1", title: "before" }, { allowExplicitId: true });
+
+        // The incremental tick emits `op: "insert"` even for a changed existing
+        // row, so the PK collision routes it through the same replace fallback.
+        await materializeExternalRowsIncremental(writer, [{ _id: "dup1", orgId: "org_1", title: "after" }], { table: "documents" });
+
+        await expect(writer.get("dup1", "documents")).resolves.toMatchObject({ title: "after" });
+        await expect(writer.get("dup1", "otherTable")).resolves.toMatchObject({ note: "unrelated row, must survive" });
+    });
 });
 
 describe("runExternalSourceTick (real baseline read from the table)", () => {

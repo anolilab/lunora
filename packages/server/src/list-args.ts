@@ -48,6 +48,7 @@
  * these parameters with no special-casing — the published spec and the accepted
  * arguments are the same declaration.
  */
+import { LunoraError } from "@lunora/errors";
 import type { ColumnValidator, Infer, Validator } from "@lunora/values";
 import { optionalInner, v } from "@lunora/values";
 
@@ -296,7 +297,19 @@ const asOperators = (value: unknown, maxInValues: number, allowContains: boolean
         // caps them for anything arriving through `.input()`, but this path exists
         // precisely BECAUSE `toQueryArgs` is reachable without that validator — so
         // leaving the cap off here would reopen the hole it was added to close.
-        operators[operator] = Array.isArray(operand) ? operand.slice(0, maxInValues) : operand;
+        //
+        // REJECT, don't truncate, and match what the validated path does with the
+        // same input. Truncating `in` narrows the result set, which is merely wrong;
+        // truncating `notIn` DROPS EXCLUSIONS and returns rows the caller asked to
+        // exclude — a silent widening, and the direction a filter must never fail.
+        // The two operators cannot be treated differently either: the whole point of
+        // this path is that no validator vetted the object, so "it was probably an
+        // `in`" is not something the reducer knows.
+        if (Array.isArray(operand) && operand.length > maxInValues) {
+            throw new LunoraError("BAD_REQUEST", `list filter: \`${operator}\` accepts at most ${String(maxInValues)} values (got ${String(operand.length)})`);
+        }
+
+        operators[operator] = operand;
     }
 
     return named === 0 ? undefined : operators;

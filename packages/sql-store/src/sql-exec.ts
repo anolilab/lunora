@@ -12,7 +12,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
 /* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
-import type { TableDefinitionLike } from "@lunora/shard-engine";
+import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -25,6 +25,39 @@ const physicalColumn = (field: string): string => (field === "_id" || field === 
 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
+
+/**
+ * Table-qualified twin of {@link columnRefSql}, for the one thing an unqualified
+ * reference cannot do: **fail** when the column is absent.
+ *
+ * workerd and D1 build SQLite with the double-quoted-string misfeature enabled,
+ * so a bare `"slug"` that resolves to no column is silently reinterpreted as the
+ * string literal `'slug'` and the statement succeeds. Any probe that reads a
+ * throw as "missing" therefore answers "present" for every database on the
+ * runtime this store actually ships to. A qualified name has no string-literal
+ * reading, so `"t"."slug"` raises `no such column: t.slug` on workerd, D1 and
+ * `node:sqlite` alike.
+ *
+ * Only for references against a table the caller has aliased
+ * (`FROM "x" AS "t"`); every other site keeps {@link columnRefSql}, whose
+ * statements name no alias to qualify with.
+ */
+const qualifiedColumnRefSql = (alias: string, field: string): SQL => sql`${sql.identifier(alias)}.${sql.identifier(physicalColumn(field))}`;
+
+/** A table's fields paired with their column meta, skipping fields that declare none. */
+const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
+    const columns: [string, ColumnMetaLike][] = [];
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        const column = validator._meta?.column;
+
+        if (column) {
+            columns.push([field, column]);
+        }
+    }
+
+    return columns;
+};
 
 /**
  * Run a composable drizzle {@link SQL} read through the (string-based) exec:
@@ -138,12 +171,63 @@ interface SqlCtxExec {
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
 }
 
-/** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
+/**
+ * SQLite storage encode for `.global()` column values — the shared
+ * `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0).
+ *
+ * Kind-blind, because it is also what binds every WHERE comparison and the rank
+ * companion's sort keys, where the two sides have to agree byte for byte.
+ * A write that knows which column it is filling uses
+ * {@link serializeDocumentColumn} instead.
+ */
 const serializeColumnValue: (value: unknown) => unknown = sqliteEncode;
 
-/** Structural read of a validator's `.nullable()` flag — `.nullable()` is the one thing that clears `notNull`. */
-const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } | undefined): boolean =>
-    validator?._meta?.column?.notNull === false;
+/**
+ * Does this validator's type admit the value `null`?
+ *
+ * `.nullable()` — the one modifier that clears `notNull` — is the explicit
+ * signal, and it used to be the ONLY one read. That made the answer a proxy for
+ * "was `.nullable()` called", not for "can this hold null", and several
+ * validators admit null without it:
+ *
+ * - `v.any()` accepts every value, `null` included.
+ * - `v.null()` accepts nothing else.
+ * - `v.literal(null)` permits exactly that one value.
+ * - `v.union(...)` admits null when any MEMBER does — `v.union(v.string(), v.null())`
+ *   is the shape that gets written in practice.
+ *
+ * `v.from(schema)` is the one shape left out: an external Standard Schema
+ * decides `null` in code we cannot read without running it, so it keeps the
+ * conservative answer it already had.
+ */
+const acceptsNull = (validator: TableDefinitionLike["shape"][string] | undefined): boolean => {
+    if (validator === undefined) {
+        return false;
+    }
+
+    if (validator._meta?.column?.notNull === false) {
+        return true;
+    }
+
+    switch (validator.kind) {
+        case "any":
+        case "null": {
+            return true;
+        }
+        case "literal": {
+            return validator._meta?.value === null;
+        }
+        case "optional": {
+            return acceptsNull(validator._meta?.inner);
+        }
+        case "union": {
+            return validator._meta?.members?.some((member) => acceptsNull(member)) === true;
+        }
+        default: {
+            return false;
+        }
+    }
+};
 
 /**
  * Does a stored SQL NULL in this column mean the field is ABSENT rather than
@@ -158,21 +242,23 @@ const acceptsNull = (validator: { readonly _meta?: { readonly column?: { readonl
  * throws, so every row that simply had no value for an optional column was
  * missing from the restore.
  *
- * `v.string().nullable()` and `v.optional(v.string().nullable())` are the
- * opposite case — NULL is a value the column genuinely holds — so those keep it.
+ * A column whose inner type ADMITS null is the opposite case — NULL is a value
+ * the column genuinely holds — so those keep it. That covers
+ * `v.optional(v.string().nullable())`, and (this is what {@link acceptsNull} was
+ * widened for) `v.optional(v.any())` and
+ * `v.optional(v.union(v.string(), v.null()))`, where a `null` the caller wrote
+ * EXPLICITLY was being discarded as "field unset" while the DO plane kept it.
+ *
+ * One column cannot hold both answers: SQL NULL is the only thing either case
+ * can store, so a table reads it one way or the other. Reading it as `null`
+ * whenever the type admits null is the direction that never loses a written
+ * value, and it never produces one outside the declared type either —
+ * `v.optional(v.any())` infers `any` and `v.optional(v.union(v.string(), v.null()))`
+ * infers `string | null | undefined`; both accept `null`. What remains is that an
+ * UNSET field of such a column reads back as `null` rather than as missing. That
+ * is a shape the declared type permits; discarding a written value was not.
  */
-const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => {
-    if (validator.kind !== "optional" || acceptsNull(validator)) {
-        return false;
-    }
-
-    // `@lunora/values` stashes the wrapped validator on `_meta.inner`; the
-    // package's own `ValidatorLike` does not declare it (see `shared/effective-kind`,
-    // which reads it the same way for the same reason).
-    const inner = (validator._meta as { inner?: { readonly _meta?: { readonly column?: { readonly notNull?: boolean } } } } | undefined)?.inner;
-
-    return !acceptsNull(inner);
-};
+const nullMeansAbsent = (validator: TableDefinitionLike["shape"][string]): boolean => validator.kind === "optional" && !acceptsNull(validator);
 
 /**
  * The `field → [effective column kind, NULL means absent]` mapping for a table,
@@ -197,6 +283,37 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
 
     return kinds;
 };
+
+/**
+ * `field → effective column kind` for the write path, keyed and memoized like
+ * {@link columnKinds} (which is ordered for the row decode; a write looks one
+ * field up at a time, so it wants a map).
+ */
+const columnKindByFieldCache = new WeakMap<TableDefinitionLike, Map<string, string | undefined>>();
+
+const columnKindOf = (definition: TableDefinitionLike, field: string): string | undefined => {
+    let byField = columnKindByFieldCache.get(definition);
+
+    if (byField === undefined) {
+        byField = new Map(columnKinds(definition).map(([name, kind]) => [name, kind]));
+        columnKindByFieldCache.set(definition, byField);
+    }
+
+    return byField.get(field);
+};
+
+/**
+ * Storage encode for one column of a document being WRITTEN, with the column's
+ * declared kind in hand.
+ *
+ * The inverse of {@link decodeGlobalRow}, and it exists for the same reason:
+ * `v.any()`/`v.union()`/`v.from()` store in a TEXT column whatever their runtime
+ * value happens to be, so a number or boolean was coerced to text on the way in
+ * and had no type to be reversed with on the way out — `42` read back `"42.0"`.
+ * Only a caller that knows the column can encode those unambiguously.
+ */
+const serializeDocumentColumn = (definition: TableDefinitionLike, field: string, value: unknown): unknown =>
+    sqliteEncode(value, columnKindOf(definition, field));
 
 /**
  * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
@@ -321,8 +438,13 @@ export {
     decodeRows,
     forEachRowPaged,
     physicalColumn,
+    qualifiedColumnRefSql,
     queryAll,
     queryBatch,
     queryRun,
     serializeColumnValue,
+    serializeDocumentColumn,
+    tableColumns,
 };
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";

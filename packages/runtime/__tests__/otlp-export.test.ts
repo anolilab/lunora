@@ -5,6 +5,56 @@ import { OTLP_GZIP_THRESHOLD, otlpSend } from "../src/otlp-export";
 /** Pull the request headers off a recorded `fetch` call. */
 const headersOf = (init: RequestInit): Record<string, string> => (init.headers ?? {}) as Record<string, string>;
 
+describe("otlpSend rejection reporting", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    // There is no retry: a rejected batch is gone. Without a line in the log, a
+    // wrong token (401) or a wrong path (404) is indistinguishable from a working
+    // pipeline on every isolate forever — every post "succeeds" and telemetry
+    // simply never arrives.
+    it("reports a non-OK collector response with its status and host, and never its body", async () => {
+        expect.assertions(4);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<typeof fetch>(async () => new Response("token 'sk-live-abc' is not valid", { status: 401 })),
+        );
+
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await otlpSend("https://collector.example/v1/traces?key=super-secret", {}, {});
+
+        expect(errors).toHaveBeenCalledTimes(1);
+
+        const line = String(errors.mock.calls[0]![0]);
+
+        expect(line).toContain("collector.example");
+        expect(line).toContain("401");
+        // Neither the response body nor the URL's query may echo into the log.
+        expect(line).not.toContain("sk-live-abc");
+    });
+
+    it("stays silent on a transport error — transient and self-healing, unlike a rejection", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<typeof fetch>(async () => {
+                throw new Error("network down");
+            }),
+        );
+
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await otlpSend("https://collector.example/v1/traces", {}, {});
+
+        expect(errors).not.toHaveBeenCalled();
+    });
+});
+
 describe("otlpSend gzip threshold", () => {
     afterEach(() => {
         vi.unstubAllGlobals();

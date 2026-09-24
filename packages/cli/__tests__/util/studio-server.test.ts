@@ -1,6 +1,9 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { connect, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ALLOW_FORWARDED_ENV } from "@lunora/config/studio-host";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,6 +98,35 @@ const requestStudioWithHeaders = (port: number, path: string, headers: Record<st
 
         request.on("error", reject);
         request.end();
+    });
+
+/** POST a JSON body to one of the studio's local endpoints (they gate on a JSON content type). */
+const postStudioJson = (port: number, path: string, host: string, body: unknown): Promise<{ body: string; statusCode: number | undefined }> =>
+    new Promise((resolve, reject) => {
+        const payload = JSON.stringify(body);
+        const request = httpRequest(
+            {
+                headers: { "content-length": String(Buffer.byteLength(payload)), "content-type": "application/json", host },
+                hostname: "127.0.0.1",
+                method: "POST",
+                path,
+                port,
+            },
+            (response) => {
+                let received = "";
+
+                response.setEncoding("utf8");
+                response.on("data", (chunk: string) => {
+                    received += chunk;
+                });
+                response.on("end", () => {
+                    resolve({ body: received, statusCode: response.statusCode });
+                });
+            },
+        );
+
+        request.on("error", reject);
+        request.end(payload);
     });
 
 /**
@@ -582,6 +614,48 @@ describe("startStudioServer", () => {
             expect(unknownChunk.body).not.toContain("<!doctype html>");
         } finally {
             await studio.close();
+        }
+    });
+
+    it("forwards the host's apiSpec into a schema edit, so the edit does not delete the project's openrpc.json", async () => {
+        expect.assertions(2);
+
+        // Codegen writes the spec its mode names and REMOVES the other, so a studio
+        // edit that reached codegen with no `apiSpec` defaulted to "openapi" and
+        // deleted the `openrpc.json` an `apiSpec: "openrpc"` project had just
+        // generated. The Vite host already forwarded it; this one did not.
+        const projectRoot = mkdtempSync(join(tmpdir(), "lunora-studio-apispec-"));
+
+        mkdirSync(join(projectRoot, "lunora"), { recursive: true });
+        writeFileSync(
+            join(projectRoot, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    todos: defineTable({
+        text: v.string(),
+    }).index("by_text", ["text"]),
+});
+`,
+            "utf8",
+        );
+
+        const port = await getFreePort();
+        const studio = await startStudioServer({ apiSpec: "openrpc", cwd: projectRoot, port, workerOrigin: "http://localhost:8787" });
+
+        try {
+            const response = await postStudioJson(port, "/__lunora/schema-edit", `127.0.0.1:${String(port)}`, {
+                column: "due",
+                kind: "addOptionalColumn",
+                table: "todos",
+                validator: "v.number()",
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(existsSync(join(projectRoot, "lunora", "_generated", "openrpc.json"))).toBe(true);
+        } finally {
+            await studio.close();
+            rmSync(projectRoot, { force: true, recursive: true });
         }
     });
 });

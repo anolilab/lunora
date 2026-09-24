@@ -137,11 +137,11 @@ const seedBoth = async (): Promise<{ global: DatabaseWriterLike; inverted: Datab
 
     const shard = createShardContextDatabase({ clock: clockFrom(), schema: doSchema, sql });
 
-    globalHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+    globalHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`);
 
     const global = createD1ContextDatabase({ clock: clockFrom(), exec: globalHarness.exec, schema: globalSchema });
 
-    invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+    invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`);
 
     const inverted = createSqlCtxDb({ clock: clockFrom(), dialect: invertedDialect, exec: invertedHarness.exec, schema: globalSchema });
 
@@ -503,8 +503,10 @@ describe.skipIf(!FTS5_IN_BUILD)("search parity — sharded DO vs .global()", () 
             const sql = shardExec(doHarness);
 
             runShardMigrations(sql, englishDoSchema);
-            globalHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
-            invertedHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "channel" TEXT)`);
+            globalHarness.ddl(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`);
+            invertedHarness.ddl(
+                `CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`,
+            );
 
             const shard = createShardContextDatabase({ schema: englishDoSchema, sql });
             const global = createD1ContextDatabase({ exec: globalHarness.exec, schema: englishGlobalSchema });

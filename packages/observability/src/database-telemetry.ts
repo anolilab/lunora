@@ -65,6 +65,10 @@ const INSTRUMENTED_METHODS = new Set([
     "rankBefore",
     "rankPage",
     "rankPageRows",
+    // Not in `TABLE_FIRST_METHODS`: a traversal's first argument is its start
+    // node, and the tables it visits are discovered as it walks — so the span
+    // carries no table name rather than a misleading one.
+    "related",
     "replace",
     "restore",
 ]);
@@ -75,6 +79,13 @@ const INSTRUMENTED_METHODS = new Set([
  * (`get`/`patch`/`delete`) deliberately do NOT put the id in the name, because a
  * span name containing a row id makes every call its own group in a collector
  * and destroys the aggregate views the span exists to feed.
+ *
+ * Local on purpose, and NOT `@lunora/shard-engine`'s `LOOP_GATED_METHODS`: that
+ * one records how the RLS guard wraps a method, so it omits `deleteWhere` and
+ * `patchWhere` (gated inline instead) and includes `deleteAll`/`query`, which
+ * take a table name but produce no span here. This set answers a pure arity
+ * question — "is `arguments[0]` the table name?" — and the two memberships
+ * differ. They were once the same identifier in two packages.
  */
 const TABLE_FIRST_METHODS = new Set([
     "aggregate",
@@ -215,11 +226,12 @@ interface DatabaseTelemetryDeps {
      * increments numbers on it; the shard reads it ONCE at the dispatch boundary
      * and formats it with {@link formatTally}.
      *
-     * Two properties fall out of that split. Per-call cost stays at a few integer
-     * increments — no object allocation, no lookup — which matters because this is
-     * on the path of every query. And because nothing is written through the
-     * dispatch's `SpanHandle`, the wide-event collector is never materialized, so
-     * a handler that instrumented nothing still doesn't trip the root-span gate.
+     * Per-call cost stays at a few integer increments — no object allocation, no
+     * lookup — which matters because this is on the path of every query. Nothing
+     * is written through the dispatch's `SpanHandle` either, so the wide-event
+     * collector is never materialized by instrumentation alone: a dispatch that
+     * ran queries gets a root span carrying these counters, but no `lunora.dispatch`
+     * log record unless the handler actually opened `ctx.span`.
      */
     tally: DatabaseTally;
 

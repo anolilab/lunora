@@ -87,6 +87,7 @@ interface AgentChatOptions {
     api: AgentChatApi;
     cancel?: FunctionReference<"mutation">;
     limit?: number;
+    onError?: SubscriptionErrorCallback;
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
@@ -119,6 +120,7 @@ type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 interface AgentOptions {
     api: AgentApi;
     cancel?: FunctionReference<"mutation">;
+    onError?: SubscriptionErrorCallback;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
     threadKey: string;
@@ -171,7 +173,7 @@ interface AgentStateOptions {
 ```ts
 interface AgentThreadRecord {
     createdAt?: number;
-    error?: string;
+    error?: null | string;
     instanceId?: string;
     messageCount?: number;
     owner?: string;
@@ -273,6 +275,7 @@ interface AuthGateStore {
 ```ts
 interface AuthStore {
     setToken: (token: string | null) => void;
+    status: Readable<AuthStatus>;
     token: Readable<string | null>;
     user: Readable<User | null>;
 }
@@ -314,6 +317,7 @@ type HeartbeatReference = FunctionReference<"mutation", {
 
 ```ts
 interface InfiniteQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     fetchNextPage: (numberItems?: number) => void;
     hasNextPage: Readable<boolean>;
     isFetchingNextPage: Readable<boolean>;
@@ -328,6 +332,7 @@ interface InfiniteQueryHandle<T> {
 ```ts
 interface InfiniteQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -398,6 +403,7 @@ type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpt
 
 ```ts
 interface PaginatedQueryHandle<T> {
+    error: Readable<SubscriptionError | undefined>;
     isLoading: Readable<boolean>;
     loadMore: (numberItems: number) => void;
     results: Readable<T[]>;
@@ -410,6 +416,7 @@ interface PaginatedQueryHandle<T> {
 ```ts
 interface PaginatedQueryOptions {
     initialNumItems: number;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -422,6 +429,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ```ts
 interface PresenceHandle<L extends ListPresentReference> {
+    error: Readable<SubscriptionError | undefined>;
     present: Readable<ReturnOf<L> | undefined>;
     sessionId: string;
     setData: (data: Record<string, unknown> | undefined) => void;
@@ -437,6 +445,7 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     heartbeat: H;
     intervalMs?: number;
     listPresent: L;
+    onError?: SubscriptionErrorCallback;
     sessionId?: string;
     shardKey?: string;
 }
@@ -518,6 +527,7 @@ type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 ```ts
 interface StreamStoreOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }
@@ -678,7 +688,9 @@ const getLunoraClient: () => LunoraClient;
 ### `hydratePreloaded` (const)
 
 ```ts
-const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient) => Readable<T>;
+const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, options?: {
+    onError?: SubscriptionErrorCallback;
+}) => Readable<T>;
 ```
 
 ### `infiniteQuery` (function)
@@ -918,3 +930,137 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `createUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AgentApprovalReference` (type)
+
+```ts
+type AgentApprovalReference = FunctionReference<"mutation", {
+    decision: "approve" | "reject";
+    instanceId: string;
+    note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentLiveStreamReference` (type)
+
+```ts
+type AgentLiveStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `AgentMessagesReference` (type)
+
+```ts
+type AgentMessagesReference = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentMessagesReference$1` (type)
+
+```ts
+type AgentMessagesReference$1 = FunctionReference<"query", {
+    key: string;
+    limit?: number;
+}, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentThreadReference` (type)
+
+```ts
+type AgentThreadReference = FunctionReference<"query", {
+    key: string;
+}, Record<string, unknown> | undefined>;
+```
+
+### `AgentTokenStreamReference` (type)
+
+```ts
+type AgentTokenStreamReference = FunctionReference<"stream", {
+    key: string;
+}, AgentLiveEvent>;
+```
+
+### `CreateMicrophone` (type)
+
+```ts
+type CreateMicrophone = (config: MicrophoneConfig) => Promise<VoiceMicrophone>;
+```
+
+### `CreateSocket` (type)
+
+```ts
+type CreateSocket = (url: string) => VoiceSocket;
+```
+
+### `CreateSpeaker` (type)
+
+```ts
+type CreateSpeaker = (config: {
+    audioFormat: VoiceAudioFormat;
+}) => VoiceSpeaker;
+```
+
+### `MicrophoneConfig` (interface)
+
+```ts
+interface MicrophoneConfig {
+    interruptChunks: number;
+    interruptThreshold: number;
+    isTurnActive: () => boolean;
+    onAudio: (pcm: Uint8Array) => void;
+    onInterrupt: () => void;
+    onLevel: (rms: number) => void;
+    onSilence: () => void;
+    silenceDurationMs: number;
+    silenceThreshold: number;
+}
+```
+
+### `VoiceMicrophone` (interface)
+
+```ts
+interface VoiceMicrophone {
+    setMuted: (muted: boolean) => void;
+    stop: () => void;
+}
+```
+
+### `VoiceSocket` (interface)
+
+```ts
+interface VoiceSocket {
+    binaryType: string;
+    close: () => void;
+    onclose: ((event: unknown) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onmessage: ((event: {
+        data: unknown;
+    }) => void) | null;
+    onopen: ((event: unknown) => void) | null;
+    readonly readyState: number;
+    send: (data: ArrayBufferView | ArrayBufferLike | string) => void;
+}
+```
+
+### `VoiceSpeaker` (interface)
+
+```ts
+interface VoiceSpeaker {
+    enqueue: (audio: Uint8Array) => void;
+    interrupt: () => void;
+    stop: () => void;
+}
+```

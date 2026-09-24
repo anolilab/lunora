@@ -91,7 +91,7 @@ export const send = mutation
 
 The builder chain is `<builder>.input(validators).<kind>(handler)`, plus `.use(middleware)` and `.output(validator)`. `internalQuery` / `internalMutation` / `internalAction` are the same builders but kept off the public `api`. Run `lunora codegen` (or the Vite plugin) to (re)generate `_generated/` after a schema change.
 
-> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Read the current time from **`ctx.now`** (epoch ms, captured once per execution — also on `ActionCtx`) instead of `Date.now()`; compute randomness and network results in an `action` (`crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments. The `nondeterministic_query_mutation` advisor flags `Date.now()`/`Math.random()`/`fetch` in query/mutation handlers.
+> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on subscription re-evaluation (an OCC conflict surfaces as a `409` to the caller, not an internal retry). Read the current time from **`ctx.now`** (epoch ms, captured once per execution — also on `ActionCtx`) instead of `Date.now()`; compute randomness and network results in an `action` (`crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments. The `nondeterministic_query_mutation` advisor flags `Date.now()`/`Math.random()`/`fetch` in query/mutation handlers.
 
 ### Local-first sync engine
 
@@ -128,22 +128,28 @@ export const getProduct = httpRoute
     });
 ```
 
-**Purge cache by tag** from an action handler:
+**Purge cache by tag** from an HTTP action handler:
 
 ```ts
-import { action } from "./_generated/server";
+import { httpAction, httpRouter } from "@lunora/server";
 
-export const refreshProducts = action.action(async ({ ctx }) => {
-    if (!ctx.cache) {
-        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
-    }
+export const app = httpRouter();
 
-    await ctx.cache.purge({ tags: ["products"] });
-    return { ok: true };
-});
+app.post(
+    "/admin/refresh-products",
+    httpAction(async (ctx) => {
+        if (!ctx.cache) {
+            return new Response("Workers Cache is not enabled in wrangler.jsonc", { status: 501 });
+        }
+
+        await ctx.cache.purge({ tags: ["products"] });
+
+        return Response.json({ ok: true });
+    }),
+);
 ```
 
-The `ctx.cache.purge` API accepts `{ tags?: string[]; purgeEverything?: boolean }`. Only action handlers expose `ctx.cache`; queries and mutations run inside the Durable Object and do not have access to the Worker-level cache binding.
+The `ctx.cache.purge` API accepts `{ tags?: string[]; purgeEverything?: boolean }`. Only **HTTP action** handlers expose `ctx.cache`: the Worker holds the cache binding and builds `HttpActionCtx`. Queries, mutations, and actions reached over RPC all run inside the Durable Object, where `ctx.cache` is `undefined`.
 
 ## Related
 

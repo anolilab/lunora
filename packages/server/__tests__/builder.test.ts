@@ -534,6 +534,142 @@ describe("builder middleware", () => {
         await expect(fn.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
+    /**
+     * A middleware that resolves without calling `next()` used to look like a
+     * short-circuit but was an authorization bypass: the terminal is what builds
+     * the handler's context, so the handler ran anyway — with every later
+     * `.use()` (`rls()`, `mask()`, `storageRules()`) skipped and `ctx.db` still
+     * the unwrapped writer, while the hoisted `fn.rls` kept advertising the
+     * procedure as guarded to studio and the shape registry. Returning
+     * `undefined` instead only produced a bare `TypeError` deeper in.
+     */
+    it("rejects a middleware that resolves without calling next(), and does not run the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const later = vi.fn<() => void>();
+
+        const fn = c.query
+            .use(({ ctx }) => ctx)
+            .use(async ({ next }) => {
+                later();
+
+                return next();
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(later).not.toHaveBeenCalled();
+    });
+
+    it("rejects a middleware that returns undefined with the same clear error, not a TypeError", async () => {
+        expect.assertions(1);
+
+        const fn = c.query.use(() => undefined).query(() => "ok");
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
+    });
+
+    /**
+     * `void next()` satisfies the "did it call next()?" guard while still
+     * resolving the chain early: `next()` hands back the downstream promise and
+     * nothing awaits it, so the handler runs against a half-built context — the
+     * later `.use()` steps (`rls()`, `mask()`, `storageRules()`) are still in
+     * flight — and a downstream rejection detaches into an unhandled rejection.
+     */
+    it("does not resolve the chain before a fire-and-forget next() has run the rest of it", async () => {
+        expect.assertions(2);
+
+        const order: string[] = [];
+        // Fire-and-forget: the promise is kept, and nothing ever awaits it.
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(async ({ next }) => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 5);
+                });
+
+                order.push("downstream");
+
+                return next();
+            })
+            .query(() => {
+                order.push("handler");
+
+                return "ok";
+            });
+
+        await fn.handler({}, {});
+
+        expect(dropped).toHaveLength(1);
+        expect(order).toStrictEqual(["downstream", "handler"]);
+    });
+
+    it("surfaces the rejection a fire-and-forget next() detached, instead of running the handler", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => string>(() => "secret");
+        const dropped: unknown[] = [];
+
+        const fn = c.query
+            .use(({ ctx, next }) => {
+                dropped.push(next());
+
+                return ctx;
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toThrow(/FORBIDDEN/u);
+
+        expect(dropped).toHaveLength(1);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The other side of that fix: a middleware that AWAITED `next()` owns the
+     * outcome, including a rejection it deliberately swallowed. Re-awaiting the
+     * downstream promise on its behalf would re-throw what it just handled.
+     */
+    it("refuses to let a middleware swallow a later step's denial", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => string>(() => "secret");
+
+        // The shape reads like error handling and is an authorization bypass.
+        // This chain's terminal only BUILDS the context and the handler runs
+        // after it resolves, so a rejection arriving here is never a handler
+        // error a middleware could legitimately recover from — it is a later
+        // step refusing (an `rls()` denial, or the no-next() guard one link
+        // down). Catching it and returning a fallback context would run the
+        // handler against exactly the context the denial existed to prevent.
+        const fn = c.query
+            .use(async ({ ctx, next }) => {
+                try {
+                    return await next();
+                } catch {
+                    return { ...ctx, fallback: true };
+                }
+            })
+            .use(() => {
+                throw new LunoraError("FORBIDDEN");
+            })
+            .query(handler);
+
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(LunoraError);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
     it("a middleware that throws aborts before the handler runs", async () => {
         expect.assertions(2);
 

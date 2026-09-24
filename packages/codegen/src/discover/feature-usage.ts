@@ -25,23 +25,65 @@ import { listLunoraSourceFiles } from "./ast";
  */
 type FeatureUsage = Record<CapabilityKey, boolean>;
 
+/** The property a handler's single destructured argument carries the request context on: `async ({ args, ctx }) => …`. */
+const CONTEXT_PROPERTY = "ctx";
+
 /**
- * The set of `ctx` helper names the source reaches — either a direct
- * `ctx.PROPERTY` access, or a destructuring of the property off the `ctx`
- * identifier (a `const ... = ctx` binding pattern). Parameter-position
- * destructuring (a destructured handler parameter) is still not matched (there is
- * no `ctx` identifier to anchor on, and matching a bare destructured param would
- * false-positive on unrelated functions) — but the import probe and, for studio
- * nav, the package-dependency signal cover that case.
+ * The set of `ctx` helper names the source reaches — a direct `ctx.PROPERTY`
+ * access, or a destructuring of the property off the context (`const { kv } =
+ * ctx`, `async ({ ctx: { kv } }) => …`).
  *
- * Collected in a single per-file pass (two descendant walks total) instead of the
- * former per-feature double-walk: each context-bearing {@link CAPABILITIES} entry
- * then just tests membership in this set, so detection is O(files × nodes) rather
+ * The context is resolved by BINDING, not by the identifier text `ctx`. A
+ * handler receives it as a property of one destructured argument, so the local
+ * name it lands under is the handler's to pick: `{ ctx }`, `{ ctx: context }`
+ * and `{ ctx: { secrets } }` are the same read. Matching the text `ctx`
+ * recognised only the first — and for `secrets`, which has no import arm and no
+ * {@link CAPABILITIES} row, nothing else covered the other two, so a renamed or
+ * destructured read built green on a host that rates the Secrets Store
+ * unsupported and threw on first use.
+ *
+ * Three descendant walks (bindings, then accesses and `const … = ctx` patterns),
+ * collected once per file: each context-bearing {@link CAPABILITIES} entry then
+ * just tests membership in this set, so detection is O(files × nodes) rather
  * than O(files × features × nodes).
  */
 const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
-    const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && receiver.getText() === "ctx";
     const names = new Set<string>();
+    /** Local names bound to the context. `ctx` itself always counts — it is the conventional spelling and the one every fixture uses. */
+    const contextNames = new Set<string>([CONTEXT_PROPERTY]);
+
+    const collectPatternNames = (pattern: Node): void => {
+        if (!Node.isObjectBindingPattern(pattern)) {
+            return;
+        }
+
+        for (const element of pattern.getElements()) {
+            const name = element.getPropertyNameNode()?.getText() ?? element.getName();
+
+            if (name) {
+                names.add(name);
+            }
+        }
+    };
+
+    // Anchor on the `ctx` PROPERTY of a binding pattern, wherever it appears —
+    // a handler parameter or a `const { ctx } = …`. A rename introduces another
+    // context name to follow; a nested pattern is the read itself.
+    for (const element of sourceFile.getDescendantsOfKind(SyntaxKind.BindingElement)) {
+        if ((element.getPropertyNameNode()?.getText() ?? element.getName()) !== CONTEXT_PROPERTY) {
+            continue;
+        }
+
+        const nameNode = element.getNameNode();
+
+        if (Node.isIdentifier(nameNode)) {
+            contextNames.add(nameNode.getText());
+        } else {
+            collectPatternNames(nameNode);
+        }
+    }
+
+    const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && contextNames.has(receiver.getText());
 
     for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
         if (reachesContext(access.getExpression())) {
@@ -51,18 +93,9 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
 
     for (const declaration of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
         const initializer = declaration.getInitializer();
-        const nameNode = declaration.getNameNode();
 
-        if (initializer === undefined || !reachesContext(initializer) || !Node.isObjectBindingPattern(nameNode)) {
-            continue;
-        }
-
-        for (const element of nameNode.getElements()) {
-            const name = element.getPropertyNameNode()?.getText() ?? element.getName();
-
-            if (name) {
-                names.add(name);
-            }
+        if (initializer !== undefined && reachesContext(initializer)) {
+            collectPatternNames(declaration.getNameNode());
         }
     }
 

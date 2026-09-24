@@ -23,10 +23,18 @@
  *
  * One upsert per registration (the seed path — a socket subscribing, not a
  * write) and one cursor update per shape per flush that actually produces a
- * poke. The local path already pays a `__shape_poke_cursor` write per
- * `(connection, subscription)` per delivered poke; a cohort row is one write for
- * a whole relay cohort, so the relayed path stays strictly cheaper per
- * subscriber than the path it mirrors.
+ * poke. Both are per COHORT, not per subscriber, and that is where this table's
+ * saving over the local path's `__shape_poke_cursor` ends: the relay receiving
+ * the poke still writes a `__lunora_relay_memos` row per
+ * `(connection, subscription)` it advances, so the relayed path pays the local
+ * path's per-subscriber write PLUS the owner's cohort row — moved off the owner
+ * onto the relay, which is the point of the tier, but not removed.
+ *
+ * The open question is whether the relay's per-socket baselines could be a
+ * per-cohort row too. Nothing in the delivery rule needs per-socket granularity
+ * for a relay-UNIFORM shape; what stops it today is that sockets on one relay
+ * join at different cursors, so a single cohort baseline would either re-poke
+ * or skip whichever half is not at it. Not attempted here.
  *
  * ## Cleanup
  *

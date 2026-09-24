@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { serveStateless } from "../src/http";
 import { createPaidMcpServer } from "../src/paid";
+import { serveStateless } from "../src/serve-stateless";
 import type { ToolResult } from "../src/tools";
 
-vi.mock(import("../src/http"), async (importOriginal) => {
+vi.mock(import("../src/serve-stateless"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return { ...actual, serveStateless: vi.fn<typeof actual.serveStateless>(actual.serveStateless) };
@@ -192,19 +192,69 @@ describe("createPaidMcpServer", () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("dispatches an unparseable body unchanged when no tool is priced", async () => {
-        expect.assertions(1);
+    it("refuses an unparseable body before dispatch even when no tool is priced", async () => {
+        expect.assertions(2);
 
         stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
         mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
 
-        await mcp.fetchHandler(rawMcpRequest("{not json"));
+        const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
 
-        // No paid tools registered → the parse-miss guard never applies, so the
-        // request still reaches the SDK transport exactly as before this change.
-        expect(serveStateless).toHaveBeenCalledTimes(1);
+        // The shared bounded read owns the parse, so the JSON-RPC parse error
+        // is answered here rather than one layer down in the transport.
+        expect(response.status).toBe(400);
+        expect(serveStateless).not.toHaveBeenCalled();
+    });
+
+    it("refuses an oversized body before buffering it, like every other transport", async () => {
+        expect.assertions(3);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        // Declared oversize: refused on the header, before the body is read.
+        const response = await mcp.fetchHandler(rawMcpRequest("{}", { "content-length": String(64 * 1024 * 1024) }));
+
+        expect(response.status).toBe(413);
+        expect(serveStateless).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("honours a custom maxRequestBytes on the paid transport", async () => {
+        expect.assertions(2);
+
+        stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge, maxRequestBytes: 16 });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+
+        expect(response.status).toBe(413);
+        expect(serveStateless).not.toHaveBeenCalled();
+    });
+
+    it("returns a throwing paid tool as an isError result, not a JSON-RPC protocol error", async () => {
+        expect.assertions(3);
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "boom", inputSchema: NO_INPUT, name: "explode" }, () => {
+            throw new Error("handler blew up");
+        });
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("explode")));
+        const payload = (await response.json()) as { error?: unknown; result?: { content: { text: string }[]; isError?: boolean } };
+
+        // Settlement precedes dispatch, so the caller has already paid: a
+        // protocol-level error is invisible to a client that renders only tool
+        // results, and the model is shown nothing for its money.
+        expect(payload.error).toBeUndefined();
+        expect(payload.result?.isError).toBe(true);
+        expect(payload.result?.content[0]?.text).toContain("handler blew up");
     });
 
     it("rejects registering the same tool name twice", () => {

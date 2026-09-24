@@ -41,8 +41,8 @@ const schema: SchemaLike = {
 let harness: ReturnType<typeof createD1Exec>;
 
 const setup = (): DatabaseWriterLike => {
-    harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
-    harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
+    harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
+    harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "authorId" TEXT, "body" TEXT)`);
 
     return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 };

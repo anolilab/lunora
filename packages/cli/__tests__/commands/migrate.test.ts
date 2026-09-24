@@ -2,12 +2,32 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
 import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** Run `body` with `process.stdout.write` captured, and return what it wrote. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        chunks.push(String(chunk));
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return chunks.join("");
+};
 
 const silentLogger = (): Logger => {
     return {
@@ -38,6 +58,112 @@ describe("lunora migrate", () => {
 
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
 
+    /**
+     * `--format json` across the subcommand dispatch.
+     *
+     * This is the branch's largest single refactor — the if-chain became a
+     * `switch` over four `dispatch*` shells, each owning its own document — and
+     * it landed with no `--format` coverage at all. Two independent signals said
+     * so: the code-quality review, and Codecov reporting 54% patch coverage on
+     * this file. The documents are a contract an agent parses, so they are
+     * pinned here rather than left to the first caller to discover.
+     */
+    describe("--format json", () => {
+        it("generate emits its document on stdout and keeps prose off it", async () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global(),
+});
+`,
+            );
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate", "init"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { empty: boolean; migrationFile?: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("generate");
+            expect(document.data.empty).toBe(false);
+            expect(document.data.migrationFile).toMatch(/init/u);
+            // Exactly one document — stdout stays pipeable, the human lines go to stderr.
+            expect(
+                stdout
+                    .trimEnd()
+                    .split("\n")
+                    .filter((line) => line === "}"),
+            ).toHaveLength(1);
+        });
+
+        it("create carries the name and the scaffolded file", async () => {
+            expect.assertions(2);
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["create", "backfill_emails"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { file?: string; name: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("create");
+            expect(document.data.name).toBe("backfill_emails");
+        });
+
+        it("refuses an unknown --format with the usage exit code, before dispatching", async () => {
+            expect.assertions(2);
+
+            let exitCode: number | undefined;
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate"],
+                    options: { format: "yaml" },
+                    process: {
+                        cwd: workdir,
+                        exit: (code: number) => {
+                            exitCode = code;
+                        },
+                    },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+            // Refused before anything ran, so no document was written.
+            expect(stdout).toBe("");
+        });
+
+        it("exits USAGE on an unknown subcommand", async () => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: ["nope"],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+        });
+    });
+
     describe("lunora migrate generate", () => {
         it("errors when schema.ts is missing", () => {
             expect.assertions(3);
@@ -48,7 +174,7 @@ describe("lunora migrate", () => {
                 logger: { ...silentLogger(), error: (m) => errors.push(m) },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
 
             const message = errors.join("\n");
 
@@ -57,7 +183,7 @@ describe("lunora migrate", () => {
         });
 
         it("first run on a global table emits CREATE TABLE", () => {
-            expect.assertions(10);
+            expect.assertions(11);
 
             writeSchema(
                 `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -86,6 +212,10 @@ export const schema = defineSchema({
             expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
             expect(sql).toContain('"id" TEXT PRIMARY KEY');
             expect(sql).toContain('"_creationTime" REAL NOT NULL');
+            // The optimistic-concurrency row version the runtime auto-provisioner
+            // also adds — emitted here so a hand-applied migration and the
+            // auto-provisioner agree on the physical shape and the column budget.
+            expect(sql).toContain('"_version" INTEGER');
             expect(sql).toContain('"email" TEXT NOT NULL');
             expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email"');
 
@@ -97,6 +227,39 @@ export const schema = defineSchema({
             const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { tables: Record<string, unknown> };
 
             expect(Object.keys(snapshot.tables)).toEqual(["users"]);
+        });
+
+        it("ignores a hyperdrive-backed global table", () => {
+            expect.assertions(3);
+
+            // `.global({ backend: "hyperdrive" })` stores the table in a
+            // Postgres/MySQL database reached through Hyperdrive, which
+            // provisions itself from the schema at runtime. The generator renders
+            // through `@lunora/d1/dialect` and has no dialect seam, so including
+            // it wrote SQLite DDL — double-quoted identifiers, `REAL` affinity —
+            // into a file the docs label "D1 SQL": a phantom table if it is ever
+            // applied to D1, and invalid syntax on MySQL.
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    accounts: defineTable({
+        email: v.string(),
+    }).global({ backend: "hyperdrive" }).index("by_email", ["email"]),
+});
+`,
+            );
+
+            const result = runMigrateGenerateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "init",
+                now: fixedNow,
+            });
+
+            expect(result.code).toBe(0);
+            expect(result.empty).toBe(true);
+            expect(result.migrationFile).toBe("");
         });
 
         it("ignores sharded (non-global) tables", () => {
@@ -401,7 +564,7 @@ export const schema = defineSchema({
                 table: "a",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("already exists");
         });
 
@@ -411,7 +574,7 @@ export const schema = defineSchema({
             const errors: string[] = [];
             const result = await runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -426,7 +589,7 @@ export const schema = defineSchema({
                 table: "messages",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -447,7 +610,7 @@ export const schema = defineSchema({
                     name: "needs_table",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
             } finally {
                 Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalIsTty });
             }
@@ -498,7 +661,7 @@ export const schema = defineSchema({
                 promptTable: async () => undefined,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("no table selected");
             expect(existsSync(migrationsFile())).toBe(false);
         });
@@ -514,7 +677,7 @@ export const schema = defineSchema({
                 promptTable: async () => 'x", evil: "y',
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid table");
         });
     });
@@ -539,7 +702,11 @@ export const backfillReadBy = defineMigration({
         async (url, init) => {
             calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
 
-            return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
+            // Serialised from the SAME body the double declares: `runMigrateDataCommand`
+            // reads the response through `readAndLogBody`, which calls `text()`, so a
+            // double answering only `json()` made every assertion run against an empty
+            // body — which is how the roll-up exit code went untested.
+            return { json: response.json, ok: response.ok, status: response.status, text: async () => JSON.stringify(await response.json()) };
         };
 
     const okResponse = (body?: unknown): { json: () => Promise<unknown>; ok: boolean; status: number } => {
@@ -665,6 +832,55 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
         });
 
+        it("falls back to the .dev.vars token against a local worker", async () => {
+            expect.hasAssertions();
+
+            const calls: CapturedCall[] = [];
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+            // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local"\n', "utf8");
+
+            try {
+                await runMigrateDataCommand({
+                    cwd: workdir,
+                    fetchImpl: captureFetch(calls, okResponse()),
+                    id: "backfill-read-by",
+                    logger: silentLogger(),
+                    subcommand: "up",
+                });
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+
+            expect(calls[0]?.headers?.authorization).toBe("Bearer local");
+        });
+
+        // The documented invocation is `lunora migrate up <id>` — the docs once
+        // showed a bare `up`/`status`, which exits 1. Pin the requirement so the
+        // examples cannot drift back.
+        it.each(["up", "down", "status"])("requires a migration id for %s", async (subcommand) => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: [subcommand],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+        });
+
         it("errors when no admin token is available", async () => {
             expect.hasAssertions();
 
@@ -682,7 +898,7 @@ export const backfillReadBy = defineMigration({
                     subcommand: "up",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;
@@ -706,7 +922,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain('"ghost" not found');
         });
 
@@ -726,7 +942,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
@@ -747,7 +963,7 @@ export const backfillReadBy = defineMigration({
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -790,6 +1006,56 @@ export const backfillReadBy = defineMigration({
             expect(calls).toHaveLength(1);
         });
 
+        it("exits non-zero when the roll-up body reports every shard failed under a 200", async () => {
+            expect.assertions(1);
+
+            // `/_lunora/migrate` answers 200 unconditionally and folds the per-shard
+            // outcomes into the BODY, so `Response.ok` is `true` for a migration that
+            // ran nowhere — the same 207-shaped trap `import` documents.
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(
+                    [],
+                    okResponse({
+                        changed: 0,
+                        failed: 3,
+                        ok: 0,
+                        processed: 0,
+                        shards: [
+                            { error: { message: "boom", timedOut: false }, shardKey: "a" },
+                            { error: { message: "boom", timedOut: false }, shardKey: "b" },
+                            { error: { message: "boom", timedOut: true }, shardKey: "c" },
+                        ],
+                        status: "failed",
+                    }),
+                ),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+            });
+
+            expect(result.code).toBe(1);
+        });
+
+        it("exits non-zero when a reached shard reports the migration itself failed", async () => {
+            expect.assertions(1);
+
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(
+                    [],
+                    okResponse({ changed: 0, failed: 0, ok: 1, processed: 10, shards: [{ result: { status: "failed" }, shardKey: "a" }], status: "failed" }),
+                ),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+                token: "s3cret",
+            });
+
+            expect(result.code).toBe(1);
+        });
+
         it("returns non-zero on an HTTP error response", async () => {
             expect.assertions(1);
 
@@ -808,7 +1074,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.PERMISSION);
         });
     });
 });
@@ -936,7 +1202,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             toUrl: "https://new.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("--yes");
     });
 
@@ -950,7 +1216,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });
@@ -975,7 +1241,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             yes: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });

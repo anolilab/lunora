@@ -23,5 +23,5 @@ export type { ConsoleLogger, ConsoleLogLevel, ConsoleTelemetryOptions } from "./
 export { consoleTelemetry } from "./console";
 export type { OtlpTelemetryOptions } from "./otlp";
 export { otlpTelemetry } from "./otlp";
-export type { SentryLike, SentryTelemetryOptions } from "./sentry";
+export type { SentryLike, SentrySpan, SentryTelemetryOptions } from "./sentry";
 export { sentryTelemetry } from "./sentry";

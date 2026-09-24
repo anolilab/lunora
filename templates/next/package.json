@@ -8,13 +8,13 @@
     },
     "scripts": {
         "dev": "lunora codegen && next dev",
-        "dev:lunora": "wrangler dev --config wrangler.lunora.jsonc",
+        "dev:lunora": "wrangler dev",
         "build": "lunora codegen && next build",
         "start": "next start",
         "codegen": "lunora codegen",
-        "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-        "deploy:lunora": "wrangler deploy --config wrangler.lunora.jsonc",
-        "deploy:next": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+        "preview": "opennextjs-cloudflare build --config wrangler.opennext.jsonc && opennextjs-cloudflare preview --config wrangler.opennext.jsonc",
+        "deploy:lunora": "wrangler deploy",
+        "deploy:next": "opennextjs-cloudflare build --config wrangler.opennext.jsonc && opennextjs-cloudflare deploy --config wrangler.opennext.jsonc",
         "deploy": "pnpm run deploy:lunora && pnpm run deploy:next"
     },
     "dependencies": {

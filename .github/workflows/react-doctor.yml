@@ -32,10 +32,18 @@
             # `version` pins the react-doctor npm tool too — the action otherwise runs
             # `@latest`, which intermittently exited 0 without producing a report.
             #
+            # It MUST match `react-doctor` in `catalog:lint` (pnpm-workspace.yaml),
+            # which is the version the repo installs and every contributor runs
+            # locally. Nothing enforces the pair, and they had drifted two minors
+            # apart: CI reported 12 `react-compiler-no-manual-memoization` and 4
+            # `exhaustive-deps` findings that do not exist on the installed
+            # version — on hand-written memos carrying an in-file rationale — and
+            # regenerated them on every `.tsx` pull request. Bump both together.
+            #
             # No `github-token` input: the action reads the ambient GITHUB_TOKEN and
             # warns about unexpected inputs if given one. `scope: changed` (the default)
             # derives its base SHA from the PR event, which is what fetch-depth:0 above
             # is for.
             - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
               "with":
-                  "version": "0.7.6"
+                  "version": "0.9.11"

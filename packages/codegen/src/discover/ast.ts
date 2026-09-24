@@ -1,8 +1,9 @@
-import { lstatSync, readdirSync } from "node:fs";
+import type { Stats } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Expression, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { Block, CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 
@@ -13,51 +14,98 @@ const TS_EXTENSION_RE: RegExp = /\.ts$/u;
 const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =>
     relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
+/** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
+const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
+
+/**
+ * The top-level `lunora/schema.ts` ONLY — `discoverSchema` loads that one
+ * separately. A nested `lunora/<feature>/schema.ts` is an ordinary source file
+ * that can carry query/mutation/migration registrations, so it must still be
+ * discovered; the `directory === root` test is what keeps this to depth 0.
+ */
+const isRootSchemaFile = (entry: string, directory: string, root: string): boolean => entry === "schema.ts" && directory === root;
+
+/**
+ * `statSync` an entry (following symlinks), reporting `undefined` for one that
+ * does not resolve — a dangling link, or a file that vanished mid-walk. Silence
+ * is what makes a mis-pointed link read as an empty directory, so the skip is
+ * said out loud; discovery has no diagnostic sink to route it through.
+ */
+const statOrReport = (path: string): Stats | undefined => {
+    try {
+        return statSync(path);
+    } catch {
+        // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
+        console.warn(`@lunora/codegen: skipping ${path} — it is a symlink that does not resolve (or vanished mid-scan).`);
+
+        return undefined;
+    }
+};
+
 /**
  * Recursively collect `.ts` files under a lunora source directory, skipping
  * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
  * migration discovery so both walk the same file set.
  *
- * Uses `lstatSync` (never `statSync`) so symlinked entries are classified by the
- * link itself, not its target: a directory symlink pointing at an ancestor (e.g.
- * `lunora/loop -> ..`) is therefore not descended into, breaking the symlink-cycle
- * infinite-recursion / build-hang that `statSync` (which follows links) would hit.
+ * Symlinks are FOLLOWED (`statSync`, not `lstatSync`): a symlinked file or
+ * directory under `lunora/` is ordinary source a team may well share that way,
+ * and classifying it by the link itself made it neither `isFile()` nor
+ * `isDirectory()`, so it was dropped from discovery in silence — the functions
+ * in it were never registered while the dev watcher still fired on every save.
+ * A link that resolves nowhere is reported rather than dropped.
+ *
+ * Following links reintroduces the cycle a link to an ancestor (`lunora/loop ->
+ * ..`) creates, so every directory is visited once by its REAL path: the second
+ * arrival at the same target ends that branch instead of recursing forever.
  */
-const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], root: string = directory): string[] => {
+const walkLunoraSourceFiles = (directory: string, accumulator: string[], root: string, visited: Set<string>): string[] => {
     let entries: string[];
+    let realDirectory: string;
 
     try {
         entries = readdirSync(directory);
+        realDirectory = realpathSync(directory);
     } catch {
         return accumulator;
     }
 
+    // Cycle guard: one visit per REAL directory, so a link back to an ancestor
+    // (`lunora/loop -> .`) ends here instead of walking the tree again — or
+    // forever.
+    if (visited.has(realDirectory)) {
+        return accumulator;
+    }
+
+    visited.add(realDirectory);
+
     for (const entry of entries) {
         const full = join(directory, entry);
-        const info = lstatSync(full);
+        const info = statOrReport(full);
+
+        if (info === undefined) {
+            continue;
+        }
 
         if (info.isDirectory()) {
-            if (entry === "_generated" || entry === "node_modules") {
-                continue;
+            if (!SKIPPED_DIRECTORIES.has(entry)) {
+                walkLunoraSourceFiles(full, accumulator, root, visited);
             }
-
-            listLunoraSourceFiles(full, accumulator, root);
-        } else if (info.isFile() && extname(entry) === ".ts") {
-            // Skip ONLY the top-level `lunora/schema.ts` — it is loaded separately
-            // by `discoverSchema`. A nested `lunora/<feature>/schema.ts` is an
-            // ordinary source file that can carry query/mutation/migration
-            // registrations, so it must be discovered (the `directory === root`
-            // guard fires at depth 0 only, where `directory` is the passed root).
-            if (entry === "schema.ts" && directory === root) {
-                continue;
-            }
-
+        } else if (info.isFile() && extname(entry) === ".ts" && !isRootSchemaFile(entry, directory, root)) {
             accumulator.push(full);
         }
     }
 
     return accumulator;
 };
+
+/**
+ * The exported entry point: every discoverer calls this with a directory and
+ * nothing else. {@link walkLunoraSourceFiles}'s accumulator/root/visited stay
+ * unexported because they are recursion state — a caller passing a pre-filled
+ * accumulator or a stale `visited` silently changes which files are discovered,
+ * and an exported signature freezes that hazard into the public API snapshot.
+ */
+const listLunoraSourceFiles = (directory: string): string[] => walkLunoraSourceFiles(directory, [], directory, new Set());
 
 /**
  * Where the worker entry lives, probed relative to the project root when a
@@ -161,21 +209,21 @@ const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => 
 };
 
 /**
- * Shared driver for the per-call-site feeders: walk every lunora source file
- * (via {@link listLunoraSourceFiles}), resolve each into the shared `Project`
- * (reusing an already-added `SourceFile`), and map every `CallExpression`
- * descendant through `rowOf` with the file's lunora-relative path — rows kept
- * in encounter order.
+ * Resolve each file into the shared `Project` (reusing an already-added
+ * `SourceFile`) and map every `CallExpression` descendant through `rowOf` with
+ * the file's display path — rows kept in encounter order.
+ *
+ * The file set is the caller's choice: {@link collectCallRows} passes the
+ * function file set, {@link collectSecurityCallRows} the wider security one.
  */
-const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] => {
+const collectRowsFrom = <Row>(project: Project, files: ScannedSourceFile[], rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] => {
     const rows: Row[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    for (const { displayPath, filePath } of files) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const row = rowOf(call, relativePath);
+            const row = rowOf(call, displayPath);
 
             if (row !== undefined) {
                 rows.push(row);
@@ -185,6 +233,31 @@ const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: 
 
     return rows;
 };
+
+/**
+ * Shared driver for the per-call-site feeders: walk every lunora source file
+ * (via {@link listLunoraSourceFiles}) and map every `CallExpression` descendant
+ * through `rowOf` with the file's lunora-relative path.
+ */
+const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] =>
+    collectRowsFrom(
+        project,
+        listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
+            return { displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath };
+        }),
+        rowOf,
+    );
+
+/**
+ * The {@link collectCallRows} driver over the *security* file set — `lunora/`
+ * plus the worker entry (see {@link listSecurityScanFiles}) — for a feeder
+ * whose call sites are conventionally built in the entry, not under `lunora/`.
+ */
+const collectSecurityCallRows = <Row>(
+    project: Project,
+    lunoraDirectory: string,
+    rowOf: (call: CallExpression, relativePath: string) => Row | undefined,
+): Row[] => collectRowsFrom(project, listSecurityScanFiles(lunoraDirectory), rowOf);
 
 /**
  * Export binding name of the exported, top-level function that lexically contains
@@ -256,17 +329,87 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
+/**
+ * The initializer of the module-scope `const <name> = …` that `identifier`
+ * binds to, or `undefined` when it binds to anything else.
+ *
+ * Resolved through the identifier's SYMBOL, not its spelling. A name-keyed
+ * lookup answers for whichever declaration happens to share the text: a
+ * function-local `const byUser = { key: (ctx) => ctx.args.email }` shadowing a
+ * module-scope `const byUser = { key: (ctx) => ctx.auth.userId }` made the
+ * feeder read the outer, safe object and miss the inner, spoofable one.
+ *
+ * `const` only, and module scope only. A `let` can be reassigned after its
+ * initializer (`let o = { key: spoofable }; o = { key: safe }` — the feeder
+ * would report the shape that never runs), and a binding declared inside a
+ * function is out of reach of this one-hop read. Under-reporting is fail-safe;
+ * reporting a stale or unrelated shape is not.
+ */
+const moduleConstInitializer = (identifier: Identifier): Node | undefined => {
+    const declaration = identifier
+        .getSymbol()
+        ?.getDeclarations()
+        .find((candidate) => Node.isVariableDeclaration(candidate));
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const list = declaration.getParent();
+
+    if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) {
+        return undefined;
+    }
+
+    const statement = list.getParent();
+
+    return Node.isVariableStatement(statement) && Node.isSourceFile(statement.getParent()) ? declaration.getInitializer() : undefined;
+};
+
+/**
+ * The object literal an options argument denotes: `node` itself when it already
+ * IS one, or — when `node` is a bare identifier — the initializer of the
+ * module-scope `const <name> = { … }` it binds to (see
+ * {@link moduleConstInitializer}).
+ *
+ * Hoisting the options out of the call is how every example in this repo writes
+ * a rate-limit guard (`const byUser = { key: … }; … rateLimit(limiter, "send",
+ * byUser)`), so a feeder that inspects only a direct object-literal argument is
+ * blind to the exact spelling its own examples use.
+ */
+const optionsObjectLiteral = (node: Node | undefined): ObjectLiteralExpression | undefined => {
+    if (!node) {
+        return undefined;
+    }
+
+    if (Node.isObjectLiteralExpression(node)) {
+        return node;
+    }
+
+    if (!Node.isIdentifier(node)) {
+        return undefined;
+    }
+
+    const initializer = moduleConstInitializer(node);
+
+    return initializer !== undefined && Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
+};
+
 /** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
 const isDatabaseAccessor = (receiver: Node): boolean =>
     (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
 
 /**
  * List reads whose options object the `ctx.db` read feeders inspect. Only
- * `findMany` / `findFirst` / `findFirstOrThrow` take an options object — the
- * by-id `get` is id-only and the fluent `query(...)` reader carries no options
- * object, so both are excluded.
+ * `findMany` / `findFirst` / `findFirstOrThrow` / `findUnique` take an options
+ * object — the by-id `get` is id-only and the fluent `query(...)` reader carries
+ * no options object, so both are excluded.
+ *
+ * A read method missing from this set is INVISIBLE to every feeder that reads
+ * through `readTargetOf` — the soft-delete and relation-load analyses — so adding
+ * one to the facade means adding it here in the same change.
  */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
+const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique"]);
 
 /**
  * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
@@ -442,6 +585,45 @@ const stringPropertyOf = (object: Node, name: string): string | undefined => {
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralText() : undefined;
 };
 
+/** The sole statement of a single-statement `{ return {...}; }` block, when it returns an object literal. */
+const objectLiteralFromReturnBlock = (block: Block): ObjectLiteralExpression | undefined => {
+    const statements = block.getStatements();
+    const [statement] = statements;
+
+    if (statements.length !== 1 || statement === undefined || !Node.isReturnStatement(statement)) {
+        return undefined;
+    }
+
+    const expression = statement.getExpression();
+
+    return expression !== undefined && Node.isObjectLiteralExpression(expression) ? expression : undefined;
+};
+
+/**
+ * The object literal a callback body evaluates to, covering the concise-body
+ * form (`() => ({...})`, where the parens make the object literal the whole
+ * body) and the block-body form (`() => { return {...}; }`). Anything else
+ * (a variable, a multi-statement block, a conditional) is not analyzable.
+ *
+ * Shared by the two readers of the generated `.extend(fn)` escape hatch —
+ * `discover/config-calls` (which keys) and `discover/worker-entry-crons` (which
+ * cron expressions) — because they must agree on which `.extend()` bodies are
+ * statically readable at all.
+ */
+const objectLiteralFromCallbackBody = (body: Node): ObjectLiteralExpression | undefined => {
+    if (Node.isObjectLiteralExpression(body)) {
+        return body;
+    }
+
+    if (Node.isParenthesizedExpression(body)) {
+        const inner = body.getExpression();
+
+        return Node.isObjectLiteralExpression(inner) ? inner : undefined;
+    }
+
+    return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
+};
+
 /** True when `node` is the literal `ctx` identifier — the anchor a `ctx.flags.*` read starts from. */
 const isContextIdentifier = (node: Node): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
 
@@ -465,6 +647,7 @@ const stringPropertyFor =
 
 export {
     collectCallRows,
+    collectSecurityCallRows,
     defaultExportExpression,
     enclosingExportName,
     handlerOf,
@@ -474,6 +657,8 @@ export {
     listLunoraSourceFiles,
     listSecurityScanFiles,
     lunoraRelativePath,
+    objectLiteralFromCallbackBody,
+    optionsObjectLiteral,
     propertyInitializer,
     readTargetOf,
     stringPropertyFor,

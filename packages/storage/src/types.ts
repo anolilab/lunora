@@ -65,11 +65,20 @@ export interface UploadOptions {
 
     /**
      * Maximum body size in bytes. For `ArrayBuffer`/`Blob` sources the length is
-     * known up front and rejected before the upload starts. For a
-     * `ReadableStream` the length isn't known synchronously, so the stream is
-     * piped through a byte counter that aborts the upload once the limit is
-     * exceeded — this also guards against R2 silently accepting/truncating an
-     * unbounded stream.
+     * known up front and rejected before the upload starts.
+     *
+     * A `ReadableStream` has no length to check, and R2 refuses any stream whose
+     * length it cannot read — so a capped stream is READ INTO MEMORY under the
+     * cap and uploaded as a sized body. Nothing reaches the bucket if the body
+     * crosses the limit.
+     *
+     * `maxSize` is therefore also the memory ceiling for a streamed upload, and
+     * the isolate's ~128 MB is shared by every concurrent request — so on the
+     * stream path `maxSize` is itself capped at 16 MiB and rejected above it.
+     * For objects larger than that use `createMultipartUpload` /
+     * `createUploadHandler`, which upload without ever holding the whole object.
+     * Must be a finite, non-negative number; anything else (`Number(undefined)`
+     * is the usual source) is rejected as a `VALIDATION_ERROR`.
      */
     maxSize?: number;
 
@@ -88,7 +97,14 @@ export interface ListOptions {
     cursor?: string;
     /** R2 list delimiter — when set, common prefixes group instead of listing. */
     delimiter?: string;
-    /** Defaults to 100, capped at 1000 (R2 limit). */
+
+    /**
+     * Defaults to 100, capped at 1000 (R2 limit). A ceiling, not a promise: R2
+     * may return fewer per page to fit the entry metadata.
+     *
+     * Must be a positive integer when given — `0`, `12.5` and `NaN` throw rather
+     * than being coerced into a page size the caller never asked for.
+     */
     limit?: number;
 }
 
@@ -125,6 +141,18 @@ export interface ObjectMetadata {
 }
 
 export interface Storage {
+    /**
+     * The bucket name this accessor operates under — the same value
+     * {@link Storage.getSignedUrl} puts into the HMAC canonical.
+     *
+     * Exposed so everything downstream agrees on one name: `asBucketStorage`
+     * tags a single-bucket storage with it, and `storageRules(...)` matches
+     * `(bucket, operation)` rules against that tag. Without it a
+     * `createStorage({ bucketName: "avatars" })` signed URLs as `avatars` while
+     * the rules engine only ever saw `"default"`.
+     */
+    readonly bucketName: string;
+
     /**
      * Begin a native R2 **multipart upload** for very large objects — upload
      * parts (each uniform in size except the last), then `complete` with the
@@ -188,6 +216,10 @@ export interface Storage {
      * segment are rolled up into `delimitedPrefixes` (the "folders") and are NOT
      * in `objects` — a folder browser needs both, so a listing whose `objects` is
      * empty is not an empty directory.
+     *
+     * A page may hold FEWER objects than `options.limit`: R2 shrinks a page to
+     * fit the per-entry metadata this call asks for. Paginate on `truncated` /
+     * `cursor`, never on `objects.length === limit`.
      */
     list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; delimitedPrefixes?: string[]; objects: R2ObjectLike[]; truncated?: boolean }>;
 
@@ -203,8 +235,25 @@ export interface Storage {
      * alias for {@link Storage.upload} — it accepts the same {@link UploadOptions}
      * so the `maxSize` / `allowedContentTypes` guards aren't lost behind the alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
+    store: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
+
+    /**
+     * Upload `body` to `key`, returning the stored key + etag.
+     *
+     * The accepted shapes mirror what R2's `put` stores bytes from — a view
+     * (`Uint8Array`) and a `string` included. They are listed here because
+     * `maxSize` measures every one of them; a shape the cap cannot measure is
+     * refused rather than uploaded uncapped.
+     */
+    upload: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
 }
 
 export {

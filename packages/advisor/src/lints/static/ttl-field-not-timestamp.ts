@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { columnKind } from "../helpers";
 
 /** Column kinds that carry an epoch-millisecond instant a TTL sweep can compare against `now`. */
 const TIME_KINDS = new Set(["date", "number", "timestamp"]);
@@ -31,8 +32,10 @@ const ttlFieldNotTimestamp: Lint = {
             }
 
             // The feeder may not carry column kinds (some runtime callers); skip
-            // the check rather than guess when the type isn't known.
-            const kind = table.columnKinds?.[ttl.field];
+            // the check rather than guess when the type isn't known. Own-property
+            // lookup, so a `.ttl("toString")` naming no declared column reads as
+            // unknown instead of inheriting an `Object.prototype` member.
+            const kind = columnKind(table, ttl.field);
 
             if (kind === undefined || TIME_KINDS.has(kind)) {
                 continue;

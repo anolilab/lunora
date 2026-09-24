@@ -15,8 +15,8 @@
         "prepare": "svelte-kit sync"
     },
     "dependencies": {
-        "@lunora/svelte": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
+        "@lunora/svelte": "^0.0.0",
         "lunorash": "^0.0.0"
     },
     "devDependencies": {

@@ -3,16 +3,28 @@
  * security gap).
  *
  * A `defineShape` replicates a table partition to a client but runs NO
- * procedure, so the `.use(rls(...))` middleware never fires. The fix hoists each
- * function's read policies onto `fn.rls` (the procedure builder) and AND-merges
- * the table's read base-where into the shape's predicate at resolve time. These
- * tests pin both halves: the registry build (policy discovery + role union) and
- * the compose (AND-merge, unrestricted pass-through, and fail-closed parity with
- * a `.rls("required")` schema).
+ * procedure, so the `.use(rls(...))` middleware never fires. A shape therefore
+ * names its own guards (`defineShape({ use: [rls(...)] })`), whose read policies
+ * are AND-merged into its predicate at resolve time. These tests pin both
+ * halves: the registry build (policy discovery + per-tag role scoping) and the
+ * compose (AND-merge, unrestricted pass-through, and fail-closed parity with a
+ * `.rls("required")` schema) — plus, at the bottom, that the scope really is
+ * per-shape and not project-wide.
  */
 import { describe, expect, it } from "vitest";
 
-import { buildRlsReadRegistry, composeShapeReadWhere, definePermission, definePolicies, definePolicy, defineRole, initLunora, rls } from "../src/index";
+import {
+    assertShapesDeclareReadPolicies,
+    buildRlsReadRegistry,
+    composeShapeReadWhere,
+    definePermission,
+    definePolicies,
+    definePolicy,
+    defineRole,
+    defineShape,
+    initLunora,
+    rls,
+} from "../src/index";
 
 const builders = initLunora.dataModel<unknown>().create();
 
@@ -252,5 +264,218 @@ describe("composeShapeReadWhere", () => {
         });
 
         expect(asUser).toStrictEqual({ AND: [{ ownerId: "u1" }, shapeWhere] });
+    });
+});
+
+/**
+ * A shape's read policies are the ones IT declares, not the project's.
+ *
+ * The registry ORs its groups and treats an unrestricted group as unrestricting
+ * the whole table, so a registry folded from every registered function collapsed
+ * a tenant shape's filter to nothing the moment ANY procedure named the table
+ * with an allow-all read policy — typically an admin listing whose real gate is
+ * a `requireAdmin` middleware a shape cannot run. Every row then replicated to
+ * every socket.
+ */
+describe("defineShape — RLS scope is the shape's own use() guards", () => {
+    const tenantDocs = definePolicy({
+        on: "read",
+        table: "docs",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+    const anyDoc = definePolicy({ on: "read", table: "docs", when: () => true });
+
+    const request = { ctx: {}, identity: null, rlsRequired: false, shapeWhere: {}, table: "docs", tablePublic: false, userId: "u1" } as const;
+
+    it("keeps a shape's tenant filter when an unrelated procedure declares an allow-all read policy", () => {
+        expect.assertions(2);
+
+        const tenantGuard = rls(definePolicies([tenantDocs]));
+        const shape = defineShape({
+            table: "docs",
+            use: [tenantGuard],
+            where: () => {
+                return {};
+            },
+        });
+
+        // The project ALSO registers an admin-only listing with an allow-all
+        // policy. Folding both into one registry is what used to happen.
+        const projectWide = buildRlsReadRegistry([guardedQuery(definePolicies([tenantDocs])), guardedQuery(definePolicies([anyDoc]))]);
+
+        expect(composeShapeReadWhere(projectWide, request)).toStrictEqual({});
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, request)).toStrictEqual({ ownerId: "u1" });
+    });
+
+    it("composes several declared guards, and ignores non-rls middlewares in the list", () => {
+        expect.assertions(1);
+
+        const noop = async ({ next }: { next: () => Promise<unknown> }) => next();
+        const shape = defineShape({
+            table: "docs",
+            use: [rls(definePolicies([tenantDocs])), noop as never],
+            where: () => {
+                return { archived: false };
+            },
+        });
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, shapeWhere: { archived: false } })).toStrictEqual({
+            AND: [{ ownerId: "u1" }, { archived: false }],
+        });
+    });
+
+    it("replicates nothing under .rls('required') when a shape declares no guard for a protected table", () => {
+        expect.assertions(1);
+
+        const shape = defineShape({
+            table: "docs",
+            where: () => {
+                return {};
+            },
+        });
+
+        expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, rlsRequired: true })).toStrictEqual({ OR: [] });
+    });
+});
+
+/**
+ * The OTHER direction of that scoping: a shape that declares no `use` at all.
+ *
+ * Under `.rls("required")` it denies, which is safe. Under the opt-in default it
+ * replicates on its own `where` alone — so an app whose `messages` table is
+ * tenant-scoped on every query, and whose shape only narrows to a channel, went
+ * from `{ AND: [{ channelId }, { tenantId }] }` to `{ channelId }` with no error
+ * and no diagnostic. `assertShapesDeclareReadPolicies` is what makes that loud:
+ * codegen stamps it into the generated shard with the tables the project's
+ * `rls()` chains govern on read, and it refuses to boot.
+ */
+describe("assertShapesDeclareReadPolicies", () => {
+    const tenantMessages = definePolicy({
+        on: "read",
+        table: "messages",
+        when: ({ auth }) => {
+            return { tenantId: (auth.identity as null | { tenantId?: string })?.tenantId };
+        },
+    });
+
+    const channelMessages = defineShape({
+        table: "messages",
+        where: () => {
+            return { channelId: "c1" };
+        },
+    });
+
+    it("a guard-less shape on a governed table replicates unfiltered — and is refused at boot", () => {
+        expect.assertions(3);
+
+        // The fail-open, concretely: the project's tenant policy exists (a query
+        // declares it), the shape declares no `use`, and what replicates is the
+        // channel filter alone — every tenant's messages in that channel.
+        const composed = composeShapeReadWhere(channelMessages.rlsRegistry, {
+            ctx: {},
+            identity: { tenantId: "t1" },
+            rlsRequired: false,
+            shapeWhere: { channelId: "c1" },
+            table: "messages",
+            tablePublic: false,
+            userId: "u1",
+        });
+
+        expect(composed).toStrictEqual({ channelId: "c1" });
+
+        // The equivalent query IS tenant-scoped, which is the asymmetry.
+        const viaQuery = buildRlsReadRegistry([guardedQuery(definePolicies([tenantMessages]))]);
+
+        expect(
+            composeShapeReadWhere(viaQuery, {
+                ctx: {},
+                identity: { tenantId: "t1" },
+                rlsRequired: false,
+                shapeWhere: { channelId: "c1" },
+                table: "messages",
+                tablePublic: false,
+                userId: "u1",
+            }),
+        ).toStrictEqual({ AND: [{ tenantId: "t1" }, { channelId: "c1" }] });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["messages"], false);
+        }).toThrow(/"channelMessages" \(table "messages"\)/u);
+    });
+
+    it("accepts a shape that names its guards, and `use: []` as the explicit acknowledgement", () => {
+        expect.assertions(2);
+
+        const guarded = defineShape({
+            table: "messages",
+            use: [rls(definePolicies([tenantMessages]))],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+        const acknowledged = defineShape({
+            table: "messages",
+            use: [],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ guarded }, ["messages"], false);
+        }).not.toThrow();
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ acknowledged }, ["messages"], false);
+        }).not.toThrow();
+    });
+
+    /**
+     * A non-empty `use` used to satisfy the check on its own, which is the same
+     * fail-open one level down: what the list has to produce is a READ-policy
+     * group for THIS shape's table. A guard for a different table, or a plain
+     * authorization middleware a shape cannot even run, produces none — so the
+     * shape replicates on its own `where` alone, exactly as if `use` were absent.
+     */
+    it("refuses a `use` list whose guards declare no read policy for the shape's own table", () => {
+        expect.assertions(2);
+
+        const otherTable = defineShape({
+            table: "messages",
+            use: [rls(definePolicies([definePolicy({ on: "read", table: "notes", when: () => true })]))],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+        const notRls = defineShape({
+            table: "messages",
+            use: [({ next }) => next()],
+            where: () => {
+                return { channelId: "c1" };
+            },
+        });
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ otherTable }, ["messages"], false);
+        }).toThrow(/"otherTable" \(table "messages"\)/u);
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ notRls }, ["messages"], false);
+        }).toThrow(/"notRls" \(table "messages"\)/u);
+    });
+
+    it("stays quiet for an ungoverned table, and under .rls('required') where the omission already denies", () => {
+        expect.assertions(2);
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["notes"], false);
+        }).not.toThrow();
+
+        expect(() => {
+            assertShapesDeclareReadPolicies({ channelMessages }, ["messages"], true);
+        }).not.toThrow();
     });
 });

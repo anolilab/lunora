@@ -1,6 +1,6 @@
 {
     "name": "@lunora/agent",
-    "version": "1.0.0-alpha.82",
+    "version": "1.0.0-alpha.131",
     "description": "Durable AI agents for Lunora: defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows, with DO SQLite threads and live message subscriptions",
     "keywords": [
         "agent",
@@ -88,25 +88,25 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
-        "lint:prettier": "pnpm exec prettier --check .",
-        "lint:prettier:fix": "pnpm exec prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "pnpm exec tsc --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/ai": "1.0.0-alpha.69",
-        "@lunora/errors": "1.0.0-alpha.29",
-        "@lunora/mail": "1.0.0-alpha.60",
-        "@lunora/server": "1.0.0-alpha.99",
-        "@lunora/values": "1.0.0-alpha.37",
-        "@lunora/workflow": "1.0.0-alpha.42",
+        "@lunora/ai": "1.0.0-alpha.96",
+        "@lunora/errors": "1.0.0-alpha.41",
+        "@lunora/mail": "1.0.0-alpha.86",
+        "@lunora/server": "1.0.0-alpha.139",
+        "@lunora/values": "1.0.0-alpha.51",
+        "@lunora/workflow": "1.0.0-alpha.60",
         "@modelcontextprotocol/sdk": "catalog:mcp",
         "ai": "catalog:ai",
         "yaml": "catalog:content"
     },
     "devDependencies": {
-        "@lunora/container": "1.0.0-alpha.40",
+        "@lunora/container": "1.0.0-alpha.56",
         "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

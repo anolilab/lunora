@@ -28,6 +28,9 @@
  */
 import type { SqlExec } from "@lunora/shard-engine";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
+import { quoteIdentifier } from "../../../shared/quote-identifier";
+
 /** Hard ceiling on rows scanned per storage column, so one enormous table can't make the scan unbounded. */
 const DANGLING_SCAN_CAP = 5000;
 
@@ -70,9 +73,6 @@ interface DanglingReferenceResult {
 const isInternalTable = (name: string): boolean =>
     name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
 
-/** Double-quote a SQL identifier, escaping any embedded double quotes. */
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
-
 /** True when `table` is a real, non-internal user table in this shard's SQLite database. */
 const tableExists = (sql: SqlExec, table: string): boolean => {
     if (isInternalTable(table)) {
@@ -101,7 +101,10 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
 
     return isPhysical
         ? { expression: quoteIdentifier(column), params: [] }
-        : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$."${column.replaceAll('"', '""')}"`] };
+        : // `jsonPathSegment`, never a hand-rolled quoter: a JSON path is not a SQL
+          // identifier, so doubling `"` (the identifier rule) emits `$."a""b"`,
+          // which SQLite reads as NULL instead of the column's value.
+          { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$.${jsonPathSegment(column)}`] };
 };
 
 /** Mutable accumulator threaded through the per-column scans so the orchestrator stays flat. */

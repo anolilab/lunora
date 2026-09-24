@@ -28,11 +28,12 @@ const validatorReader: SchemaNodeReader<Validator> = {
     constraints: (validator) => metaOf(validator).constraints as JsonSchema | undefined,
     inner: (validator) => metaOf(validator).inner as Validator | undefined,
     isNullable: (validator) => (metaOf(validator).column as ColumnMeta | undefined)?.notNull === false,
+    keyChild: (validator) => metaOf(validator).keyValidator as Validator | undefined,
     kind: (validator) => validator.kind,
     literalSchema: (validator) => {
         const { value } = metaOf(validator);
 
-        return typeof value === "bigint" ? { const: value.toString(), type: "string" } : { const: value };
+        return typeof value === "bigint" ? { const: value.toString(), format: "int64", type: "string" } : { const: value };
     },
     members: (validator) => metaOf(validator).members as ReadonlyArray<Validator>,
     shape: (validator) => metaOf(validator).shape as Record<string, Validator>,

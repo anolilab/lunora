@@ -24,6 +24,39 @@ describe("toFilterClauses", () => {
         expect(toFilterClauses(filters)).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
     });
 
+    // A facet's own value, not a value re-derived from the text shown in the
+    // box. The sidebar summarised a TEXT column as `12345 (2)`; coercing its
+    // display text back sent the NUMBER 12345, which the server compares
+    // against `json_extract(__doc__, ...)` — no type affinity, so `12345 =
+    // '12345'` is false and the click produced an empty grid under a count of 2.
+    it("sends a pinned literal verbatim instead of re-coercing its text", () => {
+        expect.assertions(2);
+
+        expect(toFilterClauses([{ column: "zip", literal: ["12345"], operator: "eq", value: "12345" }])).toStrictEqual([
+            { column: "zip", operator: "eq", value: "12345" },
+        ]);
+
+        // The NULL group flattened to the empty string, which matches nothing.
+        expect(toFilterClauses([{ column: "status", literal: [null], operator: "eq", value: "" }])).toStrictEqual([
+            { column: "status", operator: "eq", value: null },
+        ]);
+    });
+
+    it("coerces again once the operator edits the value", () => {
+        expect.assertions(1);
+
+        const onFiltersChange = noop();
+        const pinned: ReadonlyArray<EditableFilter> = [{ column: "age", literal: ["18"], operator: "gt", value: "18" }];
+
+        render(<DataFilters columns={COLUMNS} filters={pinned} onFiltersChange={onFiltersChange} onSearchChange={noop()} search="" />);
+
+        fireEvent.change(within(screen.getByTestId("db-filter-row")).getByTestId("db-filter-value"), { target: { value: "21" } });
+
+        // No `literal` survives the edit: from here the text IS the value, so
+        // `age > 21` has to compare numerically again.
+        expect(onFiltersChange).toHaveBeenLastCalledWith([{ column: "age", operator: "gt", value: "21" }]);
+    });
+
     it("coerces a numeric string to a number for comparison operators", () => {
         expect.assertions(1);
 

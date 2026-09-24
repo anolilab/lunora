@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { isAccessIdentity, readIdentityGroups } from "../src/identity-groups";
 
-// The single group reader shared by `ctx.access` (context.ts) and `accessRoles`
-// (roles.ts). These lock its contract so the two consumers can never drift.
+// The single group reader shared by `ctx.access` (context.ts) and the RLS roles
+// the resolver mints (resolver.ts). These lock its contract so the two consumers
+// can never drift.
 describe("readIdentityGroups", () => {
     it("reads the promoted top-level groups, keeping only string entries", () => {
         expect.assertions(1);

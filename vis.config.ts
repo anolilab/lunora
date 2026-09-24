@@ -21,6 +21,32 @@ export default defineConfig({
             "!{workspaceRoot}/.storybook/**/*",
             "!{workspaceRoot}/**/*.stories.@(js|jsx|ts|tsx|mdx)",
         ],
+        // Do NOT add `shared/`, `protocol/`, `registry/`, `tools/` or `.vis/` here.
+        // They look like the gap they are not: none of them sits in a project root,
+        // `default` never matches them, and `.github/file-filters.yml` goes to some
+        // length to keep `shared/**` and `protocol/**` in the `packages` filter — so
+        // the obvious reading is that the filter starts the job and `vis affected`
+        // then selects nothing.
+        //
+        // It does not. A CHANGED PATH OUTSIDE EVERY PROJECT ROOT MARKS EVERY PROJECT
+        // AFFECTED. Measured on this tree, one committed one-line edit each, against
+        // `origin/alpha` with `--no-uncommitted` (the mode CI runs in): shared/,
+        // protocol/, registry/, tools/, .vis/ — 75 of 75 projects affected, for
+        // `test`, `lint:eslint` and `lint:types` alike. So do the controls: a
+        // top-level README, `plans/`, `marketing/` — 75 as well; one package source
+        // file — 73, the graph narrowing as intended.
+        //
+        // Listing them here would therefore change nothing except to widen
+        // `sharedGlobals`, whose whole job is to be the narrow set that invalidates
+        // the world.
+        //
+        // The one case that DOES select nothing is a tracked but UNCOMMITTED edit to
+        // such a path: `--uncommitted` (on locally, off in CI) drops non-project
+        // paths deliberately, so an untracked scratch file cannot invalidate all 75.
+        // `pnpm run test:affected` over a dirty `shared/` therefore prints "No files
+        // changed. Nothing to run." and exits 0 — a local-only artefact of that
+        // guard, not a hole in CI, which diffs committed refs. Commit first, or pass
+        // `--base origin/alpha`, before concluding a gate is missing.
         sharedGlobals: ["{workspaceRoot}/.nvmrc", "{workspaceRoot}/package.json", "{workspaceRoot}/tsconfig.json", "{workspaceRoot}/tsconfig.base.json"],
     },
     tasks: {
@@ -130,7 +156,9 @@ export default defineConfig({
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then Prettier-format every staged file, repo-wide.
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write"],
+        // `--ignore-unknown`: Prettier has no TOML parser here, so a staged
+        // `.toml` would otherwise fail the hook instead of just the NUL check.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write --ignore-unknown"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.

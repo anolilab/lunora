@@ -28,6 +28,8 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import type { SearchBackfillState } from "@lunora/search-core";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { searchCoverageSurvives } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 // Type-only import for the structural surface threaded in — a value import
@@ -128,14 +130,29 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
  * takes rows back out (the analyzer rebuild rewrites them in place), so the flag
  * only ever rises — which is what lets a rebuild that has cleared `done` still
  * be told apart from a first walk.
+ *
+ * Whether the latch may carry into a given rebuild is
+ * {@link searchCoverageSurvives}'s call, shared with the sql-store twin so the
+ * two planes cannot answer it differently. That docblock carries the reasoning
+ * and the operational cost — including the 503 window an upgrade from before
+ * profile tracking pays once.
  */
 const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
+    // A companion with no state row at all takes the "unverified" branch too and
+    // is unaffected: its INSERT writes `covered = done` either way.
+    const verified = searchCoverageSurvives(readSearchBackfillState(sql, companion).profile, profile);
+    // `MAX(...)` latches; `excluded.covered` (which is `done`) replaces. Only the
+    // FIRST page of a field-change rebuild sees a differing recorded profile —
+    // from the second page on, the recorded profile is already the new one.
+    const coveredValue = verified
+        ? dsql`MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`
+        : dsql`excluded.${dsql.identifier("covered")}`;
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}, ${dsql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}, ${dsql.identifier("covered")} = MAX(${dsql.identifier(SEARCH_STATE_TABLE)}.${dsql.identifier("covered")}, excluded.${dsql.identifier("covered")})`,
+        dsql`INSERT INTO ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}, ${dsql.identifier("covered")}) VALUES (${companion}, ${cursorValue}, ${done ? 1 : 0}, ${profile}, ${done ? 1 : 0}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}, ${dsql.identifier("covered")} = ${coveredValue}`,
     );
 };
 

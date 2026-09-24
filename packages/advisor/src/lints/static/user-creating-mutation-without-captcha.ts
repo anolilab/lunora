@@ -39,10 +39,15 @@ const reasonFor = (procedure: AdvisorProcedureProtection): string => {
  * Endpoints that mint accounts or trigger emails are the classic automated-abuse
  * surface: credential-stuffing sign-ups, mailbox-flooding "forgot password" loops,
  * and disposable-account farming. A server-verified human check (Turnstile) in
- * front of them is the defense. Lunora ships `verifyTurnstile()` (`@lunora/auth`)
- * and the `protectPublic({ captcha })` bundle; this lint fires when a public
- * procedure writes a user/session/account-shaped table (or references `ctx.mail`)
- * with no captcha middleware.
+ * front of them is the defense. Lunora ships `verifyTurnstileMiddleware()`
+ * (`@lunora/auth`) and the `protectPublic({ captcha })` bundle; this lint fires
+ * when a public procedure writes a user/session/account-shaped table (or
+ * references `ctx.mail`) with no captcha middleware.
+ *
+ * The middleware, NOT `verifyTurnstile`: that one is the async verdict function
+ * the middleware calls, so `.use(verifyTurnstile({...}))` installs a Promise in
+ * the chain and checks nothing. The feeder counts only the middleware, so the
+ * remediation below has to name the same thing the feeder will accept.
  *
  * Runs only when the codegen feeder supplies protection evidence
  * (`context.procedureProtections`); a runtime caller with no evidence flags
@@ -56,7 +61,7 @@ const userCreatingMutationWithoutCaptcha: Lint = {
     level: "WARN",
     name: "user_creating_mutation_without_captcha",
     remediation:
-        "Add a server-verified human check: `.use(verifyTurnstile({ secret, token }))` from `@lunora/auth`, or wrap it with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Pair with a rate limit for defense in depth.",
+        "Add a server-verified human check: `.use(verifyTurnstileMiddleware({ secret, token: (c) => c.args.captchaToken }))` from `@lunora/auth`, or wrap it with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Pair with a rate limit for defense in depth. Note it is `verifyTurnstileMiddleware`, not the bare `verifyTurnstile` verdict function — that one returns a Promise and verifies nothing when placed in a `.use()` chain.",
     run: (context) => {
         if (context.procedureProtections === undefined) {
             return [];
@@ -74,7 +79,7 @@ const userCreatingMutationWithoutCaptcha: Lint = {
             .map((procedure) =>
                 emit(userCreatingMutationWithoutCaptcha, {
                     cacheKey: `user_creating_mutation_without_captcha:${procedure.file}:${procedure.exportName}`,
-                    detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) ${reasonFor(procedure)} but has no CAPTCHA check. Add \`.use(verifyTurnstile(...))\` or \`.use(protectPublic({ captcha }))\`.`,
+                    detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) ${reasonFor(procedure)} but has no CAPTCHA check. Add \`.use(verifyTurnstileMiddleware(...))\` or \`.use(protectPublic({ captcha }))\`.`,
                     metadata: {
                         callsMail: procedure.callsMail,
                         exportName: procedure.exportName,

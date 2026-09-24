@@ -28,6 +28,7 @@ describe("resolvePersistenceAdapter", () => {
         clear: () => Promise.resolve(),
         load: () => Promise.resolve([]),
         remove: () => Promise.resolve(),
+        replace: () => Promise.resolve(),
     };
 
     afterEach(() => {

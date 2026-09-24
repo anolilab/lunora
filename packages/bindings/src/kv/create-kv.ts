@@ -45,16 +45,16 @@ const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
  */
 const validateSegments = (value: string, kind: "key" | "prefix"): void => {
     if (byteLength(value) > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: ${kind} exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (value.includes("\0")) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} contains NUL byte`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: ${kind} contains NUL byte`);
     }
 
     for (const segment of value.split("/")) {
         if (segment === "." || segment === "..") {
-            throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} contains a \`.\`/\`..\` path component`);
+            throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: ${kind} contains a \`.\`/\`..\` path component`);
         }
     }
 };
@@ -105,21 +105,60 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (byteLength(composed) > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
+};
+
+/**
+ * `expiration` (absolute Unix seconds) and `expirationTtl` (relative seconds)
+ * are mutually exclusive. Nothing downstream enforces that: the binding type
+ * declares both as optional siblings, and the KV implementation resolves the
+ * pair by taking `expirationTtl` and dropping `expiration` on the floor
+ * (miniflare's `validatePutOptions` reads `expiration` only in the `else`
+ * branch). A caller that sends both therefore gets a silently different expiry
+ * than it asked for, so reject the pair here — on every path that reaches a
+ * `put`, not just this one.
+ */
+const assertOneExpirationForm = (options: { expiration?: number; expirationTtl?: number }): void => {
+    if (options.expiration !== undefined && options.expirationTtl !== undefined) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/bindings/kv: `expiration` and `expirationTtl` are mutually exclusive");
+    }
+};
+
+/**
+ * Reject metadata KV would refuse: not JSON-serializable, or over the
+ * 1,024-byte serialized ceiling. Checked before the round-trip so the failure
+ * names the limit instead of surfacing as whatever the binding raises — on
+ * every path that reaches a `put`, the studio's KV browser included.
+ */
+const assertMetadataWithinLimit = (metadata: unknown): void => {
+    // `JSON.stringify` throws on a bigint or a cycle. Catching it keeps this
+    // guard from replacing one cryptic failure with another: a raw `TypeError`
+    // out of an options builder is exactly what the byte check below exists to
+    // avoid.
+    let encoded: string;
+
+    try {
+        encoded = JSON.stringify(metadata);
+    } catch {
+        throw new LunoraError("BAD_REQUEST", "@lunora/bindings/kv: metadata is not JSON-serializable (cyclic value, bigint, or similar)");
+    }
+
+    // A value JSON drops entirely (a function, a symbol) stringifies to
+    // `undefined` despite the type saying otherwise; it measures small, passes,
+    // and reaches the binding unchanged — as it did before this guard.
+    if (byteLength(encoded) > MAX_METADATA_LENGTH) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: metadata exceeds ${String(MAX_METADATA_LENGTH)}-byte limit`);
+    }
 };
 
 /** Build the raw KV put options from the public {@link KvPutOptions}, dropping `undefined`s. */
 const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined => {
     const out: KvNamespacePutOptions = {};
 
-    // `expiration` and `expirationTtl` are mutually exclusive — forwarding both
-    // makes the binding throw a cryptic error, so fail fast with a clear one.
-    if (options.expiration !== undefined && options.expirationTtl !== undefined) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/kv: `expiration` and `expirationTtl` are mutually exclusive");
-    }
+    assertOneExpirationForm(options);
 
     if (options.expiration !== undefined) {
         out.expiration = options.expiration;
@@ -130,24 +169,7 @@ const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined 
     }
 
     if (options.metadata !== undefined) {
-        // `JSON.stringify` throws on a bigint or a cycle. Catching it keeps this
-        // guard from replacing one cryptic failure with another: a raw
-        // `TypeError` out of an options builder is exactly what the byte check
-        // below exists to avoid.
-        let encoded: string;
-
-        try {
-            encoded = JSON.stringify(options.metadata);
-        } catch {
-            throw new LunoraError("INTERNAL", "@lunora/bindings/kv: metadata is not JSON-serializable (cyclic value, bigint, or similar)");
-        }
-
-        // A value JSON drops entirely (a function, a symbol) stringifies to
-        // `undefined` despite the type saying otherwise; it measures small,
-        // passes, and reaches the binding unchanged — as it did before this guard.
-        if (byteLength(encoded) > MAX_METADATA_LENGTH) {
-            throw new LunoraError("INTERNAL", `@lunora/bindings/kv: metadata exceeds ${String(MAX_METADATA_LENGTH)}-byte limit`);
-        }
+        assertMetadataWithinLimit(options.metadata);
 
         out.metadata = options.metadata;
     }
@@ -279,3 +301,5 @@ export const createKv = (options: LunoraKvOptions): Kv => {
         put,
     };
 };
+
+export { assertMetadataWithinLimit, assertOneExpirationForm, validateKey };

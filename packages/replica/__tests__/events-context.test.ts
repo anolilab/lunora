@@ -38,17 +38,14 @@ const createTestClient = (): EventLogDOClient => {
 
         if (url.pathname === "/since") {
             const seq = Number(url.searchParams.get("seq") ?? "0");
-            const since = entries.filter((e) => e.seq >= seq);
-            return Response.json({ entries: since });
-        }
-
-        if (url.pathname === "/range") {
-            const from = Number(url.searchParams.get("from") ?? "0");
-            const limit = Number(url.searchParams.get("limit") ?? "50");
-            const slice = entries.slice(from, from + limit);
+            const limit = Number(url.searchParams.get("limit") ?? "500");
+            const matching = entries.filter((e) => e.seq >= seq);
+            const page = matching.slice(0, limit);
+            const truncated = matching.length > page.length;
             return Response.json({
-                entries: slice,
-                hasMore: from + limit < entries.length,
+                cursor: truncated ? page[page.length - 1]!.seq + 1 : undefined,
+                entries: page,
+                truncated,
             });
         }
 
@@ -94,7 +91,7 @@ const createNext = (originalCtx: Record<string, unknown>): MockNext => {
 
 describe("eventsContext middleware", () => {
     it("attaches ctx.events with expected facade methods", async () => {
-        expect.assertions(6);
+        expect.assertions(5);
 
         const client = createTestClient();
         const middleware = eventsContext(client);
@@ -107,7 +104,6 @@ describe("eventsContext middleware", () => {
         expect(result).toHaveProperty("events");
         expect(result.events.append).toBeTypeOf("function");
         expect(result.events.getSince).toBeTypeOf("function");
-        expect(result.events.getRange).toBeTypeOf("function");
         expect(result.events.getSize).toBeTypeOf("function");
         expect(result.events.getState).toBeTypeOf("function");
     });
@@ -169,11 +165,11 @@ describe("eventsContext middleware", () => {
 
         const since = await events.getSince(1);
 
-        expect(since).toHaveLength(1);
-        expect(since[0]!.type).toBe("b");
+        expect(since.entries).toHaveLength(1);
+        expect(since.entries[0]!.type).toBe("b");
     });
 
-    it("ctx.events.getRange returns paginated results", async () => {
+    it("ctx.events.getSince pages through the log", async () => {
         expect.assertions(6);
 
         const client = createTestClient();
@@ -188,17 +184,17 @@ describe("eventsContext middleware", () => {
             await events.append([{ type: `e${i}`, payload: i }]);
         }
 
-        const page = await events.getRange(2, 2);
+        const page = await events.getSince(2, 2);
 
         expect(page.entries).toHaveLength(2);
         expect(page.entries[0]!.seq).toBe(2);
         expect(page.entries[1]!.seq).toBe(3);
-        expect(page.hasMore).toBe(true);
+        expect(page.truncated).toBe(true);
 
-        const last = await events.getRange(4, 2);
+        const last = await events.getSince(page.cursor!, 2);
 
         expect(last.entries).toHaveLength(1);
-        expect(last.hasMore).toBe(false);
+        expect(last.truncated).toBe(false);
     });
 
     it("ctx.events.getSize returns total count", async () => {

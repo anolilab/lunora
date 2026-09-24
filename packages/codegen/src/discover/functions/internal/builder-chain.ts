@@ -2,9 +2,10 @@ import type { CallExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ValidatorIR } from "../../../ir";
-import { parseObjectShape, parseValidator } from "../../../parse-validator";
+import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../../parse-validator";
 import { builderChainSteps } from "../../builder-chain";
 import unwrapHandlerReturn from "../unwrap-handler-return";
+import { parseOutput } from "./erased-returns";
 
 /**
  * Pull the handler's return type out of an object-literal `query/mutation/action`
@@ -64,8 +65,20 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
 
         const argument = step.call.getArguments()[0];
 
-        if (argument && Node.isObjectLiteralExpression(argument)) {
-            merged = { ...parseObjectShape(argument), ...merged };
+        // `.input(sharedArgs)` is as legal as an inline literal — the builder
+        // takes any `ArgsValidator` record — and used to contribute NOTHING to
+        // the generated type while the runtime still enforced every field.
+        //
+        // An argument that does not resolve is SKIPPED, never fatal. `lunora
+        // introspect` emits `.input(<table>List.args)` (see `defineListArgs`),
+        // whose record is built at runtime and cannot be read statically at all;
+        // aborting on it would take `dev`/`verify`/`deploy` down for every
+        // introspected project. The gap is reported instead — see
+        // `discover/unreadable-arguments.ts`.
+        const literal = argument !== undefined && Node.isExpression(argument) ? resolveObjectLiteral(argument) : undefined;
+
+        if (literal !== undefined) {
+            merged = { ...parseObjectShape(literal), ...merged };
         }
     }
 
@@ -88,7 +101,7 @@ const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
 
     const argument = step.call.getArguments()[0];
 
-    return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
+    return argument && Node.isExpression(argument) ? parseOutput(step.call, () => parseValidator(argument)) : undefined;
 };
 
 export { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall };

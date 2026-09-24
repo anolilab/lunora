@@ -1,12 +1,15 @@
 package dev.lunora;
 
 import java.math.BigInteger;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The tagged value codec for Lunora's client↔server wire, ported from {@code shared/wire-codec.ts}.
@@ -43,6 +46,69 @@ public final class Wire {
      * its tag exist for that case.
      */
     public static final long MAX_EXACT_INTEGER = (1L << 53) - 1;
+
+    /**
+     * Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any non-finite epoch,
+     * {@code new Date(v)} is an Invalid Date.
+     */
+    public static final double MAX_TIME_VALUE = 8.64e15;
+
+    /**
+     * {@code new Date(epoch).getTime()} — ECMAScript TimeClip.
+     *
+     * <p>A Date truncates its argument toward zero, and anything non-finite or past ±8.64e15
+     * becomes an Invalid Date, which the reference re-encodes as a NaN tag. Kept verbatim, the
+     * epoch went back on the wire as a date the reference's own Date can never hold.
+     */
+    static double timeClip(double epoch) {
+        if (Double.isNaN(epoch) || Double.isInfinite(epoch) || Math.abs(epoch) > MAX_TIME_VALUE) {
+            return Double.NaN;
+        }
+
+        double truncated = epoch < 0 ? Math.ceil(epoch) : Math.floor(epoch);
+
+        // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on exactly one
+        // window: an epoch in (-1, 0] gives +0 there and -0 here, because Math.ceil keeps the
+        // sign of zero. The window is one value wide, and the stable subscription key spells
+        // -0 as the bare token `-0`, distinct from `0` — so without this a Date built from
+        // -0.5 opens a different subscription than the TS client's does.
+        return truncated == 0 ? 0 : truncated;
+    }
+
+    /**
+     * Whether an href carries a URL scheme, per RFC 3986: an ASCII letter followed by letters,
+     * digits, {@code +}, {@code -} or {@code .}, then {@code :}.
+     *
+     * <p>The reference builds a real {@code URL}, which throws on anything unparseable, while every
+     * port stored the string verbatim and accepted {@code "not a url"} — a frame that kills a JS
+     * peer's subscription and is waved through here. Reproducing WHATWG URL parsing in eight
+     * languages is not on offer (their own parsers disagree with it in the deep end), so the
+     * contract, and {@code protocol/README.md} §2.1, is the floor of it: an href must be ABSOLUTE.
+     */
+    static boolean isAbsoluteHref(String href) {
+        for (int index = 0; index < href.length(); index++) {
+            char character = href.charAt(index);
+
+            if (character == ':') {
+                return index > 0;
+            }
+
+            boolean letter =
+                    character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z';
+            boolean tail =
+                    index > 0
+                            && (character >= '0' && character <= '9'
+                                    || character == '+'
+                                    || character == '-'
+                                    || character == '.');
+
+            if (!letter && !tail) {
+                return false;
+            }
+        }
+
+        return false;
+    }
 
     /**
      * Bytes per element for the typed-array views the codec round-trips. A view whose payload is
@@ -362,17 +428,40 @@ public final class Wire {
                 return decodeBigInt(items);
             case "date":
                 return new WireDate(
-                        asNumber(decode(payload(items, "date"), depth + 1), "date").doubleValue());
+                        timeClip(
+                                asNumber(decode(payload(items, "date"), depth + 1), "date")
+                                        .doubleValue()));
             case "url":
-                return new WireUrl(asString(payload(items, "url"), "url"));
+                {
+                    String href = asString(payload(items, "url"), "url");
+
+                    if (!isAbsoluteHref(href)) {
+                        throw new WireFormatException("wire-codec: url href is not absolute");
+                    }
+
+                    return new WireUrl(href);
+                }
             case "map":
                 return decodeMap(items, depth);
             case "set":
                 {
+                    // The reference builds a real Set, which de-duplicates by
+                    // SameValueZero and keeps the FIRST occurrence's position —
+                    // the same rule as a Map's keys, so the same identity helper
+                    // decides it. Carrying both copies re-encoded a set the
+                    // reference would never emit.
                     List<Object> decoded = new ArrayList<>();
+                    Set<String> seen = new HashSet<>();
 
                     for (Object item : asList(payload(items, "set"), "set")) {
-                        decoded.add(decode(item, depth + 1));
+                        Object value = decode(item, depth + 1);
+                        String identity = mapKeyIdentity(value);
+
+                        if (identity != null && !seen.add(identity)) {
+                            continue;
+                        }
+
+                        decoded.add(value);
                     }
 
                     return new WireSet(decoded);
@@ -435,7 +524,16 @@ public final class Wire {
             }
 
             Object key = decode(pair.get(0), depth + 1);
-            Map.Entry<Object, Object> entry = Map.entry(key, decode(pair.get(1), depth + 1));
+            // SimpleEntry, not Map.entry: the latter is documented as rejecting
+            // nulls in EITHER slot, and JSON carries null in both. `new Map([["k",
+            // null]])` is an ordinary return value that the DO encodes and seven
+            // clients decode, so this threw a NullPointerException on every frame
+            // carrying one — and an NPE is not a WireFormatException, so it was
+            // not even the rejection type the ports were aligned onto. It
+            // surfaced as CODE_INVALID_FRAME "malformed wire value: null",
+            // permanently, naming nothing.
+            Map.Entry<Object, Object> entry =
+                    new AbstractMap.SimpleEntry<>(key, decode(pair.get(1), depth + 1));
             String identity = mapKeyIdentity(key);
 
             // Last write wins, at the FIRST occurrence's position — the reference
@@ -447,7 +545,13 @@ public final class Wire {
                 Integer index = seen.get(identity);
 
                 if (index != null) {
-                    entries.set(index, entry);
+                    // Only the VALUE. Map.prototype.set on a key already present
+                    // keeps the key it holds, so a later -0 never replaces the 0
+                    // stored under it.
+                    entries.set(
+                            index,
+                            new AbstractMap.SimpleEntry<>(
+                                    entries.get(index).getKey(), entry.getValue()));
 
                     continue;
                 }
@@ -490,7 +594,10 @@ public final class Wire {
         }
 
         if (key instanceof Number number) {
-            double numeric = number.doubleValue();
+            // `+ 0.0` clears the sign of a zero and changes nothing else:
+            // SameValueZero holds -0 equal to 0, while Double.toString keeps the
+            // sign ("-0.0"), which made a signed zero its own key.
+            double numeric = number.doubleValue() + 0.0;
 
             return Double.isNaN(numeric) ? "num:nan" : "num:" + numeric;
         }
@@ -537,39 +644,58 @@ public final class Wire {
             throw new WireFormatException("wire-codec: malformed error tag");
         }
 
-        // The props slot is NOT optional and NOT nullable: the reference reads it with
-        // Object.keys, which throws on a null or missing slot, so quietly substituting an
-        // empty map accepted a frame the reference refuses.
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the reference
+        // reads it with Object.keys, which throws on a null or missing slot and ENUMERATES a
+        // string/number/boolean/array — so [TAG,"error","E","m","ab"] would decode there with
+        // the invented props {0:"a",1:"b"} while substituting an empty map accepted the same
+        // frame here.
         if (items.size() < 5 || items.get(4) == null) {
             throw new WireFormatException("wire-codec: malformed error tag");
         }
 
         Object decodedProps = decode(items.get(4), depth + 1);
-        Map<String, Object> props =
-                decodedProps instanceof Map<?, ?>
-                        ? (Map<String, Object>) decodedProps
-                        : new LinkedHashMap<>();
+
+        if (!(decodedProps instanceof Map<?, ?>)) {
+            throw new WireFormatException(
+                    "wire-codec: malformed error tag — props must be an object");
+        }
+
+        Map<String, Object> props = (Map<String, Object>) decodedProps;
         Object cause = items.size() > 5 ? decode(items.get(5), depth + 1) : UNDEFINED;
 
-        // Name and message default rather than throw, matching the other ports:
-        // a non-string in either slot loses only the label, while the props and
-        // the cause still carry information worth surfacing.
-        String name = items.get(2) instanceof String text ? text : "";
-        String message = items.get(3) instanceof String text ? text : "";
+        // Both label slots are type-CHECKED, like every other slot. Defaulting to "" accepted
+        // the frame while erasing the error's identity, and the ports did not even agree on
+        // that: two carried the non-string through verbatim. A slot that must hold a string
+        // and does not is a malformed frame.
+        if (!(items.get(2) instanceof String name) || !(items.get(3) instanceof String message)) {
+            throw new WireFormatException(
+                    "wire-codec: malformed error tag — name and message must be strings");
+        }
 
         return new WireError(name, message, props, cause);
     }
 
     private static Object decodeBytes(List<?> items) {
+        String encoded = asString(payload(items, "bytes"), "bytes");
         byte[] data;
 
         try {
-            data = Base64.getDecoder().decode(asString(payload(items, "bytes"), "bytes"));
+            data = Base64.getDecoder().decode(encoded);
         } catch (IllegalArgumentException error) {
             // The JDK decoder's own unwrapped IllegalArgumentException escaped
             // Wire.decode, so the codec's rejection was not one of the codec's
             // own error types and a caller could not catch the set.
             throw new WireFormatException("wire-codec: invalid base64 in bytes tag");
+        }
+
+        // The payload must be CANONICAL, not merely decodable. The JDK's basic decoder infers
+        // missing padding and ignores the unused low bits of a short final quantum, so "AQI"
+        // and "AQJ=" both decoded here — the second one silently, into two bytes that re-encode
+        // as "AQI=", different bytes than the peer wrote. Re-encoding and comparing is the whole
+        // rule: the payload must be exactly what a conforming encoder would have written.
+        if (!Base64.getEncoder().encodeToString(data).equals(encoded)) {
+            throw new WireFormatException(
+                    "wire-codec: bytes payload is not canonical padded base64");
         }
 
         String ctor = items.size() > 3 && items.get(3) instanceof String name ? name : "Uint8Array";

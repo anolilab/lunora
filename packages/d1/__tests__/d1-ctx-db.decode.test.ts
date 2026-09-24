@@ -23,11 +23,12 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
 // An `v.optional(inner)` column: kind is "optional", the inner validator
 // (carrying the real storage kind) lives on `_meta.inner`, mirroring
 // `@lunora/values`' `createValidator`. The decode must unwrap to `inner.kind`.
-const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike =>
-    ({
+const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    return {
         _meta: { column: { notNull: false, ...column }, inner: { _meta: {}, kind: innerKind } },
         kind: "optional",
-    }) as ValidatorLike;
+    };
+};
 
 // A table whose columns span every non-scalar storage form the serializer
 // encodes: object/array/record → JSON, bigint → decimal string, plus scalar
@@ -62,6 +63,7 @@ const setupDocs = (): DatabaseWriterLike => {
         `CREATE TABLE "docs" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "active" INTEGER,
             "big" TEXT,
             "count" INTEGER,
@@ -75,6 +77,7 @@ const setupDocs = (): DatabaseWriterLike => {
         `CREATE TABLE "other" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "label" TEXT
         )`,
     );
@@ -188,6 +191,7 @@ const setupOptional = (): DatabaseWriterLike => {
         `CREATE TABLE "opt" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "active" INTEGER,
             "big" TEXT,
             "meta" TEXT,
@@ -259,5 +263,90 @@ describe("d1 ctx-db — explicit-id tableName cache", () => {
         expect(reloaded?.["label"]).toBe("second");
         // The `docs`-only fields must NOT bleed through from the stale entry.
         expect(reloaded?.["name"]).toBeUndefined();
+    });
+});
+
+/**
+ * `v.any()`/`v.union()`/`v.from()` store in a TEXT column (`sqlAffinityForKind`
+ * sends all three there) whatever their runtime value happens to be. A number or
+ * boolean bound to that column is COERCED by the engine — `42` lands as the text
+ * `42.0` — and the decode has no declared type to reverse it with, so the caller
+ * read back a string. This goes through a REAL column: asserting on
+ * `sqliteDecode` alone, with a JS value never bound to one, is exactly what let
+ * it ship.
+ */
+describe("d1 ctx-db — a scalar in an untyped column", () => {
+    const untypedSchema: SchemaLike = {
+        tables: {
+            events: {
+                indexes: [],
+                shape: { anything: col("any"), either: col("union"), external: col("from") },
+            },
+        },
+    };
+
+    beforeEach(() => {
+        harness = createD1Exec();
+        harness.ddl(
+            `CREATE TABLE "events" (
+                "id" TEXT PRIMARY KEY,
+                "_creationTime" INTEGER NOT NULL,
+                "_version" INTEGER,
+                "anything" TEXT,
+                "either" TEXT,
+                "external" TEXT
+            )`,
+        );
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const writer = (): DatabaseWriterLike => createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: untypedSchema });
+
+    it("round-trips a number and a boolean with their JS types intact", async () => {
+        expect.assertions(3);
+
+        const database = writer();
+
+        await database.insert("events", { _id: "e1", anything: 42, either: true, external: 1.5 }, { allowExplicitId: true });
+
+        const row = await database.get("e1");
+
+        expect(row?.["anything"]).toBe(42);
+        expect(row?.["either"]).toBe(true);
+        expect(row?.["external"]).toBe(1.5);
+    });
+
+    it("leaves a string, an object and a bigint in the same column exactly as they were", async () => {
+        expect.assertions(3);
+
+        const database = writer();
+
+        await database.insert("events", { _id: "e2", anything: "42", either: { a: 1 }, external: 9_007_199_254_740_993n }, { allowExplicitId: true });
+
+        const row = await database.get("e2");
+
+        // A numeric-looking STRING must stay a string — that ambiguity is what
+        // makes a self-describing form necessary in the first place.
+        expect(row?.["anything"]).toBe("42");
+        expect(row?.["either"]).toStrictEqual({ a: 1 });
+        expect(row?.["external"]).toBe(9_007_199_254_740_993n);
+    });
+
+    it("survives a patch and a replace of the same column", async () => {
+        expect.assertions(2);
+
+        const database = writer();
+
+        await database.insert("events", { _id: "e3", anything: "start", either: 1, external: "x" }, { allowExplicitId: true });
+        await database.patch("e3", { anything: 7 });
+
+        await expect(database.get("e3").then((row) => row?.["anything"])).resolves.toBe(7);
+
+        await database.replace("e3", { anything: false, either: 2, external: "y" });
+
+        await expect(database.get("e3").then((row) => row?.["anything"])).resolves.toBe(false);
     });
 });

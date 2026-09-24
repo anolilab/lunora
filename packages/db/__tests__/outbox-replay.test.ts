@@ -104,19 +104,49 @@ const memoryWebLocks = (): { request: (name: string, options: unknown, callback?
 };
 
 /** A mock `LunoraClient` carrying the identity + mutation surface the outbox replay path uses. */
-const makeClient = (options?: { identity?: string | null; mutation?: () => Promise<unknown> }) => {
+const makeClient = (options?: { baseline?: number; identity?: string | null; mutation?: () => Promise<unknown> }) => {
     const mutation = vi.fn<(reference: { __lunoraRef: string }, args: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>>(
         options?.mutation ?? (async () => "ok"),
     );
 
+    // Mutable so a test can model the shape a real browser always has: the
+    // durable replay starts before the app has resolved its session, and the
+    // identity arrives afterwards.
+    let identity: null | string = options?.identity === undefined ? "user-a" : options.identity;
+    // The cursor the client's live queries have reached. Mutable so a test can
+    // advance it BETWEEN composing a write and its replay — the window that makes
+    // re-sampling the baseline wrong.
+    let baseline: number | undefined = options?.baseline;
+
     const client = {
         confirmedMutationWatermark: () => 0,
-        currentIdentity: () => options?.identity ?? "user-a",
+        currentBaseline: () => baseline,
+        currentIdentity: () => identity,
         mutation,
+        // Mirrors `LunoraClient.replayIdentityVerdict`: nobody signed in yet is
+        // "unknown" (hold the write), a different user is "mismatch" (drop it).
+        replayIdentityVerdict: (stamped: null | string | undefined): "match" | "mismatch" | "unknown" => {
+            if (stamped === identity) {
+                return "match";
+            }
+
+            return identity === null ? "unknown" : "mismatch";
+        },
         subscribe: vi.fn<() => () => void>(() => () => undefined),
     };
 
-    return { client: client as never, mutation };
+    const setBaseline = (next: number | undefined): void => {
+        baseline = next;
+    };
+
+    return {
+        client: client as never,
+        mutation,
+        setBaseline,
+        signIn: (next: null | string) => {
+            identity = next;
+        },
+    };
 };
 
 const executors: OfflineExecutor[] = [];
@@ -175,11 +205,65 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // The replay targets the persisted function path and resends the ORIGINAL
         // idempotency key (not a fresh id), so a committed-but-unacked retry is
         // deduped server-side; the shard routing survives the round-trip too.
-        expect(mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { text: "hello" }, { mutationId: "c1:1", shardKey: "room-7" });
+        expect(mutation).toHaveBeenCalledWith(
+            { __lunoraRef: "messages:send" },
+            { text: "hello" },
+            { mutationId: "c1:1", replayBaseline: null, shardKey: "room-7" },
+        );
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+    });
+
+    // The write's CDC baseline has to survive the executor round-trip. By the time
+    // a replay runs, this client has advanced to a newer cursor — precisely the
+    // state a `.dropStalePatches()` table must judge the write against — so
+    // letting `client.mutation` sample its own baseline there makes every stale
+    // write look fresh and clobber.
+    it("replays under the baseline the write was composed at, not one sampled at replay time", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ baselineSeq: 10, shardKey: "room-7" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation).toHaveBeenCalledWith(
+            { __lunoraRef: "messages:send" },
+            { text: "hello" },
+            { mutationId: "c1:1", replayBaseline: 10, shardKey: "room-7" },
+        );
+    });
+
+    // `{ seq: undefined }` is not the same as omitting the option: omitting it
+    // tells `client.mutation` to sample the current cursor, which is the clobber.
+    // A write queued with no live subscription has to pin "no baseline" instead.
+    it("pins `no baseline` for a write composed without one, rather than letting the replay sample", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ shardKey: "room-7" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        const options = mutation.mock.calls[0]?.[2] as { replayBaseline?: null | number };
+
+        // `null`, not absent: absent tells `client.mutation` to sample the current
+        // cursor, which is the clobber this exists to prevent.
+        expect(options.replayBaseline).toBeNull();
     });
 
     it("drops a queued write whose captured identity no longer matches the signed-in user", async () => {
@@ -199,6 +283,67 @@ describe("durable outbox lifecycle (unified outbox)", () => {
 
         // Dropped, never replayed as someone else.
         expect(mutation).not.toHaveBeenCalled();
+    });
+
+    // No `expect.assertions` here (nor in this file's other `vi.waitFor` tests):
+    // waitFor re-runs its callback until it passes, so the assertion count is a
+    // function of timing, not of what the test checked.
+    it("reports the reserved handler's identity drop on onWriteRejected instead of dropping it silently", async () => {
+        const { client } = makeClient({ identity: "user-b" });
+        const onWriteRejected = vi.fn<(event: { code?: string; collection: string; error: Error; row?: { _id: string } }) => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ identity: "user-a" }));
+
+        await vi.waitFor(() => {
+            expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        });
+
+        const event = onWriteRejected.mock.calls[0]![0];
+
+        // The raw outbox path targets a function, not a collection, so the
+        // persisted path is what names the dropped write to the consumer.
+        expect(event.collection).toBe("messages:send");
+        expect(event.error.message).toContain("identity changed");
+    });
+
+    it("holds a queued write when no identity is established yet, then replays it once one arrives", { timeout: 10_000 }, async () => {
+        // The shape every reload has: `startOfflineExecutor` replays from its own
+        // constructor, before the app has resolved its session and called
+        // `setAuthToken`, so `currentIdentity()` is null while the replay runs.
+        // Dropping here would destroy the QUEUING user's own offline writes —
+        // strictly worse than the cross-user replay the guard exists to stop.
+        const { client, mutation, signIn } = makeClient({ identity: null });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ identity: "user-a" }));
+
+        // Held, not dropped: it stays in the durable outbox across replay
+        // attempts instead of being removed as a terminal verdict.
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBeGreaterThan(0);
+        });
+
+        expect(mutation).not.toHaveBeenCalled();
+        expect(onWriteRejected).not.toHaveBeenCalled();
+
+        signIn("user-a");
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { interval: 100, timeout: 8000 },
+        );
     });
 
     it("retries a transient (code-less) failure until the write lands", { timeout: 10_000 }, async () => {
@@ -232,9 +377,11 @@ describe("durable outbox lifecycle (unified outbox)", () => {
             { interval: 100, timeout: 8000 },
         );
 
-        // Both attempts replayed under the SAME idempotency key.
-        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
-        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", shardKey: undefined });
+        // Both attempts replayed under the SAME idempotency key — and the same
+        // pinned baseline, so a retry that lands minutes later is still judged
+        // against what the write's author could see.
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
@@ -242,6 +389,73 @@ describe("durable outbox lifecycle (unified outbox)", () => {
 
         // A transient failure is retried, never reported as a permanent rejection.
         expect(onWriteRejected).not.toHaveBeenCalled();
+    });
+
+    it("rolls the write's optimistic value back when the replay is permanently rejected", async () => {
+        const { client } = makeClient({
+            mutation: async () => {
+                // A coded verdict — permanent, so the write is dropped, not retried.
+                const error = new Error("forbidden") as Error & { code?: string };
+
+                error.code = "FORBIDDEN";
+
+                throw error;
+            },
+        });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+        const onRejected = vi.fn<() => void>();
+
+        await sink.enqueue(outboxWrite({ onRejected }));
+
+        await vi.waitFor(() => {
+            expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        });
+
+        // Without this the rejected prediction stays on screen until an unrelated
+        // frame or a reload — the rejection reaches the app but never the cache.
+        expect(onRejected).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the optimistic value alone while a transient failure is retried, and drops the handle once it commits", { timeout: 10_000 }, async () => {
+        let attempts = 0;
+        const { client, mutation } = makeClient({
+            mutation: async () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    throw new Error("socket hang up");
+                }
+
+                return "ok";
+            },
+        });
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+        const onRejected = vi.fn<() => void>();
+
+        await sink.enqueue(outboxWrite({ onRejected }));
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(2);
+            },
+            { interval: 100, timeout: 8000 },
+        );
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        // Never rolled back: the first failure was retriable, and the retry landed.
+        expect(onRejected).not.toHaveBeenCalled();
     });
 
     it("drops a transport transaction that carries no replay metadata without calling the server", async () => {
@@ -279,33 +493,42 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).not.toHaveBeenCalled();
     });
 
+    /** The writable `temp` collection — one definition for every test that queues a `db.actions.*` write. */
+    const temporaryDefinition = (shardKey?: string) => {
+        return {
+            temp: {
+                insert: {
+                    mutation: temporarySend,
+                    optimistic: (input: { text: string }, id: string) => {
+                        return { _creationTime: 0, _id: id, text: input.text };
+                    },
+                    toArgs: (row: Record<string, unknown> & { _id: string }) => {
+                        return { id: row._id, text: row.text };
+                    },
+                },
+                list: temporaryList,
+                ...(shardKey === undefined ? {} : { shardKey }),
+            },
+        };
+    };
+
     /**
      * Persist a write against a `temp` collection under a first executor, then
-     * dispose it mid-flight — simulating a deploy that removes the collection.
+     * dispose it mid-flight — simulating a deploy that removes the collection,
+     * or (with an `identity`) the session that queued the write ending.
      * @returns The optimistic id the queued write carried.
      */
-    const strandWrite = async (): Promise<string> => {
+    const strandWrite = async (identity?: string, baseline?: number): Promise<string> => {
         const { client: oldClient } = makeClient({
+            ...(identity === undefined ? {} : { identity }),
+            ...(baseline === undefined ? {} : { baseline }),
             mutation: () =>
                 new Promise(() => {
                     /* in-flight forever — the write stays persisted */
                 }),
         });
 
-        const oldDatabase = defineCollections(oldClient, {
-            temp: {
-                insert: {
-                    mutation: temporarySend,
-                    optimistic: (input: { text: string }, id) => {
-                        return { _creationTime: 0, _id: id, text: input.text };
-                    },
-                    toArgs: (row) => {
-                        return { id: row._id, text: row.text };
-                    },
-                },
-                list: temporaryList,
-            },
-        });
+        const oldDatabase = defineCollections(oldClient, temporaryDefinition());
 
         await oldDatabase.executor.waitForInit();
 
@@ -321,6 +544,114 @@ describe("durable outbox lifecycle (unified outbox)", () => {
 
         return id;
     };
+
+    /** The "next session": `temp` is still writable, so a restored write finds its mutationFn and replays. */
+    const buildWritableReload = (client: never, options?: Parameters<typeof defineCollections>[2]) => {
+        const database = defineCollections(client, temporaryDefinition(), options);
+
+        executors.push(database.executor);
+
+        return database;
+    };
+
+    it("drops a queued collection write whose identity no longer matches, instead of replaying it as the new user", { timeout: 10_000 }, async () => {
+        // Alice queues a write that never lands, then the tab dies.
+        const id = await strandWrite("alice");
+
+        // Same browser profile, same durable outbox — Bob is signed in now.
+        const { client, mutation } = makeClient({ identity: "bob" });
+        const onWriteRejected = vi.fn<(event: { code?: string; collection: string; error: Error; row?: { _id: string } }) => void>();
+
+        const database = buildWritableReload(client, { onWriteRejected });
+
+        // Init resolves once the persisted write is loaded and scheduled (its
+        // replay is fire-and-forget after that), so the wait below can't observe
+        // a still-empty queue and pass vacuously.
+        await database.executor.waitForInit();
+
+        // Wait on the restored write settling either way, so the assertions below
+        // report what actually happened to it rather than a bare timeout.
+        await vi.waitFor(
+            () => {
+                expect(database.pendingCount()).toBe(0);
+            },
+            { timeout: 8000 },
+        );
+
+        // Never sent: Alice's write must not execute under Bob's bearer.
+        expect(mutation).not.toHaveBeenCalled();
+        expect(onWriteRejected).toHaveBeenCalledTimes(1);
+
+        const event = onWriteRejected.mock.calls[0]![0];
+
+        expect(event.collection).toBe("temp");
+        expect(event.error.message).toContain("identity changed");
+        expect(event.row?._id).toBe(id);
+    });
+
+    // `db.actions.*` is a THIRD replay path, alongside the reserved
+    // `__lunora_outbox__` handler and the built-in offline queue. It composes its
+    // own `WriteProvenance`, so it has to capture the baseline there too —
+    // otherwise the replay samples whatever cursor the client has reached by then,
+    // which is the newer state the write is supposed to be judged against.
+    it("replays a collection write under the cursor it was composed at, not the reload's", { timeout: 10_000 }, async () => {
+        // Composed at cursor 10, stranded, then the app reloads already caught up
+        // to 99 — the exact window that makes re-sampling wrong.
+        await strandWrite("alice", 10);
+
+        const { client, mutation } = makeClient({ baseline: 99, identity: "alice" });
+
+        buildWritableReload(client);
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayBaseline: 10 });
+    });
+
+    it("replays a queued collection write when the same identity is still signed in", { timeout: 10_000 }, async () => {
+        await strandWrite("alice");
+
+        const { client, mutation } = makeClient({ identity: "alice" });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildWritableReload(client, { onWriteRejected });
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
+
+        await vi.waitFor(() => {
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        expect(onWriteRejected).not.toHaveBeenCalled();
+    });
+
+    it("routes a sharded collection's write to the shard its list subscription reads", async () => {
+        const { client, mutation } = makeClient();
+        const database = defineCollections(client, temporaryDefinition("acme"));
+
+        executors.push(database.executor);
+
+        await database.executor.waitForInit();
+
+        database.actions.temp({ text: "tenant write" });
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // Without the shard key the write lands in the default shard while the
+        // `acme` subscription reads another DO — committed, ack'd, invisible.
+        expect(mutation.mock.calls[0]![2]).toMatchObject({ shardKey: "acme" });
+    });
 
     /** The "new deploy": `temp` became read-only — its insert binding (and so its mutationFn) is gone. */
     const buildReadOnlyDeploy = (client: never, options?: Parameters<typeof defineCollections>[2]) => {

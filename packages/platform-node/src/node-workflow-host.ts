@@ -12,9 +12,12 @@
  * visulima `RunContext`:
  *
  * - `step.do(name, cb)` / `step.do(name, config, cb)` → `ctx.step(name, cb)` —
- * memoized + replay-safe in the visulima engine. The `config` (retries) and
- * `rollback` arguments are accepted but NOT emulated — visulima steps have no
- * per-step retry config or compensation.
+ * memoized + replay-safe in the visulima engine. The engine has neither
+ * per-step retries nor compensation, so both are emulated inside the one
+ * `ctx.step` call the adapter makes (see {@link createStepAdapter}):
+ * `config.retries` becomes an in-callback attempt loop, and `rollback` handlers
+ * are collected per activation and run in reverse declaration order when a step
+ * finally fails. `config.timeout` is NOT emulated — see the same place for why.
  * - `step.sleep(name, duration)` / `step.sleepUntil(name, ts)` → `ctx.sleep(...)`
  * with a millisecond `Duration`. Cloudflare-style duration strings
  * ("1 minute", "2 hours", …) are parsed; `sleepUntil` in the past resolves
@@ -62,10 +65,12 @@ import type {
     WorkflowBindingLike,
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
+    WorkflowRollbackHandlerLike,
     WorkflowStatusResult,
     WorkflowStepConfigLike,
     WorkflowStepContextLike,
     WorkflowStepLike,
+    WorkflowStepRollbackOptionsLike,
 } from "@lunora/workflow";
 import { createWorkflowRunContext, isWorkflowDefinition, workflowBindingName, workflowDefaultName } from "@lunora/workflow";
 import type { RunContext, RunStatus, WorkflowRuntime, WorkflowStore } from "@visulima/workflow";
@@ -161,13 +166,101 @@ const toMs = (duration: number | string): number => {
  */
 const ALIAS_DEFINITION_ID = "@lunora/platform-node:alias";
 
-/** The per-attempt info a `step.do` callback receives — the engine has no retries, so attempt is always 1. */
-const stepContext = (name: string): WorkflowStepContextLike => {
+/** The per-attempt info a `step.do` callback receives. `count` is 1 because the adapter makes exactly one `ctx.step` call per name. */
+const stepContext = (name: string, attempt: number, config: WorkflowStepConfigLike): WorkflowStepContextLike => {
     return {
-        attempt: 1,
-        config: { retries: { limit: 1 } },
+        attempt,
+        config,
         step: { count: 1, name },
     };
+};
+
+/** Config a `step.do` with no `config` argument runs under — one attempt, no retry. */
+const DEFAULT_STEP_CONFIG: WorkflowStepConfigLike = { retries: { limit: 1 } };
+
+/**
+ * The longest delay Node's timers honour. Anything above it is silently taken
+ * as 1 ms, so an unclamped oversized backoff fires on the next tick — turning
+ * the pause that was meant to spare a failing dependency into back-to-back
+ * retries. A `delay` of "1 month" alone is already past this, so the finite
+ * `retries.limit` guard does not put it out of reach.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Wait `ms` before the next attempt, capped at {@link MAX_TIMER_MS}. The cap is
+ * a ceiling, not a fix for the underlying limit: the backoff is an in-process
+ * `setTimeout`, so a wait anywhere near it outlives the activation's lease
+ * regardless. Clamping only keeps an oversized backoff from becoming no backoff.
+ */
+const delay = async (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, Math.min(ms, MAX_TIMER_MS));
+    });
+
+/**
+ * The pause before attempt `attempt + 1`, from the step's `backoff` and base
+ * `delay`. `constant` is the default, matching Cloudflare's `WorkflowBackoff`.
+ */
+const backoffMs = (base: number, backoff: "constant" | "exponential" | "linear" | undefined, attempt: number): number => {
+    switch (backoff) {
+        case "exponential": {
+            return base * 2 ** (attempt - 1);
+        }
+        case "linear": {
+            return base * attempt;
+        }
+        default: {
+            return base;
+        }
+    }
+};
+
+/** One registered `rollback`, captured when its step settled. */
+interface Compensation {
+    context: WorkflowStepContextLike;
+    handler: WorkflowRollbackHandlerLike;
+    name: string;
+
+    /**
+     * The step's DECLARATION position — the order its `step.do` was called in,
+     * assigned before that call awaits anything. Steps that run concurrently
+     * (`ctx.parallel`, or a hand-rolled `Promise.all` of `ctx.runStep`) settle
+     * in an order their declaration order does not predict, so recording the
+     * position is the only way to unwind by it.
+     */
+    order: number;
+    output: unknown;
+}
+
+/**
+ * Run every registered compensation in reverse declaration order — the saga
+ * unwind Cloudflare performs natively when a step fails.
+ *
+ * Entries arrive in the order their steps SETTLED, which for concurrent steps
+ * is not the order they were declared in, so the list is sorted by the recorded
+ * declaration position before it is reversed. Sequential bodies are unaffected:
+ * there the two orders coincide, and the failing step — declared last — still
+ * compensates first.
+ *
+ * The list is emptied first, so a second failure (two `step.do`s raced with
+ * `Promise.all`, say) cannot compensate the same steps twice.
+ *
+ * A handler that throws is swallowed deliberately: the step error is what the
+ * run reports and what the caller acts on, and one failed compensation must not
+ * mask it nor strand the compensations still queued behind it.
+ */
+const compensate = async (entries: Compensation[], cause: unknown): Promise<void> => {
+    const error = cause instanceof Error ? cause : new Error(String(cause));
+
+    for (const entry of entries.splice(0).toSorted((a, b) => b.order - a.order)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- compensations must unwind in order, not concurrently
+            await entry.handler({ ctx: entry.context, error, output: entry.output, stepName: entry.name });
+        } catch {
+            /* see above */
+        }
+    }
 };
 
 /** Map a visulima `RunStatus` onto the Lunora `WorkflowInstanceStatus` vocabulary. */
@@ -185,23 +278,145 @@ const mapStatus = (status: RunStatus): WorkflowInstanceStatus => {
     }
 };
 
-/** Adapt a visulima `RunContext` into the native `WorkflowStepLike` surface. */
+/**
+ * Adapt a visulima `RunContext` into the native `WorkflowStepLike` surface.
+ *
+ * # Retries and rollbacks are emulated here
+ *
+ * The engine offers one durable primitive — `ctx.step(id, fn)`, memoized by id —
+ * and neither a per-step retry config nor compensation. Both are emulated
+ * inside the single `ctx.step` call each `step.do` makes:
+ *
+ * - Retries: `config.retries` drives an attempt loop around the callback, so
+ * only the attempt that finally succeeds is memoized and `ctx.attempt` counts
+ * up the way Cloudflare's does. `limit` is read as the total number of
+ * attempts, which is what this host's previous `{ retries: { limit: 1 } }`
+ * default already meant by it. A non-finite `limit` is rejected outright —
+ * `attempt >= limit` could never end the loop. The backoff wait is an
+ * in-process `setTimeout` rather than a durable sleep, so a crash mid-backoff
+ * restarts the step at attempt 1 instead of resuming the countdown
+ * — at-least-once either way — and it is capped at {@link MAX_TIMER_MS}.
+ * - Rollbacks: each settled step with a `rollback` handler is pushed onto a
+ * per-activation list along with its declaration position, and a step that
+ * fails after its last attempt unwinds that list in reverse declaration order
+ * (its own handler carrying `output: undefined`, since it never produced one).
+ * The position is recorded because concurrent steps — `ctx.parallel`, or a
+ * `Promise.all` of `ctx.runStep` — settle in an order their declaration order
+ * does not predict. Replay is what makes this whole across a suspension:
+ * the engine re-executes the workflow body from the top on every activation,
+ * so a `step.do` whose result is memoized still re-registers its rollback
+ * before a later step can fail. Compensations are plain calls, not durable
+ * steps — a crash *during* the unwind leaves it half-done, and `rollbackConfig`
+ * is ignored.
+ *
+ * `config.timeout` is deliberately NOT emulated. The contract hands the callback
+ * no `AbortSignal`, so the best this seam could do is reject while the work it
+ * was supposed to cancel keeps running — a step that reports failure and then
+ * completes its side effect is worse than one that takes too long. Rated
+ * `unsupported` in `NODE_CAPABILITIES`'s `workflows` note for that reason.
+ */
 const createStepAdapter = (context: RunContext): WorkflowStepLike => {
+    /**
+     * Rollbacks registered by steps that completed in THIS activation. Rebuilt
+     * on every replay, which is exactly what makes it complete — see above.
+     */
+    const compensations: Compensation[] = [];
+
+    /**
+     * Counts `step.do` CALLS, so a compensation records where its step was
+     * declared rather than when it happened to settle. Rebuilt on every replay
+     * alongside `compensations`, and read before the call awaits anything, so
+     * concurrent steps still take their positions in source order.
+     */
+    let declared = 0;
+
     return {
-        do: (async (
+        do: async (
             name: string,
             configOrCallback: WorkflowStepConfigLike | ((context: WorkflowStepContextLike) => Promise<unknown>),
-            maybeCallback?: (context: WorkflowStepContextLike) => Promise<unknown>,
-            _rollback?: unknown,
+            callbackOrRollback?: ((context: WorkflowStepContextLike) => Promise<unknown>) | WorkflowStepRollbackOptionsLike,
+            maybeRollback?: WorkflowStepRollbackOptionsLike,
         ) => {
-            const callback = typeof configOrCallback === "function" ? configOrCallback : maybeCallback;
+            const order = declared;
+
+            declared += 1;
+
+            const hasConfig = typeof configOrCallback !== "function";
+            const callback = hasConfig ? (callbackOrRollback as (context: WorkflowStepContextLike) => Promise<unknown>) : configOrCallback;
+            const rollback = hasConfig ? maybeRollback : (callbackOrRollback as WorkflowStepRollbackOptionsLike);
 
             if (typeof callback !== "function") {
                 throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: step.do("${name}") requires a callback`);
             }
 
-            return context.step(name, async () => callback(stepContext(name)));
-        }) as WorkflowStepLike["do"],
+            const config = hasConfig ? configOrCallback : DEFAULT_STEP_CONFIG;
+            const declaredLimit = config.retries?.limit ?? 1;
+
+            // `Math.trunc` and `Math.max` both propagate `NaN` and `Infinity`,
+            // so an unvalidated limit leaves `attempt >= limit` forever false
+            // and the attempt loop never ends. Rejected here rather than in
+            // `defineStep` because this is where every path converges: a direct
+            // `step.do(name, config, cb)` never sees `defineStep`, and
+            // `ctx.runStep(step, args, { config })` can override whatever it
+            // declared.
+            if (!Number.isFinite(declaredLimit)) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: step.do("${name}") retries.limit must be a finite number, got ${String(declaredLimit)}`,
+                );
+            }
+
+            const limit = Math.max(1, Math.trunc(declaredLimit));
+            const baseDelay = config.retries?.delay === undefined ? 0 : toMs(config.retries.delay);
+
+            // The last attempt's context, so a rollback reports the attempt the
+            // step actually ran on rather than a freshly minted 1.
+            let lastContext = stepContext(name, 1, config);
+
+            try {
+                const output = await context.step(name, async () => {
+                    for (let attempt = 1; ; attempt += 1) {
+                        lastContext = stepContext(name, attempt, config);
+
+                        try {
+                            // eslint-disable-next-line no-await-in-loop -- attempts are sequential by definition
+                            return await callback(lastContext);
+                        } catch (error) {
+                            if (attempt >= limit) {
+                                throw error;
+                            }
+
+                            const wait = backoffMs(baseDelay, config.retries?.backoff, attempt);
+
+                            if (wait > 0) {
+                                // eslint-disable-next-line no-await-in-loop -- see above
+                                await delay(wait);
+                            }
+                        }
+                    }
+                });
+
+                if (rollback?.rollback !== undefined) {
+                    compensations.push({ context: lastContext, handler: rollback.rollback, name, order, output });
+                }
+
+                return output;
+            } catch (error) {
+                if (rollback?.rollback !== undefined) {
+                    compensations.push({
+                        context: lastContext,
+                        handler: rollback.rollback,
+                        name,
+                        order,
+                        output: undefined,
+                    });
+                }
+
+                await compensate(compensations, error);
+
+                throw error;
+            }
+        },
         sleep: async (name, duration) => {
             const ms = toMs(duration);
 

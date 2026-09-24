@@ -64,15 +64,22 @@ const PT_STOPWORDS =
     "a ao aos as até com como da das de do dos e em entre era essa esse esta este eu foi há isso já mais mas me mesmo meu na nas no nos num numa o os ou para pela pelo por qual que quem se sem seu só sua também te tem um uma você";
 
 /**
- * Combining Diacritical Marks (U+0300–U+036F) — the accents that sit on Latin,
- * Greek and Cyrillic letters.
+ * Combining Diacritical Marks (U+0300–U+036F) — the accents that sit on Latin
+ * and Greek letters — EXCEPT a breve or diaeresis on a Cyrillic base.
  *
  * Deliberately narrower than `\p{M}`: that class also covers the Japanese
  * voiced sound marks (U+3099/U+309A), so stripping every mark turns `が` into
  * `か` and `パ` into `ハ`, silently merging distinct words. Korean jamo
  * decompose outside this range and are likewise left alone.
+ *
+ * The Cyrillic carve-out is the same argument. `й` decomposes to `и` + U+0306
+ * and `ё` to `е` + U+0308, but these are separate LETTERS of the alphabet, not
+ * accented spellings of the base — stripping them merged `бой`/`бои` and
+ * `ёж`/`еж` into one token each. Every other mark on a Cyrillic base (the
+ * dialectal/archaic accents) still folds, and the same marks on a Latin base
+ * (`ă`, `ë`) still fold, because there they really are accents.
  */
-const LATIN_DIACRITICS = /[\u0300-\u036F]/gu;
+const LATIN_DIACRITICS = /(?<=\p{Script=Cyrillic})[\u0300-\u0305\u0307\u0309-\u036F]|(?<!\p{Script=Cyrillic})[\u0300-\u036F]/gu;
 
 /**
  * Any code point outside ASCII — the test gating {@link foldText}'s fast path.
@@ -94,6 +101,70 @@ const NON_ASCII = /[\u0080-\u{10FFFF}]/u;
  * which resume from it and would make a shared instance order-dependent.
  */
 const TOKEN_RUN = /[\p{L}\p{N}]+/gu;
+
+/**
+ * The scripts written without spaces between words. A token run in these is a
+ * whole clause, not a word.
+ *
+ * `Script_Extensions`, not `Script`: the prolonged sound mark `ー` (U+30FC) is
+ * `Script=Common`, so under the plain property `タワー` split into a katakana run
+ * plus a stray mark instead of one word.
+ */
+const CJK_RUN = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]+/gu;
+
+/** Non-global twin of {@link CJK_RUN}, for the one-per-call presence test (`test` on a `g` regex is stateful). */
+const HAS_CJK = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]/u;
+
+/**
+ * Re-cut a token run's CJK stretches into overlapping bigrams.
+ *
+ * `[\p{L}\p{N}]+` has no word boundary to find in unspaced text, so
+ * `北京大学は東京にある` came out as ONE token and only a PREFIX of the whole
+ * clause could ever match it — searching `大学` found nothing. Overlapping
+ * bigrams are the standard fallback (`北京`, `京大`, `大学`, …): both sides run
+ * through the same function, so a two-character query lands on exactly one
+ * bigram and a longer one on a run of them.
+ *
+ * Only the CJK stretches are re-cut. A mixed run like `iphone15プロ` keeps
+ * `iphone15` whole and bigrams only `プロ`, and a single CJK character (already
+ * a whole word) is left as itself.
+ */
+const expandCjkRuns = (token: string): string[] => {
+    if (!HAS_CJK.test(token)) {
+        return [token];
+    }
+
+    const parts: string[] = [];
+    let cursor = 0;
+
+    for (const match of token.matchAll(CJK_RUN)) {
+        const start = match.index;
+        // eslint-disable-next-line @typescript-eslint/no-misused-spread -- code points ARE the unit here: the run is matched as CJK only, so it holds no emoji or grapheme cluster, and splitting by UTF-16 unit would cut an astral ideograph in half
+        const run = [...match[0]];
+
+        if (start > cursor) {
+            parts.push(token.slice(cursor, start));
+        }
+
+        cursor = start + match[0].length;
+
+        if (run.length === 1) {
+            parts.push(match[0]);
+
+            continue;
+        }
+
+        for (let offset = 0; offset + 1 < run.length; offset += 1) {
+            parts.push(`${String(run[offset])}${String(run[offset + 1])}`);
+        }
+    }
+
+    if (cursor < token.length) {
+        parts.push(token.slice(cursor));
+    }
+
+    return parts;
+};
 
 /**
  * Fold text to its comparison form: decompose, drop Latin diacritics,
@@ -154,8 +225,11 @@ const STOPWORDS: Record<SearchLanguage, ReadonlySet<string>> = {
  * Analysis version. Bumped whenever folding, stopwords or (eventually)
  * stemming change, so every existing index is detected as stale and rebuilt
  * rather than serving half-old analysis.
+ *
+ * v3: CJK runs are re-cut into overlapping bigrams, and a breve/diaeresis on a
+ * Cyrillic base is no longer stripped.
  */
-const ANALYZER_VERSION = 2;
+const ANALYZER_VERSION = 3;
 
 /**
  * Longest token that reaches an index, in characters.
@@ -210,7 +284,12 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
     // folding the two predicates together forces a `stopwords.has` per token
     // even for the `none` analyzer, which the early return below skips entirely.
     const split = (text: string): string[] => {
-        const tokens = (foldText(text).match(TOKEN_RUN) ?? []).filter((token) => token.length <= MAX_TOKEN_LENGTH);
+        const folded = foldText(text);
+        const runs = folded.match(TOKEN_RUN) ?? [];
+        // One presence test per call, not one per token: `expandCjkRuns` is a
+        // no-op for the overwhelmingly common all-Latin text, and this keeps
+        // that no-op off the per-token path entirely.
+        const tokens = (HAS_CJK.test(folded) ? runs.flatMap((run) => expandCjkRuns(run)) : runs).filter((token) => token.length <= MAX_TOKEN_LENGTH);
 
         return stopwords.size === 0 ? tokens : tokens.filter((token) => !stopwords.has(token));
     };

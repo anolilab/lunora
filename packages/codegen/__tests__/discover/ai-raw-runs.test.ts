@@ -40,6 +40,14 @@ describe("discoverAiRawRuns", () => {
         expect(found[0]).toMatchObject({ exportName: "infer", file: "run", line: 1 });
     });
 
+    it("flags a destructured `args` model id — the form the ai registry item uses", () => {
+        expect.assertions(1);
+
+        write("destructured.ts", `export const infer = action(async ({ args: { model }, ctx }) => ctx.ai.run(model, {}));`);
+
+        expect(discoverAiRawRuns(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags an args-derived model reached through one local const hop", () => {
         expect.assertions(1);
 

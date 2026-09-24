@@ -15,6 +15,7 @@ import type {
     LunoraRouteHandler,
     QueryCtx,
     RegisteredQuery,
+    RelatedStart,
     ScheduledFunctionDoc,
     StorageMetadata,
     TableReader,
@@ -187,6 +188,34 @@ const check = (): void => {
     // whatever the last overload widened to — not something worth pinning.
     type Check21 = Assert<typeof ranReferenceBadArgs extends Promise<unknown> ? true : false>;
 
+    // `ctx.scheduler` takes the same generated reference every doc page and setup
+    // skill passes it (`runAfter(ms, internal.billing.endTrial, args)`) — the
+    // runtime always resolved it off `__lunoraRef`, only the type refused it,
+    // pushing every caller to `as any`. The path-string form still works.
+    const scheduledByReference = actionCtx.scheduler.runAfter(1000, apiSend, { text: "hi" });
+    const scheduledByPath = actionCtx.scheduler.runAfter(1000, "todos:send", { text: "hi" });
+
+    type Check22 = Assert<Equal<Awaited<typeof scheduledByReference>, string>>;
+    type Check23 = Assert<Equal<Awaited<typeof scheduledByPath>, string>>;
+
+    // A `query` is not schedulable — a deferred job exists to have an effect.
+    // @ts-expect-error - `apiList` is a query reference
+    const scheduledQuery = actionCtx.scheduler.runAt(Date.now(), apiList, { limit: 3 });
+
+    type Check24 = Assert<Equal<Awaited<typeof scheduledQuery>, string>>;
+
+    // `ctx.db.related`'s start node actually discriminates. Its document arm
+    // requires `_id`; without that requirement the arm is a bare
+    // `Record<string, unknown>`, `RelatedStartReference` is assignable to it,
+    // the union collapses, and a misspelled `{ tabel, id }` type-checks only to
+    // fail inside `resolveStart` at runtime.
+    type Accepts<Start> = [Start] extends [RelatedStart] ? true : false;
+
+    type Check25 = Assert<Equal<Accepts<{ id: string; table: string }>, true>>;
+    type Check26 = Assert<Equal<Accepts<{ _id: string; title: string }>, true>>;
+    type Check27 = Assert<Equal<Accepts<{ id: string; tabel: string }>, false>>;
+    type Check28 = Assert<Equal<Accepts<Record<string, unknown>>, false>>;
+
     // `ctx.db.system` — read-only system tables. The overloaded `query`/`get`
     // resolve the per-table doc type (`_scheduled_functions` → ScheduledFunctionDoc,
     // `_storage` → StorageMetadata), so these awaited results are exactly typed.
@@ -255,6 +284,13 @@ const check = (): void => {
         Check19,
         Check20,
         Check21,
+        Check22,
+        Check23,
+        Check24,
+        Check25,
+        Check26,
+        Check27,
+        Check28,
     ];
 
     // eslint-disable-next-line no-void, sonarjs/void-use -- marks the type-assertion tuple as used so its `@ts-expect-error`/`Equal<>` checks are evaluated

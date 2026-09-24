@@ -30,6 +30,23 @@ const binding = (body: unknown, init: { status?: number } = {}): { calls: Record
 };
 
 describe("createServiceClient", () => {
+    // `encodeWire` rejects any non-plain object (a `RegExp`, a `Headers`, a class
+    // instance, one with a working `toJSON()`) where `JSON.stringify` swallowed it
+    // into `{}`. Its own message names only the type, so the caller and the target
+    // function have to be attached here or the throw is untraceable.
+    it("labels an unencodable argument with the surface and the function path", async () => {
+        expect.assertions(2);
+
+        const service = binding({ result: null });
+        const client = createServiceClient(service);
+
+        await expect(client.query(reference<"query", { pattern: RegExp }, never>("threads:list"), { pattern: /nope/u })).rejects.toThrow(
+            /@lunora\/client\/service: cannot encode args for 'threads:list' — /,
+        );
+        // Rejected before the hop, so the binding is never called.
+        expect(service.calls).toHaveLength(0);
+    });
+
     it("posts the RPC envelope the worker route documents", async () => {
         expect.assertions(4);
 
@@ -153,6 +170,22 @@ describe("createServiceClient", () => {
         const service = binding({ unexpected: true }, { status: 502 });
 
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/502/u);
+    });
+
+    it("treats a non-object error slot as no envelope at all", async () => {
+        expect.assertions(4);
+
+        // §4.2: only an OBJECT `error` slot is an envelope. This path narrowed
+        // the BODY (above) but not the slot, so a proxy's `{"error": null}` page
+        // raised `TypeError: Cannot read properties of null` and
+        // `{"error": "bad gateway"}` an `Error` with no `code` — the two shapes
+        // the eight ports are now held to on the same fixture.
+        for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+            const service = binding({ error: slot }, { status: 502 });
+
+            // eslint-disable-next-line no-await-in-loop -- one binding per slot shape; the shapes are the table
+            await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toMatchObject({ code: "INTERNAL" });
+        }
     });
 
     it("passes the binding's own fetch, not the global one", async () => {

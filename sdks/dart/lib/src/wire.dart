@@ -53,6 +53,42 @@ const int wireMaxBigIntDigits = 1024;
 /// changing value — `BigInt` and its tag exist for that case.
 const int wireMaxExactInteger = 9007199254740991;
 
+/// Largest epoch a `Date` holds (ECMAScript TimeClip). Past this, and for any
+/// non-finite epoch, `new Date(v)` is an Invalid Date.
+const double wireMaxTimeValue = 8.64e15;
+
+/// `new Date(epoch).getTime()` — ECMAScript TimeClip.
+///
+/// A `Date` truncates its argument toward zero, and anything non-finite or past
+/// ±8.64e15 becomes an Invalid Date, which the reference re-encodes as a NaN
+/// tag. Kept verbatim, the epoch went back on the wire as a date the
+/// reference's own `Date` can never hold.
+double _timeClip(double epoch) {
+  if (!epoch.isFinite || epoch.abs() > wireMaxTimeValue) {
+    return double.nan;
+  }
+
+  final truncated = epoch.truncateToDouble();
+
+  // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+  // exactly one window: an epoch in (-1, 0] gives +0 there and -0 here, because
+  // truncation keeps the sign of zero. The window is one value wide, and the
+  // stable subscription key spells -0 as the bare token `-0`, distinct from `0`
+  // — so without this a Date built from -0.5 opens a different subscription
+  // than the TS client's does.
+  return truncated == 0 ? 0.0 : truncated;
+}
+
+/// An RFC 3986 scheme, then the rest — what makes an href ABSOLUTE.
+///
+/// The reference builds a real `URL`, which throws on anything unparseable,
+/// while every port stored the string verbatim and accepted `"not a url"` — a
+/// frame that kills a JS peer's subscription and is waved through here.
+/// Reproducing WHATWG URL parsing in eight languages is not on offer (their own
+/// parsers disagree with it in the deep end), so the contract, and
+/// `protocol/README.md` §2.1, is the floor of it.
+final RegExp _absoluteHref = RegExp(r'^[A-Za-z][A-Za-z0-9+\-.]*:');
+
 /// Bytes per element for the typed-array views the codec round-trips. A view
 /// whose payload is not a whole number of elements is not a view the reference
 /// can rebuild — `new Float32Array(buffer)` raises a RangeError there — so
@@ -276,6 +312,35 @@ Object? _encodeDouble(double value) {
   if (value == double.negativeInfinity) {
     return <Object?>[wireTag, '-inf'];
   }
+
+  // An integral value is narrowed to an int, because that is what `jsonEncode`
+  // needs in order to spell it the way the reference does: `JSON.stringify(1)`
+  // is `1`, while a Dart `double` renders `1.0`. Every epoch is a double here
+  // (`WireDate.epochMs`), so without this every date on the wire read
+  // `1700000000000.0` — bytes no reference decoder writes. The suite could not
+  // see it: its round-trip assertion compared through `stableStringify`, which
+  // formats numbers the ECMAScript way, so both sides agreed on the comparison
+  // and disagreed on what `transport.dart` actually sends.
+  //
+  // Bounded at 2^53 because that is the last magnitude a Dart `int` holds
+  // exactly; `int` is 64-bit, so `(1e20).toInt()` saturates at
+  // 9223372036854775807 rather than converting. A negative zero stays a double:
+  // `stableStringify` spells it as the bare token `-0`, distinct from `0`, and
+  // narrowing to `int` would drop the sign before the key is built.
+  //
+  // That leaves a residual gap on `(2^53, 1e21)`, which `number-past-exact-
+  // integer-range` reaches: `jsonEncode(1e20)` is `100000000000000000000.0`
+  // where the reference writes `100000000000000000000`. Exponent form starts at
+  // 1e21, not at 2^53 — measured, not assumed — and from 1e21 up the two agree
+  // again. The residue is a trailing `.0` on a number the receiver re-PARSES,
+  // so it costs a byte and changes no value; closing it would mean replacing
+  // `jsonEncode` in `transport.dart` with a hand-rolled writer, which is a
+  // ninth number formatter to keep in step with ECMAScript. See
+  // `sdks/README.md`, "Deliberately unpinned, and why".
+  if (value == value.truncateToDouble() && value.abs() <= 9007199254740992.0 && !(value == 0 && value.isNegative)) {
+    return value.toInt();
+  }
+
   return value;
 }
 
@@ -386,15 +451,15 @@ Object? _decodeTagged(List<Object?> value, int depth) {
       if (epoch is! num) {
         throw const WireFormatException('malformed date tag');
       }
-      return WireDate(epoch.toDouble());
+      return WireDate(_timeClip(epoch.toDouble()));
     case 'url':
-      _require(value.length >= 3 && value[2] is String, 'url');
+      _require(value.length >= 3 && value[2] is String && _absoluteHref.hasMatch(value[2] as String), 'url');
       return WireUrl(value[2] as String);
     case 'map':
       return _decodeMap(value, depth);
     case 'set':
       _require(value.length >= 3 && value[2] is List, 'set');
-      return WireSet(<Object?>[for (final item in value[2] as List<Object?>) decodeWire(item, depth + 1)]);
+      return _decodeSet(value[2] as List<Object?>, depth);
     case 'error':
       return _decodeError(value, depth);
     case 'bytes':
@@ -474,7 +539,9 @@ Object? _decodeMap(List<Object?> value, int depth) {
       final index = seen[identity];
 
       if (index != null) {
-        entries[index] = entry;
+        // Only the VALUE. `Map.prototype.set` on a key already present keeps the
+        // key it holds, so a later `-0` never replaces the `0` stored under it.
+        entries[index] = MapEntry(entries[index].key, entry.value);
         continue;
       }
 
@@ -485,6 +552,30 @@ Object? _decodeMap(List<Object?> value, int depth) {
   }
 
   return WireMap(entries);
+}
+
+/// Decode a `set` payload, collapsing duplicates the way a real `Set` does.
+///
+/// The reference builds a `new Set`, which de-duplicates by SameValueZero and
+/// keeps the FIRST occurrence's position — the same rule as a `Map`'s keys, so
+/// the same identity helper decides it. Carrying both copies re-encoded a set
+/// the reference would never emit.
+WireSet _decodeSet(List<Object?> raw, int depth) {
+  final items = <Object?>[];
+  final seen = <String>{};
+
+  for (final entry in raw) {
+    final item = decodeWire(entry, depth + 1);
+    final identity = _mapKeyIdentity(item);
+
+    if (identity != null && !seen.add(identity)) {
+      continue;
+    }
+
+    items.add(item);
+  }
+
+  return WireSet(items);
 }
 
 /// A map key's collapse identity, or `null` when it never collapses.
@@ -516,8 +607,10 @@ String? _mapKeyIdentity(Object? key) {
 
   if (key is num) {
     // `1` and `1.0` are one key to the reference, where every JSON number is a
-    // double — so they must not split on Dart's int/double distinction.
-    return key.isNaN ? 'num:nan' : 'num:${key.toDouble()}';
+    // double — so they must not split on Dart's int/double distinction. `+ 0.0`
+    // then clears the sign of a zero and changes nothing else: SameValueZero
+    // holds -0 equal to 0, while `(-0.0).toString()` is "-0.0".
+    return key.isNaN ? 'num:nan' : 'num:${key.toDouble() + 0.0}';
   }
 
   return null;
@@ -526,21 +619,28 @@ String? _mapKeyIdentity(Object? key) {
 Object? _decodeError(List<Object?> value, int depth) {
   _require(value.length >= 4, 'error');
 
-  // The props slot is NOT optional and NOT nullable: the reference reads it with
-  // `Object.keys`, which throws on a null or missing slot, so quietly
-  // substituting an empty map accepted a frame the reference refuses.
+  // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+  // reference reads it with `Object.keys`, which throws on a null or missing
+  // slot and ENUMERATES a string/number/boolean/array — so
+  // `[TAG,"error","E","m","ab"]` would decode there with the invented props
+  // {0:"a",1:"b"} while substituting an empty map accepted the same frame here.
   _require(value.length > 4 && value[4] != null, 'error');
 
-  final props = <String, Object?>{};
   final decoded = decodeWire(value[4], depth + 1);
 
-  if (decoded is Map<String, Object?>) {
-    props.addAll(decoded);
-  }
+  _require(decoded is Map<String, Object?>, 'error');
+
+  final props = <String, Object?>{...decoded! as Map<String, Object?>};
+
+  // Both label slots are type-CHECKED, like every other slot. Substituting ''
+  // for a non-string accepted the frame while erasing the error's identity, and
+  // the ports did not even agree on that: two carried the non-string through
+  // verbatim. A slot that must hold a string and does not is a malformed frame.
+  _require(value[2] is String && value[3] is String, 'error');
 
   return WireError(
-    name: value[2] is String ? value[2] as String : '',
-    message: value[3] is String ? value[3] as String : '',
+    name: value[2] as String,
+    message: value[3] as String,
     props: props,
     cause: value.length > 5 ? decodeWire(value[5], depth + 1) : WireUndefined.instance,
   );
@@ -551,10 +651,22 @@ Object? _decodeBytes(List<Object?> value) {
 
   final Uint8List data;
 
+  final encoded = value[2] as String;
+
   try {
-    data = base64.decode(value[2] as String);
+    data = base64.decode(encoded);
   } on FormatException {
     throw const WireFormatException('malformed bytes tag');
+  }
+
+  // The payload must be CANONICAL, not merely decodable. `base64.decode` also
+  // accepts the URL-SAFE alphabet, so this port alone took a frame every other
+  // implementation refuses and rewrote `-_8=` into `+/8=` on the way back out.
+  // Re-encoding and comparing is the whole rule, and it closes the padding and
+  // trailing-bit leniencies with it: the payload must be exactly the string a
+  // conforming encoder would have written for these bytes.
+  if (base64.encode(data) != encoded) {
+    throw const WireFormatException('bytes payload is not canonical padded base64');
   }
 
   final ctor = value.length > 3 && value[3] is String ? value[3] as String : 'Uint8Array';

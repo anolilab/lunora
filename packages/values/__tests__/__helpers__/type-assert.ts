@@ -22,10 +22,17 @@ type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
+/**
+ * Assignability (`A` is usable where `B` is expected) rather than the exact
+ * equality {@link Equal} tests. Wrapped in tuples so a union `A` is compared
+ * whole instead of distributing member-by-member.
+ */
+type Extends<A, B> = [A] extends [B] ? true : false;
+
 /** Keys of `T` that may be omitted. */
 type OptionalKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
 
 /** Keys of `T` that must be supplied. */
 type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T];
 
-export type { Assert, Equal, OptionalKeys, RequiredKeys };
+export type { Assert, Equal, Extends, OptionalKeys, RequiredKeys };

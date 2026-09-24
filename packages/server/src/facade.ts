@@ -119,6 +119,8 @@ export interface FacadeEntry {
     findFirst: (args?: unknown) => Promise<unknown>;
     findFirstOrThrow: (args?: unknown) => Promise<unknown>;
     findMany: (args?: unknown) => Promise<unknown>;
+    /** The one row matching `where`, or `null`. Throws `NOT_UNIQUE` when a second one matches. */
+    findUnique: (args?: unknown) => Promise<unknown>;
     get: (id: string) => Promise<unknown>;
     groupBy: (options: unknown) => Promise<unknown>;
     /** Physically remove a row (and physically cascade), bypassing `.softDelete()`. */
@@ -225,6 +227,21 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         }
     };
 
+    // "Exactly one row" — the assertion `findFirst` drops. The typed surface refuses
+    // `limit`/`cursor` (see `TableReaderFacade.findUnique`), so the over-fetch below
+    // is always the whole request.
+    const findUnique = async (args?: unknown): Promise<unknown> => {
+        const query = (args ?? {}) as Record<string, unknown>;
+        const result = (await writer.findMany(tableName, { ...query, limit: 2 })) as { page: ReadonlyArray<Record<string, unknown>> };
+
+        if (result.page.length > 1) {
+            throw new LunoraError("NOT_UNIQUE", `ctx.db.${tableName}.findUnique matched more than one document; expected at most one`);
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- mirrors `findFirst`/`unique()`: `null` is the documented "no match" result.
+        return result.page[0] ?? null;
+    };
+
     // Insert-or-update keyed by `target`. Both the lookup and the write go
     // through the bound `writer.*`, so each step is RLS-checked when this facade
     // is bound over the wrapped writer (a hidden row simply isn't found, and the
@@ -279,6 +296,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         findFirst: (args) => writer.findFirst(tableName, args),
         findFirstOrThrow: (args) => writer.findFirstOrThrow(tableName, args),
         findMany: (args) => writer.findMany(tableName, args),
+        findUnique,
         get: (id) => writer.get(id, tableName),
         groupBy: (options) => writer.groupBy(tableName, options),
         // Physical removal — bypasses `.softDelete()`. RLS gates it as a delete.

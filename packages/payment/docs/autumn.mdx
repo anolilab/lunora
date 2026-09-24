@@ -183,8 +183,10 @@ export const ShardDO = createShardDO({
             client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
             webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
         }),
-        // Override the default "caller owns the referenceId" rule for org/workspace keys.
-        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
+        // receives `env` only — there is no `ctx` in scope — so an org rule resolves membership from
+        // the reference itself, through a lookup you own.
+        // authorize: async (referenceId) => isMemberOfOrg(referenceId),
         // No `entitlements` map: Autumn is authoritative for check/listBalances.
         observability: (event) => console.log("[payment]", event.type, event),
     }),
@@ -300,7 +302,8 @@ updated.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` — the only mode Autumn accepts. Its meter is additive, so
+    // `mode: "set"` (a period total) throws VALIDATION_ERROR here.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -324,6 +327,7 @@ exist. Autumn's canonical headers are `svix-id`, `svix-timestamp`, and
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -334,7 +338,10 @@ app.post(
     httpAction(async (ctx, request) => {
         const body = await request.text();
 
-        return Response.json(
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` hop, so building the response by hand collapses the deliberate 500 on an
+        // orphaned (out-of-order) event to a 200 and Autumn never redelivers it.
+        return webhookResponse(
             await ctx.runAction(processWebhook, {
                 body,
                 svixId: request.headers.get("svix-id") ?? "",
@@ -426,6 +433,15 @@ intent to act on directly. These adapter methods **throw** `PROVIDER_ERROR`:
 
 Issue refunds and one-off payment operations from your Stripe dashboard or the
 Autumn dashboard instead.
+
+<Callout type="warn">
+    **`reconcile` does not retry a failed usage forward on Autumn.** For Stripe, Polar and Dodo the sweep re-sends usage events the provider never accepted,
+    because the event's `idempotencyKey` travels in the ingestion body (`identifier`, `externalId`, `event_id`) and the provider collapses a re-send onto the
+    original. `autumn-js` has no idempotency surface at all — `TrackParams` carries no such field — so every `client.track` call applies. A row is unreported
+    whether the request failed or only its response was lost, and those are indistinguishable, so re-sending would debit the customer's allowance a second time
+    for usage that happened once. The sweep is skipped for Autumn and `checkedUsage` stays `0`; a forward that genuinely failed is lost (Autumn under-counts)
+    and surfaces as the `usage.report_failed` observability signal. Alert on it, and re-issue by hand if you must.
+</Callout>
 
 ## Troubleshooting
 

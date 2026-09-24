@@ -13,6 +13,19 @@
 # carries the assertion that some matrix leg still runs on an FTS5-capable Node, so a PR
 # that drops that leg by editing the matrix must not be able to skip the job that would
 # have caught it.
+#
+# `shared/**` is in the build graph even though it is not a workspace: those files are
+# bundler-inlined into every consumer's dist, and 290 files across 40 packages import
+# them by relative path (199 under `src`, 87 under `__tests__`). Their ONLY coverage is
+# the package suites this filter gates — `shared/` has no suite of its own — so a
+# `shared/`-only PR used to skip `test`, `test-workerd` and `test-mysql` entirely while
+# the required check stayed green on `skipped`. That is the widest blast radius in the
+# repo getting the least verification.
+#
+# `protocol/**` for the reason one level over: `protocol/fixtures/*.json` are read at
+# runtime by JS suites (`packages/client/__tests__/protocol-conformance.test.ts`,
+# `packages/ratelimit/__tests__/middleware.test.ts`), so a fixture edit matched only the
+# `sdks` filter and the reference implementation's own assertions never re-ran.
 packages: &packages
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -24,6 +37,8 @@ packages: &packages
     - "apps/**"
     - "examples/**"
     - "registry/**"
+    - "shared/**"
+    - "protocol/**"
     - "tools/**"
     - "vis.config.ts"
 
@@ -32,6 +47,10 @@ packages: &packages
 # .d.ts surface, plus the snapshots and the tool itself.
 api_surface:
     - "packages/**"
+    # Inlined, so it is part of the built surface: a `shared/` type that a package
+    # re-exports lands in that package's .d.ts, and the dist bytes `dist-production`
+    # weighs are the inlined copy. Neither job could see a `shared/`-only change.
+    - "shared/**"
     - "api-snapshots/**"
     - "scripts/api-snapshot.js"
     # `dist-production` rides on this same filter, so its checker is listed here
@@ -47,6 +66,13 @@ api_surface:
 frontend_lintable:
     - "**/*.[tj]{s,sx}"
     - "**/*.{cts,mts,cjs,mjs}"
+    # eslint (`packages/auth-ui/eslint.config.js`), `lint:types` (vue-tsc /
+    # svelte-check) and prettier (prettier-plugin-svelte, and `vis.config.ts`
+    # formats md/mdx) all cover these, so a PR touching only them must not skip
+    # the three jobs that check them.
+    - "**/*.{vue,svelte,astro}"
+    - "**/*.{css,html}"
+    - "**/*.{md,mdx}"
     - "**/tsconfig*.json"
     - "**/package.json"
     # A project.json decides whether eslint runs a project at all — an nx-shaped
@@ -58,9 +84,17 @@ frontend_lintable:
     - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
 
+# `**/package.json` again, because the job now actually reads them all.
+# `vis sort-package-json` takes its file set from `pnpm-workspace.yaml`, which
+# omits `templates/*` — they are whole-project starters `lunora init` fetches, and
+# a workspace link would rewrite the `@lunora/*` ranges they ship. So the filter
+# matched files the job never opened, and a template-only PR got a green check on
+# a manifest nothing had read. `scripts/sort-package-json-all.sh` widens the file
+# set for one run and restores the workspace, so the filter and the job agree.
 package_json_lintable:
     - "**/package.json"
     - "package.json"
+    - "scripts/sort-package-json-all.sh"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
@@ -95,14 +129,61 @@ dependency_manifests:
 # not hypothetical — `shared/schema-snapshot.ts` decides the `LUNORA_SCHEMA_SNAPSHOT`
 # literal in every example's `shard.ts`, so a change confined to it stales all 13
 # while this job is skipped and its required check stays green.
+#
+# `packages/codegen/**` alone was not enough either. The sweep runs the real
+# `lunora codegen`, so every package in the CLI's dependency closure is behind the
+# committed output, and several put their own text INTO it verbatim:
+# `@lunora/advisor`'s lint messages are embedded character-for-character in every
+# example's `shard.ts`, and `@lunora/platform`'s capability matrix decides
+# `studioFeatures.vectors`. A PR editing only an advisor remediation string
+# matched no filter, so the job was skipped, `Check Lint Run` went green, all 13
+# examples drifted, and the NEXT unrelated codegen PR failed `lint:generated` for
+# changes it did not make.
+#
+# The list below is `scripts/check-generated-files.mjs`'s own `emitterClosure()`
+# — the packages it already refuses to run against when their `dist/` is stale.
+# That script asserts this filter still covers the closure, so a new dependency
+# edge fails the sweep loudly instead of silently un-gating it.
 generated_files:
     - "**/package.json"
     - "**/project.json"
     - "apps/docs/src/data/packages-metadata.json"
     - "apps/docs/scripts/generate-*.js"
+    # The generated error-code reference itself: a hand edit to the output is drift
+    # too, and its generator's only other input (packages/errors) is listed below.
+    - "apps/docs/src/content/docs/errors.mdx"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
+    - "packages/advisor/**"
+    - "packages/agent/**"
+    - "packages/ai/**"
+    - "packages/bindings/**"
+    - "packages/cli/**"
+    - "packages/client/**"
     - "packages/codegen/**"
+    - "packages/config/**"
+    - "packages/container/**"
+    - "packages/d1/**"
+    - "packages/do/**"
+    - "packages/errors/**"
+    - "packages/fingerprint/**"
+    - "packages/flags/**"
+    - "packages/lunora/**"
+    - "packages/mail/**"
+    - "packages/mcp/**"
+    - "packages/observability/**"
+    - "packages/platform/**"
+    - "packages/platform-cloudflare/**"
+    - "packages/queue/**"
+    - "packages/ratelimit/**"
+    - "packages/runtime/**"
+    - "packages/scheduler/**"
+    - "packages/seed/**"
+    - "packages/server/**"
+    - "packages/shard-engine/**"
+    - "packages/sql-store/**"
+    - "packages/values/**"
+    - "packages/workflow/**"
     - "shared/**"
     - "examples/**"
     # Self-listed, per the rule at the top of this file: the job's own workflow now
@@ -118,12 +199,14 @@ yaml_lintable:
     - "**/*.yaml"
 
 # E2E exercises the playground app and the five showcase examples, plus the
-# runtime/client/do/auth packages they all run on.
+# runtime/client/do/auth packages they all run on — and `shared/`, which is inlined
+# into every one of those packages and reaches the browser as part of their bundles.
 e2e:
     - "apps/playground/**"
     - "examples/**"
     - "tests/e2e/**"
     - "packages/**"
+    - "shared/**"
     - "pnpm-lock.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -141,6 +224,27 @@ benchmarks:
     - "vis.config.ts"
     - ".github/workflows/codspeed.yml"
 
+# The registry-item suite (`packages/cli/__tests__/commands/registry-items.test.ts`),
+# which scaffolds every shipped item into a throwaway project and runs the real
+# codegen + advisor over it, on top of the manifest/binding/dependency sweeps.
+#
+# Its own filter and its own job because `registry/` is not a `vis` project: a
+# registry-only PR marks NOTHING affected, so `test:affected` never reaches
+# packages/cli and every gate in that file — the advisor sweep included — was
+# skipped on exactly the PRs it exists for. The `packages` filter in test.yml
+# already lists `registry/**`, which starts the job but not the affected set.
+#
+# `packages/advisor/**` and `packages/codegen/**` are listed because the findings
+# are theirs: a new ERROR-level lint, or a feeder that starts seeing a shape,
+# changes this gate's verdict without touching registry/ or the CLI.
+registry_items:
+    - "registry/**"
+    - "packages/cli/**"
+    - "packages/advisor/**"
+    - "packages/codegen/**"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
+
 # The auth-ui → registry/auth-ui-* copy-sync check.
 registry_sync:
     - "packages/auth-ui/**"
@@ -149,10 +253,6 @@ registry_sync:
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
-# The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
-# only gate proving `lunora init` still installs and that the copy-in auth-ui payload
-# compiles against a meta-framework's own tsconfig. Both regressions it has caught came
-# from packages/registry changes, not from the templates — hence the wide globs.
 # Worker size budget. Separate from `packages` per the self-listing rule at the top.
 worker_size:
     - "scripts/check-worker-size.js"
@@ -180,18 +280,78 @@ sdks:
     # §3 — a change to either is a wire change every port must mirror.
     - "shared/base64.ts"
     - "shared/wire-key.ts"
+    # The batch transport's entry shape and its `MAX_BATCH_ENTRIES` cap, which every
+    # port mirrors as its own literal. `scripts/check-batch-cap-drift.js` reconciles the
+    # values; this listing is what re-runs the ports against the fixtures when the
+    # entry shape itself moves.
+    - "shared/batch-wire.ts"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
+# The template scaffold+install+build+typecheck matrix: too slow for every PR, but the
+# only gate proving `lunora init` still installs and that the copy-in auth-ui payload
+# compiles against a meta-framework's own tsconfig. Both regressions it has caught came
+# from packages/registry changes, not from the templates — hence the wide globs.
+#
+# `packages/**` rather than the cli + auth-ui pair it used to name: the smoke script
+# packs EVERY workspace manifest called `@lunora/*` or `lunorash` and writes all of them
+# into each scaffold's `overrides` (scripts/template-build-smoke.sh, "Pack all base
+# packages"), and `assert_no_registry_lunora` fails the run if any resolves from npm
+# instead. So a break in any of the ~50 other packages reaches a scaffold, and the two
+# named ones were only the two whose regressions happened to be caught first.
+#
+# `shared/**` for the same reason as in `packages` above: it is inlined into every one
+# of those tarballs.
+#
+# This does mean the job now runs on most package PRs. That is the trade the header
+# rule names — `e2e` and `worker-size` already sit on `packages` for the same reason —
+# and it is the only alternative to a gate that is green because it did not run.
 templates:
     - "templates/**"
     - "registry/**"
-    - "packages/cli/**"
-    - "packages/auth-ui/**"
+    - "packages/**"
+    - "shared/**"
     - "scripts/template-build-smoke.sh"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
     - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# The Expo leg of the scaffold matrix, split out because its `pnpm install` pulls
+# the react-native/expo graph and nothing else in the matrix shares it. Narrower
+# than `templates` ON PURPOSE: editing another template (say `templates/next`)
+# cannot break this one, so it should not pay for it.
+#
+# What CAN break it is still all here — the packages it consumes, the inlined
+# `shared/` sources, its own tree, the harness, and the lockfiles that decide
+# what its install resolves. Keep this in step with `templates` for everything
+# except `templates/**` and `registry/**`; a path that belongs in both and is
+# only in `templates` reopens the hole this leg exists to close.
+templates_expo:
+    - "templates/expo/**"
+    - "packages/**"
+    - "shared/**"
+    - "scripts/template-build-smoke.sh"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# The two batch caps — `MAX_BATCH_ENTRIES` (shared/batch-wire.ts) and `MAX_BATCH_BYTES`
+# (packages/client/src/replay.ts, derived from the worker's own body cap in
+# packages/runtime/src/body-readers.ts) — vs the literal every non-JS port,
+# protocol/README.md and the offline fixture restate. Separate from `sdks` because the
+# reconciliation is a node script, not a conformance suite: it must run on a change to any
+# one of the copies without paying for eight toolchains.
+batch_cap:
+    - "shared/batch-wire.ts"
+    - "packages/client/src/replay.ts"
+    - "packages/runtime/src/body-readers.ts"
+    - "protocol/README.md"
+    - "protocol/fixtures/offline-optimistic.json"
+    - "sdks/**"
+    - "scripts/check-batch-cap-drift.js"
+    - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
 # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in

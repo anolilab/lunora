@@ -1,6 +1,7 @@
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db";
+import type { BroadcastDelta, DatabaseWriterLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -76,6 +77,47 @@ describe("ctx-db against real SQLite", () => {
             await expect(writer.insert("messages", { _id: "b", authorId: "u2", channelId: "c2", text: "dup" }, { allowExplicitId: true })).rejects.toThrow(
                 /unique constraint violation/u,
             );
+        });
+    });
+
+    describe("ctx-db against real SQLite — row-size overflow", () => {
+        /**
+         * `SQLITE_LIMIT_LENGTH` is ~1 GB on a stock `node:sqlite` build and is not
+         * settable from JS, so a real oversized row is not reproducible in a unit
+         * test. The recogniser is what is under test, so the engine is wrapped to
+         * raise SQLite's own wording on the INSERT and nothing else.
+         */
+        const failingWrites = (): SqlExec => {
+            return {
+                exec: ((query: string, ...params: unknown[]) => {
+                    if (/^\s*INSERT\s+INTO\s+"messages"/iu.test(query)) {
+                        throw new Error("Error: string or blob too big");
+                    }
+
+                    return (harness.sql.exec as (this: SqlExec, q: string, ...rest: unknown[]) => unknown).call(harness.sql, query, ...params);
+                }) as SqlExec["exec"],
+            };
+        };
+
+        it("names the row-size limit instead of letting SQLITE_TOOBIG redact to INTERNAL", async () => {
+            expect.assertions(3);
+
+            runShardMigrations(harness.sql, messagesSchema);
+
+            const writer = createShardContextDatabase({
+                broadcast: () => {},
+                clock: () => 1_700_000_000_000,
+                schema: messagesSchema,
+                sql: failingWrites(),
+            });
+
+            const error = await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "big" }).catch((error_: unknown) => error_);
+
+            // A plain `Error` here is what `toErrorBody` redacts to
+            // `{ code: "INTERNAL", message: "Internal error" }`, status 500.
+            expect(error).toBeInstanceOf(LunoraError);
+            expect((error as LunoraError).code).toBe("PAYLOAD_TOO_LARGE");
+            expect((error as LunoraError).message).toMatch(/too large to store in "messages".*per-row ceiling/su);
         });
     });
 

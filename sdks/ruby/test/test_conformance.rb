@@ -31,7 +31,23 @@ class TestWireCodec < Minitest::Test
       expected = entry.key?("reencoded") ? entry["reencoded"] : encoded
 
       assert_equal canonical(expected), canonical(round_tripped), "round-trip mismatch for #{entry["name"]}"
+      # And again as the BYTES the transport sends: a round-trip assertion
+      # measured on a string the transport never sends cannot see the divergence
+      # it exists to catch.
+      assert_equal wire_text(expected), wire_text(round_tripped), "wire-text mismatch for #{entry["name"]}"
     end
+  end
+
+  # Native construction, not a fixture: a fixture carries wire VALUES, and the
+  # shape here is a WireError whose label slots hold non-strings. decode_wire
+  # refuses those, so an encoder that passed them through emitted a frame its
+  # own decoder rejects — and a decoder raise on a subscription frame kills the
+  # subscription rather than surfacing the error.
+  def test_error_labels_are_coerced_so_encode_stays_decodable
+    encoded = Lunora.encode_wire(Lunora::WireError.new(5, { "a" => 1 }))
+
+    assert_equal "5", encoded[2]
+    assert_equal "5", Lunora.decode_wire(encoded).name
   end
 end
 
@@ -148,14 +164,23 @@ class TestRpc < Minitest::Test
   #
   # The manifest listed this case from the start; the Ruby port never had it, and
   # nothing noticed until the manifest became a gate.
+  #
+  # The non-object +error+ slots are the other half: read without a type check
+  # they raised NoMethodError/TypeError, which is not an ApiError and so escapes
+  # every handler the caller wrote.
   def test_non_2xx_without_error_envelope_fails
     ConformanceManifest.covers("non_2xx_without_error_envelope_fails")
 
-    error = assert_raises(Lunora::ApiError) do
-      Lunora.parse_rpc_response({ "message" => "bad gateway" }, 502)
-    end
+    fixture("rpc.json")["responseTransportError"].each do |entry|
+      error = assert_raises(Lunora::ApiError, entry["name"]) do
+        Lunora.parse_rpc_response(entry["response"], entry["status"])
+      end
 
-    assert_equal "INTERNAL", error.code
+      assert_equal entry["code"], error.code, entry["name"]
+      # Nothing reached the shard, so a queued write must be replayed rather
+      # than dropped — the batch path already says so.
+      assert error.transient, entry["name"]
+    end
   end
 end
 
@@ -178,16 +203,53 @@ class TestWsFrames < Minitest::Test
     assert_equal canonical(frames["unsubscribe"]), canonical(Lunora.build_unsubscribe_frame("sub_1"))
   end
 
+  def test_shape_subscriptions_resend_after_reconnect
+    ConformanceManifest.covers("shape_subscriptions_resend_after_reconnect")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    client.subscribe("messages:list", { "channel" => "general" }, ->(_rows) {})
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(_rows) {})
+
+    # The cursors a resume carries are written by the frame handler, so they have
+    # to exist before the resend is built.
+    client.handle_frame(JSON.generate({ "cursor" => 9, "data" => [], "epoch" => "e1", "id" => "sub_1", "type" => "data" }))
+    client.handle_frame(JSON.generate({ "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeStart" }))
+    client.handle_frame(JSON.generate({ "pokeId" => "poke-1", "reset" => true, "rowsPatch" => [],
+                                        "shapeId" => "shape_1", "type" => "pokePart" }))
+    client.handle_frame(JSON.generate({ "checkpoint" => 5, "epoch" => "e1", "pokeId" => "poke-1", "type" => "pokeEnd" }))
+
+    resent = []
+    client.attach_socket(->(frame) { resent << frame })
+    client.resend_subscriptions
+
+    # BOTH registries. A resend that walks only the queries leaves every shape
+    # view subscribed to a socket that no longer exists — silently, and for the
+    # rest of the process's life.
+    assert_equal(%w[subscribe shape_subscribe], resent.map { |frame| frame["type"] })
+    assert_equal 9, resent[0]["query"]["sinceSeq"]
+    assert_equal "shape_1", resent[1]["id"]
+    assert_equal "roomMessages", resent[1]["shape"]["name"]
+    assert_equal({ "room" => "general" }, resent[1]["shape"]["args"])
+    assert_equal 5, resent[1]["sinceCheckpoint"]
+    assert_equal "e1", resent[1]["sinceEpoch"]
+  end
+
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
+    ConformanceManifest.covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    cancellations = 0
 
     fixture("ws-frames.json")["serverFrames"].each do |entry|
       client = Lunora::Client.new("https://app.example")
-      client.attach_socket(->(_frame) {})
+      sent = []
+      client.attach_socket(->(frame) { sent << frame })
       seen = []
       errors = []
       client.subscribe("messages:list", { "channel" => "general" }, ->(value) { seen << value },
                        ->(error) { errors << error })
+      sent.clear
 
       kind = client.handle_frame(JSON.generate(entry["frame"]))
       expect = entry["expect"]
@@ -203,7 +265,59 @@ class TestWsFrames < Minitest::Test
         assert_equal 1, errors.length
         assert_equal expect["code"], errors.first.code
       end
+
+      next unless expect["resendsAfterReconnect"]
+
+      cancellations += 1
+      assert_cancelled_but_kept(client, expect, errors, sent)
     end
+
+    # A conditional assertion that never runs is worse than none: without this,
+    # renaming the fixture key would leave every suite green.
+    assert_equal 1, cancellations, "serverFrames must carry one cancelling case"
+  end
+
+  # Cancelled AND kept. Deleting the entry takes it out of the hash
+  # +resend_subscriptions+ walks, which froze the query across every future
+  # reconnect with nothing reported.
+  def assert_cancelled_but_kept(client, expect, errors, sent)
+    assert_equal 1, errors.length
+    assert_equal expect["code"], errors.first.code
+    assert_equal expect["message"], errors.first.message
+    client.resend_subscriptions
+
+    assert_equal([expect["id"]], sent.select { |frame| frame["type"] == "subscribe" }.map { |frame| frame["id"] })
+  end
+
+  # A payload the codec refuses belongs on the addressed subscription's error
+  # callback, not on the socket read loop's stack: raising out of +handle_frame+
+  # ended that loop, and with it every OTHER subscription on the client, over one
+  # bad frame.
+  def test_a_refused_payload_errors_one_subscription_and_leaves_the_rest_reading
+    ConformanceManifest.covers("server_frame_consumer")
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    first = []
+    second = []
+    errors = []
+    client.subscribe("messages:list", { "channel" => "a" }, ->(value) { first << value }, ->(error) { errors << error })
+    client.subscribe("messages:list", { "channel" => "b" }, ->(value) { second << value })
+
+    kind = client.handle_frame(JSON.generate({
+                                               "cursor" => 1, "data" => { "n" => [Lunora::TAG, "bigint", "not-a-number"] },
+                                               "id" => "sub_1", "type" => "data"
+                                             }))
+
+    assert_equal "error", kind
+    assert_equal 1, errors.length
+    assert_equal "INVALID_FRAME", errors.first.code
+    assert_empty first
+
+    # The second subscription is still live, which is the whole point.
+    client.handle_frame(JSON.generate({ "cursor" => 2, "data" => %w[ok], "id" => "sub_2", "type" => "data" }))
+
+    assert_equal [%w[ok]], second
   end
 
   # The Enumerator form of a live query: same subscription, same decode, same

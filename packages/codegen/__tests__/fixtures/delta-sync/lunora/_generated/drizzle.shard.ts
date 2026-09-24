@@ -12,3 +12,10 @@ export const notes = sqliteTable("notes", {
 }, (t) => ({
     by_board: index("by_board").on(t.boardId),
 }));
+
+export const contacts = sqliteTable("contacts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    boardId: text("boardId").notNull(),
+    email: text("email").notNull(),
+});

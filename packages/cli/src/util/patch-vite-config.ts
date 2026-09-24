@@ -9,8 +9,8 @@
  * - `export default defineConfig({})` (no plugins key yet)
  * - `export default { plugins: [...] }` / `export default {}`
  *
- * Idempotent: returns `changed: false` when `lunora(` already appears in the
- * source or when no recognisable config shape can be found.
+ * Idempotent: returns `changed: false` when the parsed config already CALLS
+ * `lunora(...)` or when no recognisable config shape can be found.
  */
 // eslint-disable-next-line import/no-named-as-default -- magic-string's default export IS the MagicString class; this is the documented, idiomatic import
 import MagicString from "magic-string";
@@ -25,13 +25,8 @@ interface PatchViteConfigResult {
 
 const LUNORA_CALL = "lunora()";
 const LUNORA_IMPORT = 'import { lunora } from "@lunora/vite";';
-
-/** Hoisted regex — matches a `lunora(` call anywhere in the source. */
-const LUNORA_CALL_RE = /\blunora\s*\(/u;
-
-/** Hoisted check for the lunora/vite import specifier. */
-const LUNORA_VITE_DOUBLE = '"@lunora/vite"';
-const LUNORA_VITE_SINGLE = "'@lunora/vite'";
+const LUNORA_VITE_SPECIFIER = "@lunora/vite";
+const LUNORA_PLUGIN = "lunora";
 
 /**
  * Locate the config object inside a ts-morph SourceFile for a defineConfig
@@ -85,6 +80,23 @@ const findPlainExportObject = (sf: SourceFile): ObjectLiteralExpression | undefi
     return undefined;
 };
 
+/**
+ * Whether the config already CALLS `lunora(...)` — parsed, so a comment or a
+ * string naming the plugin is not a call.
+ *
+ * This decides whether the file is left alone, and the caller then reports the
+ * plugin present. A substring match therefore handed a project whose config
+ * merely mentions `lunora()` — a commented-out line, a note explaining the
+ * plugin — a dev server with no Lunora plugin in it at all, and said the config
+ * was already wired.
+ */
+const callsLunoraPlugin = (sf: SourceFile): boolean =>
+    sf.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getExpression().getText() === LUNORA_PLUGIN);
+
+/** Whether the config already imports `@lunora/vite` — parsed, for the same reason as {@link callsLunoraPlugin}, and quote style comes free. */
+const importsLunoraVite = (sf: SourceFile): boolean =>
+    sf.getImportDeclarations().some((declaration) => declaration.getModuleSpecifierValue() === LUNORA_VITE_SPECIFIER);
+
 /** Parse the config source into a single in-memory ts-morph SourceFile. */
 const parseConfigSource = (sourceText: string): SourceFile =>
     new Project({
@@ -111,7 +123,7 @@ const addImport = (ms: MagicString, sf: SourceFile): void => {
  * When the array is empty, fills it; otherwise prepends before the first
  * element.
  */
-const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): void => {
+const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): string | undefined => {
     const pluginsProp = configObject.getProperty("plugins");
 
     if (pluginsProp === undefined) {
@@ -121,35 +133,45 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
 
         if (properties.length === 0) {
             ms.appendLeft(openBrace, ` plugins: [${LUNORA_CALL}] `);
-        } else {
-            const firstProp = properties[0];
 
-            if (firstProp !== undefined) {
-                ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
-            }
+            return undefined;
         }
 
-        return;
+        const firstProp = properties[0];
+
+        if (firstProp === undefined) {
+            return "could not locate the start of the Vite config object's first property";
+        }
+
+        ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
+
+        return undefined;
     }
 
     // Property exists — find its array literal and prepend lunora().
     const arrayLit = pluginsProp.getDescendantsOfKind(SyntaxKind.ArrayLiteralExpression)[0];
 
     if (arrayLit === undefined) {
-        return;
+        return "the Vite config's `plugins` is not an array literal — add `lunora()` to it by hand";
     }
 
     const elements = arrayLit.getElements();
 
     if (elements.length === 0) {
         ms.appendLeft(arrayLit.getStart() + 1, LUNORA_CALL);
-    } else {
-        const firstElement = elements[0];
 
-        if (firstElement !== undefined) {
-            ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
-        }
+        return undefined;
     }
+
+    const firstElement = elements[0];
+
+    if (firstElement === undefined) {
+        return "could not locate the first entry of the Vite config's `plugins` array";
+    }
+
+    ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
+
+    return undefined;
 };
 
 /**
@@ -160,11 +182,12 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
  * Returns `{ code: source, changed: false, reason }` for any no-op path.
  */
 const patchViteConfig = (source: string): PatchViteConfigResult => {
-    if (LUNORA_CALL_RE.test(source)) {
+    const sf = parseConfigSource(source);
+
+    if (callsLunoraPlugin(sf)) {
         return { changed: false, code: source, reason: "lunora plugin already present" };
     }
 
-    const sf = parseConfigSource(source);
     const configObject = findDefineConfigObject(sf) ?? findPlainExportObject(sf);
 
     if (configObject === undefined) {
@@ -173,11 +196,20 @@ const patchViteConfig = (source: string): PatchViteConfigResult => {
 
     const ms = new MagicString(source);
 
-    if (!source.includes(LUNORA_VITE_DOUBLE) && !source.includes(LUNORA_VITE_SINGLE)) {
+    if (!importsLunoraVite(sf)) {
         addImport(ms, sf);
     }
 
-    patchPluginsArray(ms, configObject);
+    // The splice can decline (a `plugins` that is not an array literal — a spread,
+    // a helper call, an imported constant). That used to be a bare `return` from
+    // the splice, leaving `changed: true` over a `code` identical to the input:
+    // the caller wrote the file back and reported the config patched, and the
+    // project's dev server then ran with no Lunora plugin at all.
+    const declined = patchPluginsArray(ms, configObject);
+
+    if (declined !== undefined) {
+        return { changed: false, code: source, reason: declined };
+    }
 
     return { changed: true, code: ms.toString() };
 };

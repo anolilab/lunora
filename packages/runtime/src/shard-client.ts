@@ -43,6 +43,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
@@ -213,7 +214,16 @@ const createShardClient = (namespace: ShardNamespaceLike, options: ShardClientOp
             // lets it reach `internal*` functions. The Worker edge strips a forged
             // copy off inbound client requests, so this header only ever means
             // anything on a call originating inside the trust boundary — like this one.
+            //
+            // The x402 paywall marker rides on the same flag, for the reason the
+            // runtime's `dispatchToShard` stamps it: a server-side caller holding
+            // the DO binding has no HTTP caller to charge, so running a `.x402`
+            // target unpaid is the deliberate answer, not an origin that failed to
+            // look — and unmarked, the shard's paid backstop refuses the dispatch
+            // with `MISCONFIGURED`. A `system: false` client asked to behave
+            // exactly like an end-user RPC, so it stays unmarked and stays refused.
             if (system) {
+                headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
                 headers["x-lunora-system"] = "1";
             }
 

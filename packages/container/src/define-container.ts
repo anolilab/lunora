@@ -339,6 +339,17 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         throw new TypeError(`defineContainer: \`rollout.stepPercentage\` must be an integer in 1–100 (got ${String(stepPercentage)})`);
     }
 
+    const gracePeriodSeconds = config.rollout?.gracePeriodSeconds;
+
+    // Reaches wrangler as `rollout_active_grace_period` unchecked, where a
+    // fractional or negative value is a deploy-time failure a long way from the
+    // line that caused it. Only the shape is asserted: 0 (no grace period) is
+    // meaningful, and this repo has no sourced upper bound to enforce — an
+    // invented ceiling would be the more expensive mistake.
+    if (gracePeriodSeconds !== undefined && (!Number.isInteger(gracePeriodSeconds) || gracePeriodSeconds < 0)) {
+        throw new TypeError(`defineContainer: \`rollout.gracePeriodSeconds\` must be a non-negative integer (got ${String(gracePeriodSeconds)})`);
+    }
+
     if (config.maxInstances !== undefined && (!Number.isInteger(config.maxInstances) || config.maxInstances < 1)) {
         throw new TypeError(`defineContainer: \`maxInstances\` must be a positive integer (got ${String(config.maxInstances)})`);
     }

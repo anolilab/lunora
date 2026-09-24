@@ -188,7 +188,6 @@ interface LunoraSchedulerOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: DurableObjectNamespaceLike;
-    originUrl: string;
 }
 ```
 
@@ -335,6 +334,7 @@ interface RetryPolicy {
 
 ```ts
 interface RunOptions {
+    id?: string;
     maxConcurrency?: number;
     pool?: string;
     retry?: RetryPolicy;
@@ -431,7 +431,6 @@ interface SchedulerHostOptions {
     instanceName?: string;
     jurisdiction?: "eu" | "fedramp" | "us";
     namespace: Parameters<typeof createScheduler>[0]["namespace"];
-    originUrl: string;
 }
 ```
 
@@ -502,6 +501,18 @@ interface WorkpoolOptions extends LunoraSchedulerOptions {
     maxConcurrency: number;
     name?: string;
 }
+```
+
+### `assertScheduleDelay` (const)
+
+```ts
+const assertScheduleDelay: (delayMs: number, surface: string, argument?: string) => void;
+```
+
+### `assertScheduleInstant` (const)
+
+```ts
+const assertScheduleInstant: (timestampMs: number, nowMs: number, surface: string) => void;
 ```
 
 ### `assertValidCronExpression` (const)
@@ -576,8 +587,38 @@ const isValidCronExpression: (schedule: string) => boolean;
 const isWorkflowReference: (target: unknown) => target is WorkflowReference;
 ```
 
+### `resolveScheduleId` (const)
+
+```ts
+const resolveScheduleId: (requested: unknown) => string;
+```
+
 ### `warnIfSecondsLeading` (const)
 
 ```ts
 const warnIfSecondsLeading: (schedule: string, context: string) => void;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CronTargetArgs` (type)
+
+```ts
+type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
+```
+
+### `SchedulableReference` (type)
+
+```ts
+type SchedulableReference<Args = unknown, Return = unknown> = FunctionReference<Exclude<FunctionKind, "stream">, Args, Return>;
+```
+
+### `ScheduleTargetArgs` (type)
+
+```ts
+type ScheduleTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : T extends SchedulableReference ? ArgsOf<T> : Record<string, unknown>;
 ```

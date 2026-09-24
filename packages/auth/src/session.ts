@@ -14,7 +14,10 @@ import type { BetterAuthOptions } from "better-auth";
  * expire at the absolute `expiresIn` regardless of activity), `freshAge`
  * (freshness window, in seconds, for sensitive operations like account
  * deletion; `0` treats every session as fresh — not recommended), and
- * `cookieCache` (opt-in signed-cookie session cache to skip DB reads).
+ * `cookieCache` (signed-cookie session cache that skips DB reads —
+ * `createAuth` fills `{ enabled: true, maxAge: 60 }` when you leave it unset, so
+ * a revoked session keeps authenticating for up to that many seconds; pass
+ * `{ enabled: false }` where that window is unacceptable).
  *
  * See better-auth's `session` option for the full field list.
  */

@@ -31,11 +31,11 @@ The functions surface in the generated `api` as `browser/screenshot` and `browse
 
 ## How it works
 
-- **`ctx.browser`** exposes three methods, each returning a `Promise`:
+- **`ctx.browser`** exposes seven methods, each returning a `Promise`. The three this item uses:
     - **`screenshot(url, opts?)`** — returns a `Uint8Array` of the PNG screenshot.
     - **`pdf(url, opts?)`** — returns a `Uint8Array` of the PDF.
-    - **`scrape(url, fn)`** — runs an arbitrary `page.evaluate`-like function in the browser and returns its result.
-- The browser is launched in a remote Cloudflare Browser Rendering instance. Bytes (screenshot/pdf) never touch your Worker — only the final output is returned.
+    - **`scrape(url, fn)`** — runs `fn` inside the rendered page (`page.evaluate`) and returns its result.
+- The browser is launched in a remote Cloudflare Browser Rendering instance, but the rendered **bytes come back into your Worker** — that is how `screenshot`/`pdf` resolve a `Uint8Array`. Return the `Uint8Array` as-is (the wire codec carries it as base64) or store it in R2 and return the key; never spread it into a JSON number array.
 
 ### Screenshot
 
@@ -57,10 +57,10 @@ const pdfBytes = await ctx.browser.pdf("https://example.com/report", {
 ### Scraping
 
 ```ts
-const text = await ctx.browser.scrape("https://example.com", async (page) => page.innerText("body"));
+const text = await ctx.browser.scrape("https://example.com", () => document.body.innerText);
 ```
 
-The scraper function receives a Playwright `Page` — you can use any Playwright API (`page.$eval`, `page.content`, `page.locator`, etc.).
+The function runs **inside the rendered page**, not in the Worker: it is handed to `page.evaluate`, receives no arguments, and cannot close over Worker-side variables. Use the page's own DOM APIs (`document.querySelector`, `document.title`, …). For Playwright's `Page` API — `page.$eval`, `page.locator`, and friends — reach for `ctx.browser.launch(...)` instead, which hands you a real `Browser`.
 
 ## Security: the render target is an SSRF sink
 
@@ -72,9 +72,9 @@ The scaffolded handlers therefore fail closed on three axes:
 2. **Target** — `assertAllowedTarget` accepts only `https:` URLs whose host is in `ALLOWED_RENDER_HOSTS`. That set ships **empty**, so nothing renders until you list the hosts you actually render.
 3. **Rate** — a per-caller token bucket keyed `ctx.auth.userId ?? ctx.ip ?? "anon"`, so one account (or one anonymous IP) can't drain the quota.
 
-### Pin the allowlist on the browser too
+### Pin the allowlist on the browser too — you have to do this part
 
-The check in the copied file is the fail-closed default. The hard guarantee is `allowedHosts` on `createBrowser` — it is enforced on every navigation **and** every subresource request, and it is what satisfies the `browser_user_url_without_allowlist` advisor lint:
+The check in the copied file is the fail-closed default, and it sees the URL exactly once. The hard guarantee is `allowedHosts` on `createBrowser`, which is enforced on every navigation **and** every subresource request, so it survives a 3xx redirect and a page that fetches elsewhere:
 
 ```ts
 import { launch } from "@cloudflare/playwright";
@@ -84,6 +84,8 @@ createShardDO({
     browser: (env) => createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, launch }),
 });
 ```
+
+This item cannot write that for you — it scaffolds files under `lunora/`, not your Worker entry — and the `BROWSER` wrangler binding on its own gives `ctx.browser` no allowlist at all. So until you add the call, `lunora codegen` reports `browser_user_url_without_allowlist` (WARN) against both actions. That warning is the advisor asking for exactly this layer; it is meant to stand until you add it, and nothing in the copied file tries to silence it.
 
 Never set `allowPrivateTargets: true` — that disables the private/internal-address guard that stops a render reaching cloud metadata, internal services, or loopback (`browser_allow_private_targets`, an ERROR-level advisor lint).
 

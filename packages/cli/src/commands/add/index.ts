@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
  * `lunora add <feature>` — add a feature or registry item to an existing
  * project. A thin, discoverable front door over `lunora registry add`: the
@@ -45,7 +47,7 @@ const addCommand: Command = {
             type: String,
         },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
     ],
 };
 

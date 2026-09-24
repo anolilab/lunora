@@ -140,3 +140,8 @@ instruments-trend.png
 # Python bytecode from running the sdks/python suite locally.
 __pycache__/
 *.py[cod]
+
+# Scratch workdirs the codegen golden-fixture harness copies each fixture app
+# into. They live beside the fixtures (not in os.tmpdir()) so codegen resolves
+# types through the workspace tsconfig + node_modules the way a real app does.
+packages/codegen/__tests__/fixtures/.workdir-*/

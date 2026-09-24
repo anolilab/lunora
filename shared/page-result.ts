@@ -80,7 +80,12 @@ const rowListOf = (value: unknown): undefined | unknown[] => {
  * `true` when the list is sorted descending (newest-first — the common chat/feed
  * shape), `false` for ascending or when the direction is indeterminate (0/1
  * numeric rows, or an all-equal run). Reads the FIRST strictly-ordered adjacent
- * numeric pair, so a single out-of-order row doesn't flip the verdict.
+ * numeric pair and stops there — so an equal-timestamp run at the head is
+ * skipped rather than answered, but one out-of-order row AT THE HEAD does decide
+ * the whole list. That is deliberate cheapness, not a majority vote: the server
+ * re-runs {@link insertionIndexFor} against the page its query actually returned
+ * and sends a snapshot when the two disagree, so a wrong guess costs a snapshot,
+ * never a misplaced row.
  * @returns `true` when the list reads newest-first
  */
 const isDescending = (list: ReadonlyArray<Record<string, unknown>>): boolean => {
@@ -116,8 +121,10 @@ const isDescending = (list: ReadonlyArray<Record<string, unknown>>): boolean => 
  * deciding it: with a numeric `_creationTime` on both the new row and its
  * neighbours we honour the list's OWN direction — ascending inserts before the
  * first larger neighbour, descending before the first smaller one, so a fresh
- * newest row lands at the front of a newest-first feed. With no usable ordering
- * we append, keeping insertion order and never reordering existing rows.
+ * newest row lands at the front of a feed {@link isDescending} can READ as
+ * newest-first. A list too short to have a direction (one row, or an all-equal
+ * run) reads as ascending, and the new row is appended. With no usable ordering
+ * we append too, keeping insertion order and never reordering existing rows.
  *
  * The SERVER calls this too, to check the position it would produce matches the
  * one its query actually returned — a page ordered by a `.withIndex()` field

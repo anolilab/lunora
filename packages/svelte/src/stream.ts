@@ -2,6 +2,7 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/
 import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 
@@ -9,6 +10,13 @@ import { isFunctionReference } from "./is-function-reference";
 type StreamStatus = "complete" | "error" | "idle" | "streaming";
 
 interface StreamStoreOptions {
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The chunks already received are kept and the socket re-attaches to the same
+     * run, so a dropped connection mid-generation continues instead of surfacing
+     * `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
@@ -36,8 +44,9 @@ interface StreamHandle<T> {
 /**
  * Open a streaming query and expose its chunks, lifecycle status, and last error
  * as Svelte readable stores. The `chunks` store is lazy: the stream opens on the
- * first subscriber to `chunks` and is cancelled when the last one leaves (its
- * chunks reset on the next open). `status` and `error` mirror that same stream.
+ * first browser-side subscriber to `chunks` and is cancelled when the last one
+ * leaves (its chunks reset on the next open); a server render opens nothing.
+ * `status` and `error` mirror that same stream.
  *
  * Passing `"skip"` as `args` keeps the stores connected but the stream dormant
  * (`chunks` stays empty, `status` stays `"idle"`). The Svelte counterpart to
@@ -68,7 +77,7 @@ function stream<F extends FunctionReference<"stream">>(
     const args = (hasExplicitClient ? argsOrOptions : functionOrArgs) as ArgsOf<F> | "skip";
     const options = (hasExplicitClient ? maybeOptions : (argsOrOptions as StreamStoreOptions | undefined)) ?? {};
 
-    const { maxBuffer, shardKey } = options;
+    const { durable, maxBuffer, shardKey } = options;
 
     // Writable status/error stores the chunks store's start/stop callback drives,
     // so all three stores mirror the one underlying stream.
@@ -88,6 +97,15 @@ function stream<F extends FunctionReference<"stream">>(
         set([]);
         errorStore.set(undefined);
 
+        // Server-render guard: svelte's server runtime subscribes to `{$store}`
+        // during `render()`, so this start callback runs on the server too. See
+        // `query.ts`. The stores stay at their inert values until hydration.
+        if (!isBrowser()) {
+            statusStore.set("idle");
+
+            return () => undefined;
+        }
+
         if (args === "skip") {
             statusStore.set("idle");
 
@@ -98,7 +116,7 @@ function stream<F extends FunctionReference<"stream">>(
 
         let active = true;
         let current: ReadonlyArray<ReturnOf<F>> = [];
-        const iterable = client.stream(functionRef, args, { maxBuffer, shardKey });
+        const iterable = client.stream(functionRef, args, { durable, maxBuffer, shardKey });
         const cancelIterable = (): void => {
             iterable.cancel();
         };

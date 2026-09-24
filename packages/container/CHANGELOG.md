@@ -1,3 +1,848 @@
+## @lunora/container [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.55...@lunora/container@1.0.0-alpha.56) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/container [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.54...@lunora/container@1.0.0-alpha.55) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/container [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.53...@lunora/container@1.0.0-alpha.54) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* `SpanEvent` gains an optional `sampled` field; a sink that
+enumerates the shape must accept it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(do): fold the ctx.db summary tally onto the dispatch root span
+
+`instrumentDatabase: "summary"` is the default whenever a sink is configured. It
+counted every `ctx.db` call on the hot path and then threw the tally away for
+the commonest handler shape there is — one that reads `ctx.db` and nothing else:
+
+- the dispatch `finally` recorded the root span only when the handler had also
+  touched `ctx.trace` or `ctx.span`, so a db-only dispatch minted no span at
+  all; and
+- even when a root span WAS recorded, `recordDispatchRootSpan` built the
+  attribute bag only inside the `collector !== undefined` branch, so the
+  counters were dropped again unless the handler had opened `ctx.span`.
+
+A non-empty tally now counts as root-span content (`hasRootSpanContent`, shared
+by the dispatch and trigger gates so they cannot drift), and the attributes are
+assembled whether or not a wide event exists. A dispatch that ran no queries and
+recorded nothing still mints nothing, so the bounded span ring keeps its
+"traces worth looking at" property.
+
+No new export traffic: `exportWideEvent` still requires a `ctx.span` collector,
+so this adds no `lunora.dispatch` log record.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(container): keep an errored span when the head decision dropped its trace
+
+The container gated span export on `parent?.sampled !== false` alone, with no
+error re-check — so a failure inside a head-sampled-out trace was the one thing
+that never reached the collector. That is the exact case the tail bias exists
+for, and the worker and the shard both apply it.
+
+`emitSpan` now calls `shouldExportTrace` from `shared/sampling`, the same
+decision the worker's `emitRpcEvent` and the shard's dispatch `finally` take, so
+there is one implementation of head-verdict-plus-tail-bias rather than three
+spellings of it. The toggle comes from a new `alwaysSampleErrors` option
+falling back to `LUNORA_SAMPLE_ERRORS` (`"0"` turns it off), mirroring how the
+shard reads `x-lunora-sample-errors` so all three tiers default to keep.
+
+Scoped per span, and documented as such: a container is a long-running process
+with no dispatch boundary to re-decide at, so a span that already settled `ok`
+before a sibling failed is not retro-exported. That matches what the worker does
+with its own dispatch events.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(platform): rate the telemetry surfaces that need a host primitive
+
+No telemetry surface carried a `PlatformCapabilities` rating, so the two that
+genuinely depend on platform-injected request metadata degraded silently off
+Cloudflare with nothing recording that they would.
+
+Three keys, each rated on both targets with the reasoning in its docblock:
+
+- `edgeRequestMetadata` — `request.cf`. Both the
+  `trustInboundTraceContext: "mtls"` trust signal and the OTLP placement
+  resource detector read it directly, and a host that injects none turns the
+  first into "never trust" and the second into "not Cloudflare".
+- `hostTraceFusion` — the sink's `fuseCloudflareTraces` opt-in, the one
+  telemetry surface that reaches past `ShardHost` into a provider API
+  (`cloudflare:workers`' `tracing.enterSpan`).
+- `logArchive` — reading the durable `ctx.log` archive back, which needs an
+  Iceberg catalog over the object store and an SQL engine to query it, not just
+  a bucket.
+
+All three are advisory by nature, recorded as such in the module doc: each is
+configured through a `createWorker` argument or an `ObservabilitySink` field,
+neither of which codegen reads, so there is no app-side declaration to gate on.
+The rest of the pipeline (`ctx.log`, `ctx.trace`, `ctx.span`, `ctx.metrics`,
+traced `ctx.fetch`, W3C propagation) deliberately gets no key — it is sink
+callbacks over the `fetch` global and needs no host primitive.
+
+Where that silence actually bit, the diagnostic now lands at the only tier that
+can observe it: a dropped inbound trace under a named trust signal whose
+metadata bag is absent from the request warns once, naming the signal, instead
+of being silenced along with the deliberate `true`/`false` answers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(observability): state what sampling covers on the batch and container paths
+
+The sampling page claimed a trace is kept or dropped whole across every tier,
+which the batch dispatch path and the container exporter did not do. Both now
+do, so the page says so explicitly rather than leaving the reader to assume it:
+a batch rides one verdict, and a container applies the tail bias with the one
+honest limit its lack of a dispatch boundary imposes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(container): propagate the dispatch's tail-bias toggle to the container tier
+
+A container previously learned the tail-bias verdict only from its own
+`LUNORA_SAMPLE_ERRORS` env var, so it agreed with the worker and the shard
+because their defaults coincided rather than because it had been told. An
+operator who set `sampling.alwaysSampleErrors: false` on `createWorker` got a
+container that kept exporting errored spans of dropped traces.
+
+The verdict now travels the whole way, beside the `traceparent` it belongs
+with:
+
+- the shard reads `x-lunora-sample-errors` once into a request-scoped field and
+  exposes it as `getCurrentSampleErrors()` — in the same `RequestScope` as
+  `traceparent`, since re-pinning one but not the other would send a parked
+  request's verdict to the container;
+- codegen emits it as the fifth argument to `createContainerContext`, which
+  stamps the header onto every outbound container request (`get` / `any` /
+  `pool` / `.port()` / `exec`);
+- `createContainerTelemetry` gains a `request` option that reads both halves off
+  the inbound request, so a container handler does not have to know which header
+  carries what.
+
+Absent stays distinguishable from `"0"`: a dispatch that propagated no verdict
+(an alarm, a subscription re-run, a non-Lunora caller) omits the header and
+leaves the container on its own configuration, rather than being told "off".
+The env fallback is kept for the case it still serves — a one-shot container
+started with a fixed context and no request to read — and the precedence
+(explicit option, then request, then env, then tier default) is stated once, at
+the point of resolution.
+
+The header name moves to `shared/sampling.ts`, next to the decision it belongs
+to, rather than being spelled out at each of the four sites that now use it.
+
+Internally the container client carries one `OutboundTraceContext` object
+instead of threading a bare `traceparent` positional through six helpers, so a
+future addition cannot be forwarded by some paths and dropped by others.
+* `createContainerContext` takes a fifth `sampleErrors`
+parameter. Generated code passes it; a hand-written caller that omits it keeps
+the previous behaviour.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(runtime): mint a span id per shard in a batched dispatch
+
+The batch built its sub-request headers ONCE, outside the per-shard fan-out, so
+`injectTraceContext` stamped a single span id into a `traceparent` that every
+shard then received.
+
+Each shard runs its own dispatch and adopts the id it is handed as that
+dispatch's root (`resolveTraceAnchor` takes the inbound `parentSpanId`), then
+stamps it onto its `lunora.dispatch` wide event, every `ctx.log` record, and the
+parent of every `ctx.trace` child. Two shards in one batch therefore put
+unrelated work on the wire under a single `(traceId, spanId)`, and a collector
+resolves that inconsistently — merge, last-write, or duplicate.
+
+The header bag is now built inside the loop with a span id minted per shard, and
+each entry event parents to the span its OWN shard received rather than to the
+batch root. That also groups a batch's waterfall by the hop that actually
+carried each entry instead of flattening every entry under one bar.
+
+This is the rule the per-entry ids already followed, one level up and across
+processes: the comment on `entryTraceFields` describing why entries may not
+share an id applies just as much to the `traceparent`, and that is the one that
+mints spans in another process.
+
+The regression test asserts uniqueness over the whole batch's id set rather than
+comparing ids pairwise, across a three-shard fixture — a pairwise check written
+against two shards passes while a third collides.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(platform): qualify when the Node log archive fails closed
+
+The Node `logArchive` note read as though the admin route always answers
+`LOG_ARCHIVE_NOT_CONFIGURED` on this host. It does not: the route is registered
+here like anywhere else, and that code is returned only while the `logArchive`
+table or the R2 SQL credentials are absent. Configure both and the route stops
+failing closed — it builds an R2 SQL client and queries Cloudflare's API over
+the network, which is not this host serving the archive.
+
+The rating is unchanged and still honest; what was wrong was the reason given
+for it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* five defects in the trace/metric export path ([#794](https://github.com/anolilab/lunora/issues/794)) ([ee1c1a7](https://github.com/anolilab/lunora/commit/ee1c1a7f15e5ee1178a9bf1f0fb8420283e7f004))
+
+## @lunora/container [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.52...@lunora/container@1.0.0-alpha.53) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
+## @lunora/container [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.51...@lunora/container@1.0.0-alpha.52) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/container [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.50...@lunora/container@1.0.0-alpha.51) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/container [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.49...@lunora/container@1.0.0-alpha.50) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/container [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.48...@lunora/container@1.0.0-alpha.49) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/container [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.47...@lunora/container@1.0.0-alpha.48) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
+## @lunora/container [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.46...@lunora/container@1.0.0-alpha.47) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/container [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.45...@lunora/container@1.0.0-alpha.46) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **observability,agent:** `SpanHandle.spanContext()` returns `SpanContextIds`
+(`sampled` alongside the ids); `ctx.trace` accepts an optional fourth
+`SpanIdentity` argument; `WorkerOptions.queue` receives a fourth `TriggerTrace`
+argument, and codegen emits it.
+
+The gates that hid all of this are rewritten to go through the real path: the
+bridge suite drives the real span factory instead of a fake that echoed back
+whatever id it was handed, and the agent suites drive `generateText`/`streamText`
+against a mock model instead of invoking the telemetry hooks by hand.
+
+Not fixed, deliberately: a `ctx.fetch` span still parents to the dispatch rather
+than an enclosing `ctx.trace` (no ambient span stack in the DO profile) — the
+docblock now says so instead of implying otherwise. The Sentry and Braintrust
+model-call spans still end at time-to-first-byte on a streamed turn, because
+their host span must wrap `execute()` to establish the parent context; both
+docblocks now state it and point at the OTLP bridge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(api): accept the span-identity and trigger-trace surface
+
+The bridge now records under the id it publishes (SpanIdentity), SpanHandle
+reports the propagated sampled bit (SpanContextIds), and a queue consumer accepts
+the trigger's trace (TriggerTrace).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): close every telemetry bridge at the real end of a call
+
+The Sentry and Braintrust bridges wrapped `execute()`, which on a streamed turn
+resolves the instant `doStream` hands the stream back. Both reported every
+streamed generation as a ~1 ms, zero-token, always-OK call, and a stream that
+died mid-way never reached a span at all.
+
+Both now open the host span around `execute()` — still what parents the
+provider's own work — but keep it open past it. Sentry uses `startSpanManual`
+(present on every SDK built on `@sentry/core`, verified against 10.55.0) and ends
+the span from the terminal event; Braintrust parks its `traced` callback on a
+gate the terminal event releases, so the caller still gets `execute()`'s value
+immediately while the span covers the whole generation. Usage is read off the
+SDK's normalized end event, where a LanguageModelV4 provider's nested
+`{ inputTokens: { total } }` has already been flattened.
+
+The lifecycle all three share moves to `telemetry/in-flight-calls.ts`, and with
+it two fixes:
+
+- Aborts and errors now close the call they NAME. Every ai@7 terminal event
+  carries the model call's `callId`, `onAbort` and `onError` included, but the
+  close was indiscriminate — and a bridge built at module scope, which is the
+  documented `defineAgent({ telemetry: { integrations: [...] } })` shape, shares
+  one map across every concurrent run in the isolate. One run's barge-in
+  reported a sibling's live generation as aborted and swallowed its real span.
+- A stream that rejects outright dispatches no telemetry callback at all, so
+  its entry was never removed and pinned the call's prompt for the life of the
+  integration. Entries older than ten minutes are now swept on the next open.
+  The contradictory claim that the map "cannot grow" is gone.
+
+A throwing integration also no longer fails the user's tool. `traceToolExecution`
+runs inside the tool's durable `step.do`, so a host SDK throwing in `executeTool`
+made the step retry a tool that had already run, or report a successful one as
+failed — against that function's own promise that telemetry is never flow
+control. The tool's real outcome is recorded as it happens and always wins.
+
+`SpanIdentity`'s two ids become required: the sole caller always passes both, and
+`identity?:` already expresses "no adapter involved", so a partial object
+type-checked and meant nothing.
+
+The `version_metadata` object unwrap in `readerFromRecord` is keyed to
+`CF_VERSION_METADATA` alone. Applied to any object-valued binding it would export
+the internal `.id` of whatever a future probed key named as a resource attribute.
+
+Every model-call test now drives the real SDK through `generateText`/`streamText`
+rather than invoking the hooks by hand, which is what hid the streaming defect:
+called directly, `execute()` resolves with a finished result and the span looks
+perfect. Each new assertion was confirmed to fail against the pre-fix behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): release swept calls and stop the wrapper deciding tool outcomes
+
+Two findings from review, both real.
+
+**The abandoned-call sweep dropped the record but stranded the resource.** A
+swept entry was deleted without `onClose`, which is right — a span ending at
+"whenever the next call started" is worse than none. But two bridges carry
+something live in the host SDK: Sentry's `startSpanManual` span ends only when
+someone ends it, and Braintrust's `traced` callback is parked on a gate the
+terminal event releases. Dropping those entries left the span open and the
+callback parked for the life of the isolate — the same leak the sweep exists to
+prevent, one level down.
+
+`createInFlightCalls` takes an `onEvict`, and each bridge releases its own
+resource there without emitting anything. Both new tests fail without it
+("expected undefined to be defined"). Writing the Braintrust one showed the
+abandonment has to be modelled precisely: with an `execute()` that never
+settles, the callback parks on `execute()` rather than on the gate, and nothing
+can release it. The real shape is a stream handed back at first byte that then
+dies — `execute()` resolves, the callback parks on the gate.
+
+**A telemetry wrapper could decide a durable tool outcome.** The ai@7 contract
+hands `executeTool` the tool's `execute` and trusts what it returns. This file
+guarded a wrapper THROW, but not a wrapper that skips `execute` entirely or
+returns a value of its own — so an integration could record a tool that never
+ran, or replace its result, inside the durable `step.do`. That contradicts the
+function's own promise that telemetry is never flow control.
+
+The wrapper's return value and its rejection are now both discarded, and the
+outcome is read from one memoized promise. Memoized rather than re-run: a
+wrapper that starts `execute` without awaiting it leaves no trace by the time it
+returns, and re-running would execute the tool twice. This also deletes the
+`ran`/`failed` bookkeeping — the promise already carries both.
+
+Five new cases; three fail against the previous flow (skip, replace, and the
+un-awaited start), while reject-after-success and the tool's own failure already
+behaved correctly.
+
+Also suppress the secret scanner on a fixture `Bearer admin-token` in
+`trigger-trace.test.ts`, matching how the e2e fixtures do it — `vis secrets`
+reports clean.
+
+464 agent tests, repo `lint:types`, `api:check` (54 snapshots) and `vis secrets`
+all green.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(agent): floor the streamed-span assertions on the stream, not wall clock
+
+CI failed with `expected 94 to be greater than 96` on the Sentry streamed-span
+test. The assertion was `spanDuration > wallMs / 2`, but `wallMs` starts before
+the span does — so a runner slow enough to spend ~98ms getting from the timer to
+the first `doStream` call inflates the divisor past the span and the test fails
+on scheduling alone, with nothing wrong.
+
+All three bridge suites carried the same shape. Each now floors on the stream's
+OWN delay budget, which the fixture makes knowable: `streamingModel` waits
+`gapMs` per chunk, so `{ chunks: 3, gapMs: 30 }` is ~90ms regardless of how slow
+the runner is getting there.
+
+The floor still separates what it exists to separate. The defect being guarded is
+a span closed when `execute()` resolves — the instant `doStream` hands the stream
+back — which measured ~1ms. Verified by re-introducing exactly that close: the
+streamed test fails again, along with three others.
+
+464 agent tests pass; `eslint --max-warnings=0` clean (the constant sits above the
+expect group rather than splitting it, which `vitest/padding-around-expect-groups`
+flags).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **observability,agent:** make the trace say what actually happened ([#618](https://github.com/anolilab/lunora/issues/618)) ([c07f788](https://github.com/anolilab/lunora/commit/c07f788836fb5724002a80a2031b88a033e304d0))
+* **shard-engine,container:** bracket two control channels with the wire codec ([#623](https://github.com/anolilab/lunora/issues/623)) ([da5e903](https://github.com/anolilab/lunora/commit/da5e903f9d6ea9c878fe2587f534706f02ecfff4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/container [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.44...@lunora/container@1.0.0-alpha.45) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/container [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.43...@lunora/container@1.0.0-alpha.44) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* the KV mutual-exclusion error is raised with code `BAD_REQUEST`
+instead of `INTERNAL`, and it now fires from the admin `putValue` path as well as
+`createKv`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): materialize the remote wrangler config after bindings are provisioned
+
+`planViteRemoteBindings` ran at plugin-factory time, before any Vite hook. The temp
+config it writes is a copy of `wrangler.jsonc` with `"remote": true` injected on each
+eligible binding, and Lunora provisions the bindings the project's code implies from
+`wranglerValidatorPlugin`'s `config` hook — so the copy was always taken one write too
+early. Under `LUNORA_REMOTE` the cloudflare plugin was then pointed at a snapshot that
+predated the provisioning, and the dev worker booted without the binding that had just
+been written. This is the remote twin of the local defect that moving the reconcile into
+`config` closed; that move did not reach this path.
+
+Observed live against a real account on an example app: `vite dev` logged
+"inferred bindings -> AI (Workers AI) (written to .../wrangler.jsonc)", the file on disk
+gained `"ai": { "binding": "AI" }`, the materialized temp config did not, and a probe
+route reported `["DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]`. After the change the
+same probe reports `["AI","DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]` and the temp
+config carries `"ai": { "binding": "AI", "remote": true }`.
+
+Materialization now happens in the `config` hook, which is registered after the
+validator's and therefore runs after it (both are `enforce: "pre"`). The build gate moves
+with it, so `vite build` no longer writes a temp config it never uses. Cleanup folds into
+the same plugin because the disposer cannot be captured before the plan exists; a
+re-entered `config` hook disposes the previous generation rather than orphaning its file.
+* `remoteBindingsConfigPlugin` and `remoteBindingsCleanupPlugin` are
+replaced by a single `remoteBindingsPlugin(options, planOptions)`, which takes the plan
+inputs rather than an already-materialized plan.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(notify): close the register-side takeover and the dead-device blackout
+
+`ctx.push.register()` upserted a subscription with `user_id = ?` in the `DO UPDATE SET` list, so
+registering an endpoint already stored for someone else re-owned it. The id is derived from the
+endpoint, i.e. a caller-controlled key — the same precondition `unregister` was given an atomic
+`deleteOwned` for. Registering a victim's endpoint with garbage keys under your own id took their
+device dark (an encryption failure is not a gone signal, so it was never pruned either) and handed
+you `unregister` over it. Both stores now refuse a put that would move a row to a different owner —
+D1 in the `ON CONFLICT … DO UPDATE`'s own `WHERE`, memory with no await between check and write —
+and the legacy-prefix eviction inside `put`, a DELETE on a different primary key the guarded upsert
+never sees, is scoped the same way (with the CLAIM predicate, so an anonymous device that signs in
+still loses its old row).
+
+FCM dead tokens were never detected as gone. The provider forwards `body.error.message` only, and
+FCM HTTP v1 keeps `UNREGISTERED` in `error.details[].errorCode`, which it drops — so the codes
+`isGoneError` matched could not arrive and every uninstalled device stayed registered forever, was
+re-POSTed on every broadcast, and counted `failed`. Match the `NOT_FOUND` prose the transport
+actually emits, still scoped to FCM.
+
+A gone subscription also cost four POSTs and ~2.2 s of backoff before being deleted, because
+`retryMiddleware` had no `shouldRetry`; those attempts then fed a circuit breaker whose counter is
+closure state shared by every channel, so two dead devices blacked out `chat`/`webhook`/`inApp` for
+30 s — and the second device's result became `Circuit open`, which is not a gone signal, so it
+survived to repeat it. Permanent failures are no longer retried, and the breaker is per provider and
+ignores them; it still opens for five consecutive transient failures.
+
+On the retry path a gone receipt was reported `failed`, so the pruned id went back into `failedIds`
+and the narrower retry could only throw `no registered subscription` until the queue dead-lettered
+an unsubscribe. It settles as `expired` now, kinded by the id's own prefix, as does an id whose row
+is already gone.
+
+Seeded `email` columns used faker's `free_email` default, so generated rows carried deliverable
+gmail/hotmail/yahoo addresses; seed a staging database, run any user-driven mail flow, and the app
+mails real strangers from its own verified domain. They are built on the RFC 2606 reserved
+`example.com` now — goldens regenerated, since an explicit provider also shifts faker's draw.
+
+Also: the mail capture sink logs when it has nowhere to record instead of returning a success-shaped
+`uncaptured` in silence; the inbound `verify` gate proceeds only on `true`/`undefined` rather than
+on anything but `false`; the queue recipe and `idempotencyKey` docs say that consumer-side dedupe is
+the only mechanism, since no transport can reach Resend's `Idempotency-Key` request header; the
+studio seed host answers `409 fk-parents-empty` (a code its client already decoded and nothing ever
+sent) instead of returning children whose fabricated parents it drops; and `flagshipProvider`
+refuses a literal empty `authToken` as the thunk path already did.
+* `SubscriptionStore.put` must refuse a put that would move a row to a different
+owner, and `ctx.push.register()` now rejects with `FORBIDDEN` for an endpoint registered to another
+user. `@lunora/seed` generates `@example.com` addresses, changing every seeded email value.
+`handleSeedRequest` returns 409 instead of 200 for a table whose foreign-key parents were not
+supplied in `existingIds`.
+
+Test doubles were the reason two of these went unnoticed and are tightened here: the notify mock
+engine now wires the real resilience middleware through the same `attachResilience` production
+uses (a bare `createNotification` exercised none of it), the mock push provider answers each
+provider's real gone phrasing per kind, and `fakeD1` models the `ON CONFLICT … DO UPDATE … WHERE`
+refusal and each of the three `DELETE` owner predicates instead of overwriting and deleting
+unconditionally.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): spawn compensations under an id the engine accepts
+
+The Workflows engine validates an instance id on `create` before it does anything
+else: at most 100 characters matching `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. `:` is not in
+that class, so `ctx.parallel`'s group-saga rollback — spawned as
+`<childId>:compensate` — was rejected on every attempt, in every deployment. The
+rejection is not a duplicate-instance error, so the durable step burned its whole
+retry budget, the catch in `compensateCompleted` logged it and moved on, and the
+group failed with the completed branches never rolled back. A `chargeCard` branch
+with `compensateWith: "refundCard"` took the money and refunded nothing.
+
+The five unit tests hard-coded the `:compensate` id against a `create` double that
+accepted any string, and the workerd smoke never spawns, so nothing caught it. The
+double now applies the engine's own id check, and a new test asserts that every id
+the package mints from a Cloudflare-shaped parent — children and compensations
+alike — satisfies that grammar, so a future suffix carrying a `:` fails there.
+
+Only the suffix is ours to constrain. The parent id it is appended to belongs to
+the host, and `@lunora/platform-node` runs this same orchestrator on
+`@visulima/workflow`, whose `generateRunId` mints `<definitionId>:<uuid>` and
+accepts no override. A test pins that a host-issued parent id the Cloudflare engine
+would refuse still fans out and compensates, so the Cloudflare grammar stays in the
+assertion that belongs to Cloudflare rather than leaking into the portable path.
+
+Also in this change:
+
+- `ctx.parallel` reads an attached child's terminal `status()` instead of waiting
+  for an event that has already been consumed. `instance.restart()` on a parent
+  that had fanned out wipes the parent's step cache AND its event map, so the
+  re-run spawn steps re-attach to children that already signalled; the joins then
+  hibernated for the branch timeout (24 hours by default) and failed the group with
+  the finished children's results sitting unread on their handles. The status read
+  costs nothing on a first spawn — only the attach path performs it — and also
+  recovers a join whose signal was lost for any other reason.
+
+- `isDuplicateInstanceError` no longer misses an `already_exists` spelling. The
+  predicate cannot be pinned against a live engine (miniflare never rejects a
+  duplicate create at all, so the attach branch is unreachable under workerd), and
+  the test now records why along with the separator variants it does defend.
+* a group-saga compensation instance is now created as
+`<childId>-compensate`, not `<childId>:compensate`. Nothing could observe the old
+id — the engine rejected it — but an app that derived the name itself must update.
+The `lunora:spawn:*` durable step now memoizes a branch outcome rather than the
+child id; a parent already in flight replays the old string and joins as before.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): key the readiness gate on the run, not on onStop
+
+`lunoraReadiness` was cleared only in `onStop`, but the base reaches that hook
+solely through `syncPendingStoppedEvents` — which `start()` never calls (only
+`startAndWaitForPorts`, `stop()` and the alarm loop do), while the monitor callback
+that observes a container exit merely records the state. So an explicit `start()`
+inside the up-to-three-minute window before the next alarm found the finished run's
+settled gate and returned early, skipping BOTH `armHardTimeout` and the `readyOn`
+probes: run 2 had no hard timeout at all and was proxied to before it reported
+ready. The hard timeout's own SIGTERM lands squarely in that window, so the
+runaway-cost backstop disarmed itself on the way out.
+
+The mirror case is why "always re-arm" is not the answer: a no-op `start()` on an
+already-running container — an isolate recycled under a live run, or a periodic
+"ensure started" call — begins no new run, and re-arming stamped a fresh generation
+that orphaned the live schedule row and pushed the total-lifetime cap out
+indefinitely.
+
+Both now hang off one synchronous observation taken before anything is started:
+the container was not running (a new run — drop the old gate, arm, probe) or it was
+(no new run — probe for this isolate, leave the armed schedule alone). Read before
+any await, so two concurrent starts of a stopped container still share one gate.
+The two sites that drop a failed gate are identity-checked, so a gate failing late
+for a run that has since ended cannot discard the current run's.
+
+The existing test called `onStop` by hand between the two starts, encoding exactly
+the assumption that does not hold; it now lets the run end the way the base does.
+The start double stubs both entry points and flips the container's `running` flag
+the way `doStartContainer` does, so a no-op start is distinguishable from a first
+start.
+
+Also in this change:
+
+- `startAndWaitForPorts()` resolves the Secrets Store env. It was the only start
+  entry that did not, despite being the path `containerFetch` routes through and the
+  one an app can call itself; `doStartContainer` reads `this.envVars`, so a container
+  started that way booted without its `secretsStore` values. Resolution moves out of
+  `containerFetch`, which now performs it only when a start is actually needed.
+
+- `hardTimeout` is documented as what it is. `stop()` sends SIGTERM and does not
+  escalate to `destroy()`, so a container that traps or ignores the signal outlives
+  its cap; the docs promised it would "never run longer than an hour, busy or not".
+  The hook docblock names the escalation an app can add.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* build: regenerate the lockfile against the released manifest versions
+
+`alpha`'s release commits bumped `@lunora/observability` to alpha.56 and
+`@lunora/platform-cloudflare` to alpha.32 without updating `pnpm-lock.yaml`, so
+every CI job fails in its setup step: the workflows install with
+`--frozen-lockfile`, which refuses a lockfile whose specifiers disagree with the
+manifests. That turns roughly a dozen checks red at once, including both
+required ones, for reasons that look unrelated to the change under review.
+
+Regenerated rather than hand-edited — a text-merged lockfile passes locally and
+fails on the merge ref CI actually builds.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(flags): reword a comment that tripped the secret-entropy rule
+
+The literal env-var reference in the new test's comment reads as a high-entropy
+string to `no-secrets`, which fails `lint:eslint` at --max-warnings=0. The
+comment says the same thing without spelling the identifier.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the id, run-identity and provisioning gaps left open
+
+`ctx.parallel`'s group-saga rollback was still unreachable, gated on length instead of the colon.
+The engine's create-time id check tests `id.length > 100` BEFORE the character class, and a branch
+id is caller-controlled right up to that ceiling — an explicit `branch(…, { id })`, or a derived
+`<parentId>-c<n>` under a long host-issued parent. Adding `-compensate` puts the rollback over it,
+`create` rejects, `compensateCompleted` logs and continues, and a completed branch that took payment
+is never refunded. An over-long compensation id now folds back under the ceiling, keeping a digest
+of the whole child id and the readable suffix. The regression test's short synthetic parent only
+ever exercised the character class; it says so now, and a 90-character branch id covers the rest.
+
+`codeTool` and `agent.asTool()` could never be used together. `codeTool` gives each script step a
+tool-call id of `${toolCallId}:${step.id}` and takes any tool in its map, so `agentAsTool`'s
+`sub-<name>-<toolCallId>` carried a colon into `create`, which rejects it — not as a duplicate, so
+it rethrows and the per-step `step.do` burns its retries. The call id is hashed into the instance id
+now (the thread key still carries it raw), and the docblock that called this "a note for whoever
+changes the shape, not a live hazard" is gone. The agent binding double applies the engine's own id
+check, which is what let this pass unnoticed.
+
+The attach path returned a child's outcome straight into the durable step cache while only the event
+path bounded it. Both channels cap at 1 MiB, and a step return the host cannot serialise aborts the
+instance rather than failing one branch, so the attach path bounds it the same way.
+
+Provisioning was reachable only through `validateWrangler`. `reconcileBindingsSafely` lived in the
+wrangler validator's `config` hook, so turning the CHECKS off — an option whose name promises
+nothing about writes — took the write back out of `config`, and the Cloudflare plugin parsed
+`wrangler.jsonc`, and `remoteBindingsPlugin` copied it, before the binding existed: the exact
+missing-`env.DB` boot that hook was moved to fix. It is its own unconditionally registered plugin
+now, still `enforce: "pre"` and still ahead of the remote-bindings copy.
+
+A re-entrant Vite `config` pass left `configPath` naming a deleted file: cleanup unlinked temp A, a
+new plan wrote temp B, and `withRemoteBindings` read the A still on the options object as a
+user-supplied path and returned unchanged. The plugin tracks what it injected, so only a path it did
+not write counts as the user's.
+
+The container's `beginStart()` snapshot was a TOCTOU across two awaits — a Secrets Store RPC, and
+the base's own pre-start work. A container exiting in that window let a new run start with
+`wasRunning === true`, so the hard timeout was never armed and (via `start()`) the readiness probes
+were skipped too: run 2 ran uncapped and was proxied to before it reported ready. The snapshot moved
+past the secrets resolution, and an `onStop` observed ACROSS the base call now demotes it. What
+remains uncovered is an exit inside `start()`'s own base call, which never syncs pending stop
+events — documented on `beginStart`, along with the hard timeout being a one-shot signal that
+nothing re-sends to a container ignoring SIGTERM.
+
+Docs and comments that overstated a guarantee: the mail queue recipe promised exactly-once for a
+mark written after the send and read from an eventually-consistent store; `register()`'s owner guard
+hard-fails browser account switching, because `subscribeToPush` reuses the browser's subscription
+and every account derives the same id, so the README now makes the sign-out `unregister` part of the
+recipe rather than an aside; the half-open breaker lets through every send already in flight, not
+"exactly one"; `isPermanentFailure` is channel-less as well as kind-less and now governs retry for
+chat/webhook/inApp; the duplicate-instance matcher is unreachable LOCALLY, not in production, which
+is why `createOrAttach` exists at all.
+* `flagshipProvider({ authToken: "" })` now throws at construction instead of
+evaluating flags against their checked-in defaults — a deployment reading an unset secret straight
+off `env` fails to boot rather than failing closed in silence. Omit `authToken` for an
+unauthenticated endpoint, or pass a thunk. A sub-agent child run's instance id is now
+`sub-<name>-<digest>` rather than `sub-<name>-<toolCallId>`, so a run in flight across the upgrade
+starts a second child instead of re-attaching.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(deps): regenerate the lockfile after merging alpha
+
+The merge took the branch's lockfile, which still carried the released-version
+specifiers the new root overrides replace.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* make saga compensation, container restarts and push ownership actually work ([#592](https://github.com/anolilab/lunora/issues/592)) ([6fae07a](https://github.com/anolilab/lunora/commit/6fae07a056a6c93fea1fc11aa88c8d35ee031019))
+
+## @lunora/container [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.42...@lunora/container@1.0.0-alpha.43) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+
+## @lunora/container [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.41...@lunora/container@1.0.0-alpha.42) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* writes already sitting in a durable outbox carry no identity stamp and are
+dropped on the next drain instead of replayed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(db): report the reserved outbox handler's drop instead of swallowing it
+
+The per-collection replay handler wraps its NonRetriableError and reports it on
+`onWriteRejected`; the reserved `__lunora_outbox__` handler threw bare. A write
+dropped there rolled the optimistic row back with no UI signal — the exact
+failure that option was added to prevent, on the one path that already had the
+identity guard. Reports the identity drop and a server-coded replay rejection
+alike, because reporting only the first would leave the handler with the same
+half-guarded shape it is being fixed for.
+
+Also validates `rollout.gracePeriodSeconds` in `defineContainer`, which reached
+wrangler's `rollout_active_grace_period` unchecked while its sibling
+`stepPercentage` was validated; a fractional or negative value became a
+deploy-time failure far from the line that caused it. Only the shape is
+asserted — 0 is meaningful and no upper bound is sourced.
+
+And corrects a `collection-options.ts` docblock that stated the inverse of the
+code: it justified lazy resolution by an identity switch "retiring" the derived
+registry, but a switch rewinds each registry in place precisely so captures stay
+valid. The real replacement case is a client teardown.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(container): cite the platform ceiling the readiness budget sits on
+
+`READINESS_TIMEOUT_MS` is 30s, which is exactly Cloudflare's documented timeout
+for a `blockConcurrencyWhile` callback — "if this timeout is exceeded, the
+Durable Object will be reset" — and `armHardTimeout`'s three storage round-trips
+run ahead of it. While that wait sat inside the gate the reset won the race, so
+the `LunoraError` naming the failing check, port and budget was unreachable on
+the one path it exists for. The same page calls blocking that gate on I/O an
+anti-pattern, which a `readyOn` probe is.
+
+Records the source at the constant so the number is not re-derived by assumption
+and the wait is not moved back inside the gate.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(db): hold a replayed write when no identity is established yet
+
+The identity gate compared the stamped identity against `currentIdentity()` with
+a bare `!==`. That destroys the queuing user's own offline writes on every
+reload: `startOfflineExecutor` replays from its own constructor, before the app
+has resolved its session and called `setAuthToken`, so `currentIdentity()` is
+still null while the replay runs. A `NonRetriableError` there is terminal — the
+executor removes the entry from durable storage — so an offline write made
+before a reload was deleted rather than sent.
+
+The property being protected is "never replay as a DIFFERENT user". A null
+current identity is no user at all, so there is nobody to impersonate and the
+write must be held. The verdict now belongs to the client
+(`replayIdentityVerdict`): a mismatch is terminal, an unknown identity throws a
+retriable error and the write waits. It also routes through the existing
+token-hash check, so a subject that resolves after the token no longer looks
+like a different user. Both replay handlers share it, which closes the same bare
+comparison in the reserved `__lunora_outbox__` handler.
+
+Also gates request proxying on the `readyOn` probes. The base commits the
+healthy state inside its start gate, before the probes run, so `containerFetch`
+skipped startup entirely and proxied to a container that never reported ready;
+`afterContainerStart` is now single-flight and `containerFetch` awaits it.
+
+Reads the last-login cookie after mount in all six auth-ui ports, so the first
+client render matches the server instead of producing markup the server could
+not have produced, and gates the email and magic-link badges on
+`plugins.lastLoginMethod` the way the social buttons already were. Hardens the
+cookie read against a malformed percent-escape, which threw `URIError` during
+render.
+* `db.actions.*` transactions persist `{ identity, shardKey }`
+metadata. A write queued by an older build carries no stamp and is held rather
+than replayed under an unverified identity.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): clear the readiness gate when a run stops
+
+The single-flight gate added for concurrent starts outlived the run it belonged
+to. After `onStop` — including the `onActivityExpired` path, which stops the
+container — a restart found the settled promise and returned early, so the new
+run skipped both `armHardTimeout` and the `readyOn` probes: the restarted app
+was proxied to before it reported ready, and its hard timeout was never re-armed.
+
+Cleared when the run ends rather than at the top of a start, so single-flight
+still holds within a run. Resetting per start would let two concurrent starters
+each build a gate and each arm a schedule stamped with the same generation,
+which is the race the single-flight was added to close.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close 15 audit findings across the db outbox, container DO and adapters ([#589](https://github.com/anolilab/lunora/issues/589)) ([57080c6](https://github.com/anolilab/lunora/commit/57080c65698170d60403f1ca7731a9009661f1fc))
+
+## @lunora/container [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.40...@lunora/container@1.0.0-alpha.41) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/container [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.39...@lunora/container@1.0.0-alpha.40) (2026-09-02)
 
 

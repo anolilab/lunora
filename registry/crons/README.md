@@ -50,7 +50,7 @@ Cron targets are **internal** functions (`internalMutation` / `internalAction` /
 
 ## Schedules
 
-All schedule helpers are UTC. Exactly one of `seconds` / `minutes` / `hours` is allowed for `interval`.
+All schedule helpers are UTC. `interval` takes exactly one of `minutes` / `hours`. `{ seconds }` is rejected at definition time — Cloudflare Cron Triggers have a one-minute floor, so the 6-field expression it would compile to is refused by `wrangler deploy`; use `ctx.scheduler.runAfter`/`runAt` for sub-minute work, or `{ minutes: 1 }` for the fastest cron-native cadence.
 
 ```ts
 crons.interval("sweep", { minutes: 30 }, internal.presence.sweep, { roomId: "lobby" });

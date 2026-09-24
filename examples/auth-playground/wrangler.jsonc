@@ -11,7 +11,7 @@
         // Auth identity, sessions, organizations, members live in D1 — better-auth
         // discovers the schema across every configured plugin and runs migrations
         // against this binding via `ensureMigrated` / `compileMigrationsSql`.
-        { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "REPLACE_WITH_D1_ID" },
+        { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "<replace-with-d1-create-id>" },
     ],
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },

@@ -31,10 +31,12 @@ interface LogEntry {
     traceId?: string;
 }
 
+/** Default ring size for both in-memory buffers — `SpanBuffer` imports it from here alongside {@link normalizeCapacity}. */
 const DEFAULT_CAPACITY = 500;
 
 /**
- * Normalize a caller-supplied ring capacity to a usable integer.
+ * Normalize a caller-supplied ring capacity to a usable integer. Shared with
+ * `span-buffer.ts`, which imposes the identical bound on the identical ring.
  *
  * `> 0` alone was not enough, in both directions. A fractional capacity passed
  * that test and then truncated to ZERO, so the ring evicted every entry it was
@@ -121,5 +123,5 @@ class LogBuffer {
     }
 }
 
-export { LogBuffer };
+export { DEFAULT_CAPACITY, LogBuffer, normalizeCapacity };
 export type { LogEntry, LogLevel };

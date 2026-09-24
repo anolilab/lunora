@@ -48,7 +48,7 @@ class GateShard extends ShardDO {
     protected override resolveShape(
         name: string,
         args: Record<string, unknown>,
-        identity?: { identity?: Record<string, unknown>; userId?: string },
+        identity?: { identity?: Record<string, unknown>; ip?: string; userId?: string },
     ): Resolved | undefined {
         switch (name) {
             // No where at all — identity-independent.
@@ -78,6 +78,11 @@ class GateShard extends ShardDO {
             // An identity-gated resolve that throws for a probe.
             case "guarded": {
                 throw new Error("RLS: auth required");
+            }
+            // Scoped by the caller's IP rather than by a claim — per-subscriber all
+            // the same, so the probes must vary `ip` to catch it.
+            case "ipScoped": {
+                return { effectiveWhere: { fromIp: identity?.ip }, table: "messages" };
             }
             // Identity-DEPENDENT: the where is scoped to the caller.
             case "myInbox": {
@@ -139,6 +144,16 @@ describe("relay-uniform shape gate", () => {
         expect.assertions(1);
 
         expect(makeShard().uniform("orgScoped", {})).toBe(false);
+    });
+
+    it("rejects a shape whose where reads ctx.ip (the probes vary the address too)", () => {
+        expect.assertions(1);
+
+        // `ip` reaches a shape's `where` as `ctx.ip`, so it is a per-subscriber
+        // input like any claim. A probe set that leaves it undefined resolves this
+        // shape identically three times, calls it uniform, and multicasts one
+        // cohort the membership computed for nobody's address.
+        expect(makeShard().uniform("ipScoped", {})).toBe(false);
     });
 
     it("rejects a where reading an arbitrary custom claim (no hardcoded list to miss it)", () => {

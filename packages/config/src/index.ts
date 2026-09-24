@@ -24,22 +24,9 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
-export type {
-    DeployDriver,
-    DeployRequest,
-    DevRequest,
-    DriverContext,
-    DriverToolchain,
-    NamedResource,
-    ProvisionResult,
-    ResourceGraph,
-    SecretRequest,
-    ShardNamespaceResource,
-    TailRequest,
-    ToolchainCommand,
-} from "./deploy-driver";
+export type { DeployDriver, DeployRequest, DevRequest, DriverToolchain, SecretRequest, TailRequest, ToolchainCommand } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework, readProjectDependencyNames } from "./detect-framework";
+export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
 export {
     claimDevServerState,
@@ -69,8 +56,8 @@ export {
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
-export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
+export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
@@ -84,15 +71,8 @@ export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
-export type { LunoraProjectConfig, RemotePreference } from "./project-config";
-export {
-    interpretRemote,
-    LUNORA_CONFIG_FILE,
-    readProjectRemotePreference,
-    readProjectTarget,
-    resolveProjectTarget,
-    resolveTargetOrThrow,
-} from "./project-config";
+export type { RemotePreference } from "./project-config";
+export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export type {
@@ -141,7 +121,7 @@ export type {
     WireResult,
     WireRlsEdit,
 } from "./schema-edit/policy-scaffold";
-export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
+export { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
 export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName } from "./tui-theme";

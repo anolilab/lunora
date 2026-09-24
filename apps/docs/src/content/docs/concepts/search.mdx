@@ -111,6 +111,14 @@ Repeated terms collapse: `"cat cat"` is the same query as `"cat"`.
 Matches are ordered by relevance (how often the terms occur in the indexed
 field), newest first among equally relevant documents.
 
+Only the **first 1000 token occurrences** of a document are indexed, and a token
+longer than 256 characters is dropped. Both are per-document caps on the indexed
+text, not on distinct terms: the write path issues one statement per chunk of
+tokens, so an unbounded text column would turn one row write into hundreds of
+sequential round trips. The consequence for long documents (articles,
+transcripts) is that a term appearing only after the 1000th token does not match,
+and relevance counts occurrences within that window only.
+
 ## Filter fields
 
 Every column you want to filter by inside a search must be declared in
@@ -180,16 +188,18 @@ Until that walk finishes, a search on a **shard-local** table is refused with
 table indexed so far. The index covers a growing prefix in `id` order, and a
 result set missing every match past that point is indistinguishable from one
 where those matches never existed. Each read advances the backfill, so a caller
-that retries makes progress; the admin op below finishes it in one go. On a
-`.global()` table the read is answered from whatever is indexed at the time.
+that retries makes progress; the admin op below finishes it in one go. A
+`.global()` table is refused the same way, for the same reason — the read never
+falls back to a partial answer on either tier.
 
 An index **rebuilding** under a changed analyzer — a different `language`, or a
 new analyzer version shipped with Lunora — is a different state, and a
 shard-local table keeps answering throughout it. Every row is already in the
 index and the re-walk rewrites each one's analysis in place, so nothing goes
 missing; a shrinking suffix is matched under the previous rules until the walk
-reaches it. (A `.global()` table discards the index and rebuilds it, and answers
-from the rebuilt part meanwhile.)
+reaches it. A `.global()` table rebuilds the same way — the companion is
+deliberately **not** emptied first, so it keeps answering throughout. Only a
+change of index _layout_ drops the companion table.
 
 ### `staged`
 
@@ -204,10 +214,12 @@ A staged index is maintained on every write from the moment it is declared, but
 nothing walks the rows that predate it. On a shard-local table that means **every
 search on the table is refused with `SEARCH_INDEX_BUILDING` until you run the
 backfill** — the index is not partly useful in the meantime, and skipping the
-backfill leaves it that way indefinitely. (On a `.global()` table it answers from
-the documents written after the deploy only.) Declared together with the table
-there is nothing to walk, so the index is complete from the start and `staged`
-costs nothing.
+backfill leaves it that way indefinitely. A `.global()` table over existing rows
+behaves identically: the index is recorded as not-covered and every search is
+refused until the backfill runs, so `staged` on a large D1/Hyperdrive table is
+search-offline, not degraded-but-live. Declared together with the table there is
+nothing to walk, so the index is complete from the start and `staged` costs
+nothing.
 
 For sharded tables, drive it against a running deployment with the
 `backfillSearch` admin op:

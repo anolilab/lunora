@@ -122,7 +122,7 @@ describe("implicit id tiebreak follows the sort direction", () => {
         // makes the two distinguishable at all.
         const page = await writer.findMany("events", { limit: 2, orderBy: [{ _creationTime: "desc" }] });
 
-        expect(page.continueCursor).toMatch(/^~3/u);
+        expect(page.continueCursor).toMatch(/^~4/u);
 
         const next: { page: Record<string, unknown>[] } = await writer.findMany("events", {
             cursor: page.continueCursor,

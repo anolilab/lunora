@@ -31,7 +31,7 @@ export const createReconnect = (options: ReconnectOptions = {}, random: () => nu
                 return exponential;
             }
 
-            // Decorrelated jitter: pick a value in [exponential/2, exponential]
+            // Equal jitter: pick a value in [exponential/2, exponential]
             const min = exponential / 2;
 
             return Math.floor(min + random() * (exponential - min));

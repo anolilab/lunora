@@ -63,5 +63,10 @@ const ssrOrigin = (): Plugin => {
  * worker). One worker, one deploy, one `ShardDO` namespace.
  */
 export default defineConfig({
-    plugins: [vinext(), cloudflare(), lunora({ cloudflare: false }), ssrOrigin()],
+    // `allowUnauthenticatedShardAccess: true` is a DEMO default: the composed
+    // worker default-denies client-named shard access (403), so the scaffold's
+    // auth-less `.shardBy("channelId")` schema needs this to work — data is
+    // protected by per-row RLS. A PRODUCTION sharded app should drop it and
+    // configure `authorizeShard` in a hand-written worker instead.
+    plugins: [vinext(), cloudflare(), lunora({ allowUnauthenticatedShardAccess: true, cloudflare: false }), ssrOrigin()],
 });

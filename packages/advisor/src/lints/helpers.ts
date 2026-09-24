@@ -117,6 +117,51 @@ export const isPiiColumn = (column: string): boolean => NORMALIZED_PII_NAMES.has
 export const PII_FIELD_NAMES: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST);
 
 /**
+ * `true` when `identifier` names one of `phrases`, matched on WORD boundaries.
+ *
+ * A substring scan matches a phrase ANYWHERE in the normalized string — `reset`
+ * inside `updatePresets`, `otp` inside `snapshotPrune` and `listSlotProfiles` —
+ * so plainly benign procedures come back tagged auth-sensitive. That is the
+ * false-positive class {@link isPiiColumn} and the flag-polarity lint's own
+ * tokenizer both exist to avoid, and a security lint that cries wolf on
+ * `updatePresets` is how a team learns to ignore the advisor.
+ *
+ * A phrase matches when its words appear as a contiguous run of `identifier`'s
+ * words (`signIn` matches `signInWithEmail`), or when the two normalize
+ * identically (the identifier `signin` matches the phrase `signIn`). List a
+ * phrase under every spelling a caller might write it as ONE word (`login` as
+ * well as `logIn`): `loginHandler` tokenizes to `["login", "handler"]` and
+ * shares no word with `logIn`.
+ */
+export const matchesNamePhrase = (identifier: string, phrases: ReadonlyArray<string>): boolean => {
+    const tokens = tokenize(identifier);
+    const normalized = normalize(identifier);
+
+    return phrases.some((phrase) => {
+        if (normalized === normalize(phrase)) {
+            return true;
+        }
+
+        const words = tokenize(phrase);
+
+        return words.length > 0 && tokens.some((_, start) => words.every((word, offset) => tokens[start + offset] === word));
+    });
+};
+
+/**
+ * The declared validator kind of `table`'s `column`, or `undefined` when the
+ * table has no such column (or the feeder carries no column kinds at all).
+ *
+ * `columnKinds` is a plain object, so a bare index read inherits from
+ * `Object.prototype`: a column named `toString`/`constructor` resolves to a
+ * function and a type lint reports an ERROR whose detail is `[native code]`.
+ * Own-property lookup keeps an undeclared column undeclared — the same hazard
+ * {@link shardKindsByTable} answers with a `Map`.
+ */
+export const columnKind = (table: AdvisorTable, column: string): string | undefined =>
+    table.columnKinds !== undefined && Object.hasOwn(table.columnKinds, column) ? table.columnKinds[column] : undefined;
+
+/**
  * Framework-managed columns every table has implicitly. They never appear in a
  * table's declared `fields`, so a column-resolution check must treat them as
  * always valid (an index or relation may legitimately reference `_id`).

@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { encodeIdentityHeader, isByteStringSafe } from "../../../shared/identity-header";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 import type { ShardFunctionReference } from "../src/shard-client";
 import { createShardClient } from "../src/shard-client";
@@ -125,6 +126,32 @@ describe("createShardClient", () => {
         // a raw `JSON.stringify({ name: "名前 🎌" })` would violate it.
         expect(isByteStringSafe(identityHeader)).toBe(true);
         expect(identityHeader).toBe(encodeIdentityHeader({ name: "名前 🎌" }));
+    });
+
+    it("stamps the origin paywall marker so a paid (`.x402`) procedure is not refused by the shard", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = createNamespace(() => ok(null));
+
+        await createShardClient(namespace, { shardKey: "u1" }).call("billing:premiumReport", {});
+
+        // Same posture as the runtime's scheduler/cron dispatch: a server-side
+        // caller inside the trust boundary has no HTTP caller to charge, so running
+        // a paid target unpaid is the deliberate answer — not an origin that failed
+        // to look. Unmarked, the shard's `isPaidFunction` backstop 500s the call.
+        expect(calls[0]?.headers[ORIGIN_PAYWALL_HEADER]).toBe(ORIGIN_PAYWALL_APPLIED);
+        expect(calls[0]?.headers["x-lunora-system"]).toBe("1");
+    });
+
+    it("withholds the paywall marker from a `system: false` client, which is an end-user RPC", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = createNamespace(() => ok(null));
+
+        await createShardClient(namespace, { shardKey: "u1", system: false }).as({ userId: "u1" }).call("billing:premiumReport", {});
+
+        expect(calls[0]?.headers[ORIGIN_PAYWALL_HEADER]).toBeUndefined();
+        expect(calls[0]?.headers["x-lunora-system"]).toBeUndefined();
     });
 
     it("drops the system flag when the caller opts out", async () => {

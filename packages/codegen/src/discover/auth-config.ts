@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { AuthConfigIR } from "../ir";
-import { collectCallRows, propertyInitializer } from "./ast";
+import { collectSecurityCallRows, propertyInitializer } from "./ast";
 import { calleeName } from "./callee";
 
 /** Whether `node` is the literal `true` keyword. */
@@ -99,15 +99,20 @@ const authConfigInCall = (call: CallExpression, relativePath: string): AuthConfi
 };
 
 /**
- * Discover `createAuth({...})` calls in `lunora/` — the shared input for the
- * five `auth_*` security lints (trusted-origins wildcard, CSRF check disabled,
- * secure cookies disabled, email verification disabled, session freshAge zero).
- * Matched by callee NAME, so a re-export or alias still resolves. When the
- * config argument isn't a statically-analyzable object literal (a top-level
- * spread, or not an object literal at all), the row is recorded with
+ * Discover `createAuth({...})` calls — the shared input for the `auth_*`
+ * security lints (trusted-origins wildcard, CSRF check disabled, secure cookies
+ * disabled, email verification disabled, session freshAge zero, SCIM without
+ * transactions). Matched by callee NAME, so a re-export or alias still resolves.
+ * When the config argument isn't a statically-analyzable object literal (a
+ * top-level spread, or not an object literal at all), the row is recorded with
  * `analyzable: false` and every boolean fact at its SAFE value, so no lint fires
  * on an opaque config.
+ *
+ * Scans the worker entry as well as `lunora/` (see `listSecurityScanFiles`) for
+ * the same reason `discover/config-calls` does: `createAuth` is built in the
+ * entry by convention — `examples/blog/src/server/index.ts` is the shape — so a
+ * `lunora/`-only walk left all six lints unable to fire on a real app.
  */
-const discoverAuthConfig = (project: Project, lunoraDirectory: string): AuthConfigIR[] => collectCallRows(project, lunoraDirectory, authConfigInCall);
+const discoverAuthConfig = (project: Project, lunoraDirectory: string): AuthConfigIR[] => collectSecurityCallRows(project, lunoraDirectory, authConfigInCall);
 
 export default discoverAuthConfig;

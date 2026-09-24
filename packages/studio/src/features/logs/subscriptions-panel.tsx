@@ -12,6 +12,7 @@ import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { jsonRowReplacer } from "../../lib/internal";
 
 interface SubscriptionsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -21,13 +22,21 @@ interface SubscriptionsPanelProps {
 /** Longest `args` JSON rendered inline before it's truncated; the full value stays in the cell `title`. */
 const ARGS_MAX = 80;
 
-/** Serialise a subscription's `args` to a compact, length-bounded string for the table cell. */
+/**
+ * Serialise a subscription's `args` to a compact, length-bounded string for the
+ * table cell.
+ *
+ * `jsonRowReplacer`, never a bare `JSON.stringify`: subscription args are wire-
+ * decoded when the socket attaches and handed back verbatim, so a live query on
+ * a `v.bigint()` column carries a real `bigint` here — which `JSON.stringify`
+ * throws on, unmounting the whole panel on every poll.
+ */
 const formatArguments = (args: Record<string, unknown> | undefined): string => {
     if (args === undefined) {
         return "";
     }
 
-    const json = JSON.stringify(args);
+    const json = JSON.stringify(args, jsonRowReplacer);
 
     return json.length > ARGS_MAX ? `${json.slice(0, ARGS_MAX)}…` : json;
 };

@@ -24,12 +24,14 @@ import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
+import { discoverErasedReturns, resetErasedReturns } from "./discover/erased-returns";
 import discoverExportSinks from "./discover/export-sinks";
 import discoverFailOpenGuards from "./discover/fail-open-guards";
 import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFlagReads from "./discover/flag-reads";
 import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
 import discoverFunctions from "./discover/functions";
+import { checkpointErasedReturns } from "./discover/functions/internal/erased-returns";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverGeoIndexUsages from "./discover/geo-index-usages";
 import discoverHttpActionGuards from "./discover/http-action-guards";
@@ -72,6 +74,7 @@ import discoverStaleMigrationImports from "./discover/stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
 import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
@@ -86,6 +89,7 @@ import {
     emitDrizzleSchema,
     emitFunctions,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitShard,
     emitVectors,
@@ -93,6 +97,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
     ContainerIR,
@@ -418,6 +423,10 @@ const inferToFixpoint = (options: {
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
     // the files those types resolve against change. Everything else in the
     // pipeline reads syntax, not inference, and stays outside.
+    // Erasures recorded by a pass that is then re-run are stale — a later pass
+    // may render the same return — so each re-run drops the previous pass's.
+    const rewindErasedReturns = checkpointErasedReturns();
+
     let functions = discoverFunctions(project, lunoraDirectory);
     let mutators = discoverMutators(project, lunoraDirectory);
     let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -425,7 +434,16 @@ const inferToFixpoint = (options: {
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside
     // generated code, with no pointer back to the two files that caused it.
+    //
+    // Once per namespace SPACE: `api.*` and `httpStreams.*` are separate emitted
+    // objects, so a function file may share a namespace with a route file, but
+    // two streaming-route files may not — and only `.stream()` routes are
+    // grouped by namespace at all, so the plain verbs stay out of it.
     assertNoNamespaceCollisions([...functions, ...mutators].map((definition) => definition.filePath));
+    assertNoNamespaceCollisions(
+        httpRoutes.filter((route) => route.stream).map((route) => route.filePath),
+        "http-stream",
+    );
 
     for (let pass = 1; ; pass += 1) {
         const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
@@ -444,6 +462,7 @@ const inferToFixpoint = (options: {
         syncProjectFile(project, apiPath, apiContent);
         syncProjectFile(project, generatedFunctionsPath, functionsContent);
 
+        rewindErasedReturns();
         functions = discoverFunctions(project, lunoraDirectory);
         mutators = discoverMutators(project, lunoraDirectory);
         httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -586,6 +605,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
 
+    // Same reason, same place: the erasure buffer those resolvers fill is
+    // module-level, so a previous run that threw before draining it would
+    // otherwise report its erasures against this project.
+    resetErasedReturns();
+
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
     // Phase 1 — everything that must be resolved and RENDERED before a single
@@ -599,6 +623,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         crons,
         dataModelContent,
         dependencies,
+        entryCronTriggers,
         env,
         featureUsage,
         hasFlags,
@@ -697,7 +722,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
                   imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
-                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory),
+                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory, functions),
                   mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
                   maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
                   maskStrategies: discoverMaskStrategies(project, lunoraDirectory),
@@ -706,7 +731,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
                   notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
                   notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
-                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory, functions),
+                  mutators,
+                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory, functions, mutators),
                   unrestrictedWhereBranches: discoverUnrestrictedWhereBranches(project, lunoraDirectory),
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
@@ -731,14 +757,33 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   wranglerVariables: options.wranglerVariables,
               });
 
-    // A binding whose TYPE is a registered procedure but which never reached
-    // `api.ts` was dropped by the syntactic scan. Reported alongside the
-    // advisor's findings so it travels the same channel to the terminal and the
-    // studio.
+    // Two ways a procedure reaches `api.ts` wrong, both silent until now, both
+    // reported alongside the advisor's findings so they travel the same channel
+    // to the terminal and the studio: a binding whose TYPE is a registered
+    // procedure but which never reached `api.ts` at all (dropped by the
+    // syntactic scan), and one that did reach it carrying fewer arguments than
+    // the runtime enforces (an argument record codegen could not read).
     const advisories =
         advisorContext === undefined
             ? []
-            : [...runAdvisor(advisorContext, { source: "static" }), ...discoverUnregisteredProcedures(project, lunoraDirectory, functions)];
+            : [
+                  ...runAdvisor(advisorContext, { source: "static" }),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
+                  ...discoverUnreadableArguments(project, lunoraDirectory),
+                  // The third, and the output-side twin of the second: a return
+                  // type codegen could render as neither a name nor a structure,
+                  // so `api.ts` says `unknown` where the runtime returns a shape.
+                  // Drains a buffer the discovery passes above filled — the
+                  // signal ("expansion produced nothing") exists only at the
+                  // moment of the fallback, so it cannot be re-derived here.
+                  ...discoverErasedReturns(lunoraDirectory),
+              ];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -766,13 +811,26 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
 
-    // Which optional, package-backed features the studio should show a nav page
-    // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
+    // The platform gate's `vectorStore` verdict, named once for every consumer
+    // below. `undefined` means the app never declared a vector index, which must
+    // not withhold anything; only an explicit `false` is a rejection. Spelling
+    // that three-state comparison out per call site is what let one of them —
+    // the studio nav — keep advertising the feature the other two withheld.
+    const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+
+    // Which optional features the studio should show a nav page for.
+    // `buildStudioFeatures` OR's the code-usage flags with the schema/project
     // signals the `lunora/`-scoped scan can't see: storage columns + access rules,
-    // declared crons, vector indexes, and — crucially for packages wired only in
-    // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
-    // Emitted into the generated ShardDO's `studioFeatures()` override so the
-    // studio hides only pages whose backing package the app genuinely never wires.
+    // declared crons, and — crucially for packages wired only in the worker entry
+    // (e.g. `@lunora/mail`) — the project's declared dependencies. Emitted into the
+    // generated ShardDO's `studioFeatures()` override.
+    //
+    // The dependency arm fails OPEN: a page whose backing package is installed
+    // shows even when the scan cannot see the wiring, because those pages degrade
+    // to an empty state. `vectors` is the exception and gates on the schema
+    // declaration alone — its endpoints 400 without a registry to serve, so
+    // failing open there would fail open into an error. See
+    // `buildStudioFeatures`' docblock.
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -787,6 +845,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        vectorStoreSupported,
         workflowCount: workflows.length,
     });
 
@@ -815,7 +874,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
     const shardContent = emitShard({
-        advisories,
+        // `_generated/shard.ts` is committed, and this finding is a fact about
+        // the machine codegen ran on rather than about the app — regenerating
+        // against a stale `dist/` would write it into a tracked file, so the
+        // diff would differ per developer. It still reaches the terminal through
+        // `CodegenResult.advisories`, which is where a fact about this run
+        // belongs. (`procedure_not_registered` is embedded like every other
+        // finding, and it is resolution-dependent too — a cold `dist/` drops it
+        // from the emitted list. That is the pre-existing cost of embedding
+        // advisories at all, not something this filter can fix.)
+        advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
         containers,
@@ -833,6 +901,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments: featureUsage.payments,
         hasPipelines: featureUsage.pipelines,
         hasR2sql: featureUsage.r2sql,
+        // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
+        // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
+        // so the DO kept the whole Vectorize wiring on a host rating
+        // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
+        // the Cloudflare one while the type surface was withheld.
+        hasVectors: vectorStoreSupported,
         hasX402: featureUsage.x402,
         maskMetadata,
         mutators,
@@ -856,6 +930,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
+    const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -895,9 +970,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
-        hasGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
+        hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
         hasHyperdrive: featureUsage.hyperdrive,
-        hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
+        hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
         hasImages: featureUsage.images,
         // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
         // config field is emitted on the usage signal — so this MUST stay
@@ -913,13 +988,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasR2sql: featureUsage.r2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
+        // The same schema signal `emitShard` gates the shard config's source-client
+        // field and the ingest poll on, so the builder method and the config field
+        // it writes to are emitted together or not at all.
+        hasSourcedTables: schema.tables.some((table) => table.externalSource !== undefined),
         hasStorage: studioFeatures.storage,
-        // Gated, not raw: the declaration alone is what the platform pass
-        // rejects on a host rating `vectorStore: "unsupported"`. Passing the raw
-        // count here emitted the runtime WIRING for `ctx.vectors` even when the
-        // type surface was correctly withheld, so "the surface was withheld" was
-        // only half true. Absent means never declared, which must not withhold.
-        hasVectors: platformGate.signals.vectorStore !== false && schema.vectorIndexes.length > 0,
+        // The gate's verdict, on the same convention `emitServer`/`emitShard`
+        // take it: the emitter AND's it with the declaration itself. This call
+        // site used to pass the CONJUNCTION under the same prop name, so the one
+        // flag meant two different things depending on which emitter read it.
+        hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
         hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
@@ -932,6 +1010,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Drives the emitted `listSchemaTables` — export's seed for "every table".
         tableNames: schema.tables.map((table) => table.name),
         useUmbrella,
+        // The app's own declaration, which `emitApp` AND's with `hasVectors`.
+        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // needs to make the same decision its siblings make has to come in.
+        vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
         // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO
         // namespace. Empty for voice-free (and agent-free) projects, so the
@@ -962,21 +1044,46 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
+    // The `_generated/` files this run emits, in write order. Which files those
+    // are depends on the project (conditional features, `apiSpec`), so it is
+    // recorded here rather than restated by each caller — the CLI used to print
+    // a hardcoded three-file list that had been wrong since the fourth file was
+    // added, and nothing could have caught it.
+    const writtenFiles: string[] = [];
+
     if (!options.dryRun) {
         if (!existsSync(outputDirectory)) {
             mkdirSync(outputDirectory, { recursive: true });
         }
 
-        writeIfChanged(join(outputDirectory, "app.ts"), appContent);
-        writeIfChanged(dataModelPath, dataModelContent);
-        writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
-        writeIfChanged(serverPath, serverContent);
-        writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
-        writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
-        writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
-        writeIfChanged(join(outputDirectory, "vectors.ts"), vectorsContent);
-        writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
-        writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
+        /** Always-emitted file: write it and record the name. */
+        const emit = (fileName: string, content: string): void => {
+            writeIfChanged(join(outputDirectory, fileName), content);
+            writtenFiles.push(fileName);
+        };
+
+        /**
+         * Conditionally-emitted file: `writeIfPresent` DELETES it when `content`
+         * is `""`, so only a non-empty emit counts as written.
+         */
+        const emitOptional = (fileName: string, content: string): void => {
+            writeIfPresent(join(outputDirectory, fileName), content);
+
+            if (content !== "") {
+                writtenFiles.push(fileName);
+            }
+        };
+
+        emit("app.ts", appContent);
+        emit("dataModel.ts", dataModelContent);
+        emit("api.ts", apiContent);
+        emit("server.ts", serverContent);
+        emit("functions.ts", functionsContent);
+        emit("shard.ts", shardContent);
+        emit("crons.ts", cronsContent);
+        emit("vectors.ts", vectorsContent);
+        emit("drizzle.global.ts", drizzleFiles.global);
+        emit("drizzle.shard.ts", drizzleFiles.shard);
 
         // Conditionally-emitted files: each is written only when its feature is
         // in use (the `emit*` helper returns `""` otherwise), so projects that
@@ -984,14 +1091,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - containers.ts  → `@lunora/container`, when containers are declared
         //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
         //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
-        writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
-        writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        emitOptional("containers.ts", containersContent);
+        emitOptional("workflows.ts", workflowsContent);
         //   - agents.ts      → `@lunora/agent`, when agents are declared
-        writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
-        writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
-        writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
+        emitOptional("agents.ts", agentsContent);
+        emitOptional("queues.ts", queuesContent);
+        emitOptional("scheduler.ts", schedulerContent);
+        emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
-        writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);
+        emitOptional("collections.ts", collectionsContent);
 
         // The `.json` is the portable artifact for external tooling; the `.ts`
         // (same document, inlined) is what the worker imports and passes to
@@ -1000,10 +1108,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // (empty content when the mode is off) so switching `apiSpec` away from a
         // format also DELETES its now-stale spec files instead of leaving a
         // portable artifact that documents endpoints/args that no longer exist.
-        writeIfPresent(join(outputDirectory, "openapi.json"), wantsOpenApi ? openApiContent : "");
-        writeIfPresent(join(outputDirectory, "openapi.ts"), wantsOpenApi ? openApiModuleContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.json"), wantsOpenRpc ? openRpcContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.ts"), wantsOpenRpc ? openRpcModuleContent : "");
+        emitOptional("openapi.json", wantsOpenApi ? openApiContent : "");
+        emitOptional("openapi.ts", wantsOpenApi ? openApiModuleContent : "");
+        emitOptional("openrpc.json", wantsOpenRpc ? openRpcContent : "");
+        emitOptional("openrpc.ts", wantsOpenRpc ? openRpcModuleContent : "");
 
         // Bless the schema baseline on first capture (so a project gets a
         // committed snapshot the moment it runs codegen) or when explicitly
@@ -1030,7 +1138,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisorContext,
         agents,
         containers,
-        cronTriggers: emitWranglerCronTriggers(crons),
+        // Declared jobs plus the schedules `createWorker` is configured with
+        // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
+        // fire, and both count against Cloudflare's per-worker Cron Trigger cap,
+        // so the reconciler and the CLI's limit warning have to see one list.
+        cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
         generated: {
             agents: agentsContent,
             api: apiContent,
@@ -1060,6 +1172,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schemaSnapshot,
         schemaSnapshotPath,
         workflows,
+        writtenFiles,
     };
 };
 
@@ -1275,6 +1388,17 @@ export interface CodegenResult {
      * adds no binding or migration. Empty when the project declares no workflows.
      */
     workflows: ReadonlyArray<WorkflowIR>;
+
+    /**
+     * The `_generated/` file names this run emitted, in write order, relative to
+     * {@link CodegenResult.outputDirectory}. Conditional files appear only when
+     * their feature is in use, and the spec artifacts only for the requested
+     * `apiSpec` — so this is what the project actually has, not a fixed list.
+     * Empty under `dryRun` (nothing is written). Callers report from this rather
+     * than restating the set, which is how the CLI came to advertise three of
+     * twelve files.
+     */
+    writtenFiles: ReadonlyArray<string>;
 }
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.

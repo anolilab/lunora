@@ -21,6 +21,7 @@ const baseOptions = {
     hasQueue: false,
     hasR2sql: false,
     hasScheduler: false,
+    hasSourcedTables: false,
     hasStorage: false,
     hasVectors: false,
     hasWorkflow: false,
@@ -53,7 +54,7 @@ describe("emitApp — schema jurisdiction", () => {
 
         const output = emitApp({ ...baseOptions, hasScheduler: true, jurisdiction: "eu" });
 
-        expect(output).toContain('createScheduler({ jurisdiction: "eu", namespace, originUrl: origin })');
+        expect(output).toContain('createScheduler({ jurisdiction: "eu", namespace })');
     });
 
     it("leaves ctx.scheduler un-pinned when no jurisdiction is declared", () => {
@@ -61,6 +62,6 @@ describe("emitApp — schema jurisdiction", () => {
 
         const output = emitApp({ ...baseOptions, hasScheduler: true });
 
-        expect(output).toContain("createScheduler({ namespace, originUrl: origin })");
+        expect(output).toContain("createScheduler({ namespace })");
     });
 });

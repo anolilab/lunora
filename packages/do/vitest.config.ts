@@ -65,11 +65,16 @@ const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 export default defineConfig({
     test: {
         coverage,
-        // Mirror tools/get-vitest-config: under CI contention some suites (e.g.
+        // Mirror tools/get-vitest-config: under contention some suites (e.g.
         // the distinct-path flood) exceed Vitest's 5s default. Projects inherit
         // this via `extends: true`.
-        testTimeout: process.env.CI ? 30_000 : 10_000,
-        hookTimeout: process.env.CI ? 30_000 : 10_000,
+        //
+        // Flat, not keyed on `process.env.CI` — see that file for why. `vis`
+        // fans the whole suite across a developer's machine while CI gets a
+        // dedicated runner, so local is the MORE contended environment and a
+        // CI-keyed ternary gives it the shorter fuse.
+        testTimeout: 30_000,
+        hookTimeout: 30_000,
         projects: runWorkerd
             ? [
                   {

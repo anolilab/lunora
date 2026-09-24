@@ -172,10 +172,13 @@ describe("subscription — reactive args (plan 340)", () => {
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
         expect(fake.subscriptions[1]?.unsubscribed).toBe(false);
 
-        // A late frame from the torn-down subscription must not leak into the signal.
+        // The previous args' value does not survive the switch, and a late frame
+        // from the torn-down subscription must not leak into the signal.
+        expect(data()).toBeUndefined();
+
         fake.subscriptions[0]?.push([{ id: "stale" }]);
 
-        expect(data()).toStrictEqual([{ id: "1" }]);
+        expect(data()).toBeUndefined();
 
         fake.subscriptions[1]?.push([{ id: "2" }]);
 

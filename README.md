@@ -16,6 +16,7 @@
 [![CI][ci-badge]][ci]
 [![npm version][npm-version-badge]][npm-version]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
+[![OpenSSF Scorecard][scorecard-badge]][scorecard]
 
 </div>
 
@@ -321,6 +322,8 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/
+[scorecard-badge]: https://api.scorecard.dev/projects/github.com/anolilab/lunora/badge?style=for-the-badge
+[scorecard]: https://scorecard.dev/viewer/?uri=github.com/anolilab/lunora
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
 [license]: ./LICENSE.md
 [status-badge]: https://img.shields.io/badge/status-alpha-blueviolet.svg?style=for-the-badge

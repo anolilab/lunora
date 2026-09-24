@@ -18,6 +18,7 @@
  * (create, chunk PATCH, resume HEAD, delete) and denies fail-closed — a thrown
  * callback is a deny, never a 500.
  */
+import { LunoraError } from "@lunora/errors";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
 import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
@@ -73,10 +74,13 @@ interface CreateUploadHandlerOptions {
     /**
      * Maximum accepted file size in bytes. Forwarded to the multipart parser
      * (protocol `"multipart"`) and, for `"tus"`/`"chunked-rest"`, enforced by
-     * this handler itself against the request's declared size (`Upload-Length`
-     * / `Content-Length`) — see {@link declaredUploadSize}. Defaults to
+     * this handler itself against the largest size the request declares across
+     * `Upload-Length` (TUS), `X-Total-Size` (chunked REST) and `Content-Length`
+     * — see {@link declaredUploadSize}. Defaults to
      * {@link DEFAULT_MAX_UPLOAD_BYTES} (100 MiB) — pass this to raise or lower
-     * the ceiling; there is no unbounded option.
+     * the ceiling; there is no unbounded option. Must be a finite, non-negative
+     * number: anything else (notably a `NaN` from an unset env var) throws at
+     * construction rather than disabling the cap.
      */
     maxFileSize?: number;
     /** Which protocol to speak. Default `"tus"` (the resumable, pause/resume-capable one). */
@@ -170,9 +174,16 @@ const tooLargeResponse = (protocol: UploadProtocol): Response =>
  * STORAGE construction time. `createUploadHandler` receives an
  * already-constructed `storage`, so it cannot tighten that cap after the
  * fact; this pre-check is what actually enforces `maxFileSize` for those two
- * protocols. TUS's create (`POST`) declares the total size via
- * `Upload-Length`; REST/other single-shot requests carry it in
- * `Content-Length`.
+ * protocols.
+ *
+ * Each protocol declares the total in its own header, so all three are read and
+ * the LARGEST is checked. TUS's create (`POST`) uses `Upload-Length`. A chunked
+ * REST create sends `X-Chunked-Upload: true` with the total in `X-Total-Size`
+ * and a zero (or absent) `Content-Length`, since the create carries no body —
+ * reading `Content-Length` alone let every chunked-REST upload past the cap.
+ * Single-shot REST requests carry the size in `Content-Length`. Taking the
+ * largest rather than the first present means a request that declares a small
+ * total beside a large body cannot pick the lenient header.
  *
  * Deliberately skipped for `"multipart"`: there, `Content-Length` covers the
  * whole multipart body (boundaries + field headers, not just file bytes), so
@@ -188,15 +199,24 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
         return undefined;
     }
 
-    const raw = request.headers.get("Upload-Length") ?? request.headers.get("Content-Length");
+    let largest: number | undefined;
 
-    if (raw === null) {
-        return undefined;
+    // `Headers.get` matches case-insensitively, so the casing here is cosmetic.
+    for (const header of ["Upload-Length", "X-Total-Size", "Content-Length"]) {
+        const raw = request.headers.get(header);
+
+        if (raw === null) {
+            continue;
+        }
+
+        const parsed = Number(raw);
+
+        if (Number.isFinite(parsed) && (largest === undefined || parsed > largest)) {
+            largest = parsed;
+        }
     }
 
-    const parsed = Number(raw);
-
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return largest;
 };
 
 const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHandlerOptions): { fetch: (request: Request) => Promise<Response> } => {
@@ -219,6 +239,17 @@ const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHand
 const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler => {
     const protocol = options.protocol ?? "tus";
     const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_UPLOAD_BYTES;
+
+    // `??` only fills in a nullish value, so an unset upload-limit env var
+    // coerced with `Number(...)` survives as `NaN` — and `declaredSize > NaN` is
+    // always false, which silently removes the ONLY cap this handler enforces
+    // for the TUS and chunked-REST protocols. A negative cap is the opposite
+    // failure (every upload rejected). Both are configuration bugs, caught at
+    // construction rather than acted on per request, mirroring the same guard on
+    // `UploadOptions.maxSize` in `createStorage`.
+    if (!Number.isFinite(maxFileSize) || maxFileSize < 0) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
+    }
 
     const handlerOptions: UploadHandlerOptions = {
         maxFileSize,
@@ -247,9 +278,17 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
 
         if (authorize !== undefined) {
             try {
-                const allowed = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
+                // Read back as `unknown` and compared to `true`, never tested for
+                // truthiness. The gate is DECLARED to answer a boolean, but it is
+                // app code and untyped JavaScript reaches it: an
+                // `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
+                // that forgot its `.valid` hands back `{ valid: false }`, which is
+                // TRUTHY. This is the WRITE path, so passing that through is an
+                // attacker putting bytes in the bucket. Mirrors
+                // `@lunora/server`'s `isServeAuthorized` on the read path.
+                const allowed: unknown = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
 
-                if (!allowed) {
+                if (allowed !== true) {
                     return denyResponse(protocol);
                 }
             } catch {

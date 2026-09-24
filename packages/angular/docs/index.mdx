@@ -23,11 +23,12 @@ WebSocket transport, subscription registry, offline queue, and delta-merge.
 Angular signals map directly onto Lunora's per-subscription deltas, so a live
 query is a `signal` the WebSocket writes to.
 
-The API is deliberately small and signal-first: a DI token carrying one shared
-client, a `liveQuery` signal, an imperative `mutate`, and a `connectionStatus`
-signal. Parity extras that the other adapters ship (paginated queries, bound
-optimistic-mutation handles, presence, rate-limit mirrors, reactive loaders)
-aren't here yet; see [What's not here yet](#whats-not-here-yet).
+The API is signal-first and at parity with the other adapters: a DI token
+carrying one shared client, `liveQuery`, `subscription`, `mutate`/`mutator`,
+`runAction`, `stream`, `paginatedQuery`/`infiniteQuery`, `presence`,
+`rateLimit`, `flag`/`flags`, `auth`/`authGate`, the agent and voice primitives,
+`connectionStatus`, and `hydratePreloaded` alongside the `@lunora/angular/server`
+subpath for the SSR handoff.
 
 ## Install
 
@@ -45,10 +46,16 @@ dependency; the host app supplies the Angular runtime.
 | `provideLunora`      | provider factory | Wires a `LunoraClient` into the application injector. Add to your app config.                                                                                                     |
 | `injectLunoraClient` | function         | Read the `LunoraClient` from the current injector. Throws outside an injection context; inside DI, `LUNORA_CLIENT`'s root-scoped default applies when no provider was registered. |
 | `LUNORA_CLIENT`      | injection token  | The DI token every reactive primitive resolves the client from. Root-scoped default: a same-origin browser client.                                                                |
-| `liveQuery`          | function         | Live query as an Angular `Signal`. Args are not reactive here; pass `"skip"` to short-circuit.                                                                                    |
+| `liveQuery`          | function         | Live query as an Angular `Signal`. Pass a function/`Signal` for reactive args, or `"skip"` to short-circuit.                                                                      |
 | `mutate`             | function         | Run a mutation and resolve with the server result. Optimistic updates + offline queue pass through to the client.                                                                 |
 | `runAction`          | function         | Run an action and resolve with the server result. No optimistic options — an action is not a write.                                                                               |
 | `connectionStatus`   | function         | `Signal` of the aggregate live-socket status across all shard connections.                                                                                                        |
+
+Beyond the table: `subscription`, `mutator`, `stream`, `paginatedQuery` /
+`infiniteQuery`, `presence`, `rateLimit`, `flag` / `flags`, `auth` / `authGate`,
+`agent`, `agentChat`, `agentState`, `agentToolEvents`, `voiceAgent`, and
+`hydratePreloaded` (with the `@lunora/angular/server` subpath) are all exported
+too — see the sections below and the package's `src/index.ts` for the full list.
 
 Re-exported types: `ArgsOf`, `ConnectionStatus`, `FunctionReference`,
 `LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `ReturnOf`,
@@ -133,9 +140,13 @@ short-circuit: no network call, no socket; the signal stays `undefined`.
 readonly profile = liveQuery(api.users.me, signedIn ? {} : "skip");
 ```
 
-Unlike the Vue/Solid adapters, `args` is a plain value here, not a reactive
-getter/accessor; changing a component field does not re-subscribe `liveQuery`
-on its own. Pass `{ shardKey }` to route to a specific shard when the target
+`args` may be a plain value **or** a function/`Signal`. A plain value resolves
+once and never re-runs. A function is reactive, like the Vue/Solid adapters:
+each change tears the previous subscription down, resets the signal to
+`undefined`, and opens a fresh one — so calling it from outside an injection
+context needs an explicit `injector` alongside `client`/`destroyRef`.
+`subscription` and `paginatedQuery`/`infiniteQuery` take the same form. Pass
+`{ shardKey }` to route to a specific shard when the target
 function is `.shardBy(...)`-partitioned, and `{ onError }` to observe a
 post-attach subscription failure (without it, a failure after the initial
 attach is dropped silently and the signal just stops updating). To call
@@ -225,19 +236,6 @@ export class ConnectionBadge {
     readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
 }
 ```
-
-## What's not here yet
-
-`@lunora/angular` ships the signal-first core: `liveQuery`, `mutate`,
-`runAction`, `connectionStatus`, and the client provider. It does not (yet) ship the parity
-extras some other adapters have: cursor/infinite pagination
-(`createPaginatedQuery` / `createInfiniteQuery` in `@lunora/solid`), a bound
-optimistic-mutation handle, presence, a client-side rate-limit mirror, an
-`auth` composable, or the SSR reactive-loader handoff (`hydratePreloaded` /
-`@lunora/*/server`); there is no `@lunora/angular/server` subpath. Build these
-directly against [`@lunora/client`](/docs/packages/client) (or the shared
-`@lunora/client/query` primitives `liveQuery` is built on) until they land in
-this adapter.
 
 ## Agent tool events — `agentToolEvents(options)`
 

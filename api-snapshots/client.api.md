@@ -111,6 +111,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    credential?: string;
     identity: string | null;
     serverCursor?: number;
     serverEpoch?: string;
@@ -242,7 +243,7 @@ interface ClientToSwMessage {
 ### `ConnectionStatus` (type)
 
 ```ts
-type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
 ### `CronJobInfo` (interface)
@@ -405,6 +406,9 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    expectIdentityResolution(): void;
+    currentBaseline(shardKey?: string): number | undefined;
+    replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
     callMutator(functionPath: string, args: Record<string, unknown>, options?: {
@@ -660,6 +664,18 @@ class LunoraClient {
         offset?: number;
         organizationId: string;
     }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
     removeAuthOrgMember(input: {
         memberId: string;
     }): Promise<void>;
@@ -804,6 +820,10 @@ interface LunoraClientOptions {
     outbox?: OutboxSink;
     persistence?: false | PersistenceAdapter;
     persistenceVersion?: string;
+    pollingFallback?: {
+        afterFailedAttempts?: number;
+        intervalMs?: number;
+    };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
     url: string;
@@ -825,6 +845,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
+    replayBaseline?: null | number;
     shardKey?: string;
 }
 ```
@@ -890,6 +911,7 @@ class OfflineQueue {
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
+    hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -941,11 +963,13 @@ type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => 
 ```ts
 interface OutboxMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;
     identity: string | null;
     mutationId: number;
+    onRejected?: () => void;
     shardKey?: string;
 }
 ```
@@ -955,6 +979,7 @@ interface OutboxMutation {
 ```ts
 interface OutboxSink {
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+    pending?: () => boolean;
 }
 ```
 
@@ -963,6 +988,7 @@ interface OutboxSink {
 ```ts
 interface PersistedMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId?: string;
     functionPath: string;
     id: string;
@@ -980,6 +1006,7 @@ interface PersistenceAdapter {
     clear: () => Promise<void>;
     load: () => Promise<PersistedMutation[]>;
     remove: (id: string) => Promise<void>;
+    replace: (mutation: PersistedMutation) => Promise<void>;
 }
 ```
 
@@ -1035,6 +1062,7 @@ interface QueryCacheAdapter {
 ```ts
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
+    readonly baselineSeq?: number;
     clientId?: string;
     readonly functionPath: string;
     id?: string;
@@ -1306,7 +1334,7 @@ type SubscriptionCallback = (data: unknown) => void;
 
 ```ts
 interface SubscriptionError {
-    code?: string;
+    code?: LunoraErrorCodeInput;
     message: string;
 }
 ```
@@ -1340,10 +1368,7 @@ interface SubscriptionState {
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
-    readonly checkpointCallbacks: Set<(watermark: {
-        checkpoint?: number;
-        mutationId?: number;
-    }) => void>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
@@ -1374,6 +1399,7 @@ interface SwToClientMessage {
 interface SyncWatermark {
     checkpoint?: number;
     mutationId?: number;
+    rowsFollow?: boolean;
 }
 ```
 
@@ -1393,6 +1419,14 @@ class TabCoordinator {
     broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
     broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
+}
+```
+
+### `TransportError` (class)
+
+```ts
+class TransportError extends LunoraError {
+    constructor(message: string, data?: unknown);
 }
 ```
 
@@ -1706,10 +1740,28 @@ const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectRes
 
 ## `@lunora/client/auth`
 
+### `AUTH_STATUSES` (const)
+
+```ts
+const AUTH_STATUSES: readonly [
+    "authenticated",
+    "loading",
+    "unauthenticated",
+    "unreachable"
+];
+```
+
+### `AuthStatus` (type)
+
+```ts
+type AuthStatus = (typeof AUTH_STATUSES)[number];
+```
+
 ### `IdentityStore` (interface)
 
 ```ts
 interface IdentityStore {
+    getStatus: () => AuthStatus;
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
@@ -1719,6 +1771,18 @@ interface IdentityStore {
 
 ```ts
 const getIdentityStore: (client: LunoraClient) => IdentityStore;
+```
+
+### `isAuthenticatedStatus` (const)
+
+```ts
+const isAuthenticatedStatus: (status: AuthStatus) => boolean;
+```
+
+### `isLoadingStatus` (const)
+
+```ts
+const isLoadingStatus: (status: AuthStatus) => boolean;
 ```
 
 ## `@lunora/client/pagination`
@@ -2135,3 +2199,276 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `validateFiles` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `CallRunnerSinks` (interface)
+
+```ts
+interface CallRunnerSinks<R> {
+    setError: (error: Error) => void;
+    setPending: (pending: boolean) => void;
+    setResult: (result: R) => void;
+}
+```
+
+### `ClientAckMessage` (interface)
+
+```ts
+interface ClientAckMessage {
+    id: string;
+    type: "ack";
+}
+```
+
+### `ClientConnectMessage` (interface)
+
+```ts
+interface ClientConnectMessage {
+    caps?: ReadonlyArray<string>;
+    clientId?: string;
+    context?: Record<string, unknown>;
+    id: string;
+    type: "connect";
+}
+```
+
+### `ClientStreamMessage` (interface)
+
+```ts
+interface ClientStreamMessage {
+    generation?: number;
+    id: string;
+    query: {
+        args?: Record<string, unknown>;
+        functionPath: string;
+        shardKey?: string;
+    };
+    sinceChunk?: number;
+    type: "stream";
+}
+```
+
+### `ClientSubscribeMessage` (interface)
+
+```ts
+interface ClientSubscribeMessage {
+    id: string;
+    query: {
+        args?: Record<string, unknown>;
+        functionPath?: string;
+        sinceEpoch?: string;
+        sinceSeq?: number;
+        table?: string;
+    };
+    type: "subscribe";
+}
+```
+
+### `ClientUnsubscribeMessage` (interface)
+
+```ts
+interface ClientUnsubscribeMessage {
+    id: string;
+    type: "unsubscribe";
+}
+```
+
+### `ClientWhisperMessage` (interface)
+
+```ts
+interface ClientWhisperMessage {
+    data?: unknown;
+    topic: string;
+    type: "whisper";
+}
+```
+
+### `ClientWhisperSubscribeMessage` (interface)
+
+```ts
+interface ClientWhisperSubscribeMessage {
+    topic: string;
+    type: "whisper_subscribe" | "whisper_unsubscribe";
+}
+```
+
+### `EvictHandler` (type)
+
+```ts
+type EvictHandler = (entry: QueuedMutation, error: Error & {
+    code?: string;
+}) => void;
+```
+
+### `FunctionKind` (type)
+
+```ts
+type FunctionKind = "action" | "mutation" | "query" | "stream";
+```
+
+### `NullableTimestamp` (type)
+
+```ts
+type NullableTimestamp = null | number | string;
+```
+
+### `OfflineQueueDeps` (interface)
+
+```ts
+interface OfflineQueueDeps {
+    onEvict?: EvictHandler;
+    onSizeChange?: (size: number) => void;
+    persistence?: PersistenceAdapter;
+    version?: string;
+}
+```
+
+### `OptimisticLayer` (interface)
+
+```ts
+interface OptimisticLayer {
+    commitCursor?: number;
+    readonly id: symbol;
+    readonly transform: (current: unknown) => unknown;
+}
+```
+
+### `PersistenceErrorContext` (interface)
+
+```ts
+interface PersistenceErrorContext {
+    readonly error: unknown;
+    readonly mutationId?: string;
+    readonly operation: PersistenceOperation;
+}
+```
+
+### `PersistenceOperation` (type)
+
+```ts
+type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
+```
+
+### `ServerAckMessage` (interface)
+
+```ts
+interface ServerAckMessage {
+    id: string;
+    type: "ack";
+}
+```
+
+### `ServerChunkMessage` (interface)
+
+```ts
+interface ServerChunkMessage {
+    data: unknown;
+    generation?: number;
+    id: string;
+    seq?: number;
+    type: "chunk";
+}
+```
+
+### `ServerCompleteMessage` (interface)
+
+```ts
+interface ServerCompleteMessage {
+    id: string;
+    type: "complete";
+}
+```
+
+### `ServerDataMessage` (interface)
+
+```ts
+interface ServerDataMessage {
+    cursor?: number;
+    data?: unknown;
+    delta?: unknown;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "data" | "delta";
+}
+```
+
+### `ServerErrorMessage` (interface)
+
+```ts
+interface ServerErrorMessage {
+    error?: unknown;
+    id?: string;
+    message?: string;
+    type: "error";
+}
+```
+
+### `ServerResumeMessage` (interface)
+
+```ts
+interface ServerResumeMessage {
+    cursor?: number;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "resume";
+}
+```
+
+### `ServerSettledMessage` (interface)
+
+```ts
+interface ServerSettledMessage {
+    cursor?: number;
+    epoch?: string;
+    id: string;
+    lastMutationId?: number;
+    type: "settled";
+}
+```
+
+### `ServerWhisperMessage` (interface)
+
+```ts
+interface ServerWhisperMessage {
+    data: unknown;
+    from?: string;
+    topic: string;
+    type: "whisper";
+}
+```
+
+### `ShapeCallback` (type)
+
+```ts
+type ShapeCallback = (rows: Record<string, unknown>[]) => void;
+```
+
+### `TabCoordinatorOptions` (interface)
+
+```ts
+interface TabCoordinatorOptions {
+    channelName?: string;
+    heartbeatInterval?: number;
+    leaderTimeout?: number;
+    onBecomeLeader?: () => void;
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
+    onLeaderClaimAnswered?: () => void;
+    onStopBeingLeader?: () => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+}
+```
+
+### `WSState` (type)
+
+```ts
+type WSState = "idle" | "connecting" | "open" | "closed";
+```

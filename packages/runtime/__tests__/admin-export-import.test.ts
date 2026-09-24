@@ -1,8 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { transformSync } from "esbuild";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import chunkedBody from "./helpers/chunked-body";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -24,23 +32,7 @@ const ADMIN_TOKEN = "admin-bear";
  * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
  * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
  */
-const oversizedStream = (): ReadableStream<Uint8Array> => {
-    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
-    let sent = 0;
-
-    return new ReadableStream<Uint8Array>({
-        pull(controller) {
-            if (sent >= 5) {
-                controller.close();
-
-                return;
-            }
-
-            sent += 1;
-            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
-        },
-    });
-};
+const oversizedStream = (): ReadableStream<Uint8Array> => chunkedBody({ exceedBytes: 1_048_576 });
 
 describe("createWorker — admin export endpoint", () => {
     it("rejects without a configured admin token (403)", async () => {
@@ -179,6 +171,54 @@ describe("createWorker — admin export endpoint", () => {
 
         expect(lines).toHaveLength(2);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+    });
+
+    it("errors the stream when a shard's export failed instead of serving a short snapshot", async () => {
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                failed: 1,
+                ok: 1,
+                shards: [
+                    { rows: [{ doc: { _id: "u1" }, table: "users" }], shardKey: "c1" },
+                    { error: { message: 'shard "c2" failed: boom', timedOut: false }, shardKey: "c2" },
+                ],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // The status line is committed before the fan-out runs, so the only
+        // honest signal left is an aborted body — which a consumer cannot mistake
+        // for a complete dump the way it can mistake a short one.
+        expect(response.status).toBe(200);
+        await expect(response.text()).rejects.toThrow(/c2/u);
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {
@@ -691,6 +731,144 @@ describe("createWorker — admin import endpoint", () => {
     });
 });
 
+/**
+ * The `backup` registry item's scheduled snapshot, restored through this endpoint.
+ *
+ * The item writes NDJSON to R2 and `lunora backup restore` feeds that object
+ * straight back here — but nothing ever ran the two halves against each other,
+ * which is how the snapshot shipped framed by `{"__table":…}` header lines above
+ * bare rows. This reader needs `table` and `doc` on EVERY line, so a header-framed
+ * snapshot restored zero rows and the operator found out mid-incident.
+ *
+ * The serialiser is lifted out of the shipped item and CALLED rather than
+ * re-typed here, so the assertion is over what the item actually emits.
+ */
+describe("backup registry snapshot → admin import", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "lunora-backup-item-"));
+    const itemPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "registry", "backup", "backup.ts");
+
+    afterAll(() => {
+        rmSync(scratch, { force: true, recursive: true });
+    });
+
+    /**
+     * `toNdjson` as the shipped registry item defines it, compiled and imported as
+     * a real module.
+     *
+     * Lifting the item's own expression is the point: a re-typed copy here would
+     * keep passing after the item drifted, which is exactly the gap that let the
+     * header-framed shape ship.
+     *
+     * The item wire-encodes each document through its own `encodeWire` mirror,
+     * which is too large to lift with it (multi-statement, and it closes over two
+     * module constants). The reference encoder is injected instead, because the
+     * question HERE is the NDJSON framing — `table` and `doc` on every line. That
+     * the item's mirror still agrees with the reference is pinned separately, by
+     * `packages/cli/__tests__/commands/registry-backup-item.test.ts`, which builds
+     * its expected bytes from `shared/wire-codec`.
+     */
+    const itemToNdjson = async (): Promise<(table: string, rows: ReadonlyArray<Record<string, unknown>>) => string> => {
+        // Spans lines: the expression is an arrow whose body sits on the next one.
+        const match = /^const toNdjson = ([\s\S]*?);$/mu.exec(readFileSync(itemPath, "utf8"));
+
+        if (match?.[1] === undefined) {
+            throw new Error("could not locate `toNdjson` in registry/backup/backup.ts");
+        }
+
+        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "shared", "wire-codec.ts");
+        const compiled = transformSync(`import { encodeWire } from ${JSON.stringify(pathToFileURL(codecPath).href)};\nexport const toNdjson = ${match[1]};`, {
+            loader: "ts",
+        }).code;
+        const file = join(scratch, `to-ndjson-${randomUUID()}.mjs`);
+
+        writeFileSync(file, compiled);
+
+        const loaded = (await import(pathToFileURL(file).href)) as { toNdjson: (table: string, rows: ReadonlyArray<Record<string, unknown>>) => string };
+
+        return loaded.toNdjson;
+    };
+
+    it("restores every row of a snapshot the registry item produced", async () => {
+        expect.assertions(3);
+
+        const toNdjson = await itemToNdjson();
+        const imported: { doc: Record<string, unknown>; table: string }[] = [];
+        const orchestrateImport = vi.fn<
+            (_namespace: unknown, request: { batches: { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string }[] }) => Promise<unknown>
+        >(async (_namespace: unknown, request: { batches: { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string }[] }) => {
+            const inserted: Record<string, number> = {};
+
+            for (const batch of request.batches) {
+                for (const row of batch.rows) {
+                    imported.push(row);
+                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                }
+            }
+
+            return {
+                conflicts: 0,
+                errors: [],
+                failed: 0,
+                inserted,
+                ok: request.batches.length,
+                shards: request.batches.map((batch) => {
+                    return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey };
+                }),
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { kind: "root" } };
+            },
+            shardDO: noopNamespace,
+        });
+
+        // The item's own framing: per-table chunks joined by newlines, one
+        // trailing newline (`registry/backup/backup.ts`, the `snapshot` action).
+        const body = `${[
+            toNdjson("messages", [{ _id: "m1", body: "hi" }]),
+            toNdjson("users", [
+                { _id: "u1", name: "Ada" },
+                { _id: "u2", name: "Grace" },
+            ]),
+        ]
+            .filter((chunk) => chunk.length > 0)
+            .join("\n")}\n`;
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const result: { errors: unknown[]; inserted: Record<string, number> } = await response.json();
+
+        // A header-framed snapshot lands here as three `BAD_ROW: row is missing
+        // \`table\`` errors and an empty `inserted` — a restore of nothing.
+        expect(result.errors).toStrictEqual([]);
+        expect(result.inserted).toStrictEqual({ messages: 1, users: 2 });
+        expect(imported.map((row) => row.table)).toStrictEqual(["messages", "users", "users"]);
+    });
+});
+
 describe("import streaming — large body", () => {
     it("handles a 10k-row NDJSON body without crashing", async () => {
         expect.hasAssertions();
@@ -892,6 +1070,55 @@ describe("admin sync (CDC streaming export)", () => {
         expect(body.global.cursor).toBe(2);
         // The caller's per-shard cursor map reaches the coordinator verbatim.
         expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ cursors: { c1: 4 } });
+    });
+
+    it("forwards the per-shard epoch map and surfaces each shard's epoch", async () => {
+        expect.assertions(3);
+
+        const orchestrateCdcSync = vi.fn<
+            (
+                namespace: unknown,
+                request: { cursors?: Record<string, number>; epochs?: Record<string, string> },
+            ) => Promise<{ failed: number; ok: number; shards: { cursor: number; epoch?: string; shardKey: string }[] }>
+        >(async () => {
+            return { failed: 0, ok: 1, shards: [{ cursor: 5, epoch: "live-c1", shardKey: "c1" }] };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                body: JSON.stringify({ cursors: { c1: 4 }, epochs: { c1: "held-c1" }, tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ shards: { epoch?: string; shardKey: string }[] }>();
+
+        // The pair the consumer checkpoints: the cursor it already had, and the
+        // timeline that cursor indexes, which it can echo back next poll.
+        expect(body.shards[0]).toMatchObject({ epoch: "live-c1", shardKey: "c1" });
+        expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ epochs: { c1: "held-c1" } });
     });
 
     it("omits the global page when syncGlobals is not configured", async () => {

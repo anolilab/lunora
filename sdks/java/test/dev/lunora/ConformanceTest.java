@@ -52,6 +52,7 @@ public final class ConformanceTest {
         serverFrameConsumer();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
+        shapeSubscriptionsResendAfterReconnect();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         resetPokeReplacesShapeMembership();
@@ -145,6 +146,17 @@ public final class ConformanceTest {
         return Key.stableStringify(value);
     }
 
+    /**
+     * Renders a value the way {@link Client} puts it on the socket, with {@link Json#write}.
+     * Separate from {@link #canonical}, which is free to normalise: {@code stableStringify} spells
+     * every number the ECMAScript way, so {@code 1.0} and {@code 1} compare EQUAL through it — the
+     * divergence a round-trip case exists to catch. Dart's dates went out as {@code
+     * 1700000000000.0} for exactly that reason, on a green suite.
+     */
+    private static String wireText(Object value) {
+        return Json.write(value);
+    }
+
     @SuppressWarnings("unchecked")
     private static void wireCodecRoundTrip() throws IOException {
         covers("wire_codec_round_trip");
@@ -166,6 +178,12 @@ public final class ConformanceTest {
             check(
                     canonical(roundTripped).equals(canonical(expected)),
                     "round-trip mismatch for " + testCase.get("name"));
+            // And again as the BYTES the transport sends: a round-trip
+            // assertion measured on a string the transport never sends cannot
+            // see the divergence it exists to catch.
+            check(
+                    wireText(roundTripped).equals(wireText(expected)),
+                    "wire-text mismatch for " + testCase.get("name"));
         }
     }
 
@@ -268,9 +286,15 @@ public final class ConformanceTest {
 
         String kind = client.handleFrame(Json.write(frame));
 
-        check("data".equals(kind), "handleFrame must return normally rather than throw");
+        // "error", not "data": the frame was NOT delivered, and the other seven
+        // ports say so. This test used to pin the divergence it was meant to
+        // catch by asserting "data" and never looking at the code.
+        check("error".equals(kind), "a frame that would not decode is reported as an error");
         check(seen.isEmpty(), "a malformed value must not reach onData");
         check(errors.size() == 1, "a malformed value must surface via onError");
+        check(
+                Client.CODE_INVALID_FRAME.equals(errors.get(0).code()),
+                "the error carries the shared INVALID_FRAME code, not null");
     }
 
     /**
@@ -420,6 +444,29 @@ public final class ConformanceTest {
                 "data".equals(client.handleFrame(Json.write(envelope))),
                 "a MAX_DEPTH value must survive its frame envelope");
         check(seen.size() == 1, "and reach onData");
+
+        // A `data` frame is ONE envelope level, and measuring the cap only there
+        // is how it shipped a level short. The deepest envelope the protocol has
+        // is the batch response (protocol/README.md §4.3) at four, and an offline
+        // flush that could not parse its own 200 body classified a committed
+        // batch as a transport failure and replayed it forever.
+        Map<String, Object> slotBody = new LinkedHashMap<>();
+
+        slotBody.put("result", deepest);
+
+        Map<String, Object> slot = new LinkedHashMap<>();
+
+        slot.put("id", 0);
+        slot.put("status", 200);
+        slot.put("body", slotBody);
+
+        Map<String, Object> batch = new LinkedHashMap<>();
+
+        batch.put("results", List.of(slot));
+
+        check(
+                Json.parse(Json.write(batch)) != null,
+                "a MAX_DEPTH value must survive the batch-response envelope");
     }
 
     @SuppressWarnings("unchecked")
@@ -451,9 +498,22 @@ public final class ConformanceTest {
         covers("format_number_matches_ecmascript");
 
         Object[][] cases = {
-            {0.0, "0"}, {3.0, "3"}, {1.5, "1.5"}, {-2.5, "-2.5"},
-            {1e-5, "0.00001"}, {1e-6, "0.000001"}, {1e-7, "1e-7"}, {1.5e-7, "1.5e-7"},
-            {1e-21, "1e-21"}, {1e20, "100000000000000000000"}, {1e21, "1e+21"},
+            {0.0, "0"},
+            {3.0, "3"},
+            {1.5, "1.5"},
+            {-2.5, "-2.5"},
+            {1e-5, "0.00001"},
+            {1e-6, "0.000001"},
+            {1e-7, "1e-7"},
+            {1.5e-7, "1.5e-7"},
+            {1e-21, "1e-21"},
+            {1e20, "100000000000000000000"},
+            {1e21, "1e+21"},
+            // An integral double past 2^53 keeps ECMAScript's shortest-digits
+            // spelling rather than the exact expansion 1152921504606846976.
+            {1.152921504606847e18, "1152921504606847000"},
+            // Negative zero keeps its sign; every integer conversion drops it.
+            {-0.0, "-0"},
         };
 
         for (Object[] testCase : cases) {
@@ -551,20 +611,30 @@ public final class ConformanceTest {
         }
     }
 
-    private static void non2xxWithoutEnvelopeThrows() {
+    @SuppressWarnings("unchecked")
+    private static void non2xxWithoutEnvelopeThrows() throws IOException {
         covers("non_2xx_without_error_envelope_fails");
 
         // protocol/README.md §4.2. Without the status check this returned null
-        // and threw nothing — the caller believes its mutation committed.
-        Map<String, Object> body = new LinkedHashMap<>();
+        // and threw nothing — the caller believes its mutation committed. The
+        // fixture's non-object `error` slots are the other half: a slot holding
+        // a string, a null or an array is not an envelope either, and a port
+        // reading one without a type check throws its LANGUAGE's exception
+        // rather than ApiException, escaping every handler the caller wrote.
+        for (Object entry : (List<Object>) fixture("rpc.json").get("responseTransportError")) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            Map<String, Object> response = (Map<String, Object>) testCase.get("response");
+            int status = ((Number) testCase.get("status")).intValue();
 
-        body.put("message", "bad gateway");
-
-        try {
-            Client.parseRpcResponse(body, 502);
-            check(false, "a 502 without an error envelope must throw");
-        } catch (Client.ApiException error) {
-            check("INTERNAL".equals(error.code), "the transport error is INTERNAL");
+            try {
+                Client.parseRpcResponse(response, status);
+                check(false, "expected an ApiException for " + testCase.get("name"));
+            } catch (Client.ApiException error) {
+                check(error.code.equals(testCase.get("code")), "code for " + testCase.get("name"));
+                // Nothing reached the shard, so a queued write must be replayed
+                // rather than dropped — the batch path already says so.
+                check(error.transientFailure, "transient for " + testCase.get("name"));
+            }
         }
     }
 
@@ -611,12 +681,16 @@ public final class ConformanceTest {
     @SuppressWarnings("unchecked")
     private static void serverFrameConsumer() throws IOException {
         covers("server_frame_consumer");
+        covers("complete_frame_cancels_without_dropping_the_subscription");
+
+        int cancellations = 0;
 
         for (Object entry : (List<Object>) fixture("ws-frames.json").get("serverFrames")) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
 
-            client.attachSocket(frame -> {});
+            client.attachSocket(sent::add);
 
             List<Object> seen = new ArrayList<>();
             List<Client.SubscriptionError> errors = new ArrayList<>();
@@ -624,6 +698,7 @@ public final class ConformanceTest {
 
             args.put("channel", "general");
             client.subscribe("messages:list", args, seen::add, errors::add, null);
+            sent.clear();
 
             String kind = client.handleFrame(Json.write(testCase.get("frame")));
             Map<String, Object> expect = (Map<String, Object>) testCase.get("expect");
@@ -644,7 +719,38 @@ public final class ConformanceTest {
                         java.util.Objects.equals(errors.get(0).code(), expect.get("code")),
                         "error code");
             }
+
+            // Cancelled AND kept. Removing the entry takes it out of the map
+            // resendSubscriptions walks, which froze the query across every future reconnect
+            // with nothing reported.
+            if (Boolean.TRUE.equals(expect.get("resendsAfterReconnect"))) {
+                cancellations++;
+                check(errors.size() == 1, "a complete frame cancels once");
+                check(
+                        java.util.Objects.equals(errors.get(0).code(), expect.get("code")),
+                        "cancellation code");
+                check(
+                        java.util.Objects.equals(errors.get(0).message(), expect.get("message")),
+                        "cancellation message");
+                client.resendSubscriptions();
+
+                List<Object> resubscribed = new ArrayList<>();
+
+                for (Map<String, Object> frame : sent) {
+                    if ("subscribe".equals(frame.get("type"))) {
+                        resubscribed.add(frame.get("id"));
+                    }
+                }
+
+                check(
+                        resubscribed.equals(List.of(expect.get("id"))),
+                        "the cancelled subscription is resent on reconnect");
+            }
         }
+
+        // A conditional assertion that never runs is worse than none: without this,
+        // renaming the fixture key would leave every suite green.
+        check(cancellations == 1, "serverFrames must carry one cancelling case");
     }
 
     /**
@@ -704,6 +810,63 @@ public final class ConformanceTest {
                                         "shape_1", "roomMessages", args, null, null))
                         .equals(canonical(shape.get("shape-subscribe-cold"))),
                 "shape-subscribe-cold");
+    }
+
+    /**
+     * A reconnect re-subscribes SHAPES as well as queries, each carrying its resume checkpoint.
+     *
+     * <p>A resend that walks only the query registry leaves every shape view subscribed to a socket
+     * that no longer exists — silently, and for the rest of the process's life, because a shape
+     * only ever hears from the server through a poke.
+     */
+    @SuppressWarnings("unchecked")
+    private static void shapeSubscriptionsResendAfterReconnect() {
+        covers("shape_subscriptions_resend_after_reconnect");
+
+        Client client = new Client("https://app.example", null);
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.attachSocket(frame -> {});
+        client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+        client.subscribeShape("roomMessages", args, rows -> {}, null);
+
+        // The cursors a resume carries are written by the frame handler, so they have to exist
+        // before the resend is built.
+        client.handleFrame(
+                "{\"cursor\":9,\"data\":[],\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.handleFrame("{\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeStart\"}");
+        client.handleFrame(
+                "{\"pokeId\":\"poke-1\",\"reset\":true,\"rowsPatch\":[],\"shapeId\":\"shape_1\",\"type\":\"pokePart\"}");
+        client.handleFrame(
+                "{\"checkpoint\":5,\"epoch\":\"e1\",\"pokeId\":\"poke-1\",\"type\":\"pokeEnd\"}");
+
+        List<Map<String, Object>> resent = new ArrayList<>();
+
+        client.attachSocket(resent::add);
+        client.resendSubscriptions();
+
+        check(resent.size() == 2, "both registries are walked");
+        check("subscribe".equals(resent.get(0).get("type")), "the query frame goes out first");
+        check(
+                ((Number) ((Map<String, Object>) resent.get(0).get("query")).get("sinceSeq"))
+                                .intValue()
+                        == 9,
+                "carrying the tracked query cursor");
+
+        Map<String, Object> frame = resent.get(1);
+        Map<String, Object> shape = (Map<String, Object>) frame.get("shape");
+
+        check("shape_subscribe".equals(frame.get("type")), "and the shape frame after it");
+        check("shape_1".equals(frame.get("id")), "addressed at the live shape id");
+        check("roomMessages".equals(shape.get("name")), "naming the shape it subscribed to");
+        check(
+                canonical(shape.get("args")).equals(canonical(Wire.encode(args))),
+                "with the args it subscribed under");
+        check(
+                ((Number) frame.get("sinceCheckpoint")).intValue() == 5,
+                "resuming from the tracked checkpoint");
+        check("e1".equals(frame.get("sinceEpoch")), "and the tracked epoch");
     }
 
     @SuppressWarnings("unchecked")

@@ -61,6 +61,15 @@ type SeedClient<InsertModel> = SeedClientState & {
 interface SeedClientOptions {
     /** Default row count when a table call passes no spec (default `10`). */
     defaultCount?: number;
+
+    /**
+     * Wall-clock reference for time-valued columns (`createdAt`, `expiresAt`, a
+     * `.unique()` date, …), in epoch-ms. Defaults to `Date.now()` **per call**,
+     * which is the one input that otherwise drifts between runs — pin it and the
+     * client is deterministic in the full sense the docs promise, not merely in
+     * its ids.
+     */
+    now?: number;
     /** Persist each generated batch (e.g. insert through the test harness). Pure when omitted. */
     persist?: (table: string, rows: ReadonlyArray<Record<string, unknown>>) => Promise<void> | void;
     /** Deterministic mapping selector — same seed ⇒ same rows and ids. Default `0`. */
@@ -140,7 +149,7 @@ const buildOverrides = <Row>(
  * // posts.authorId values are drawn from `users`.
  */
 const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>(schema: Schema, options: SeedClientOptions = {}): SeedClient<InsertModel> => {
-    const { defaultCount = 10, persist, seed = 0 } = options;
+    const { defaultCount = 10, now, persist, seed = 0 } = options;
 
     const store: Record<string, Record<string, unknown>[]> = {};
     const idsByTable: Record<string, string[]> = {};
@@ -158,6 +167,7 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
             counts: { [table]: count },
             existingIds: idsByTable,
             indexOffset: { [table]: offset },
+            now,
             only: [table],
             overrides: { [table]: buildOverrides(partials, callOptions?.overrides, offset) },
             seed,

@@ -2,7 +2,7 @@ import type { CallExpression, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { ExposeCacheIR, ValidatorIR } from "../../../ir";
-import { parseObjectShape } from "../../../parse-validator";
+import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
 import { builderChainSteps } from "../../builder-chain";
 
 /** Read a property off an object literal as a string literal, or `undefined` when absent / not statically readable. */
@@ -120,12 +120,15 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     }
 
     const initializer = argsProperty.getInitializer();
+    // `args: sharedArgs` resolves the same as an inline literal — one argument
+    // record shared by two procedures is ordinary, and it used to contribute
+    // nothing while the runtime still enforced every field. Anything that does
+    // NOT resolve keeps the `{}` this form has always reported: unlike
+    // `.input(…)`, `args:` is optional here, so an unreadable one is not
+    // necessarily a dropped validator.
+    const shape = initializer === undefined ? undefined : resolveObjectLiteral(initializer);
 
-    if (!initializer || !Node.isObjectLiteralExpression(initializer)) {
-        return {};
-    }
-
-    return parseObjectShape(initializer);
+    return shape === undefined ? {} : parseObjectShape(shape);
 };
 
 export { argsFromCall, exposeFromBuilderChain };

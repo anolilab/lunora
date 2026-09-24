@@ -86,16 +86,14 @@ export const subscription = <F extends FunctionReference>(
     const error = signal<SubscriptionError | undefined>(undefined);
 
     const open = (currentArgs: ArgsOf<F> | "skip", registerCleanup: (unsubscribe: () => void) => void): void => {
-        if (currentArgs === "skip") {
-            // Reset, don't just bail: under the reactive form args can move from
-            // real args to `"skip"`, and the effect's cleanup only closes the
-            // socket. Without this the consumer keeps rendering the last payload
-            // (or the last error) of a subscription that is no longer open.
-            // `liveQuery` gets this for free via `createQuerySubscription`'s
-            // `onReset` on its own SKIP branch.
-            data.set(undefined);
-            error.set(undefined);
+        // Reset first, don't just (re)open: under the reactive form the effect's
+        // cleanup only closes the socket. Without this the consumer keeps
+        // rendering the previous args' last payload (or error) under the new
+        // args — or, on a `"skip"` emission, as if the subscription were still open.
+        data.set(undefined);
+        error.set(undefined);
 
+        if (currentArgs === "skip") {
             return;
         }
 

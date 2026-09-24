@@ -26,6 +26,7 @@ import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMaskStrategy } from "./mask-strategies";
+import type { AdvisorMutatorDeclaration } from "./mutator-declarations";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
@@ -50,7 +51,6 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
-import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -408,6 +408,16 @@ export interface LintContext {
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
+     * Exported `defineMutator({ … })` declarations in `lunora/mutators.ts` — the
+     * `mutator_without_owner_scope` input. A mutator is a client-callable write
+     * endpoint, and `owner` is the declarative scope that ties each write to its
+     * caller's verified identity; one declaring none authorizes nothing by itself.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
+
+    /**
      * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
      * mutators' authoritative `server` impls (the `mutator_full_row_replace`
      * input). Each `replace` overwrites the entire row, clobbering a concurrent
@@ -550,11 +560,11 @@ export interface LintContext {
 
     /**
      * `ctx.db.<table>.findMany({ with: { <rel> } })` relation-hydrating list reads
-     * — the `masked_relation_leak_via_with` input. Column masking is applied to a
-     * read's top-level rows but does not descend into `with`-hydrated relations,
-     * so a masked table surfaced only through a `with` on an unprotected public
-     * read is returned in the clear. Supplied by the codegen feeder; absent for
-     * runtime callers, where the lint finds nothing.
+     * — the `masked_relation_leak_via_with` input. Column masking is
+     * per-procedure and the relation loader applies the READING procedure's
+     * policy to every `with` hop, so what leaks is a public read whose own
+     * procedure declares no policy for the related table. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
      */
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
 
@@ -644,22 +654,6 @@ export interface LintContext {
      * nothing.
      */
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-
-    /**
-     * Bounded row samples per table — the `constraint_validator` lint input.
-     * There is NO shipped feeder: neither the runtime nor the studio reads row
-     * samples out of a shard, so this is absent for every caller in-tree and the
-     * constraint lint finds nothing. Supply it yourself (a paged read per table,
-     * plus the existing-id set for the FK referential-integrity checks) to drive
-     * that lint.
-     *
-     * Each entry carries `existingIds` (every `_id` in the sample window) so
-     * FK columns can be cross-checked across tables in O(1) per value. When
-     * `truncated` is `true`, violations on rows beyond the cap are not reported
-     * — the finding description notes the sample cap so the operator understands
-     * the bounded window.
-     */
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
 
     /**
      * Per-table full-scan volume observed at runtime (the hot-scan half of the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { splitStatements } from "../../../src/features/sql/split-statements";
+import { splitStatements } from "../../../../../shared/sql-split-statements";
 
 describe("splitStatements", () => {
     it("splits a script into its statements, dropping the empty trailing one", () => {
@@ -74,6 +74,19 @@ describe("splitStatements", () => {
         expect(statements[1]?.rejection?.message).toContain("read-only");
         // A refusal does not swallow the statements after it.
         expect(statements[2]?.sql).toBe("SELECT 2");
+    });
+
+    it("treats a comment after the last statement as noise, not a statement of its own", () => {
+        expect.assertions(2);
+
+        // The tail after the final `;` is whitespace and a comment. It used to be
+        // classified as its own statement, come back `SQL_EMPTY`, and surface on
+        // the Run path as a refused statement reading "the query is empty" — for
+        // text the operator wrote as a note.
+        const statements = splitStatements("SELECT 1;\n-- a closing note");
+
+        expect(statements.map((statement) => statement.sql)).toStrictEqual(["SELECT 1"]);
+        expect(statements[0]?.rejection).toBeUndefined();
     });
 
     it("passes a semicolon in a literal through to a runnable statement", () => {

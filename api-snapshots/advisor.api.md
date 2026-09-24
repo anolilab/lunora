@@ -324,6 +324,7 @@ interface AdvisorKvKeyAccess {
     file: string;
     line: number;
     method: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -379,6 +380,17 @@ interface AdvisorMaskStrategy {
     line: number;
     strategy: string;
     table: string;
+}
+```
+
+### `AdvisorMutatorDeclaration` (interface)
+
+```ts
+interface AdvisorMutatorDeclaration {
+    exportName: string;
+    file: string;
+    line: number;
+    owner?: string;
 }
 ```
 
@@ -450,6 +462,7 @@ interface AdvisorOwnerFieldWrite {
     file: string;
     line: number;
     method: string;
+    ownerScoped?: true;
     visibility?: "internal" | "public";
 }
 ```
@@ -735,7 +748,6 @@ interface AdvisorTable {
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;
     name: string;
-    optionalFields?: ReadonlySet<string>;
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
     softDelete?: {
@@ -745,18 +757,6 @@ interface AdvisorTable {
         after?: number;
         field: string;
     };
-}
-```
-
-### `AdvisorTableSample` (interface)
-
-```ts
-interface AdvisorTableSample {
-    readonly cap: number;
-    readonly existingIds: ReadonlySet<string>;
-    readonly rows: ReadonlyArray<Record<string, unknown>>;
-    readonly table: string;
-    readonly truncated: boolean;
 }
 ```
 
@@ -967,6 +967,7 @@ interface LintContext {
     mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
@@ -992,7 +993,6 @@ interface LintContext {
     staleMigrationImports?: ReadonlyArray<AdvisorStaleMigrationImport>;
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
-    tableSamples?: ReadonlyArray<AdvisorTableSample>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
@@ -1241,12 +1241,6 @@ const commitOrderedHardDelete: Lint;
 const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => BaselineComparison;
 ```
 
-### `constraintValidator` (const)
-
-```ts
-const constraintValidator: Lint;
-```
-
 ### `containerInstanceKeyFromUserInput` (const)
 
 ```ts
@@ -1485,6 +1479,12 @@ const maskedRelationLeakViaWith: Lint;
 
 ```ts
 const mutatorFullRowReplace: Lint;
+```
+
+### `mutatorWithoutOwnerScope` (const)
+
+```ts
+const mutatorWithoutOwnerScope: Lint;
 ```
 
 ### `nondeterministicQueryMutation` (const)
@@ -1773,4 +1773,45 @@ const workflowUnknownTarget: Lint;
 
 ```ts
 const workflowUnused: Lint;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AdvisorExternalSource` (interface)
+
+```ts
+interface AdvisorExternalSource {
+    hasReconcile?: boolean;
+    hasSoftDelete?: boolean;
+    hasTenantBy: boolean;
+    mode?: string;
+    unanalyzable?: boolean;
+}
+```
+
+### `AdvisorUnrestrictedWhereBranch` (interface)
+
+```ts
+interface AdvisorUnrestrictedWhereBranch {
+    exportName: string;
+    file: string;
+    form: "empty-object" | "undefined";
+    key: string;
+    line: number;
+    owner: string;
+}
+```
+
+### `AdvisorWorkflowStep` (interface)
+
+```ts
+interface AdvisorWorkflowStep {
+    line: number;
+    method: string;
+    name: string;
+}
 ```

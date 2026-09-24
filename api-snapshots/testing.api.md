@@ -514,3 +514,55 @@ interface MockablePage {
 ```ts
 const mockLunora: (page: MockablePage, options?: MockLunoraOptions) => Promise<MockLunora>;
 ```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `HarnessFunction` (type)
+
+```ts
+type HarnessFunction = (args?: Record<string, unknown>) => unknown;
+```
+
+### `InlineActionFunction` (type)
+
+```ts
+type InlineActionFunction<R> = (context: ActionCtx) => Promise<R> | R;
+```
+
+### `InlineMutationFunction` (type)
+
+```ts
+type InlineMutationFunction<R> = (context: MutationCtx) => Promise<R> | R;
+```
+
+### `InlineQueryFunction` (type)
+
+```ts
+type InlineQueryFunction<R> = (context: QueryCtx) => Promise<R> | R;
+```
+
+### `RecordedWideEvent` (interface)
+
+```ts
+interface RecordedWideEvent {
+    attributes: LogFields;
+    events: {
+        attributes?: LogFields;
+        name: string;
+    }[];
+    links: {
+        spanId: string;
+        traceId: string;
+    }[];
+}
+```
+
+### `TestSchema` (type)
+
+```ts
+type TestSchema = Schema<Record<string, TableDefinition>>;
+```

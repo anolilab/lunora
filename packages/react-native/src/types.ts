@@ -3,15 +3,15 @@ import type { AsyncStorageLike, LunoraClientOptions } from "@lunora/client";
 /**
  * A `() => headers` factory the React Native client threads onto every HTTP RPC
  * request *and* the WebSocket upgrade — a generic escape hatch for attaching a
- * **custom** credential header (an API-gateway key, a proxy token, …) that
- * React Native's missing cookie jar can't carry implicitly. Return `undefined`
- * (or an empty object) when there's nothing to attach.
+ * **custom** credential header (an API-gateway key, a proxy token, …). Return
+ * `undefined` (or an empty object) when there's nothing to attach.
  *
  * For better-auth Expo sessions, prefer a **bearer** token instead: read it with
  * `@lunora/react-native/auth`'s `expoBearerToken` and feed it to
- * `client.setAuthToken` / `setWsToken` (see the package README). A bearer avoids
- * the `Cookie` header the runtime's CSRF guard rejects on `Origin`-less native
- * requests.
+ * `client.setAuthToken` / `setWsToken` (see the package README). Either way the
+ * client sends `credentials: "omit"`, so the platform cookie jar never attaches a
+ * session cookie the runtime's CSRF guard would reject on an `Origin`-less native
+ * request.
  * @experimental
  */
 export type AuthHeadersFactory = () => Record<string, string> | undefined;
@@ -49,9 +49,15 @@ export interface CreateLunoraClientOptions extends LunoraClientOptions {
     /**
      * React Native `AsyncStorage` (or any async key/value store with the same
      * `getItem`/`setItem`/`removeItem` surface — Expo `SecureStore`, an in-memory
-     * map in tests). When supplied, the offline mutation queue is persisted here
-     * via `createAsyncStoragePersistence`, so writes made offline survive an app
-     * restart. Ignored when an explicit `persistence` is passed.
+     * map in tests). When supplied it backs two independent caches: the offline
+     * mutation queue (via `createAsyncStoragePersistence`, so writes made offline
+     * survive an app restart) and the durable query cache (via
+     * `createAsyncStorageQueryCache`, so reads repaint before the socket
+     * reconnects).
+     *
+     * Each is opted out of by its own option, not by the other: `persistence`
+     * overrides the queue and `queryCache` overrides the read cache, so
+     * `{ persistence: false, storage }` still writes query results to storage.
      */
     storage?: AsyncStorageLike;
 }

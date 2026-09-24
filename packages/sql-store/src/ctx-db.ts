@@ -30,7 +30,6 @@ import type {
     AggregateResult,
     AggregateTally,
     CdcChange,
-    ColumnMetaLike,
     CrossShardReadArgs,
     DatabaseWriterLike,
     GroupByEntry,
@@ -48,7 +47,6 @@ import type {
     TriggerEventLike,
     TriggerOpLike,
     TriggerTimingLike,
-    ValidatorLike,
     WhereInput,
     WhereSqlStrategy,
 } from "@lunora/shard-engine";
@@ -63,6 +61,7 @@ import {
     buildSeekWhere,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
+    cdcForkedError,
     cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
@@ -74,6 +73,7 @@ import {
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
+    equalityPinnedFields,
     fanOutScalarCounts,
     foldAggregateTally,
     hasTrigger,
@@ -87,10 +87,10 @@ import {
     NotFoundError,
     NotUniqueError,
     RANK_TIEBREAK,
+    rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
     relationHooks,
-    renderSql,
     resolveRankPartition,
     resolveRankSeekTuple,
     resolveRelationPredicates,
@@ -102,22 +102,39 @@ import {
     selectIndexForGroupBy,
     softDeleteScope,
     sortColumnName,
+    stripReservedPatchFields,
     throwingScheduler,
     tiebreakDirectionFor,
+    uniqueIndexFields,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
+import { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
 import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
-import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
+import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import { createPointReadBatcher } from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, decodeRow, decodeRows, forEachRowPaged, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
-import { BIGINT_KEY_LENGTH, bigintSqlKey, effectiveColumnKind } from "./value-codec";
+import {
+    BACKFILL_BATCH_SIZE,
+    columnRefSql,
+    createIndexIfNotExists,
+    decodeRow,
+    decodeRows,
+    forEachRowPaged,
+    OCC_VERSION_COLUMN,
+    queryAll,
+    queryBatch,
+    queryRun,
+    serializeColumnValue,
+    serializeDocumentColumn,
+    tableColumns,
+} from "./sql-exec";
+import { effectiveColumnKind, sqliteDecode } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
@@ -173,9 +190,10 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
 };
 
 /**
- * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `<col> ASC|DESC`, with an `id` tiebreak appended
- * unless an id field is already ordered (keeps paging deterministic).
+ * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/shard-engine`'s
+ * string `compileOrderByText`: each key as `<col> ASC|DESC`, with an `id`
+ * tiebreak appended unless an id field is already ordered (keeps paging
+ * deterministic).
  *
  * The tiebreak follows the last key's direction, via the shared
  * `tiebreakDirectionFor`. Declared indexes here now carry the same
@@ -284,6 +302,42 @@ interface SqlCtxDbOptions {
     maxRelationKeys?: number;
 
     /**
+     * Object identifying the database this store provisions, so the one-shot
+     * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
+     * against it instead of repeating per instance.
+     *
+     * Hosts build a ctx-db **per request** (the writer captures the caller's
+     * identity and D1 bookmark), so without this the sweep — one round trip per
+     * global table plus one per index — runs again on the first `.global()`
+     * access of every request. On a 50-table schema that is ~1s in `lunora dev`
+     * and a real latency floor in production.
+     *
+     * WHAT TO PASS: something that outlives the request AND names one database
+     * (and one configuration). The D1 binding off `env` and the declaration
+     * object a host builds once both qualify; the result of a per-request
+     * factory does not — it keys the memo on a fresh object every time and
+     * shares nothing (which is silent, and looks exactly like not passing it).
+     *
+     * INVARIANT, unenforced: one scope ⇒ one `schema`, `dialect` and `cdc`. The
+     * memoised run closes over the FIRST writer's, so a later writer sharing a
+     * scope with `cdc: true` behind one with `cdc: false` never gets
+     * `__cdc_log`. Hosts pass app-level constants for all three, which is why
+     * this is a note rather than a composite key.
+     *
+     * Two behaviours change with a shared memo, both benign and both worth
+     * knowing: the DDL runs in the FIRST writer's D1 session, so a later
+     * session's first read is no longer implicitly pinned behind a write of its
+     * own (on a replicated binding that can mean one transient stale read on a
+     * freshly-provisioned database); and a database reset out from under a live
+     * isolate is no longer healed by the next request, since the entry lives as
+     * long as the scope does.
+     *
+     * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
+     * tests want (they pair a fresh database with a reused schema object).
+     */
+    provisionScope?: object;
+
+    /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
      * Absent it, `ctx.scheduler` is a stub that throws on use — pass one when
      * triggers on `.global()` tables need to enqueue follow-up work.
@@ -294,21 +348,6 @@ interface SqlCtxDbOptions {
 
 /** Cap on re-entrant trigger writes before we treat it as a self-triggering loop. */
 const MAX_TRIGGER_DEPTH = 50;
-
-/** A table's fields paired with their column meta, skipping fields that declare none. */
-const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
-    const columns: [string, ColumnMetaLike][] = [];
-
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        const column = validator._meta?.column;
-
-        if (column) {
-            columns.push([field, column]);
-        }
-    }
-
-    return columns;
-};
 
 /**
  * Fill any field absent from `document` that declares a `.default()` literal or
@@ -487,14 +526,27 @@ const tableNameFromId = async (
 // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value / AggregateResult are `number | null`; an empty reduction is null.
 const aggregateScalar = (value: unknown): null | number => (value === null || value === undefined ? null : Number(value));
 
-/** Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each group's key tuple. */
-const mapGroupByRows = (by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
+/**
+ * Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each
+ * group's key tuple.
+ *
+ * Each group value is reversed through the same {@link sqliteDecode} every row
+ * read uses. Without it the key carried the raw STORAGE form: SQLite has no
+ * boolean, so a `v.boolean()` column grouped into `0`/`1` keys while the
+ * companion-indexed path (which decodes its key tuple through `decodeWire`)
+ * handed back `false`/`true` — the answer's TYPE depended on whether an
+ * aggregate index happened to cover the request, and a caller's
+ * `groups.find((group) => group.key.flag === true)` was `undefined` on the scan.
+ */
+const mapGroupByRows = (definition: TableDefinitionLike, by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
     rows.map((row) => {
         const key: Record<string, unknown> = {};
 
         for (const field of by) {
+            const validator = definition.shape[field];
+
             // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key mirrors SQL group values; an absent grouped column is null in the result shape.
-            key[field] = row[field] ?? null;
+            key[field] = sqliteDecode(row[field] ?? null, validator && effectiveColumnKind(validator));
         }
 
         return { key, value: aggregateScalar((row as { value: unknown }).value) };
@@ -545,26 +597,38 @@ const buildRankBeforeBranches = (
     sortColumns: ReadonlyArray<string>,
     own: Record<string, unknown>,
     rowId: string,
-): SQL | undefined => {
+): SQL => {
     const branches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const column = sortColumns[pivot];
+        const sortKey = index.sortBy[pivot];
+        // Each pivot's comparison comes from the shared `rankPivotConditionSql`,
+        // which owns the NULL cases: `col < NULL` is UNKNOWN, and NULL rows sort
+        // ahead of a non-null pivot ascending, so a bare comparator both
+        // under-counts and mis-reads a NULL-valued row's own position. The
+        // `__id__` tiebreak closes the tuple and is never NULL.
+        const isSortPivot = pivot < sortColumns.length && column !== undefined && sortKey !== undefined;
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition = isSortPivot ? rankPivotConditionSql(column, own[column], direction, false) : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = sortColumns
             .slice(0, pivot)
             .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, own[prefixColumn]));
-        const column = sortColumns[pivot];
-        const sortKey = index.sortBy[pivot];
 
-        if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
-            conditions.push(sql`${sql.identifier(column)} ${sql.raw(sortKey.direction === "desc" ? ">" : "<")} ${own[column]}`);
-        } else {
-            conditions.push(sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`);
-        }
+        conditions.push(pivotCondition);
 
         branches.push(andBranch(conditions));
     }
 
-    return branches.length > 0 ? sql.join(branches, sql` OR `) : undefined;
+    // Never `undefined`: an absent clause counts the WHOLE partition, and "every
+    // pivot was a NULL at the start of its ordering" means nothing sorts before
+    // this row at all.
+    return branches.length > 0 ? sql.join(branches, sql` OR `) : sql`1 = 0`;
 };
 
 /**
@@ -586,6 +650,14 @@ const buildRankCursorSeek = (
     const branches: SQL[] = [];
 
     for (const [pivot, col] of columns.entries()) {
+        // Shared with the DO twin — see `rankPivotConditionSql` for why a bare
+        // `>`/`<` at the pivot drops every row once a sort column holds NULL.
+        const pivotCondition = rankPivotConditionSql(col.column, decoded[pivot], col.direction, true);
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
@@ -598,8 +670,14 @@ const buildRankCursorSeek = (
             conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, decoded[prefix]));
         }
 
-        conditions.push(sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "<" : ">")} ${decoded[pivot]}`);
+        conditions.push(pivotCondition);
         branches.push(andBranch(conditions));
+    }
+
+    if (branches.length === 0) {
+        // The cursor sits at the end of the ordering on every pivot: no row
+        // resumes after it.
+        return sql`(1 = 0)`;
     }
 
     return sql`(${sql.join(branches, sql` OR `)})`;
@@ -608,8 +686,17 @@ const buildRankCursorSeek = (
 /**
  * The rankPage column tuple in sort order: `[partition, ...sortColumns, id]`.
  * Partition and id sort ascending; each sort column follows its index direction.
+ *
+ * `nullable` marks the columns the seek has to place NULLs for: `__partition__`
+ * is the canonical-JSON key tuple and `__id__` is store-minted, so only the
+ * `__sort_k<i>__` columns can hold one (`syncRankIndexEntry` writes
+ * `record[field] ?? null`). It drives the ORDER BY's `NULLS FIRST/LAST` — the
+ * seek assumes SQLite's placement, which Postgres does not share.
  */
-const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+const rankPageColumns = (
+    index: RankIndexDefinitionLike,
+    sortColumns: ReadonlyArray<string>,
+): { column: string; direction: "asc" | "desc"; nullable: boolean }[] => {
     // A rank index with no sort columns degenerates the cursor tuple to
     // `[__partition__, RANK_TIEBREAK]`, which lets `buildRankCursorSeek` silently
     // mismatch and return a wrong/empty page. The schema builder already requires
@@ -619,13 +706,13 @@ const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyAr
         throw new LunoraError("INTERNAL", `rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
     }
 
-    const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
+    const columns: { column: string; direction: "asc" | "desc"; nullable: boolean }[] = [{ column: "__partition__", direction: "asc", nullable: false }];
 
     for (const [i, sortKey] of index.sortBy.entries()) {
-        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction, nullable: true });
     }
 
-    columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+    columns.push({ column: RANK_TIEBREAK, direction: "asc", nullable: false });
 
     return columns;
 };
@@ -699,246 +786,74 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
 };
 
 /**
- * SQLite affinity for a column. Resolves the *effective* validator kind (so
- * `v.optional(inner)` stores as `inner` would) and defers to the shared dialect
- * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
- * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
+ * Whether a column of this validator **could** hold a `bigint` — i.e. whether
+ * `sqliteEncode` may have stored an order-preserving key there rather than a
+ * value SQL can reduce.
+ *
+ * `sqliteEncode` keys off the RUNTIME type, so a `v.any()` / `v.union()` /
+ * `v.from()` column holding a bigint is stored as a padded key exactly like a
+ * declared one; gating on the declared kind alone is how the shard twin wrote
+ * ~1e39 into a companion, one declaration away. Both the min/max write path
+ * (which decides whether to reduce in SQL or fold in JS) and
+ * {@link assertReducibleBySql} (which refuses a read outright) take this test —
+ * they have to agree, because a column the writer treats as keyed is exactly
+ * one the reader must not reduce.
+ *
+ * The widening only pays off because `sqliteDecode` reverses those columns'
+ * keys too — it did not at first, and the fold then coerced 40 characters of
+ * padding to `undefined` and left the companion holding a stale extreme. Widening
+ * the detector and widening the decoder are one change, not two.
+ *
+ * `mayHoldProjectedValue` in `@lunora/shard-engine`'s `sql-projection.ts` is the
+ * same rule for the DO plane, over `bigint` + `bytes` rather than `bigint` alone.
+ * They belong together — beside the codec pair the two planes already share, in
+ * `sql-projection.ts` — but the widths differ, so merging them is its own change.
+ * @returns `true` when a value in this column may be a `bigint` key
  */
-const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string => dialect.columnType(effectiveColumnKind(validator));
-
-/** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
-const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
-    const fieldColumns: SQL[] = [];
-
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        if (!validator._meta?.column) {
-            continue;
-        }
-
-        // Required, non-optional fields get NOT NULL; optional ones stay nullable
-        // so an insert that omits them can't trip a constraint.
-        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
-
-        fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
+const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][string] | undefined): boolean => {
+    if (validator === undefined) {
+        return false;
     }
 
-    const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
-    const total = frameworkColumns.length + fieldColumns.length;
+    const kind = effectiveColumnKind(validator);
 
-    // `VALIDATION_ERROR`, not `INTERNAL`: a table too wide is the schema
-    // author's input, and an internal-coded error has its message replaced with
-    // "Internal error" on the way out — redacting the one sentence that says
-    // what to do. `ensureMigrated` does not cache the rejection, so every
-    // request re-runs this; an opaque 500 forever is a bad way to learn a table
-    // has too many columns.
-    if (dialect.maxTableColumns !== undefined && total > dialect.maxTableColumns) {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(dialect.maxTableColumns)}-column limit — split the table, or move the extra fields into one object field`,
-        );
-    }
-
-    return sql.join([...frameworkColumns, ...fieldColumns], sql`, `);
-};
-
-/**
- * The default total order every read here ends with, appended to a declared
- * index so the index can answer the sort instead of the engine sorting every
- * match into a temp B-tree.
- *
- * Same defect, same fix, as `INDEX_SORT_KEYS` in `@lunora/shard-engine`'s
- * `ctx-db-migrations.ts` — this backend simply never got it. `compileOrderBySql`
- * below used to say so in its own doc. Measured on `node:sqlite`, 50k rows,
- * `WHERE status = ? ORDER BY _creationTime, id LIMIT 21`: 134.0us against a
- * fields-only index, 11.3us with the sort keys on it, and the `USE TEMP B-TREE
- * FOR ORDER BY` step disappears from the plan.
- *
- * NOT appended to a UNIQUE index: `(email, _creationTime, id)` is unique for
- * every row, so the constraint would silently stop rejecting duplicates — data
- * corruption rather than a slow query. Same split as the DO twin.
- */
-const indexSortKeys = (dialect: SqlDialect): SQL | undefined => {
-    // Not on an engine that needs a key prefix to index text. MySQL declares
-    // `id VARCHAR(768)` — 768 utf8mb4 characters is 3072 bytes, which is exactly
-    // InnoDB's whole-index key limit on its own — so appending it to ANY other
-    // column raises ER_TOO_LONG_KEY and the migration fails outright. Prefixing
-    // it (`id(191)`) would create, but MySQL cannot satisfy an ORDER BY from a
-    // prefixed column, so the index would cost writes and buy nothing. The
-    // engine that actually backs `.global()` is D1 (SQLite); Postgres indexes
-    // text directly and gets the fix too.
-    if (dialect.indexKeyPrefix?.("string") !== undefined) {
-        return undefined;
-    }
-
-    return sql`${columnRefSql("_creationTime")}, ${columnRefSql("id")}`;
-};
-
-/**
- * Drop `name` when the engine already holds an index by that name built from a
- * DIFFERENT column list.
- *
- * `CREATE INDEX IF NOT EXISTS` does not replace a differing definition and does
- * not complain, so a database provisioned before {@link indexSortKeys} existed
- * would keep its filter-only index forever and never see the improvement. The
- * DO twin (`dropIndexIfShapeChanged`) exists for exactly this.
- *
- * SQLite only — that is the engine `.global()` tables run on (D1), and it is the
- * one whose catalog echoes the CREATE statement back verbatim, so the comparison
- * is a string compare rather than a per-engine column-list reconstruction. On
- * Postgres/MySQL a pre-existing index of the old shape is left alone: the new
- * shape reaches fresh databases, and an existing one keeps working, slower.
- */
-const dropIndexIfShapeChanged = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    spec: { columns: SQL; name: string; table: string; unique: boolean },
-): Promise<void> => {
-    if (dialect.name !== "sqlite") {
-        return;
-    }
-
-    const held = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} AND tbl_name = ${spec.table}`);
-    const current = held[0]?.["sql"];
-
-    // No row, or an implicit index the engine created for a constraint (`sql` is
-    // NULL there) — nothing of ours to replace.
-    if (typeof current !== "string") {
-        return;
-    }
-
-    // Compare the parenthesised column list rather than the whole statement, so
-    // this stays insensitive to how the surrounding DDL is spelled.
-    const columnsOf = (statement: string): string | undefined => {
-        const open = statement.indexOf("(");
-
-        return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
-    };
-
-    const unique = spec.unique ? sql`UNIQUE ` : sql``;
-    const wanted = columnsOf(
-        renderSql(dialect.name, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql,
-    );
-
-    if (wanted === undefined || wanted === columnsOf(current)) {
-        return;
-    }
-
-    // A UNIQUE index is dropped only once we know the new shape can actually be
-    // created. Dropping first and letting the follow-up `CREATE UNIQUE INDEX`
-    // fail on rows that are duplicates under the NEW column set leaves the table
-    // with no constraint at all — and the failed migration re-runs and re-fails
-    // on every wake, so the gap does not close on its own. Refusing here keeps
-    // the old constraint in force and names what has to be de-duplicated.
-    //
-    // There is a TOCTOU window between this probe and the create, which is
-    // acceptable: this runs at provisioning time, only when an index's declared
-    // fields actually changed, and losing the race costs a failed migration
-    // rather than a silently unprotected table.
-    if (spec.unique) {
-        const duplicates = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT ${spec.columns} FROM ${sql.identifier(spec.table)} GROUP BY ${spec.columns} HAVING COUNT(*) > 1 LIMIT 1`,
-        );
-
-        if (duplicates.length > 0) {
-            throw new LunoraError(
-                "INTERNAL",
-                `unique index "${spec.name}" on "${spec.table}" cannot be re-created with its new column list: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
-            );
-        }
-    }
-
-    await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
-};
-
-/** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
-const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    // Index column reference as drizzle SQL, with a key prefix where the engine
-    // demands it (MySQL can't index its now-unbounded TEXT string columns without
-    // one). Framework columns (id/_creationTime — absent from `shape`) are already
-    // index-safe types, so they get no prefix.
-    const indexRef = (field: string): SQL => {
-        const reference = columnRefSql(field);
-        const validator = definition.shape[field];
-        const prefix = validator && dialect.indexKeyPrefix ? dialect.indexKeyPrefix(effectiveColumnKind(validator)) : undefined;
-
-        return prefix === undefined ? reference : sql`${reference}(${sql.raw(String(prefix))})`;
-    };
-
-    const sortKeys = indexSortKeys(dialect);
-
-    for (const index of definition.indexes) {
-        const fields = sql.join(
-            index.fields.map((field) => indexRef(field)),
-            sql`, `,
-        );
-        const unique = index.unique ?? false;
-        const spec = {
-            columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
-            name: `${tableName}_${index.name}`,
-            table: tableName,
-            unique,
-        };
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await dropIndexIfShapeChanged(exec, dialect, spec);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, spec);
-    }
-
-    // The DEFAULT total order, for the reads that name no index at all — a bare
-    // `findMany({ limit })` or `paginate()`. The table above declares only `id`
-    // as its primary key, so nothing indexed `ORDER BY _creationTime, id` and the
-    // engine read the whole table into a temp B-tree to return the first page.
-    // The DO twin creates the same index on every row table.
-    if (sortKeys !== undefined) {
-        await createIndexIfNotExists(exec, dialect, { columns: sortKeys, name: `${tableName}__by_creation`, table: tableName, unique: false });
-    }
-
-    // `.unique()` columns synthesize a UNIQUE index so the engine enforces the
-    // constraint (the write layer maps breaches to ConflictError), mirroring the
-    // DO twin's `migrateSecondaryIndexes`.
-    for (const [field, column] of tableColumns(definition)) {
-        if (!column.unique) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, { columns: indexRef(field), name: `${tableName}_unique_${field}`, table: tableName, unique: true });
-    }
+    return kind === "any" || kind === "bigint" || kind === "from" || kind === "union";
 };
 
 /**
  * Refuse a SQL-side reduce or group over a column stored as an order-preserving
  * key rather than as its value.
  *
- * A `v.bigint()` column holds the zero-padded key {@link bigintSqlKey} builds, so
+ * A `v.bigint()` column holds the zero-padded key `bigintSqlKey`
+ * ({@link file://./value-codec.ts}) builds, so
  * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
  * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
  * characters of padding. All three look like answers, and `SUM` past 2^53 used
  * instead to escape as a raw driver `RangeError`.
  *
- * The maintained `__agg_` companion answers these numerically, so the error names
- * it rather than just refusing. Exact per CONTRIBUTION, not per total: `__value__`
- * is a DOUBLE, and `applyAggregateDelta` accumulates coerced values into it — so
- * a `sum` of individually safe `bigint` amounts loses integer precision once the
- * running total passes 2^53, and a `min`/`max` over values past it compares the
- * nearest doubles. A caller who needs an exact total over that range reads the
- * rows and reduces them in JS, where the values are `bigint` again.
+ * The test is {@link mayHoldBigintKey}, not the declared kind: `sqliteEncode`
+ * keys off the RUNTIME type, so a `bigint` written into a `v.any()` /
+ * `v.union()` / `v.from()` column is stored as the identical key. Reading the
+ * declared kind saw only `"any"` and let the scan reduce the padding — `sum` of
+ * two small amounts came back as `2e+39`. Refusing per COLUMN over-matches (an
+ * untyped column that only ever holds plain numbers is refused too), and that
+ * is the side to be wrong on: the alternative returned a confident wrong
+ * number, and the companion the error names answers both cases exactly.
  *
- * Applied at every SQL-reducing entry point —
+ * The maintained `__agg_` companion is what the error names instead. It is exact
+ * per contribution — `coerceAggregateNumber` refuses any single `bigint` past
+ * 2^53 outright — but its running total accumulates in a REAL column, so a sum
+ * of in-range values can still cross 2^53 and round there. The message says so
+ * rather than promising exactness the companion cannot give. Applied at every SQL-reducing entry point —
  * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
  * `assertReducibleBySql`, which shipped guarding one and not its sibling.
- * @throws LunoraError `BAD_REQUEST` when `field` is stored as an order-preserving key
+ * @throws LunoraError `BAD_REQUEST` when `field` may hold an order-preserving key
  */
 const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: string, label: string): void => {
-    const validator = definition.shape[field];
-
-    if (validator !== undefined && effectiveColumnKind(validator) === "bigint") {
+    if (mayHoldBigintKey(definition.shape[field])) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
     }
 };
@@ -956,436 +871,6 @@ const assertGroupByReducibleBySql = (
 
     if (agg.field !== undefined) {
         assertReducibleBySql(definition, agg.field, `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${agg.field}" } })`);
-    }
-};
-
-/**
- * Rows converted per pass by {@link rewriteLegacyBigintColumns}; keeps one
- * statement's bound-parameter count inside D1's budget.
- *
- * Rendered into the `LIMIT` inline (`sql.raw`) rather than bound: mysql2's
- * prepared-statement path rejects a placeholder there with
- * `Incorrect arguments to mysqld_stmt_execute`, which took the whole MySQL
- * provisioning pass down. It is a module constant, so nothing caller-supplied
- * reaches the statement text.
- */
-const BIGINT_REWRITE_PAGE = 100;
-
-/**
- * Migration-state key for one table's `bigint` re-encoding pass.
- *
- * Recorded in the same reserved table the search backfill uses — it is a
- * `key → {cursor, done, profile}` map, and this pass needs exactly that. The
- * `:` namespace cannot collide with a search companion name (`companionFor`
- * emits `<table>__search_<index>`).
- */
-const bigintRewriteStateKey = (tableName: string): string => `bigint-rewrite:${tableName}`;
-
-/**
- * Stamped alongside a recorded completion, so widening {@link BIGINT_KEY_LENGTH}
- * one day re-runs the pass instead of reading a marker for the old width.
- */
-const BIGINT_REWRITE_PROFILE = `bigint-key/${String(BIGINT_KEY_LENGTH)}`;
-
-/**
- * The declared fields of `table` that are stored as a `bigint` key.
- */
-const bigintFields = (definition: SchemaLike["tables"][string]): string[] =>
-    Object.entries(definition.shape)
-        .filter(([, validator]) => validator._meta?.column !== undefined && effectiveColumnKind(validator) === "bigint")
-        .map(([field]) => field);
-
-/**
- * The `SET` assignments that convert one row's legacy `bigint` columns, empty
- * when every one of them already holds a key.
- *
- * A value this encoding cannot hold — non-numeric text no encoder here ever
- * wrote, or a magnitude past the 39-digit ceiling — is left exactly as stored
- * rather than aborting the pass; the keyset cursor still steps over it.
- */
-const legacyBigintAssignments = (row: Record<string, unknown>, fields: ReadonlyArray<string>): SQL[] => {
-    const assignments: SQL[] = [];
-
-    for (const field of fields) {
-        const raw = row[field];
-
-        // "Already a key", not "already 40 characters" — the same distinction the
-        // `legacy` predicate makes. A key is a `"0"`/`"1"` sign character plus 39
-        // digits; `"-"` plus a 39-digit magnitude is 40 characters too, and a
-        // length-only test skipped exactly those, leaving a convertible negative
-        // stored as decimal text that `eq` no longer matches.
-        if (typeof raw !== "string" || (raw.length === BIGINT_KEY_LENGTH && !raw.startsWith("-"))) {
-            continue;
-        }
-
-        try {
-            assignments.push(sql`${columnRefSql(field)} = ${bigintSqlKey(BigInt(raw))}`);
-        } catch {
-            // Not a value this encoding can hold. Left as stored.
-        }
-    }
-
-    return assignments;
-};
-
-/**
- * Rows still holding decimal text, expressed so the rows the encoding can never
- * hold stop matching permanently.
- *
- * A convertible legacy value is at most a signed 39-digit decimal — 40
- * characters with the sign — so anything longer is past the encoding's digit
- * ceiling and is left as stored. That leaves the one overlap with a real key, which is
- * also 40 characters: a key's first character is its `"0"`/`"1"` sign, never
- * `"-"`, so `SUBSTR(col, 1, 1) = '-'` separates them. A plain `LENGTH(col) <> 40`
- * matched neither, which silently skipped every negative 39-digit value.
- */
-const legacyBigintPredicate = (fields: ReadonlyArray<string>): SQL =>
-    sql.join(
-        fields.map(
-            (field) =>
-                sql`(${columnRefSql(field)} IS NOT NULL AND (LENGTH(${columnRefSql(field)}) < ${BIGINT_KEY_LENGTH} OR (LENGTH(${columnRefSql(field)}) = ${BIGINT_KEY_LENGTH} AND SUBSTR(${columnRefSql(field)}, 1, 1) = ${"-"})))`,
-        ),
-        sql` OR `,
-    );
-
-/** One `UPDATE` per row of a page that has something to convert; rows without a usable `id`, and values the encoding cannot hold, are skipped. */
-const legacyBigintUpdates = (rows: ReadonlyArray<Record<string, unknown>>, fields: ReadonlyArray<string>, tableName: string): SQL[] => {
-    const updates: SQL[] = [];
-
-    for (const row of rows) {
-        const { id } = row;
-        const assignments = typeof id === "string" ? legacyBigintAssignments(row, fields) : [];
-
-        if (assignments.length > 0) {
-            updates.push(sql`UPDATE ${sql.identifier(tableName)} SET ${sql.join(assignments, sql`, `)} WHERE ${columnRefSql("id")} = ${id}`);
-        }
-    }
-
-    return updates;
-};
-
-/**
- * Rewrite any `v.bigint()` column still holding the plain decimal text an
- * earlier build stored into the order-preserving key {@link bigintSqlKey} now
- * writes.
- *
- * This is a **storage-format migration, and it is not optional**. Decimal text
- * is exact for `=` but sorts `"9"` after `"10"`, so every range filter,
- * `ORDER BY`, page cursor and `MIN`/`MAX` over such a column returned the wrong
- * rows. The fix changes what is written — which means a table holding both forms
- * has a worse problem than the one it started with: `where: { n: { eq: 10n } }`
- * binds the key and no longer matches a row stored as `"10"`. Converting the
- * stragglers is what keeps that from being a silent read break, so it runs from
- * the same provisioning pass that creates the table.
- *
- * Self-terminating, and recorded once done. It pages on a keyset cursor over
- * `id`, so a value the encoding cannot hold is stepped over rather than retried
- * forever within a pass — but the cursor is not durable, so without a marker the
- * next `ensureMigrated` restarted at the top. `ensureMigrated` is memoised per
- * ctx-db (per REQUEST on a Hyperdrive binding), and the probe is a scan: on a
- * converted table it matches nothing only after reading every row. So completion
- * goes in the shared migration-state table and the steady state is one
- * primary-key lookup, not a full-table scan per request.
- *
- * The predicate skips what the encoding provably cannot hold — anything longer
- * than a signed 39-digit decimal — so an oversized legacy value stops matching
- * permanently rather than pinning the pass open. It does still match a sign
- * character: `"-"` plus 39 digits is 40 characters, so a plain `LENGTH <> 40`
- * left exactly the negative 39-digit values unconverted, and a converted key
- * never starts with `-`.
- */
-const rewriteLegacyBigintColumns = async (
-    exec: SqlCtxExec,
-    tableName: string,
-    definition: SchemaLike["tables"][string],
-    dialect: SqlDialect,
-): Promise<void> => {
-    const fields = bigintFields(definition);
-
-    if (fields.length === 0) {
-        return;
-    }
-
-    const stateKey = bigintRewriteStateKey(tableName);
-    const recorded = await readSearchBackfillState(exec, dialect, stateKey);
-
-    if (recorded.done && recorded.profile === BIGINT_REWRITE_PROFILE) {
-        return;
-    }
-
-    const legacy = legacyBigintPredicate(fields);
-    const selected = sql.join([columnRefSql("id"), ...fields.map((field) => columnRefSql(field))], sql`, `);
-    let cursor = "";
-
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- keyset pages run sequentially on the single shared connection; each page's cursor comes from the previous one.
-        const rows = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT ${selected} FROM ${sql.identifier(tableName)} WHERE (${legacy}) AND ${columnRefSql("id")} > ${cursor} ORDER BY ${columnRefSql("id")} LIMIT ${sql.raw(String(BIGINT_REWRITE_PAGE))}`,
-        );
-
-        if (rows.length === 0) {
-            break;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- one round trip per page; the rows are keyed by distinct `id`, so order across them doesn't matter.
-        await queryBatch(exec, dialect, legacyBigintUpdates(rows, fields, tableName));
-
-        const last = rows.at(-1)?.["id"];
-
-        if (typeof last !== "string") {
-            // The cursor cannot advance, so this pass did NOT reach the end of
-            // the table and must not be recorded as converged.
-            return;
-        }
-
-        cursor = last;
-    }
-
-    await writeSearchBackfillState(exec, dialect, stateKey, undefined, true, BIGINT_REWRITE_PROFILE);
-};
-
-/**
- * Add the columns a `.global()` table is missing.
- *
- * `CREATE TABLE IF NOT EXISTS` alone leaves an existing table exactly as it is,
- * so adding a field to a shipped schema provisioned nothing: every `insert` died
- * with the driver's own `table p has no column named slug` — untyped, and never
- * mentioning a remedy — while reads and unrelated patches kept working, so the
- * deploy looked half-healthy. Both sibling migrations in this package already
- * reshape their own tables (`runSqlAggregateMigrations` PRAGMA-checks and
- * `ALTER`s, `migrateSearchState` `ALTER`s under a try/catch); only the
- * user-facing table was left out.
- *
- * The probe is one `SELECT <every declared column> … LIMIT 0` — dialect-blind,
- * no catalog member on {@link SqlDialect}, and on the overwhelmingly common
- * no-drift path it is a single statement that reads no rows. Only when that
- * fails does it cost one probe per column to find which are missing.
- *
- * Added columns are always **nullable**, whatever the field declares: existing
- * rows have no value for a field that did not exist, and `ADD COLUMN … NOT NULL`
- * without a default is rejected outright on a non-empty table by all three
- * engines. The declared `notNull` is still enforced on write by the validator.
- * Additive only, like the `CREATE` it follows — a retype or a drop still needs an
- * explicit migration.
- */
-const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    const fields = Object.entries(definition.shape).filter(([, validator]) => validator._meta?.column !== undefined);
-
-    if (fields.length === 0) {
-        return;
-    }
-
-    const probe = async (columns: ReadonlyArray<string>): Promise<boolean> => {
-        try {
-            await queryAll(
-                exec,
-                dialect,
-                sql`SELECT ${sql.join(
-                    columns.map((column) => columnRefSql(column)),
-                    sql`, `,
-                )} FROM ${sql.identifier(tableName)} LIMIT 0`,
-            );
-
-            return true;
-        } catch {
-            return false;
-        }
-    };
-
-    if (await probe(fields.map(([field]) => field))) {
-        return;
-    }
-
-    for (const [field, validator] of fields) {
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection; each probe gates its own ALTER.
-        if (await probe([field])) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- same connection, and a failure here must surface rather than race the next ALTER.
-        await queryRun(
-            exec,
-            dialect,
-            sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect))}`,
-        );
-    }
-};
-
-/**
- * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
- * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
- * declared field, then its secondary and `.unique()` indexes. This is the D1
- * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
- * tables) — it makes the schema the single source of truth for global tables
- * too, so a fresh database serves them without a hand-applied migration. The
- * column set and dialect match exactly what this module reads and writes
- * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
- *
- * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
- * drops or retypes an existing column, so destructive schema changes still need
- * an explicit migration.
- */
-const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    // The bigint re-encoding pass below records its completion there, and this is
-    // also the entry point a dev host calls on its own — "the migration throws
-    // unless you happened to run the search one first" is not a contract.
-    // Idempotent, so the later call from `ensureMigrated` costs nothing.
-    await migrateSearchState(exec, dialect);
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind !== "global") {
-            continue;
-        }
-
-        const columns = globalTableColumnsDdl(tableName, definition, dialect);
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
-        await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must carry every declared column before its indexes reference them.
-        await alterGlobalTableDrift(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
-        await createGlobalTableIndexes(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.
-        await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
-    }
-};
-
-/**
- * Materialize the `__agg_<index>` companion tables for every declared
- * `aggregateIndex` on a global table. Global tables in Lunora ship their own
- * DDL — counter tables are opt-in so production hosts can decide where they
- * live. Tests and dev hosts can call this once after their schema migration to
- * unlock O(1) counts.
- *
- * Idempotent (`CREATE TABLE IF NOT EXISTS`).
- */
-const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    const { integer, key, real } = dialect.companionTypes;
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.aggregateIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const aggTable = aggregateTableName(tableName, index.name);
-
-            // `__value__` is op-aware now (count / running sum / extreme — NULL
-            // for an empty min/max group) and `__count__` tracks the row count
-            // (avg divisor + empty-group detection). It is nullable; the pre-
-            // reducer-aware shape declared it `NOT NULL`.
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(aggTable)} (${sql.identifier("__key__")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("__value__")} ${sql.raw(real)}, ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0)`,
-            );
-
-            // Alpha-era companion-rebuild caveat (SQLite/D1 only): a binding that
-            // materialized this table before `__count__` existed gets the column
-            // added here (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape
-            // an existing table, so we pragma-check then ALTER. Fresh PG/MySQL
-            // tables are created with `__count__` already, so this legacy reshape
-            // is skipped off SQLite.
-            if (dialect.name === "sqlite") {
-                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                const columns = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(aggTable)})`);
-
-                if (!columns.some((column) => column["name"] === "__count__")) {
-                    // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                    await queryRun(
-                        exec,
-                        dialect,
-                        sql`ALTER TABLE ${sql.identifier(aggTable)} ADD COLUMN ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0`,
-                    );
-                }
-            }
-        }
-    }
-};
-
-/**
- * A rank btree index column. MySQL can't index a full VARCHAR(768)/TEXT column in
- * a *composite* index (3072-byte key limit), so VARCHAR/TEXT key columns get a
- * 191-char utf8mb4 prefix (keeps several columns under the cap); SQLite/Postgres
- * — and number/real columns everywhere — index in full.
- */
-const rankIndexColumn = (dialect: SqlDialect, column: string, direction: "ASC" | "DESC", needsPrefix: boolean): SQL => {
-    const reference = dialect.name === "mysql" && needsPrefix ? sql`${sql.identifier(column)}(191)` : sql`${sql.identifier(column)}`;
-
-    return sql`${reference} ${sql.raw(direction)}`;
-};
-
-/** The rank btree key tuple in sort order: `__partition__`, the sort columns, then `__id__` — each prefixed where MySQL's type demands it. */
-const rankBtreeColumns = (dialect: SqlDialect, index: RankIndexDefinitionLike, definition: SchemaLike["tables"][string]): SQL[] => {
-    // __partition__/__id__ are the VARCHAR(768) `key` type → always prefixed on MySQL.
-    const columns: SQL[] = [rankIndexColumn(dialect, "__partition__", "ASC", true)];
-
-    for (const [i, sortKey] of index.sortBy.entries()) {
-        const validator = definition.shape[sortKey.field];
-        const needsPrefix = validator !== undefined && dialect.indexKeyPrefix?.(effectiveColumnKind(validator)) !== undefined;
-
-        columns.push(rankIndexColumn(dialect, sortColumnName(i), sortKey.direction === "desc" ? "DESC" : "ASC", needsPrefix));
-    }
-
-    columns.push(rankIndexColumn(dialect, "__id__", "ASC", true));
-
-    return columns;
-};
-
-/** Each rank sort column is typed by its source field's kind (the same type + serialized form the main table uses), so it accepts the stored sort key and orders correctly. A generic BLOB would reject the value on Postgres (BYTEA is strict). */
-const rankSortColumnDefs = (dialect: SqlDialect, index: RankIndexDefinitionLike, definition: SchemaLike["tables"][string]): SQL[] =>
-    index.sortBy.map((sortKey, i) => {
-        const validator = definition.shape[sortKey.field];
-        const columnType = dialect.columnType(validator ? effectiveColumnKind(validator) : undefined);
-
-        return sql`${sql.identifier(sortColumnName(i))} ${sql.raw(columnType)}`;
-    });
-
-/**
- * Materialize the `__rank_<index>` companion tables for every declared
- * `rankIndex` on a global table. Mirrors `runSqlAggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL.
- *
- * Idempotent (`CREATE TABLE IF NOT EXISTS` + `createIndexIfNotExists`).
- */
-const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    const { key } = dialect.companionTypes;
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const rankTable = rankTableName(tableName, index.name);
-            const sortColumnDefs = rankSortColumnDefs(dialect, index, definition);
-            const columnPart = sortColumnDefs.length > 0 ? sql`, ${sql.join(sortColumnDefs, sql`, `)}` : sql``;
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection; the table must exist before its index below.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(rankTable)} (${sql.identifier("__id__")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("__partition__")} ${sql.raw(key)} NOT NULL${columnPart})`,
-            );
-
-            const orderedColumns = rankBtreeColumns(dialect, index, definition);
-            const btreeName = `${tableName}__rank_${index.name}__btree`;
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
-            await createIndexIfNotExists(exec, dialect, {
-                columns: sql.join(orderedColumns, sql`, `),
-                name: btreeName,
-                table: rankTable,
-                unique: false,
-            });
-        }
     }
 };
 
@@ -1603,6 +1088,45 @@ const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<n
     return Number.isFinite(floor) ? floor : undefined;
 };
 
+/**
+ * High-watermark of the `.global()` changelog — the largest `seq` ever
+ * ALLOCATED, which is what makes it a witness rather than a reading. `0` when
+ * nothing has been written, `undefined` on an engine that cannot answer.
+ *
+ * SQLite reads it from `sqlite_sequence`, the AUTOINCREMENT bookkeeping row,
+ * which a `DELETE` does not touch — so it survives the retention sweep clearing
+ * the row that carries the current maximum, and `MAX(seq)` does not (it reports
+ * NULL for a fully swept log). That difference is the whole point: a watermark
+ * that a trim can lower would accuse every healthy consumer of holding a rewound
+ * cursor.
+ *
+ * `undefined` on Postgres and MySQL, so the guard below simply does not run
+ * there. Both DO have a sequence, but reading it means dialect-specific
+ * catalogue SQL against engines this package has no suite for, and MySQL's
+ * `information_schema` AUTO_INCREMENT is a cached estimate rather than a fact —
+ * a wrong watermark here refuses a consumer that is perfectly in sync. The one
+ * engine `.global()` runs on for D1 is SQLite, which is where the restore
+ * semantics this guards against (Time Travel) live; `dropIndexIfShapeChanged` in
+ * `ctx-db-migrations.ts` is scoped the same way for the same reason.
+ */
+const readSqlCdcWatermark = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    if (dialect.name !== "sqlite") {
+        return undefined;
+    }
+
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("seq")} AS ${sql.identifier("seq")} FROM ${sql.identifier("sqlite_sequence")} WHERE ${sql.identifier("name")} = ${CDC_LOG_TABLE}`,
+    );
+    const head = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    // No bookkeeping row means no row was ever inserted, so the true watermark is
+    // `0` — the same answer the shard plane's `readCdcCursor` gives for an empty
+    // log, and the one `cdcForkedError` is written against.
+    return Number.isFinite(head) ? head : 0;
+};
+
 /** Serialize a changelog post-image, tagging the leaves JSON cannot carry. Identity for a pure-JSON document. */
 const encodeCdcDocJson = (doc: Record<string, unknown>): string => JSON.stringify(needsWireEncoding(doc) ? encodeWire(doc) : doc);
 
@@ -1663,7 +1187,43 @@ const readSqlCdcChanges = async (
     // disarm the guard for a deployment that swept and then turned retention
     // back off — one round trip per export page is not worth trading a silent
     // gap for.
+    //
+    // Read BEFORE the watermark below, though its verdict comes second: this is
+    // the probe that touches `__cdc_log` itself, so a caller pointed at a
+    // database where the changelog was never created still gets an error naming
+    // `__cdc_log` rather than one naming `sqlite_sequence`, which SQLite has not
+    // created either.
     const floor = await readSqlCdcFloor(exec, dialect);
+
+    // Rollback guard, ahead of the retention guard because it is the only one
+    // that says the cursor itself is meaningless rather than merely out of range.
+    //
+    // No consumer can legitimately hold a `seq` above the high-watermark: `seq`
+    // is allocated monotonically and the watermark outlives a sweep (see
+    // {@link readSqlCdcWatermark}), and the only cursor this module ever hands
+    // out is the `seq` of a row it actually returned. A cursor above it is
+    // therefore proof that the log rolled back underneath the consumer — on D1,
+    // a Time Travel restore, which rewinds the entire database and every durable
+    // record of the pre-restore timeline inside it.
+    //
+    // The consumer's own cursor is the only surviving witness, and unlike the
+    // shard plane there is no second one: the `.global()` changelog has no
+    // archive, and no epoch row (which a restore would rewind anyway — the
+    // shard's exists to be RE-MINTED once a witness has proved the fork, and
+    // there is no channel here to carry a re-minted epoch to a consumer; see the
+    // PR description). So this witness is acted on where it is presented.
+    //
+    // Serving the empty page this read would otherwise produce tells the consumer
+    // it is caught up. The store's post-restore writes then climb back through
+    // seqs it has already passed and are skipped one by one, silently and
+    // permanently — a warehouse table missing everything written after the
+    // restore, reported nowhere. So refuse, and carry the surviving watermark so
+    // a resynchronisation knows where the timeline it is on actually starts.
+    const watermark = await readSqlCdcWatermark(exec, dialect);
+
+    if (watermark !== undefined && sinceSeq > watermark) {
+        throw cdcForkedError(watermark, sinceSeq, "global");
+    }
 
     if (floor !== undefined && cursorBelowRetainedFloor(floor, sinceSeq)) {
         throw cdcTrimmedError(floor, sinceSeq, "global");
@@ -1764,6 +1324,107 @@ const readSqlCdcChangedTables = async (
     return { cursor, tables, ...(floor === undefined ? {} : { floor }) };
 };
 
+/** SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; D1, workerd and `node:sqlite` all surface that same text. */
+const SQLITE_ROW_TOO_BIG_RE = /string or blob too big/iu;
+
+/** Postgres' wording for a heap tuple that will not fit its page (`ERROR: row is too big: size 8168, maximum size 8160`). */
+const PG_ROW_TOO_BIG_RE = /row is too big/iu;
+
+/**
+ * Does `error` say the row this write tried to store is over the engine's
+ * per-row ceiling, and if so, what is that ceiling called? Returns `undefined`
+ * when the error is anything else.
+ *
+ * Recognised per dialect, because only the wording is shared with the
+ * shard-local plane:
+ *
+ * - **SQLite** (D1, workerd, `node:sqlite`) phrases `SQLITE_TOOBIG` as "string
+ *   or blob too big" — the same text the `lunora-row-too-big` solutions entry
+ *   in `@lunora/errors` keys on.
+ * - **MySQL** raises `ER_TOO_BIG_ROWSIZE`. Drivers disagree on which field
+ *   carries it — mysql2 sets `errno`, others only the symbolic `code` — so
+ *   accept either, the way `createIndexIfNotExists` already accepts
+ *   `ER_DUP_KEYNAME`.
+ * - **Postgres** raises `program_limit_exceeded` (SQLSTATE 54000) with "row is
+ *   too big"; the code alone is too broad (it also covers target-list and
+ *   argument-count limits), so the message is what decides.
+ */
+const rowTooBigLimit = (dialect: SqlDialect, error: unknown): string | undefined => {
+    const { code, errno } = error as { code?: unknown; errno?: unknown };
+    const message = error instanceof Error ? error.message : "";
+
+    switch (dialect.name) {
+        case "mysql": {
+            return errno === 1118 || code === "ER_TOO_BIG_ROWSIZE"
+                ? "InnoDB's per-row ceiling — roughly 8 KB, half a 16 KB page, for the part of the row stored inline"
+                : undefined;
+        }
+        case "postgres": {
+            return PG_ROW_TOO_BIG_RE.test(message) ? "the 8 KB heap page a tuple must fit once its wide columns have been TOASTed out" : undefined;
+        }
+        default: {
+            return SQLITE_ROW_TOO_BIG_RE.test(message) ? "the storage engine's per-row ceiling (2 MB on D1)" : undefined;
+        }
+    }
+};
+
+/**
+ * Row-size overflow is the one storage-engine limit a caller can act on, so it
+ * must survive the wire. None of the three engines raises a `LunoraError`, and
+ * `toErrorBody` redacts every foreign throw to `INTERNAL` / "Internal error" /
+ * 500 — leaving the operator a redacted 500 for a document they can simply move
+ * to R2. `PAYLOAD_TOO_LARGE` is catalogued non-internal (413), so this message
+ * reaches the client with the limit named.
+ *
+ * The shard-local plane does the same thing in its own `runWrite`
+ * (`@lunora/shard-engine`); the recogniser is not shared because the engine
+ * ceilings and their error shapes are not.
+ */
+const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): void => {
+    const limit = rowTooBigLimit(dialect, error);
+
+    if (limit === undefined) {
+        return;
+    }
+
+    throw new LunoraError(
+        "PAYLOAD_TOO_LARGE",
+        `document is too large to store in "${table}": a single row cannot exceed ${limit}. The limit is on the STORED bytes, which are UTF-8. Keep the payload in R2 (ctx.storage) and store a reference on the row.`,
+    );
+};
+
+/**
+ * Remap a write's raw engine error to the coded one a caller can act on, then
+ * rethrow — the single `catch` body every write path shares.
+ *
+ * A UNIQUE-index breach is a {@link ConflictError} (`CONFLICT`, 409): the caller
+ * lost a race or wrote a duplicate, both of which they can answer. A row over
+ * the engine's ceiling is {@link throwIfRowTooBig}'s `PAYLOAD_TOO_LARGE`.
+ * Anything else is rethrown untouched — guessing at an unrecognised engine error
+ * is how a redacted 500 becomes a wrong 409.
+ *
+ * Takes `dialect` rather than a pre-destructured `isUniqueViolation`, matching
+ * `throwIfRowTooBig`: the two used to disagree, which is why the identical catch
+ * body could not simply be lifted out.
+ */
+const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): never => {
+    if (dialect.isUniqueViolation(error)) {
+        throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
+    }
+
+    throwIfRowTooBig(dialect, error, table);
+
+    throw error;
+};
+
+/**
+ * The provisioning sweep in flight (or completed) for a given
+ * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
+ * the same database share one run. Weak so a scope that goes out of scope takes
+ * its entry with it; a rejected run is evicted so the next call retries.
+ */
+const provisioningByScope = new WeakMap<object, Promise<void>>();
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1772,20 +1433,24 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // locals shadow the module-level SQLite helpers/imports. `@lunora/hyperdrive/global`
     // injects a Postgres/MySQL dialect; absent one, this is the SQLite default.
     const { dialect } = options;
-    const { isUniqueViolation } = dialect;
-    // Value encode stays the shared SQLite codec (`serializeColumnValue`) on every
-    // engine — storage is SQLite-shaped everywhere. Identifier quoting and
-    // placeholder numbering are drizzle's job (rendered per-engine via renderSql),
-    // so the strategy only carries the per-engine WHERE differences: the
-    // substring test's position function, and (on D1) the bound-parameter budget.
-    const whereSqlStrategy: WhereSqlStrategy = {
+    // Value encode stays the shared SQLite codec on every engine — storage is
+    // SQLite-shaped everywhere. Identifier quoting and placeholder numbering are
+    // drizzle's job (rendered per-engine via renderSql), so the base only carries
+    // the per-engine WHERE differences: the substring test's position function,
+    // and (on D1) the bound-parameter budget. `serialize` is per-TABLE — see
+    // {@link whereSqlStrategyFor}.
+    const whereSqlStrategyBase: Omit<WhereSqlStrategy, "serialize"> = {
         fieldRef: columnRefSql,
-        serialize: serializeColumnValue,
-        // `contains` must fold case the way each engine's `LIKE` does, since that is
-        // the behaviour callers already have: SQLite's is ASCII-case-insensitive
-        // (the compiler's `instr(lower(…), lower(…))` default), MySQL's follows the
-        // column collation (`LOCATE`, case-insensitive by default), Postgres' is
-        // case-sensitive (`strpos`).
+        // `contains` keeps whatever case behaviour each engine's substring test
+        // already gives callers, which is NOT the same across the three: SQLite is
+        // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
+        // default), while Postgres (`strpos`) and MySQL (`LOCATE`) are both
+        // byte-exact. MySQL's `LOCATE` follows the column collation and
+        // `@lunora/hyperdrive`'s dialect pins every character column to
+        // `utf8mb4_0900_bin` — a column's collation beats a bound literal's — so it
+        // is case-SENSITIVE there, not case-insensitive as this comment used to say.
+        // Left as-is deliberately: there is no majority to fold toward, and making
+        // MySQL insensitive would silently widen every shipped `contains` filter.
         ...(dialect.name === "mysql" ? { containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0` } : {}),
         ...(dialect.name === "postgres" ? { containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0` } : {}),
         // The compiler defaults `inList` to SQLite's bounded `json_each` form,
@@ -1793,6 +1458,50 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // statement at 100 bound parameters. The other two engines bind
         // thousands and have no `json_each`, so they take the literal list.
         ...(dialect.name === "sqlite" ? {} : { inList: literalInList }),
+    };
+
+    /** One `WhereSqlStrategy` per table definition — see {@link whereSqlStrategyFor}. Definitions come from `defineSchema` and never mutate, so the entry is valid for the ctx-db's life. */
+    const whereStrategyByDefinition = new WeakMap<TableDefinitionLike, WhereSqlStrategy>();
+
+    /**
+     * The `where` strategy for one table: the engine base above, plus a
+     * value encode that knows which COLUMN it is filling.
+     *
+     * That last part is not a nicety. `v.any()` / `v.union()` / `v.from()` store
+     * as TEXT on every engine, so a number or boolean written to one is kept in
+     * the marked, self-describing form `serializeDocumentColumn` writes —
+     * `sqliteEncode` cannot infer that from the value alone, and the kind-blind
+     * binding this replaced bound a bare `42` against a column holding the marked
+     * text. Nothing matched: `where: { un: 42 }` returned no rows, `{ un: { gt: 5 } }`
+     * returned no rows, and — because a keyset cursor's pivot binds through this
+     * same strategy — page 2 of a `.paginate()` ordered on such a column came back
+     * EMPTY, silently dropping every row after the first page. The identical
+     * operations against the DO row store are correct, so moving a table to
+     * `.global()` changed the answers.
+     *
+     * What this does NOT fix: the marked form is JSON text, so SQLite orders an
+     * untyped column's numbers LEXICOGRAPHICALLY (`1.5, 10, 100, 2, 9`). Ranges
+     * and cursors are now consistent WITH that order — the same order `ORDER BY`
+     * uses, which is what makes paging return every row — but it is not numeric
+     * order. Making it numeric means an order-preserving stored encoding for an
+     * untyped column, i.e. a storage-format change with a migration, so it is
+     * stated here rather than half-done.
+     */
+    const whereSqlStrategyFor = (definition: TableDefinitionLike): WhereSqlStrategy => {
+        const cached = whereStrategyByDefinition.get(definition);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const strategy: WhereSqlStrategy = {
+            ...whereSqlStrategyBase,
+            serialize: (value, field) => serializeDocumentColumn(definition, field, value),
+        };
+
+        whereStrategyByDefinition.set(definition, strategy);
+
+        return strategy;
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */
@@ -1903,12 +1612,28 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // dialect's fts5 flag). CREATE IF NOT EXISTS is idempotent, so running it
-    // once per instance is cheap.
-    let migratedPromise: Promise<void> | undefined;
+    // dialect's fts5 flag).
+    //
+    // "Once per ctx-db" is only cheap when the ctx-db outlives the request — and
+    // it does not: hosts build one per request so the writer can carry the
+    // caller's identity and bookmark. `provisionScope` lifts the memo onto the
+    // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
+    // what makes the sweep once-per-isolate rather than once-per-request.
+    //
+    // A caller that passes no scope gets a private one. That is not a special
+    // case in disguise: the entry then lives exactly as long as this closure
+    // holds the key, which IS a per-ctx-db memo — same lifetime as the `let` it
+    // replaces, one mechanism instead of two.
+    const provisionScope = options.provisionScope ?? {};
 
     const ensureMigrated = async (): Promise<void> => {
-        migratedPromise ??= (async (): Promise<void> => {
+        const cached = provisioningByScope.get(provisionScope);
+
+        if (cached) {
+            return cached;
+        }
+
+        const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
             await runSqlGlobalTableMigrations(exec, schema, dialect);
@@ -1925,13 +1650,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
-            // ctx-db. Clear the cache so the next call retries the idempotent
+            // scope. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            migratedPromise = undefined;
+            provisioningByScope.delete(provisionScope);
             throw error;
         });
 
-        return migratedPromise;
+        // Recorded synchronously (the IIFE above has only run to its first
+        // await), so concurrent first-callers single-flight onto this run — and
+        // so the `delete` above can never drop a fresher entry than its own.
+        provisioningByScope.set(provisionScope, run);
+
+        return run;
     };
 
     /**
@@ -2048,33 +1778,104 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Reduce one group's extreme in JS, off the decoded rows, for a column
+     * {@link mayHoldBigintKey} matches — through {@link foldAggregateTally}, the
+     * same fold both backfills seed a group with, so a recomputed extreme cannot
+     * disagree with a rebuilt one.
+     *
+     * Pages by keyset on `id` like {@link ensureRankBackfilled} rather than
+     * selecting the group in one statement: the fold reads every surviving row,
+     * and one write against a 200k-row group otherwise put 200k rows in the
+     * isolate — for a predicate most matching columns never need.
+     * @returns the surviving extreme, or `null` when the group has no numeric row
+     */
+    const foldGroupExtreme = async (
+        definition: SchemaLike["tables"][string],
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        conditions: SQL[],
+    ): Promise<null | number> => {
+        // Single-group, so the tally key is the empty string and only `value` is
+        // read — the caller pins `__count__` from its own tracked tally.
+        const tallies = new Map<string, AggregateTally>();
+        let cursorId: string | undefined;
+        let hasMore = true;
+
+        while (hasMore) {
+            const seek = cursorId === undefined ? conditions : [...conditions, sql`${sql.identifier("id")} > ${cursorId}`];
+            const pageWhere = seek.length > 0 ? sql` WHERE ${sql.join(seek, sql` AND `)}` : sql``;
+            // `id` rides along only as the keyset cursor; the fold reads just the
+            // reduced column, and `decodeRow` skips whatever the projection left out.
+            // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+            const pageRows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT ${sql.identifier("id")}, ${columnRefSql(index.field ?? "")} FROM ${sql.identifier(tableName)}${pageWhere} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
+            );
+
+            for (const decoded of decodeRows(definition, pageRows)) {
+                foldAggregateTally(tallies, "", index, decoded);
+            }
+
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
+            hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- an extreme-less group stores NULL, matching what both backfills seed
+        return tallies.get("")?.value ?? null;
+    };
+
+    /**
      * Recompute a min/max group's extreme from the source table, scoped to the
      * group's `by`-tuple and the index's static `where`, against the D1 column
      * dialect. Runs AFTER the physical row write, so it sees the post-write
      * source and returns the surviving extreme (`null` when none survives). The
      * caller pins `__count__` from its own tracked tally.
+     *
+     * A column that may hold an order-preserving key goes to
+     * {@link foldGroupExtreme} rather than to `MIN`/`MAX`. Not
+     * `ORDER BY <col> LIMIT 1` either: the key is order-preserving only against
+     * other keys, and SQLite orders every TEXT after every numeric — so on a
+     * mixed `v.any()` column the extreme would be decided by storage class rather
+     * than by magnitude.
      */
     const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
-        const sqlFunction = aggregateSqlFunction(index.op);
         const field = index.field ?? "";
         const conditions: SQL[] = [];
+        const definition = schema.tables[tableName];
+        // Column-aware, for the same reason `whereSqlStrategyFor` is: an untyped
+        // (`v.any()`/`v.union()`/`v.from()`) `by` or static-`where` column stores a
+        // number in a marked form only the column's kind can reproduce, and a
+        // kind-blind binding here scoped the recompute to no rows at all.
+        const serialize = (key: string, value: unknown): unknown =>
+            definition ? serializeDocumentColumn(definition, key, value) : serializeColumnValue(value);
 
         for (const key of index.by ?? []) {
             // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
-            const value = serializeColumnValue(document[key] ?? null);
+            const value = serialize(key, document[key] ?? null);
 
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
         for (const [key, expected] of Object.entries(index.where ?? {})) {
             const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
-            const value = serializeColumnValue(literal);
+            const value = serialize(key, literal);
 
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
-        const query = sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS value FROM ${sql.identifier(tableName)}`;
-        const rows = await queryAll(exec, dialect, conditions.length > 0 ? sql`${query} WHERE ${sql.join(conditions, sql` AND `)}` : query);
+        const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
+
+        if (definition && mayHoldBigintKey(definition.shape[field])) {
+            return foldGroupExtreme(definition, tableName, index, conditions);
+        }
+
+        const sqlFunction = aggregateSqlFunction(index.op);
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}${whereSql}`,
+        );
 
         return aggregateScalar(rows[0]?.["value"]);
     };
@@ -2189,7 +1990,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const existingRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
             const existing = existingRows[0] as { count: number; value: null | number } | undefined;
             const existingValue = aggregateScalar(existing?.value);
@@ -2324,9 +2125,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
-     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db. Pages
-     * the source table via keyset cursor on `id` so an unbounded table never
-     * has to fit in a single SELECT.
+     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     *
+     * Bounded end to end, not just on the read: the source table is paged by
+     * keyset cursor on `id`, and the tuples that page produces are flushed
+     * before the next one is read, so neither the buffered `SQL` objects nor the
+     * dispatched batch ever grows to the row count.
      */
     const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
         const cacheKey = `${tableName}::rank::${index.name}`;
@@ -2359,12 +2163,35 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
         const insertColumnList = identifierList(["__id__", "__partition__", ...sortColumns]);
 
-        // Collect the rank tuples during the keyset scan, then insert them
-        // sequentially below (the scan callback can't itself await on the
-        // shared connection).
-        const rankTuples: unknown[][] = [];
+        // One INSERT per source row, flushed a page at a time. The aggregate
+        // twin buffers its whole insert list because that list is `unique(by)`
+        // keys, not rows; a rank tuple is per ROW, so buffering the same way put
+        // the entire table — plus one drizzle `SQL` object per row — in the
+        // isolate and handed the engine an N-statement batch, on a path that
+        // runs lazily inside a request (every first write, and every first
+        // `rank()`/`rankPage()`, against a table with a declared rankIndex).
+        //
+        // `forEachRowPaged` awaits an async `onDoc`, so the flush happens from
+        // inside the walk: the writes go to the companion table while the walk
+        // pages the source, and the peak is one page of tuples either way.
+        let pending: SQL[] = [];
 
-        await forEachRowPaged(exec, dialect, definition, tableName, (document) => {
+        const flush = async (): Promise<void> => {
+            if (pending.length === 0) {
+                return;
+            }
+
+            const batch = pending;
+
+            pending = [];
+
+            // Rows are keyed by distinct `__id__`, so order across a batch
+            // doesn't matter; a `run()`-per-statement loop when the exec has no
+            // `batch` seam.
+            await queryBatch(exec, dialect, batch);
+        };
+
+        await forEachRowPaged(exec, dialect, definition, tableName, async (document) => {
             if (index.where && !matchesRankStaticWhere(document, index.where)) {
                 return;
             }
@@ -2373,15 +2200,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
             const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-            rankTuples.push([document["_id"], partitionKey, ...sortValues]);
+            pending.push(
+                sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList([document["_id"], partitionKey, ...sortValues])})`,
+            );
+
+            if (pending.length >= BACKFILL_BATCH_SIZE) {
+                await flush();
+            }
         });
 
-        const inserts = rankTuples.map((tuple) => sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList(tuple)})`);
-
-        // One round trip for the whole backfill when the exec exposes `batch`
-        // (rows are keyed by distinct `__id__`, so order across them doesn't
-        // matter); a sequential `run()` loop otherwise.
-        await queryBatch(exec, dialect, inserts);
+        await flush();
 
         rankBackfilled.set(cacheKey, true);
 
@@ -2547,11 +2375,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         try {
             await queryRun(exec, dialect, query);
         } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throw error;
+            mapWriteError(dialect, error, table);
         }
     };
 
@@ -2572,12 +2396,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
      * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
      * blob) and `SqlCtxExec.run` returns no rows-affected count, so the CAS is
-     * expressed as `WHERE "id" IS ? AND "<col>" IS ? ... RETURNING "id"` run via
-     * `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound values
-     * are the RAW column values captured at read time ({@link rawRow}) so the
-     * comparison is faithful; `IS` gives NULL-safe equality. An empty RETURNING
-     * set means a concurrent write committed during the intervening `await` and
-     * changed the row — surfaced as a {@link ConflictError}.
+     * expressed as `WHERE "id" IS ? AND "_version" IS ? ... RETURNING "id"` run
+     * via `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound
+     * values are the RAW column values captured at read time ({@link rawRow});
+     * `IS` gives NULL-safe equality, which is what makes a row written before
+     * {@link OCC_VERSION_COLUMN} existed (version `NULL`) still guardable. An
+     * empty RETURNING set means a concurrent write committed during the
+     * intervening `await` and changed the row — surfaced as a
+     * {@link ConflictError}.
+     *
+     * The guard binds TWO parameters at any table width. Comparing every
+     * physical column instead — which is what this did — cost `2N+2` parameters
+     * on an `UPDATE` and blew D1's 100-per-statement ceiling from 50 declared
+     * fields up, so a table that provisioned and inserted fine lost every update
+     * to a redacted "Internal error". The version bump rides in the `SET` list
+     * as `COALESCE("_version", 0) + 1`, an expression rather than a bound value,
+     * so it costs nothing against that budget either.
+     *
+     * Bumping on every guarded write also gives MySQL a real affected-rows
+     * signal: a `patch` that writes back identical field values would otherwise
+     * report 0 rows changed and read as a phantom conflict.
      *
      * `snapshot` of `undefined` means there was nothing on disk at read time
      * (only happens on the delete path when the row was already gone); the
@@ -2593,13 +2431,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
+        const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
         const guardClause = sql.join(
-            Object.keys(snapshot).map((column) => nullSafeEquals(sql`${sql.identifier(column)}`, snapshot[column])),
+            [
+                nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
+                // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
+                nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),
+            ],
             sql` AND `,
         );
         const base =
             verb === "UPDATE"
-                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause} WHERE ${guardClause}`
+                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = COALESCE(${versionRef}, 0) + 1 WHERE ${guardClause}`
                 : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
 
         const occConflict = (): never => {
@@ -2625,11 +2468,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
         } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throw error;
+            mapWriteError(dialect, error, table);
         }
     };
 
@@ -2646,7 +2485,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Raw (unquoted) column names — the INSERT quotes them via `sql.identifier`.
             columns: ["id", "_creationTime", ...fields],
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeDocumentColumn(definition, field, document[field] ?? null))],
         };
     };
 
@@ -2685,7 +2524,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const rowsIndexed = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
 
             if (rowsIndexed.length === 0) {
@@ -2715,7 +2554,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const rowsIndexed = await queryAll(
             exec,
             dialect,
-            sql`SELECT ${sql.identifier("__key__")} AS key, ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)}`,
+            sql`SELECT ${sql.identifier("__key__")} AS ${sql.identifier("key")}, ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)}`,
         );
 
         return rowsIndexed.map((row) => {
@@ -2945,7 +2784,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
                         const row = rows[0] as { count: number; value: null | number } | undefined;
 
@@ -2956,9 +2795,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             assertReducibleBySql(definition, aggOptions.field, `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" })`);
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
             const aggregateFunction = sql.raw(aggregateSqlFunction(aggOptions.op));
-            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS value FROM ${sql.identifier(tableName)}`;
+            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
             const value = rows[0]?.["value"];
 
@@ -3007,7 +2846,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
 
                         return Number(rows[0]?.["value"] ?? 0);
@@ -3015,8 +2854,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
-            const query = sql`SELECT COUNT(*) AS count FROM ${sql.identifier(tableName)}`;
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
+            const query = sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
 
             return Number(rows[0]?.["count"] ?? 0);
@@ -3100,8 +2939,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // merged row; read scoping (not companion removal) hides it.
                 const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
                 const assignments = sql.join(
-                    // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
-                    Object.keys(definition.shape).map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                    Object.keys(definition.shape).map(
+                        // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                        (field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`,
+                    ),
                     sql`, `,
                 );
 
@@ -3170,7 +3011,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape);
+            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+                pinned: equalityPinnedFields(args.where),
+                uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+            });
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
             // Relation reads routed by the child's backend (shard-local child of
@@ -3230,12 +3074,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // findMany(). Pass `undefined` for relationBaseWhere (no nested policy
                 // threading, matching what the old scalar counter did).
                 const resolvedCombined = await resolveAggregateRelations(combined, childTable, undefined);
-                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategy);
+                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategyFor(childDefinition));
 
                 // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.
                 const fieldRef = columnRefSql(whereField);
 
-                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS count FROM ${sql.identifier(childTable)}`;
+                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(childTable)}`;
 
                 if (whereCondition) {
                     groupQuery = sql`${groupQuery} WHERE ${whereCondition}`;
@@ -3281,7 +3125,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
             }
 
-            const whereCondition = compileWhereSql(predicate, whereSqlStrategy);
+            const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
             const orderBy = compileOrderBySql(orderKeys, dialect);
 
             let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
@@ -3414,12 +3258,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // keys AND the reducer's field.
             assertGroupByReducibleBySql(definition, tableName, groupOptions.by, agg);
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
 
             const select: SQL[] = groupOptions.by.map((field) => sql`${columnRefSql(field)} AS ${sql.identifier(field)}`);
 
             if (agg.op === "count") {
-                select.push(sql`COUNT(*) AS value`);
+                select.push(sql`COUNT(*) AS ${sql.identifier("value")}`);
             } else {
                 // `agg.field` is asserted present for non-count reducers by the
                 // guard above; re-check locally so the column ref stays typed
@@ -3428,7 +3272,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
                 }
 
-                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS value`);
+                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS ${sql.identifier("value")}`);
             }
 
             const groupBy = sql.join(
@@ -3446,7 +3290,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const rows = await queryAll(exec, dialect, query);
 
-            return mapGroupByRows(groupOptions.by, rows);
+            return mapGroupByRows(definition, groupOptions.by, rows);
         },
 
         /**
@@ -3573,7 +3417,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
-            const merged: Record<string, unknown> = { ...existing, ...patch, _id: id };
+            const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(patch), _id: id };
 
             applyOnUpdate(definition, patch, merged, auth);
 
@@ -3591,7 +3435,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const fields = Object.keys(definition.shape);
             const assignments = sql.join(
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
                 sql`, `,
             );
 
@@ -3953,7 +3797,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const beforeRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey}${beforeClause ? sql` AND (${beforeClause})` : sql``}`,
+                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey} AND (${beforeClause})`,
             );
             const totalRows = await queryAll(
                 exec,
@@ -4004,7 +3848,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // ascending except the sort columns, which follow their index.
             const rankColumns = rankPageColumns(index, sortColumns);
             const orderBy = sql.join(
-                rankColumns.map((col) => sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "DESC" : "ASC")}`),
+                rankColumns.map(
+                    (col) =>
+                        sql`${sql.identifier(col.column)} ${sql.raw(`${col.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, { direction: col.direction, nullable: col.nullable })}`)}`,
+                ),
                 sql`, `,
             );
 
@@ -4094,12 +3941,22 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
+            // `_creationTime` is when the row was INSERTED, so a rewrite carries
+            // the stored one forward — the same thing `patch` does. Minting a
+            // fresh `clock()` here moved every replaced row to the end of every
+            // `_creationTime`-ordered index and past every live keyset cursor, so
+            // a paginating client saw it twice or never.
+            //
             // A client-supplied `_creationTime` is honored only under the
             // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
-            // rewrite — both replay a row's original creation time). The default
-            // mutation path mints from `clock()` so a forged document
-            // `_creationTime` can't overwrite the persisted timestamp.
-            const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // rewrite — both replay a row's original creation time); a forged one
+            // on the default mutation path cannot overwrite the persisted
+            // timestamp.
+            const replayed = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : undefined;
+            const stored = typeof snapshot["_creationTime"] === "number" ? snapshot["_creationTime"] : undefined;
+            // `clock()` is the last resort, for a row with no readable stored
+            // timestamp; the `??` chain keeps it unevaluated on the normal paths.
+            const creationTime = replayed ?? stored ?? clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(definition, document, replaced, auth);
@@ -4120,7 +3977,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 [
                     sql`${sql.identifier("_creationTime")} = ${creationTime}`,
                     // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(replaced[field] ?? null)}`),
+                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, replaced[field] ?? null)}`),
                 ],
                 sql`, `,
             );
@@ -4143,17 +4000,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     return writer;
 };
 
-export {
-    createSqlCtxDb,
-    readSqlCdcChangedTables,
-    readSqlCdcChanges,
-    readSqlCdcFloor,
-    runSqlAggregateMigrations,
-    runSqlCdcMigration,
-    runSqlGlobalTableMigrations,
-    runSqlRankMigrations,
-    sweepSqlCdcRetention,
-};
+export { createSqlCtxDb, readSqlCdcChangedTables, readSqlCdcChanges, readSqlCdcFloor, runSqlCdcMigration, sweepSqlCdcRetention };
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export type { SqlCtxDbOptions };
 

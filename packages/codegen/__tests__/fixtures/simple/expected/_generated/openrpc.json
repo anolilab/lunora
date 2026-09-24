@@ -121,7 +121,6 @@
           "name": "args",
           "required": true,
           "schema": {
-            "additionalProperties": false,
             "properties": {
               "channelId": {
                 "description": "Id<\"channels\">",
@@ -269,7 +268,6 @@
           "name": "args",
           "required": true,
           "schema": {
-            "additionalProperties": false,
             "properties": {
               "channelId": {
                 "description": "Id<\"channels\">",
@@ -293,6 +291,9 @@
               },
               "tags": {
                 "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
                   "type": "string"
                 },
                 "type": "object"

@@ -204,6 +204,18 @@ interface MaskDatabase {
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
     /** Cross-shard companion to `rankPage`, gated the same way `rankPage` is masked below. */
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+
+    /**
+     * Relation-graph traversal. Its rows come from tables the caller never
+     * names, at every hop — exactly the `with`-hop problem — so it is masked
+     * through the same `relationMask` hook rather than by a per-table wrapper
+     * here. Structural mirror of `@lunora/shard-engine`'s `RelatedOptions` /
+     * `RelatedPage`, narrowed to what this wrapper touches.
+     */
+    related?: (
+        start: Record<string, unknown>,
+        options?: { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] },
+    ) => Promise<{ continueCursor: null | string; isDone: boolean; nodes: { document: Record<string, unknown> }[] }>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -285,7 +297,7 @@ const maskPage = <Context>(page: QueryPage, columns: MaskColumns<Context>, base:
  * `assertWhereAllowed` (below) closes on the `where` path, reached instead
  * through the index builder.
  *
- * Unlike `where` (a plain object walked by `collectWhereFields`), the
+ * Unlike `where` (a plain object walked by `assertWhereScope`), the
  * range/search is a builder CALLBACK (`q => q.eq("ssn", x)`), so the referenced
  * fields aren't statically inspectable. Run the callback once against a
  * recording proxy: its blanket `get` trap turns EVERY property access into a
@@ -600,6 +612,13 @@ const wrapDatabase = <Context>(
      * row and probe the masked tables concurrently. Only masked tables are
      * probed: a row in no masked table needs no masking. The unwrapped `base.*`
      * is used so the probe itself isn't masked.
+     *
+     * A `lookupById` MISS falls through to the probe path instead of answering
+     * "absent": the seam is shard-local, so a `.global()` row always misses it
+     * and only `get`/`findFirst` reach those rows (through the writer's global
+     * fallback). Treating the miss as absent made `ctx.db.get(id)` return `null`
+     * for every global row inside a `mask()` procedure. The fast path still
+     * settles the common case — a shard-local hit — in one round-trip.
      */
     const locate = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.lookupById) {
@@ -608,12 +627,9 @@ const wrapDatabase = <Context>(
             // mask (IDOR).
             const located = await base.lookupById(id, expectedTable);
 
-            if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
-                return { row: null, tableName: undefined };
+            if (located) {
+                return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
             }
-
-            return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
         }
 
         const row = await base.get(id, expectedTable);
@@ -970,6 +986,18 @@ const wrapDatabase = <Context>(
             return maskRow(row, columns, context);
         },
 
+        // Every row a traversal returns comes from a table the caller never
+        // named, so it is masked exactly like a `with`-hydrated child: by
+        // handing the walk the composed `relationMask` hook, which it applies
+        // per hop with that hop's target table. The `...base` spread would
+        // otherwise publish an unmasked reader over the whole schema.
+        related: base.related
+            ? async (
+                  start: Record<string, unknown>,
+                  options?: { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] },
+              ) => await (base.related as NonNullable<MaskDatabase["related"]>)(start, withRelationMask(options))
+            : undefined,
+
         // Delegates to `base.lookupById` directly, not `locate` above (which
         // folds the table name away) — the `...base` spread would otherwise expose it unmasked.
         async lookupById(id, expectedTable) {
@@ -1094,7 +1122,18 @@ const mask = <Context extends MaskContextIn = MaskContextIn>(
 
         // Procedure-wide escape hatch: a privileged caller sees raw values, so
         // we forward the unwrapped ctx untouched (no wrap, no facade rebind).
-        if (options.bypass?.(maskContext)) {
+        //
+        // SECURITY: narrowed to the exact `true`, like every sibling gate
+        // (`rls`'s `decision === true`, `storageRules`' `rule.when(...) === true`,
+        // `http-storage`'s serve authorizer, the runtime's `grants`). `bypass` is
+        // DECLARED to answer a boolean but it is app code, and the canonical
+        // mistake — `bypass: ({ auth }) => auth.identity?.role`, the `.can(...)` or
+        // `=== "admin"` forgotten — hands back a TRUTHY string. Evaluated by
+        // truthiness that skipped the whole mask for every caller whose claim was
+        // merely present, serving `ssn` / `email` / `hashedPassword` raw with no
+        // error and nothing in the logs. This is the one direction that must fail
+        // closed: a weird value now masks rather than unmasks.
+        if (options.bypass?.(maskContext) === true) {
             return next();
         }
 

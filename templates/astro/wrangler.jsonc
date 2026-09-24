@@ -1,9 +1,17 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    // Astro's @astrojs/cloudflare adapter builds its SSR worker; `src/worker.ts`
-    // wraps it with `withLunora` so Lunora realtime mounts in the same worker.
-    "main": "src/worker.ts",
+    // `src/server.ts` composes Astro's adapter SSR handler with the Lunora plane
+    // and exports `ShardDO`; @astrojs/cloudflare's embedded @cloudflare/vite-plugin
+    // reads this `main`, builds that file into `dist/server/entry.mjs` and writes a
+    // `.wrangler/deploy/config.json` redirect, which is what `wrangler deploy`
+    // (and `lunora deploy`) then ship.
+    //
+    // Do NOT name this file `src/worker.ts`: `lunora deploy` treats that exact path
+    // as a SvelteKit-shaped composed entry and passes it to wrangler positionally.
+    // Combined with the redirect's `no_bundle: true` that uploads the raw,
+    // untranspiled TypeScript source as the worker — a 1.4 KiB "successful" deploy.
+    "main": "src/server.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     // Workers deploy with custom bindings doesn't auto-generate the assets
@@ -18,5 +26,14 @@
     // the class-A Vite binding reconciler), so the template ships this explicitly —
     // matching the sveltekit/nuxt class-B templates.
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Blast-radius cap. Alerting is lagging by definition — by the time a
+    // threshold trips, the runaway handler has already run — so a CPU ceiling is
+    // one of the few controls that bounds the damage rather than reporting it.
+    // Raise it if a legitimate handler needs longer.
+    "limits": { "cpu_ms": 30000 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": true } },
+    // Deploy attribution: the runtime reads this binding and stamps
+    // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs
+    // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
 }

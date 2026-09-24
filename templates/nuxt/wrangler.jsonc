@@ -14,9 +14,25 @@
     "main": "worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
+    // Nitro's Cloudflare runtime serves client assets ONLY through `env.ASSETS`
+    // (`if (env.ASSETS && isPublicAssetURL(url.pathname)) return env.ASSETS.fetch(request)`).
+    // Without this binding the SSR HTML renders and every `/_nuxt/*` request
+    // 404s — no hydration, no Lunora client. `.output/public` is the
+    // `cloudflare_module` preset's `output.publicDir`, the same directory Nitro's
+    // own `wrangler deploy … --assets` hint points at.
+    "assets": { "binding": "ASSETS", "directory": ".output/public" },
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Blast-radius cap. Alerting is lagging by definition — by the time a
+    // threshold trips, the runaway handler has already run — so a CPU ceiling is
+    // one of the few controls that bounds the damage rather than reporting it.
+    // Raise it if a legitimate handler needs longer.
+    "limits": { "cpu_ms": 30000 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": true } },
+    // Deploy attribution: the runtime reads this binding and stamps
+    // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs
+    // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
 }

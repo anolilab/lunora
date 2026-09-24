@@ -1,5 +1,7 @@
 <script lang="ts">
-    import { readLastLoginMethod } from "../core/last-login-method";
+    import { onMount } from "svelte";
+    import { viewHref } from "../core/config";
+    import { LAST_METHOD_EMAIL, readLastLoginMethod } from "../core/last-login-method";
     import { createSignInController } from "../core/sign-in";
     import { signInWithSocial } from "../core/social";
     import AnonymousButton from "./AnonymousButton.svelte";
@@ -14,25 +16,35 @@
     import SubmitButton from "./SubmitButton.svelte";
 
     let {
-        forgotPasswordHref = "/forgot-password",
-        signUpHref = "/sign-up",
+        forgotPasswordHref,
+        signUpHref,
     }: {
+        /** Defaults to the configured forgot-password route; see `viewPaths.base`. */
         forgotPasswordHref?: string;
+        /** Defaults to the configured sign-up route; see `viewPaths.base`. */
         signUpHref?: string;
     } = $props();
 
     const context = useAuthUI();
+    const forgotPasswordLink = $derived(forgotPasswordHref ?? viewHref(context, "forgotPassword"));
+    const signUpLink = $derived(signUpHref ?? viewHref(context, "signUp"));
     const t = context.localization;
     const social = context.social;
     const { actions, state: form } = controllerStore(createSignInController);
-    // Read once at initialisation rather than in an effect: it is a cookie, it is
-    // available before the first paint, and it only picks a badge.
-    const lastUsed = readLastLoginMethod();
+    // Read after mount, not at initialisation: the server has no cookie, so a
+    // render-time read is a hydration mismatch. See `lastLoginMethodStore`.
+    let lastUsedAfterMount = $state<string | undefined>(undefined);
+
+    onMount(() => {
+        lastUsedAfterMount = readLastLoginMethod();
+    });
+
+    const lastUsed = $derived(context.plugins.lastLoginMethod ? lastUsedAfterMount : undefined);
 </script>
 
 <AuthCard title={t.signIn}>
     <SocialButtons
-        lastUsed={context.plugins.lastLoginMethod ? lastUsed : undefined}
+        {lastUsed}
         onSelect={(provider) => {
             void signInWithSocial(context, provider);
         }}
@@ -61,13 +73,19 @@
             <FormBanner error={$form.formError} />
             <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
             <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
-            <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
-            <SubmitButton pending={$form.status === "submitting"}>{t.signIn}</SubmitButton>
+            <AuthLink href={forgotPasswordLink}>{t.forgotPasswordLink}</AuthLink>
+            <SubmitButton pending={$form.status === "submitting"}>
+                {t.signIn}
+                <!-- better-auth records a password sign-in as "email", so without this the badge is invisible for the most common route there is. -->
+                {#if lastUsed === LAST_METHOD_EMAIL}
+                    <span class="lunora-auth-social__badge">{t.lastUsed}</span>
+                {/if}
+            </SubmitButton>
         </form>
     {/if}
     {#snippet footer()}
         {#if context.signUp}
-            <AuthLink href={signUpHref}>{t.noAccount}</AuthLink>
+            <AuthLink href={signUpLink}>{t.noAccount}</AuthLink>
         {/if}
     {/snippet}
 </AuthCard>

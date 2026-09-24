@@ -40,15 +40,10 @@ import { defineQueue } from "@lunora/queue";
 import { api } from "./_generated/api";
 
 export const emailQueue = defineQueue<{ to: string }>({
-    handler: async (ctx, batch) => {
+    handler: async (_ctx, batch) => {
         for (const message of batch.messages) {
-            try {
-                await message.run(api.email.send, { to: message.body.to });
-                message.ack();
-            } catch (error) {
-                ctx.log.error("send failed", message.id, error);
-                message.retry();
-            }
+            await message.run(api.email.send, { to: message.body.to });
+            message.ack();
         }
     },
     // Push-consumer tuning (optional):
@@ -58,6 +53,8 @@ export const emailQueue = defineQueue<{ to: string }>({
 
 The handler runs inside a Lunora context: call any query/mutation/action with `message.run(api.x.y, args)` (the dispatch goes through the same path the scheduler and workflows use). Each `message` is `ack`/`retry`-able for at-least-once processing.
 
+Note the loop does **not** wrap `message.run(...)` in a `try`/`catch`. Letting the failure propagate is what the consumer needs to isolate a poison message — see below.
+
 ## Poison messages
 
 `message.run(...)` is `ctx.run(...)` pinned to that one message, and the pin is what keeps one bad message from taking its whole batch down.
@@ -66,9 +63,9 @@ Cloudflare delivers up to 100 messages per batch and redelivers the **whole batc
 
 When a call made through `message.run(...)` fails **deterministically** (the dispatched function answered `400`, `403`, `404` or `422` — a retry would fail identically), the consumer attributes the failure to that message: it is acked and taken out of the queue, every message the handler had not yet decided is explicitly retried, and the batch as a whole resolves. Messages the handler already `ack`ed or `retry`ed keep the decision it made. Transient failures (`408`, `429`, `5xx`, a timeout) are unchanged — the batch still throws and workerd retries it.
 
-Attribution needs the pin. A bare `ctx.run(api.x.y, args)` inside the loop carries no message id, so its failure is unattributable and the whole batch retries — which is why the loop should call `message.run`. Isolation does not depend on the dev capture sink; it applies in production too.
+Attribution needs the pin **and the throw**. A bare `ctx.run(api.x.y, args)` inside the loop carries no message id, so its failure is unattributable and the whole batch retries — which is why the loop should call `message.run`. And a `try`/`catch` around `message.run(...)` that swallows the error and calls `message.retry()` opts the message out entirely: the consumer only attributes a failure the handler let propagate, and an explicit `retry()` is a decision it never overrides. The poison message then burns its retry budget and dead-letters exactly as if isolation did not exist. If you need to log the failure yourself, re-throw after logging. Isolation does not depend on the dev capture sink; it applies in production too.
 
-Because an isolated message is acked, it never reaches the dead-letter queue. It is recorded with outcome `error` (and the failure message) in the Studio **Queues** log, which is where you see it — so keep dev capture on, or log it yourself in a `catch`.
+Because an isolated message is acked, it never reaches the dead-letter queue. It is recorded with outcome `error` (and the failure message) in the Studio **Queues** log, which is where you see it — so keep dev capture on, or log it in a `catch` that re-throws.
 
 ## Enqueue from a mutation or action
 

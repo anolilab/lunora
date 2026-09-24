@@ -218,6 +218,38 @@ describe("createPgVectorIndex", () => {
         await expect(store.query([1, 0, 0], { filter: { size: 1n } })).rejects.toThrow(/bigint/);
     });
 
+    /**
+     * The fail-open shape the guard above could not see: `Object.entries` is
+     * `[]` for a `Map`, a `Set`, a `Date` or a class instance, so walking one
+     * inspects nothing and rejects nothing, and `JSON.stringify` turns it into
+     * `{}` — a containment document EVERY row with metadata matches. At the top
+     * level it is worse still: `Object.keys(new Map())` is empty, so the
+     * length-keyed gate skipped both the guard and the containment clause and
+     * issued an unfiltered query across every tenant.
+     */
+    it("rejects a non-plain object anywhere in the filter rather than matching every tenant", async () => {
+        expect.assertions(6);
+
+        const store = index();
+
+        await store.upsert([
+            { id: "mine", metadata: { tenant: "t1" }, values: [1, 0, 0] },
+            { id: "theirs", metadata: { tenant: "t2" }, values: [1, 0, 0] },
+        ]);
+
+        await expect(store.query([1, 0, 0], { filter: { tenant: new Map([["id", "t1"]]) } })).rejects.toThrow(/Map/);
+        await expect(store.query([1, 0, 0], { filter: { tenant: new Set(["t1"]) } })).rejects.toThrow(/Set/);
+        await expect(store.query([1, 0, 0], { filter: { since: new Date(0) } })).rejects.toThrow(/Date/);
+        await expect(store.query([1, 0, 0], { filter: { tags: [new Map()] } })).rejects.toThrow(/Map/);
+        // The filter ITSELF, where no own enumerable key exists to count.
+        await expect(store.query([1, 0, 0], { filter: new Map([["tenant", "t1"]]) as unknown as Record<string, unknown> })).rejects.toThrow(/Map/);
+
+        // A plain nested object is still fine.
+        const ok = await store.query([1, 0, 0], { filter: { tenant: "t1" }, topK: 5 });
+
+        expect(ok.matches.map((match) => match.id)).toStrictEqual(["mine"]);
+    });
+
     it("omits metadata and values unless the caller asks", async () => {
         expect.assertions(4);
 

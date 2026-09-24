@@ -32,14 +32,20 @@ secrets are per-environment and **non-inheritable**, so a secret set on the
 default environment is not visible to `staging`:
 
 ```bash
-lunora env push --env staging       # push .dev.vars to one environment
+lunora env push --yes --env staging # push .dev.vars to one environment (--yes is required)
 lunora env diff --prod              # compare local keys against the deployed set
 ```
 
 `env diff` compares secret **names**, not values; Cloudflare never returns a
-secret's value. `lunora env doctor` validates `.dev.vars` against the bindings
-your config declares, which catches the "deployed to staging, forgot the new
-secret" failure before the deploy rather than after.
+secret's value. It is the check that catches the "deployed to staging, forgot
+the new secret" failure before the deploy: run `lunora env diff --env staging`
+against the environment you are about to ship to.
+
+`lunora env doctor` is a narrower, offline check — it validates `.dev.vars`
+against `.dev.vars.example` only (keys the example lists but the file lacks, and
+values that still look like placeholders). It reads no bindings and no schema,
+and with no `.dev.vars.example` present it exits 0 having checked nothing, so a
+secret nobody added to the example file is invisible to it.
 
 <Callout type="warn">
     Give each environment its own D1 database and R2 buckets. Sharing a database between staging and production means a staging migration is a production

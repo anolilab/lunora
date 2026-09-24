@@ -2,10 +2,10 @@
  * HTTP-SSE stream consumer for `httpRoute.<verb>(path).stream()` routes.
  *
  * The server pump (`@lunora/server`'s `buildStreamHandler`) writes one
- * `data: <json>\n\n` frame per yielded chunk, a final `event: complete` frame
- * on iterator completion, and an `event: error` frame carrying
- * `{ code, message }` on throw. This consumer opens the route with `fetch`,
- * reads `response.body.getReader()`, parses that exact framing, and yields
+ * `data: <wire-encoded json>\n\n` frame per yielded chunk, a final
+ * `event: complete` frame on iterator completion, and an `event: error` frame
+ * carrying a plain (unencoded) `{ code, message }` on throw. This consumer opens
+ * the route with `fetch`, reads `response.body.getReader()`, parses that exact framing, and yields
  * typed chunks through the same bounded {@link StreamIterable} queue the WS
  * procedure stream uses — so `.cancel()`, backpressure, and error delivery
  * behave identically across both stream primitives. Cancelling (or aborting
@@ -14,6 +14,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types";
@@ -156,11 +157,17 @@ const handleSseFrame = (frame: SseFrame, handle: UntypedHandle): boolean => {
         return true;
     }
 
-    // Default event: one JSON-encoded chunk. Ignore data-less frames (e.g. a
+    // Default event: one wire-encoded chunk. Ignore data-less frames (e.g. a
     // keepalive comment) rather than JSON.parse("").
+    //
+    // `decodeWire` is the other half of the server pump's `encodeWire`, and the
+    // ONLY decode on this path — it is not idempotent, so nothing downstream may
+    // decode again. Without it a `Date` arrived as an ISO string, an
+    // `ArrayBuffer` as `{}` and a `NaN` as `null`, each still typed as the
+    // declared chunk type.
     if ((frame.event === "" || frame.event === "message") && frame.data !== "") {
         try {
-            handle.push(JSON.parse(frame.data));
+            handle.push(decodeWire(JSON.parse(frame.data)));
         } catch {
             handle.fail(new LunoraError("HTTP_STREAM_BAD_CHUNK", "httpStream: malformed SSE chunk (invalid JSON)"));
 

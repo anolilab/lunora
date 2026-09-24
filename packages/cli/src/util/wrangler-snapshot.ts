@@ -8,10 +8,11 @@
  * real deploy would ship, not the one the project happened to have written down.
  *
  * So: snapshot, provision, let the artifacts read the provisioned config, then
- * put the original bytes back. The window matters more than the mechanism — the
- * caller that produces the LAST artifact is the one that owns the snapshot,
- * which is why this is a standalone helper rather than a `finally` buried in the
- * pipeline that provisions.
+ * put the original bytes back. The window matters more than the mechanism, and
+ * it has exactly one owner: `runDeployCommand`, which holds it open across both
+ * the bundle and `--emit-bindings`'s requirements document. A second owner is
+ * how a rollback once fired between them and produced a document saying
+ * `"crons": []` for an app with a nightly cron.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 

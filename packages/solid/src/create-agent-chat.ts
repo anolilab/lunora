@@ -1,4 +1,4 @@
-import type { FunctionReference, OptimisticMessage } from "@lunora/client";
+import type { FunctionReference, OptimisticMessage, SubscriptionErrorCallback } from "@lunora/client";
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createMemo, createSignal } from "solid-js";
@@ -124,6 +124,13 @@ interface CreateAgentChatOptions {
     limit?: number;
 
     /**
+     * Called when the live history or thread subscription reports an error (a
+     * session expiry, an RLS denial). Without it — and without reading `error` —
+     * such a failure is invisible and `messages` / `status` are cleared until a later frame arrives.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link CreateAgentChatOptions.sendArgs} and the per-call args.
@@ -151,6 +158,8 @@ interface CreateAgentChatResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The history or thread subscription's last error, or `undefined`. */
+    error: Accessor<Error | undefined>;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: Accessor<ReadonlyArray<AgentChatMessage>>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
@@ -192,16 +201,27 @@ const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
  * replay-safe, live-only delta design.
  */
 const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+    const { api, cancel: cancelReference, limit, onError, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
-    const { data: history } = createSubscription(api.agents.agentMessages, () => {
-        const key = resolveMaybe(threadKey);
+    const { data: history, error: historyError } = createSubscription(
+        api.agents.agentMessages,
+        () => {
+            const key = resolveMaybe(threadKey);
 
-        return limit === undefined ? { key } : { key, limit };
-    });
-    const { data: threadData } = createSubscription(api.agents.agentThread, () => {
-        return { key: resolveMaybe(threadKey) };
-    });
+            return limit === undefined ? { key } : { key, limit };
+        },
+        { onError },
+    );
+    const { data: threadData, error: threadError } = createSubscription(
+        api.agents.agentThread,
+        () => {
+            return { key: resolveMaybe(threadKey) };
+        },
+        { onError },
+    );
+    // Named for the return key it feeds; `error` itself is taken by the `catch`
+    // binding in `send` below.
+    const subscriptionError = createMemo(() => historyError() ?? threadError());
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so `createStream` never opens a stream (and `streamingText` stays empty).
@@ -342,7 +362,7 @@ const createAgentChat = (options: CreateAgentChatOptions): CreateAgentChatResult
         await cancelMutation.mutate({ instanceId, threadKey: resolveMaybe(threadKey) });
     };
 
-    return { approve, cancel, messages, reject, send, status, streamingText };
+    return { approve, cancel, error: subscriptionError, messages, reject, send, status, streamingText };
 };
 
 export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, CreateAgentChatApi, CreateAgentChatOptions, CreateAgentChatResult };

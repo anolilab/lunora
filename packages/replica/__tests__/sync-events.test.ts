@@ -101,7 +101,68 @@ describe(EventsSync, () => {
         expect(applied[0]!.seq).toBe(0);
         expect(applied[1]!.seq).toBe(1);
         expect(sync.watermark).toBe(2); // seq 0 + 1 + 1
-        expect(callCount()).toBe(1);
+        // Two fetches: the batch, then the one that comes back empty and ends
+        // the catch-up walk.
+        expect(callCount()).toBe(2);
+    });
+
+    it("sync() walks every page of a log larger than one batch", async () => {
+        expect.assertions(4);
+
+        const { mirror } = createMockMirror();
+
+        const log: EventLogEntry[] = Array.from({ length: 5 }, (_, index) => {
+            return { seq: index, type: "e", payload: index, timestamp: 100 + index };
+        });
+
+        // A transport that answers a BOUNDED page, like `EventLogDOClient.getSince`.
+        const pageSize = 2;
+        const batches: number[][] = [];
+
+        const sync = new EventsSync({
+            fetchEventsSince: (sinceSeq) => Promise.resolve(log.filter((entry) => entry.seq >= sinceSeq).slice(0, pageSize)),
+            applyEvents: (events) => {
+                batches.push(events.map((entry) => entry.seq));
+            },
+            getTableDiffs: () => [],
+            mirror,
+        });
+
+        const count = await sync.sync();
+
+        expect(count).toBe(5);
+        expect(sync.watermark).toBe(5);
+        // Each page is applied as its own atom — never one 5-event batch.
+        expect(batches).toStrictEqual([[0, 1], [2, 3], [4]]);
+        await expect(sync.sync()).resolves.toBe(0);
+    });
+
+    it("sync() stops instead of spinning when a batch does not advance the watermark", async () => {
+        expect.assertions(2);
+
+        const { mirror } = createMockMirror();
+        let calls = 0;
+
+        const sync = new EventsSync({
+            // A broken transport: always the same entry, whatever the watermark.
+            fetchEventsSince: () => {
+                calls += 1;
+
+                return Promise.resolve([{ seq: 0, type: "stuck", payload: null, timestamp: 1 }]);
+            },
+            applyEvents: () => {},
+            getTableDiffs: () => [],
+            mirror,
+        });
+
+        await sync.sync();
+        await sync.sync();
+
+        expect(sync.watermark).toBe(1);
+        // Cycle 1: the batch, then one more fetch that returns the SAME entry —
+        // it ends at seq 0 < the watermark, so the walk stops. Cycle 2: one
+        // fetch, same verdict. Bounded, not spinning.
+        expect(calls).toBe(3);
     });
 
     it("sync() applies diffs to the mirror", async () => {
@@ -336,7 +397,7 @@ describe(EventsSync, () => {
     });
 
     it("callbacks are invoked with correct watermark progression", async () => {
-        expect.assertions(9);
+        expect.assertions(6);
 
         const { mirror, applied } = createMockMirror();
 
@@ -363,27 +424,20 @@ describe(EventsSync, () => {
             mirror,
         });
 
-        // First sync → events seq 0-1 → watermark 2. A CLEAN batch takes the
-        // fast path: ONE `getTableDiffs()` + ONE mirror fan-out for the whole
-        // batch (REPLICA-08 batched catch-up), so exactly ONE diff lands for
-        // this 2-event batch — not one per event.
+        // One sync walks BOTH pages (seq 0-1, then seq 2) and lands on
+        // watermark 3. A clean page takes the fast path: ONE `getTableDiffs()`
+        // + ONE mirror fan-out per page (REPLICA-08 batched catch-up), so two
+        // diffs land for three events — not one per event.
         const count1 = await sync.sync();
 
-        expect(count1).toBe(2);
-        expect(sync.watermark).toBe(2);
-        expect(applied).toHaveLength(1);
-
-        // Second sync → event seq 2 → watermark 3 → one more diff.
-        const count2 = await sync.sync();
-
-        expect(count2).toBe(1);
+        expect(count1).toBe(3);
         expect(sync.watermark).toBe(3);
         expect(applied).toHaveLength(2);
 
-        // Third sync → no new events
-        const count3 = await sync.sync();
+        // Second sync → no new events.
+        const count2 = await sync.sync();
 
-        expect(count3).toBe(0);
+        expect(count2).toBe(0);
         expect(sync.watermark).toBe(3);
         expect(applied).toHaveLength(2);
     });
@@ -560,6 +614,92 @@ describe(EventsSync, () => {
         expect(mirroredRows).toStrictEqual(["row0", "row1", "row2", "row3"]);
     });
 
+    it("does NOT replay a batch through applyEvents when only the mirror fan-out failed", async () => {
+        expect.assertions(4);
+
+        // The replay succeeded; the mirror threw afterwards. The watermark holds
+        // (correctly — the diffs are not mirrored yet), so the next poll re-fetches
+        // the same batch. Handing it to the state machine again applies the same
+        // events twice, and unlike `getTableDiffs`, `applyEvents` is not required
+        // to be idempotent and has nothing to roll back.
+        const applied: unknown[] = [];
+        const { fetchEventsSince } = createMockLog([
+            { seq: 0, type: "ok", payload: "a", timestamp: 10 },
+            { seq: 1, type: "ok", payload: "b", timestamp: 20 },
+        ]);
+
+        let failMirror = true;
+
+        const mirror = {
+            applyDiff: vi.fn<(diff: TableDiff) => void>(() => {
+                if (failMirror) {
+                    throw new Error("mirror write failed");
+                }
+            }),
+            onChange: vi.fn<() => () => void>(),
+            get eventLog(): EventLog {
+                return new EventLog();
+            },
+        } as unknown as LocalMirror;
+
+        const sync = new EventsSync({
+            fetchEventsSince,
+            applyEvents: (events) => {
+                for (const event of events) {
+                    applied.push(event.payload);
+                }
+            },
+            getTableDiffs: () => [createTableDiff("rows", [{ type: "insert", data: { id: "x" } }])],
+            mirror,
+            onError: () => {},
+        });
+
+        await sync.sync();
+
+        expect(applied).toStrictEqual(["a", "b"]);
+        expect(sync.watermark).toBe(0);
+
+        failMirror = false;
+
+        const count = await sync.sync();
+
+        // The retry re-derives the diffs (that is `getTableDiffs`' idempotency
+        // contract) but must not re-run the state machine over "a" and "b".
+        expect(applied).toStrictEqual(["a", "b"]);
+        expect(count).toBe(2);
+    });
+
+    it("yields a poll cycle instead of chasing a log that keeps growing", async () => {
+        expect.assertions(3);
+
+        const { mirror } = createMockMirror();
+
+        // A writer faster than the reader: every fetch answers with one more
+        // event, so the batch is never empty. Against a genuinely live log an
+        // unbounded cycle never returns at all — and `#inFlight`, which every
+        // concurrent `sync()` awaits, never settles. The writer stops here at
+        // 1500 only so an unbounded loop terminates and reports the overrun
+        // instead of hanging the suite.
+        const sync = new EventsSync({
+            fetchEventsSince: async (sinceSeq) => {
+                return sinceSeq >= 1500 ? [] : [{ seq: sinceSeq, type: "ok", payload: sinceSeq, timestamp: sinceSeq }];
+            },
+            applyEvents: () => {},
+            getTableDiffs: () => [],
+            mirror,
+            onError: () => {},
+        });
+
+        const count = await sync.sync();
+
+        expect(count).toBe(1000);
+        // The watermark carries the cycle's progress, so the next one resumes
+        // exactly where this stopped rather than repeating any of it.
+        expect(sync.watermark).toBe(1000);
+
+        await expect(sync.sync()).resolves.toBe(500);
+    });
+
     it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {
         expect.assertions(4);
 
@@ -570,6 +710,12 @@ describe(EventsSync, () => {
         const sync = new EventsSync({
             fetchEventsSince: async () => {
                 fetchCalls += 1;
+
+                // The catch-up walk's terminating fetch — only the FIRST call
+                // is the one this test parks in flight.
+                if (fetchCalls > 1) {
+                    return [];
+                }
 
                 return new Promise<EventLogEntry[]>((resolve) => {
                     resolveFetch = resolve;
@@ -595,6 +741,8 @@ describe(EventsSync, () => {
         // Both callers observe the SAME outcome — the real result of the one
         // cycle that ran — not a synthetic `0`.
         expect(secondCount).toBe(1);
-        expect(fetchCalls).toBe(1);
+        // The parked fetch plus the walk's terminating one — the second
+        // `sync()` still started no cycle of its own.
+        expect(fetchCalls).toBe(2);
     });
 });

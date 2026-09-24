@@ -1,6 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { findProjectConfigFile, loadProjectConfig } from "@lunora/codegen";
+import type { GeneratedClassModule } from "@lunora/config";
+import { GENERATED_CLASS_MODULES } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -111,61 +114,37 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
     return detected?.class === "A" && CLASS_A_WIRING[detected.framework] !== undefined;
 };
 
-/**
- * Whether the project depends on the unscoped `lunorash` umbrella. When it does,
- * the composed worker must import the runtime through the umbrella subpath
- * (`lunorash/runtime`) rather than the bare `@lunora/runtime`: a umbrella-only
- * install — the default for the starter templates — never installs the granular
- * `@lunora/runtime`, so the bare specifier is unresolvable and the dev server
- * dies with `Cannot find module '@lunora/runtime' imported from
- * 'virtual:lunora/worker'`. Mirrors codegen's detection
- * (`run-codegen`: `dependencies.has("lunorash")`).
- */
-const projectUsesUmbrella = (projectRoot: string): boolean => {
-    try {
-        const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as Record<string, Record<string, string> | undefined>;
-
-        return ["dependencies", "devDependencies", "peerDependencies"].some((field) => pkg[field]?.["lunorash"] !== undefined);
-    } catch {
-        // No readable package.json → assume granular `@lunora/*` (backward-compatible default).
-        return false;
-    }
-};
-
-/**
- * The `_generated/` modules whose exported classes wrangler validates a
- * `class_name` against: container Durable Objects, workflow entrypoints, and
- * agent (workflow) entrypoints — the same three kinds `reconcile-bindings`
- * writes into `wrangler.jsonc`. The composed entry star-re-exports each module
- * the project actually has.
- */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
-
-/** One {@link GENERATED_CLASS_MODULES} entry. */
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+/** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
  * so the emitted composition is unit-testable in isolation.
  *
- * The emitted module imports the framework SSR handler + the project's
- * generated artifacts (functions registry, OpenAPI doc, `createShardDO`) and
- * composes them through `composeWorker` — reserved `/_lunora/*` paths route to
- * Lunora, everything else falls through to the framework SSR handler. The
+ * The emitted module imports the framework SSR handler and the project's
+ * generated `defineApp()` builder, and mounts the handler as the app's
+ * `httpRouter` — reserved `/_lunora/*` paths route to Lunora, everything else
+ * falls through to the framework SSR handler. `.build()` yields the whole
+ * module worker (`fetch` / `scheduled` / `queue` / `email`) plus `ShardDO`. The
  * `generatedImportBase` MUST be an absolute filesystem path to the `_generated`
  * directory. Virtual modules have no real filesystem path, so relative specifiers
  * like `./lunora/_generated/functions` cannot be resolved by Vite/rolldown from a
  * virtual module id. Absolute paths are resolved correctly in all environments
  * (Vite 8 + rolldown 1.x confirmed).
  */
-const buildWorkerEntrySource = (
-    framework: DetectedFramework,
-    generatedImportBase: string,
-    classModules: ReadonlyArray<GeneratedClassModule> = [],
-    useUmbrella = false,
-    allowUnauthenticatedShardAccess = false,
-    shard: LunoraShardConfig = {},
-): string => {
+interface WorkerEntryComposition {
+    /** Whether to allow unauthenticated shard access — `.extend(...)` on the builder. */
+    allowUnauthenticatedShardAccess?: boolean;
+    /** Finished specifier for the project's `lunora.config.*`, when it declares an `app` hook. */
+    appConfigModule?: string;
+    /** The `_generated/` class modules that exist, each star-re-exported. */
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    /** Per-shard knobs, each key named after the builder method that sets it. */
+    shard?: LunoraShardConfig;
+}
+
+const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
+    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], shard = {} } = composition;
+
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
@@ -180,11 +159,6 @@ const buildWorkerEntrySource = (
     // resolve `C:/…` ids fine, so the emitted imports are valid in all environments.
     const base = generatedImportBase.replaceAll("\\", "/");
 
-    // Umbrella-aware runtime import (see `projectUsesUmbrella`): the generated
-    // `_generated/*` already use `lunorash/*` for umbrella projects, so the composed
-    // worker must match or the bare `@lunora/runtime` won't resolve.
-    const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
-
     // wrangler refuses to deploy a `class_name` the worker doesn't export, and
     // that rule covers ALL THREE generated class kinds — containers
     // (`durable_objects`), workflows and agents (both `workflows[]`), which is
@@ -195,48 +169,112 @@ const buildWorkerEntrySource = (
     // otherwise the import would fail to resolve.
     const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
 
-    // A class-A app never calls the generated `defineApp()` builder — it has no
-    // worker entry to call it FROM — so this emitted line is its only route to
-    // `createShardDO(config)`. Bare, it left `cdc` and the whole reactive query
-    // cache unreachable for every class-A template.
+    // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
+    // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so
+    // a class-A project had no file to add the re-export to and deferred dispatch
+    // was unreachable.
     //
-    // Keys are sorted so the emitted entry is stable across config-object
-    // literal ordering, and `JSON.stringify` drops `undefined`-valued keys — so
-    // an empty (or all-default) `shard` emits `createShardDO()` exactly as
-    // before rather than a noisy `createShardDO({})`. Values are booleans,
-    // numbers and a closed string union, all of which `JSON.stringify` escapes,
-    // so nothing here can break out of the literal.
-    const shardArgument = JSON.stringify(Object.fromEntries(Object.entries(shard).toSorted(([a], [b]) => a.localeCompare(b))));
-    const shardConfig = shardArgument === "{}" ? "" : shardArgument;
+    // Keyed on the generated `scheduler` module, which codegen writes off the
+    // same `hasScheduler` that decides whether the builder HAS a `.scheduler()`
+    // method — so the call and the method cannot disagree, and the class is
+    // forwarded by the ordinary star re-export below rather than a specifier this
+    // plugin hard-codes. Keying it on the `wrangler.jsonc` binding instead let a
+    // project declare the binding with no scheduler code and get
+    // `TypeError: ….scheduler is not a function` at worker boot.
+    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
 
+    // `configureApp` receives the builder and returns it, so the framework wiring
+    // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
+    // are chained in between. See the docs for why the seam exists at all.
+    // Carries its OWN leading newline so an app without the module gets output
+    // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
+    // stripped for the same reason the sibling `/app` import has none: the
+    // bundler resolves the extension.
+    // Carries its OWN leading newline so a project without an `app` hook gets
+    // output byte-identical to before, rather than a gratuitous blank line.
+    const appConfigImport = appConfigModule === undefined ? "" : `\nimport lunoraConfig from "${appConfigModule}";`;
+    // Called directly, with no `?? identity` fallback. The host already asserted
+    // the hook is a function; a fallback could only fire if the config changed
+    // between that check and the bundle, and it would then boot a worker with the
+    // user's `.auth()` / `.global()` wiring silently missing. A `TypeError` naming
+    // `lunoraConfig.app` is strictly better than an app quietly missing its auth.
+    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["lunoraConfig.app(", ")"];
+
+    // Each declared `shard` knob as its `defineApp()` builder call. Every
+    // `LunoraShardConfig` key is named after the builder method that sets it, so
+    // this needs no mapping table. Sorted so the emitted entry is stable across
+    // config-object literal ordering; `undefined`-valued keys are dropped so an
+    // all-default `shard` adds nothing. Values are booleans, numbers, a closed
+    // string union and a flat options object, all of which `JSON.stringify`
+    // escapes, so nothing here can break out of the call.
+    const shardCalls = Object.entries(shard)
+        .filter(([, value]) => value !== undefined)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => `\n    .${key}(${JSON.stringify(value)})`)
+        .join("");
+
+    // The composed entry goes through the generated `defineApp()` builder rather
+    // than calling `composeWorker` itself.
+    //
+    // A class-A app has no hand-written worker entry to call `defineApp()` FROM,
+    // so this file is its only route to it — and hand-rolling `composeWorker`
+    // here meant re-deriving, by hand, everything codegen already knows: the
+    // module worker's `scheduled` / `queue` / `email` entrypoints, `cronJobs`,
+    // `listSchemaTables`, `logArchive`, the studio's KV + vector introspectors,
+    // `identity`, `jurisdiction`, `workflowsClient`, `notifySubscriptionStore`,
+    // the `.global()` D1 writer, and the whole `createShardDO` config. It
+    // derived four of them, so `lunora deploy` would provision a cron trigger
+    // (or a queue consumer) into a worker with no `scheduled` (or `queue`)
+    // export and Cloudflare fired it into nothing.
+    //
+    // `.build()` returns the module-worker object itself, so every handler
+    // codegen wired is forwarded by construction — a handler added later cannot
+    // go missing here again.
     return `// Generated by @lunora/vite — class-A worker composition (PLAN4 M2).
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
-import { composeWorker } from "${runtimeModule}";
 ${wiring.imports}
-import { LUNORA_FUNCTIONS } from "${base}/functions";
-import { openApiSpec } from "${base}/openapi";
-import { createShardDO } from "${base}/shard";
+import { defineApp } from "${base}/app";${appConfigImport}
 
-export const ShardDO = createShardDO(${shardConfig});
+const app = ${configureOpen}defineApp()
+    .shard((env) => env.SHARD)${schedulerCall}${configureClose}
+    .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
+    .build();
+
+export const ShardDO = app.ShardDO;
 ${classReexports}
-
-let worker;
-
-export default {
-    async fetch(request, env, context) {
-        worker ??= composeWorker({${allowUnauthenticatedShardAccess ? "\n            allowUnauthenticatedShardAccess: true," : ""}
-            functions: LUNORA_FUNCTIONS,
-            httpRouter: ${wiring.handler},
-            openApiSpec,
-            routes: {},
-            shardDO: env.SHARD,
-        });
-
-        return worker.fetch(request, env, context);
-    },
-};
+export default app;
 `;
+};
+
+/**
+ * The project-config specifier to compose through, or `undefined` when the
+ * project declares no `app` hook.
+ *
+ * Decided by LOADING the config with `jiti`, not by parsing it for a name: a
+ * computed hook works, and a config that throws is caught here instead of
+ * failing the BUNDLE with "does not provide an export named …" against a virtual
+ * module — the least debuggable error this plugin can produce. `load()` may be
+ * async, which is what lets this use `jiti`'s non-deprecated entry point.
+ */
+const appConfigSpecifier = async (projectRoot: string): Promise<{ error?: string; specifier?: string }> => {
+    const { config, error } = await loadProjectConfig(projectRoot);
+
+    if (error !== undefined) {
+        return { error };
+    }
+
+    if (typeof config?.app !== "function") {
+        return {};
+    }
+
+    const path = findProjectConfigFile(projectRoot);
+
+    // Posix-ified HERE, so the emitter receives a finished specifier: `resolve()`
+    // yields backslashes on Windows, which are invalid escapes once interpolated
+    // into a string literal. The extension is KEPT — stripping it made the
+    // specifier depend on Vite's default `resolve.extensions` matching ours.
+    return { specifier: path?.replaceAll("\\", "/") };
 };
 
 /**
@@ -257,7 +295,9 @@ export default {
  * resolves/loads nothing. `cloudflare: false` does NOT disable the virtual
  * entry — it only means "don't add the Cloudflare Vite plugin a second time"
  * (the user supplied it themselves); the composed worker must still be
- * resolvable so the user-supplied CF plugin can find the wrangler `main`.
+ * resolvable so the user-supplied CF plugin can find the wrangler `main`. The
+ * vinext template depends on exactly that, so making this plugin honour the
+ * option would break it.
  */
 export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, context: LunoraPluginContext): Plugin => {
     // Virtual modules have no real filesystem path, so relative specifiers like
@@ -265,10 +305,9 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     // `\0virtual:lunora/worker`. We must use an absolute path so the bundler can
     // locate the files regardless of the virtual module's (non-existent) base dir.
     const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
-    const useUmbrella = projectUsesUmbrella(options.projectRoot);
 
     return {
-        load(id) {
+        async load(id) {
             if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
                 // `@cloudflare/vite-plugin` names the browser environment "client"
                 // and the worker environment after the worker; emit the stub there
@@ -285,14 +324,22 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // entry carries.
                 const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
 
-                return buildWorkerEntrySource(
-                    context.framework.framework,
-                    generatedImportBase,
+                const { error, specifier } = await appConfigSpecifier(options.projectRoot);
+
+                if (error !== undefined) {
+                    // Evaluated on the HOST, so a `cloudflare:*` import or a
+                    // tsconfig path alias (which `jiti` does not read) throws.
+                    // Swallowing it composed a worker with the user's `.auth()` /
+                    // `.global()` wiring silently missing.
+                    this.warn(`[lunora] lunora.config could not be loaded, so its \`app\` hook was not composed: ${error}`);
+                }
+
+                return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
+                    allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
+                    appConfigModule: specifier,
                     classModules,
-                    useUmbrella,
-                    options.allowUnauthenticatedShardAccess,
-                    options.shard,
-                );
+                    shard: options.shard,
+                });
             }
 
             return undefined;
@@ -308,5 +355,5 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     };
 };
 
-export type { ClassAWiring, GeneratedClassModule };
-export { buildWorkerEntrySource, CLASS_A_WIRING, GENERATED_CLASS_MODULES, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export type { ClassAWiring, WorkerEntryComposition };
+export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

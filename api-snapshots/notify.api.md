@@ -121,7 +121,7 @@ interface LunoraPush {
     list: (filter?: SubscriptionFilter) => Promise<PushSubscriptionDevice[]>;
     register: (input: RegisterInput) => Promise<StoredSubscription>;
     send: (target: StoredSubscription | string, payload: PushContent) => Promise<Receipt>;
-    unregister: (id: string) => Promise<void>;
+    unregister: (id: string, owner: PushOwner) => Promise<void>;
 }
 ```
 
@@ -201,8 +201,18 @@ interface PushBroadcastJob {
 ### `PushBroadcastPageOutcome` (interface)
 
 ```ts
-interface PushBroadcastPageOutcome extends BroadcastPageResult {
+interface PushBroadcastPageOutcome {
     failedIds: string[];
+    nextFilter?: SubscriptionFilter;
+    result: BroadcastResult;
+}
+```
+
+### `PushOwner` (interface)
+
+```ts
+interface PushOwner {
+    userId: string | null | undefined;
 }
 ```
 
@@ -275,6 +285,7 @@ interface ResolvedProviders {
 interface RoutingPushOptions {
     allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
+    retryBaseDelay?: number;
     webPush?: Provider<unknown, PushPayload>;
 }
 ```
@@ -328,6 +339,7 @@ type SubscriptionStatus = "expired" | "failed" | "ok";
 ```ts
 interface SubscriptionStore {
     delete: (id: string) => Promise<void>;
+    deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     get: (id: string) => Promise<StoredSubscription | undefined>;
     list: (filter?: SubscriptionFilter) => Promise<StoredSubscription[]>;
     markStatus: (id: string, status: SubscriptionStatus, error?: string) => Promise<void>;
@@ -407,7 +419,7 @@ const fcmId: (token: string) => string;
 ### `isGoneError` (const)
 
 ```ts
-const isGoneError: (message: string | undefined) => boolean;
+const isGoneError: (message: string | undefined, kind?: StoredSubscription["kind"]) => boolean;
 ```
 
 ### `isNotifyDefinition` (const)
@@ -483,6 +495,15 @@ interface SubscribeToPushOptions {
 }
 ```
 
+### `SubscribeToPushResult` (interface)
+
+```ts
+interface SubscribeToPushResult {
+    replacedEndpoint?: string;
+    subscription: SerializedPushSubscription;
+}
+```
+
 ### `isPushSupported` (const)
 
 ```ts
@@ -492,11 +513,40 @@ const isPushSupported: () => boolean;
 ### `subscribeToPush` (const)
 
 ```ts
-const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SerializedPushSubscription>;
+const subscribeToPush: (options: SubscribeToPushOptions) => Promise<SubscribeToPushResult>;
 ```
 
 ### `unsubscribeFromPush` (const)
 
 ```ts
 const unsubscribeFromPush: () => Promise<boolean>;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `BroadcastPageResult` (interface)
+
+```ts
+interface BroadcastPageResult {
+    nextCursor?: string;
+    result: BroadcastResult;
+}
+```
+
+### `NormalizeOptions` (interface)
+
+```ts
+interface NormalizeOptions {
+    allowedPushOrigins?: string[];
+}
+```
+
+### `PushContent` (type)
+
+```ts
+type PushContent = Omit<PushPayload, "to">;
 ```

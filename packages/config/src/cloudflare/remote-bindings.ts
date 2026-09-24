@@ -319,7 +319,7 @@ const isRemoteEnvEnabled = (value: string | undefined): boolean => {
 /** The three inputs that can switch remote-binding dev on, in precedence order. */
 interface RemoteEnableInputs {
     /**
-     * The `remote` preference from `lunora.json` (the lowest-priority signal).
+     * The `remote` preference from `lunora.config.*` (the lowest-priority signal).
      * `undefined` means "no project preference"; an explicit `false` here loses
      * to neither the flag nor the env when those are absent — it just stays off.
      */
@@ -335,7 +335,7 @@ interface RemoteEnableInputs {
  *
  * 1. an explicit `--remote` flag (highest — a deliberate per-invocation choice),
  * 2. then `LUNORA_REMOTE` in the environment,
- * 3. then the `remote` key in `lunora.json` (lowest — a project default).
+ * 3. then the `remote` key in `lunora.config.*` (lowest — a project default).
  *
  * The flag and env are one-directional (they can only turn remote *on*); only
  * the config preference carries a meaningful `false`, and it applies solely when

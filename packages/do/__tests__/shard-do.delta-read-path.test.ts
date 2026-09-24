@@ -1,3 +1,4 @@
+import type { LunoraError } from "@lunora/errors";
 import type { CdcChange, DatabaseWriterLike, ShapeProbeCounters, SocketAttachment } from "@lunora/shard-engine";
 import {
     CDC_LOG_TABLE_SEQ_INDEX,
@@ -96,14 +97,30 @@ class ProbeCountingShard extends ShardDO {
         await this.getWriter().insert("roomMembers", { _id: id, roomId, userId: "u1" }, { allowExplicitId: true });
     }
 
+    /** This shard's CDC epoch — what a fork seal re-mints, so a test can tell one timeline from the next. */
+    public cdcEpoch(): string | undefined {
+        return this.currentCdcEpoch();
+    }
+
     /** The changelog page a streaming-export / read-replica consumer pulls, exposed so a test can assert what it refuses. */
-    public syncCdc(sinceSeq: number): { changes: CdcChange[]; cursor: number } {
-        return this.runShardCdcSync({ sinceSeq });
+    public syncCdc(sinceSeq: number, sinceEpoch?: string): { changes: CdcChange[]; cursor: number; epoch?: string } {
+        return this.runShardCdcSync({ sinceEpoch, sinceSeq });
     }
 
     /** The same page as {@link ProbeCountingShard.syncCdc}, but through the admin dispatch's archive-backed path. */
-    public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number }> {
+    public syncCdcArchived(sinceSeq: number): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
         return this.cdcSyncPage({ sinceSeq });
+    }
+
+    /**
+     * Seal this shard's timeline the way an unattended witness does — the
+     * retention sweep finding an archived segment above the watermark, a
+     * subscriber presenting a rewound resume claim, another connector being
+     * refused. What matters to a `cdcSync` consumer is only that the epoch
+     * moved without it being present, which is the whole of what this models.
+     */
+    public seal(): string {
+        return this.sealForkedTimeline();
     }
 
     /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
@@ -154,6 +171,48 @@ const makeState = (sockets: FakeWebSocket[], name?: string): ShardDOState => {
         storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
     };
 };
+
+/**
+ * A native point-in-time restore, as far as anything outside Cloudflare can
+ * reproduce one: SQLite's CONTENT reverts to an earlier moment — the changelog
+ * rows, the `sqlite_sequence` high-watermark `readCdcCursor` reads, the archive
+ * watermark — and nothing held outside this shard's SQLite does.
+ *
+ * The native API is out of reach rather than merely inconvenient. workerd
+ * implements `getCurrentBookmark` / `getBookmarkForTime`, but
+ * `onNextSessionRestoreBookmark` answers "This Durable Object's storage back-end
+ * does not implement point-in-time recovery", so neither `node:sqlite` nor the
+ * workerd suite can perform a restore. The revert is the whole of what these
+ * paths turn on, so the revert is what is modelled — deliberately including the
+ * `__cdc_meta` epoch, which a restore reverts with everything else and which is
+ * therefore never, by itself, evidence that the timeline forked.
+ */
+const restoreSqliteTo = (seq: number): void => {
+    // The rows the undone changelog entries describe go back with them — these
+    // suites only ever insert, so undoing an insert is a delete by id.
+    for (const row of harness.sql.exec(`SELECT "table", id FROM __cdc_log WHERE seq > ?`, seq).toArray() as { id: string; table: string }[]) {
+        harness.sql.exec(`DELETE FROM ${JSON.stringify(row.table)} WHERE id = ?`, row.id);
+    }
+
+    harness.sql.exec(`DELETE FROM __cdc_log WHERE seq > ?`, seq);
+    harness.sql.exec(`UPDATE sqlite_sequence SET seq = ? WHERE name = '__cdc_log'`, seq);
+
+    // Only the archiving path creates the watermark table, so a shard that has
+    // never archived has none to revert.
+    if (harness.sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__cdc_archive'`).toArray().length > 0) {
+        harness.sql.exec(`UPDATE __cdc_archive SET seq = ? WHERE id = 1 AND seq > ?`, seq, seq);
+    }
+};
+
+/** The id of the first change in the segment stored at `key` — what a re-keyed put would have replaced. */
+const firstChangeId = async (bucket: ReturnType<typeof createFakeR2Bucket>, key: string): Promise<string | undefined> => {
+    const body = await bucket.get(key);
+
+    return body === null ? undefined : (JSON.parse(await body.text()) as { changes: { id: string }[] }).changes[0]?.id;
+};
+
+/** The epoch segment of an archive key (`cdc/<shard>/<epoch>/<seq>.json`). */
+const epochOfKey = (key: string): string => key.split("/")[2] ?? "";
 
 const write = (functionPath: string, args: Record<string, unknown>): Request =>
     new Request("https://shard.internal/rpc", {
@@ -565,7 +624,7 @@ describe("delta-sync read path", () => {
          * off the write path — a test that did not await it would assert against
          * a log the sweep had not finished touching.
          */
-        const sweepWithArchive = async (environment: Record<string, unknown>, rows: number): Promise<ProbeCountingShard> => {
+        const sweepWithArchive = async (environment: Record<string, unknown>, rows: number, idPrefix = "m"): Promise<ProbeCountingShard> => {
             const pending: Promise<unknown>[] = [];
             const sockets: FakeWebSocket[] = [];
             const state: ShardDOState = {
@@ -578,11 +637,20 @@ describe("delta-sync read path", () => {
 
             for (let index = 0; index < rows; index += 1) {
                 // eslint-disable-next-line no-await-in-loop -- sequential writes build the changelog range the sweep acts on
-                await shard.seed(`m${String(index)}`, "c1");
+                await shard.seed(`${idPrefix}${String(index)}`, "c1");
             }
 
-            await shard.fetch(write("messages:send", { _id: "trigger", channelId: "c1" }));
-            await Promise.all(pending);
+            await shard.fetch(write("messages:send", { _id: `${idPrefix}-trigger`, channelId: "c1" }));
+
+            // Drained rather than `Promise.all(pending)` once: the flush is
+            // itself deferred through `waitUntil`, and the archive task it starts
+            // is pushed while that first promise is already being awaited — a
+            // single snapshot of the array therefore returns before the sweep has
+            // finished touching the log it is about to be asserted against.
+            while (pending.length > 0) {
+                // eslint-disable-next-line no-await-in-loop -- draining a queue that grows while it is awaited is the point
+                await Promise.all(pending.splice(0));
+            }
 
             return shard;
         };
@@ -684,6 +752,294 @@ describe("delta-sync read path", () => {
             environment["LUNORA_CDC_ARCHIVE"] = createFakeR2Bucket();
 
             await expect(shard.syncCdcArchived(0)).rejects.toThrow(/trimmed/u);
+        });
+
+        it("starts a fresh prefix when the archive holds segments the shard has no record of writing", async () => {
+            expect.assertions(5);
+
+            const bucket = createFakeR2Bucket();
+            const environment: Record<string, unknown> = { LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "5" };
+            const before = await sweepWithArchive(environment, 20);
+            const firstEpoch = before.cdcEpoch();
+
+            expect(bucket.keys().map((key) => epochOfKey(key))).toStrictEqual([firstEpoch]);
+
+            // A restore to before the shard's first write: the rows go back with
+            // the log, and the archive WATERMARK goes with them — while R2, which
+            // no restore can reach, keeps every segment already written.
+            restoreSqliteTo(0);
+            harness.sql.exec(`DELETE FROM messages`);
+
+            // So the rewound shard re-issues the same `seq` range for different
+            // changes, and a segment key IS its range's last seq: left alone this
+            // sweep puts the second timeline over the first one's object.
+            const after = await sweepWithArchive(environment, 20, "n");
+
+            expect(after.cdcEpoch()).not.toBe(firstEpoch);
+            // The first timeline's segment is still the first timeline's — a put
+            // under the reused key replaces rows already deleted from SQLite with
+            // changes that never happened, and nothing anywhere reports it.
+            await expect(firstChangeId(bucket, bucket.keys()[0] ?? "")).resolves.toBe("m0");
+
+            // The fresh epoch is a fresh prefix, so the next sweep archives beside
+            // the old timeline rather than over it.
+            const later = await sweepWithArchive(environment, 20, "o");
+
+            expect(new Set(bucket.keys().map((key) => epochOfKey(key)))).toStrictEqual(new Set([firstEpoch, later.cdcEpoch()]));
+
+            // …and a read-back on the new timeline serves the new timeline only.
+            // On one shared prefix the two are stitched into a single ascending
+            // run, so a consumer paging from below the floor is handed rolled-back
+            // changes as though they were the ones it missed.
+            const page = await later.syncCdcArchived(0);
+
+            expect(page.changes.filter((change) => change.id.startsWith("m"))).toStrictEqual([]);
+        });
+    });
+
+    /**
+     * A point-in-time restore reverts every durable thing INSIDE this shard's
+     * SQLite — the changelog rows, the `sqlite_sequence` high-watermark
+     * `readCdcCursor` reads, the `__cdc_meta` epoch, the archive watermark — and
+     * nothing a consumer holds outside it. So a consumer arrives carrying a
+     * cursor the shard has issued but can no longer account for, and every read
+     * path has to treat that as proof rather than as a cursor.
+     */
+    describe("rewound timeline", () => {
+        const buildShard = (): ProbeCountingShard => new ProbeCountingShard(makeState([]), {});
+
+        it("refuses a consumer whose cursor is above the rewound log", async () => {
+            expect.assertions(4);
+
+            const shard = buildShard();
+
+            for (const id of ["m1", "m2", "m3", "m4", "m5"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes build the changelog range the consumer checkpoints against
+                await shard.seed(id, "c1");
+            }
+
+            // The consumer drains the log and checkpoints at 5.
+            expect(shard.syncCdc(0).cursor).toBe(5);
+
+            restoreSqliteTo(2);
+            await shard.seed("post-restore", "c1");
+
+            const epochBefore = shard.cdcEpoch();
+
+            // Echoing `sinceSeq` back here reports "caught up" to a consumer that
+            // is about to skip the entire post-restore range: seq 3 onwards are
+            // now different changes, and the consumer's own cursor is what keeps
+            // it from ever asking for them.
+            const refusal = (() => {
+                try {
+                    shard.syncCdc(5);
+                } catch (error) {
+                    return error as LunoraError;
+                }
+
+                return undefined;
+            })();
+
+            expect(refusal?.message).toMatch(/rolled back/u);
+            // The surviving cursor and the timeline to resynchronise against —
+            // without them the consumer knows only that it must not continue.
+            expect(refusal?.data).toStrictEqual({ cursor: 3, epoch: expect.any(String) });
+
+            // The refusal seals the fork for everyone else: a subscriber holding
+            // the pre-restore epoch re-snapshots instead of resuming onto it.
+            expect(shard.cdcEpoch()).not.toBe(epochBefore);
+        });
+
+        it("still answers a consumer that is merely up to date", async () => {
+            expect.assertions(1);
+
+            const shard = buildShard();
+
+            await shard.seed("m1", "c1");
+
+            // A quiet consumer sitting exactly at the high-watermark has nothing
+            // to be told: an empty page is the correct answer and must not be
+            // turned into an error by the guard above.
+            expect(shard.syncCdc(1)).toStrictEqual({ changes: [], cursor: 1, epoch: shard.cdcEpoch() });
+        });
+
+        it("serves a rewound page once post-restore writes climb back past the cursor, naming the timeline it belongs to", async () => {
+            expect.assertions(5);
+
+            const shard = buildShard();
+
+            for (const id of ["m1", "m2", "m3", "m4", "m5"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes build the changelog range the consumer checkpoints against
+                await shard.seed(id, "c1");
+            }
+
+            expect(shard.syncCdc(0).cursor).toBe(5);
+
+            restoreSqliteTo(2);
+
+            // The refusal above is the consumer's cursor standing ABOVE the
+            // watermark, and the watermark climbs. Six post-restore writes re-issue
+            // seqs 3..8, so by the time this consumer polls again its cursor of 5
+            // is back inside the range and nothing refuses it.
+            for (const id of ["p1", "p2", "p3", "p4", "p5", "p6"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential writes carry the AUTOINCREMENT back past the consumer's cursor
+                await shard.seed(id, "c1");
+            }
+
+            const page = shard.syncCdc(5);
+
+            // Served — and served changes belonging to the timeline that replaced
+            // the one this consumer checkpointed against.
+            expect(page.changes.map((change) => change.id)).toStrictEqual(["p4", "p5", "p6"]);
+
+            // `p1`..`p3` were committed at the re-issued seqs 3..5, below this
+            // consumer's cursor, and nothing here reaches them: the consumer will
+            // never ask below 5, and this watermark says so too.
+            expect(harness.sql.exec(`SELECT id FROM messages WHERE id IN ('p1', 'p2', 'p3')`).toArray()).toHaveLength(3);
+
+            // What the page DOES carry now is the witness. #771 pinned these keys
+            // as exactly `["changes", "cursor"]` — the observation that a seal from
+            // any other witness on this shard changed nothing a `cdcSync` consumer
+            // could see, because the result had no field to carry the re-minted
+            // epoch through. That gap is what this change closes, so the assertion
+            // is kept and inverted rather than deleted: the shape it pinned is now
+            // the shape that would be wrong.
+            expect(Object.keys(page)).toStrictEqual(["changes", "cursor", "epoch"]);
+            expect(page.epoch).toBe(shard.cdcEpoch());
+        });
+
+        /**
+         * The fan-out the epoch exists for. A seal happens with this consumer
+         * absent — the retention sweep finding a rewound archive is the plane's
+         * unattended detector, and a subscriber or another connector seals the
+         * same way. Every consumer that carries an epoch inherits it; this one
+         * now can too.
+         */
+        describe("echoed epoch", () => {
+            /** Walk a consumer to the high-watermark and hand back the pair it would checkpoint. */
+            const drain = async (shard: ProbeCountingShard): Promise<{ cursor: number; epoch: string | undefined }> => {
+                for (const id of ["m1", "m2", "m3"]) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential writes build the range the consumer checkpoints against
+                    await shard.seed(id, "c1");
+                }
+
+                const page = shard.syncCdc(0);
+
+                return { cursor: page.cursor, epoch: page.epoch };
+            };
+
+            it("refuses a consumer echoing the epoch a seal replaced", async () => {
+                expect.assertions(4);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                // The seal: some other witness proved the fork while this consumer
+                // was between polls. Its cursor stays perfectly in range, so the
+                // high-watermark guard has nothing to say about it.
+                const sealed = shard.seal();
+
+                expect(sealed).not.toBe(checkpoint.epoch);
+
+                const refusal = (() => {
+                    try {
+                        shard.syncCdc(checkpoint.cursor, checkpoint.epoch);
+                    } catch (error) {
+                        return error as LunoraError;
+                    }
+
+                    return undefined;
+                })();
+
+                expect(refusal?.code).toBe("CDC_TIMELINE_FORKED");
+                // What to do about it, not merely that it happened: an incremental
+                // cursor cannot cross a fork, so re-seed.
+                expect(refusal?.message).toMatch(/cannot cross a fork — re-seed from a snapshot/u);
+                // The timeline to come back on, beside the cursor, so the consumer
+                // can checkpoint the new pair after its re-seed.
+                expect(refusal?.data).toStrictEqual({ cursor: checkpoint.cursor, epoch: sealed });
+            });
+
+            /**
+             * The echo guard refuses but never seals, and the ordering that
+             * makes that true: it runs ahead of the watermark guard, so a stale
+             * echo is answered before anything can take the cursor beside it for
+             * a fresh detection.
+             *
+             * Asserted on a SECOND shard instance over the same SQLite, because
+             * `sealForkedTimeline` latches per wake — within one wake a spurious
+             * seal is invisible, and across wakes it is the whole harm: every
+             * consumer still holding the stale epoch would re-fork the shard on
+             * every wake, invalidating the resume of everyone who had already
+             * adopted the sealed one.
+             */
+            it("refuses a stale echo on a later wake without sealing again", async () => {
+                expect.assertions(3);
+
+                const first = buildShard();
+                const checkpoint = await drain(first);
+                const sealed = first.seal();
+
+                // A fresh instance: new latch, same database.
+                const woken = buildShard();
+
+                expect(woken.cdcEpoch()).toBe(sealed);
+
+                // Out of range as well as out of date, so the watermark guard
+                // would ALSO fire — and would seal, because this wake has not.
+                // Only running the echo guard first keeps that from happening.
+                restoreSqliteTo(1);
+
+                expect(() => woken.syncCdc(checkpoint.cursor, checkpoint.epoch)).toThrow(/cannot cross a fork/u);
+
+                // Unchanged: the fork this consumer is being refused for was
+                // already detected and already sealed. Re-minting would tell
+                // every up-to-date consumer to re-seed for nothing.
+                expect(woken.cdcEpoch()).toBe(sealed);
+            });
+
+            it("serves a consumer echoing the current epoch", async () => {
+                expect.assertions(2);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                await shard.seed("m4", "c1");
+
+                // Nothing forked, so echoing the pair must be an ordinary read —
+                // the guard is a fork detector, not a second authentication step.
+                const page = shard.syncCdc(checkpoint.cursor, checkpoint.epoch);
+
+                expect(page.changes.map((change) => change.id)).toStrictEqual(["m4"]);
+                expect(page.epoch).toBe(checkpoint.epoch);
+            });
+
+            /**
+             * The negative control, and it matters as much as the refusal: the
+             * repo owns no consumer of this surface, so every one is user-written
+             * and out of repo. A connector that never learns about the field has
+             * to keep working exactly as it did.
+             */
+            it("serves an epoch-less consumer across a seal, exactly as before", async () => {
+                expect.assertions(3);
+
+                const shard = buildShard();
+                const checkpoint = await drain(shard);
+
+                shard.seal();
+                await shard.seed("m4", "c1");
+
+                // No `sinceEpoch`, so nothing to compare and nothing to refuse:
+                // the high-watermark proof alone, which is the whole of the
+                // guarantee this consumer had before the field existed.
+                const page = shard.syncCdc(checkpoint.cursor);
+
+                expect(page.changes.map((change) => change.id)).toStrictEqual(["m4"]);
+                expect(page.cursor).toBe(checkpoint.cursor + 1);
+                // It is still TOLD the epoch — emitting is additive and
+                // unconditional. Only echoing is opt-in.
+                expect(page.epoch).toBe(shard.cdcEpoch());
+            });
         });
     });
 });

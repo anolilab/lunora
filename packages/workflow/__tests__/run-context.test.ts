@@ -1,6 +1,7 @@
 import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import { defineWorkflowEvent } from "../src/define-event";
 import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";
@@ -31,6 +32,29 @@ const makeEvent = (): WorkflowEventLike<{ orderId: string }> => {
 describe("createWorkflowRunContext", () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it("decodes wire-form params, so a scheduled workflow sees real bigint and Date values", () => {
+        expect.assertions(2);
+
+        // A scheduled workflow's args arrive in wire form on purpose: Workflow
+        // `params` are JSON-serialised into durable storage, so a decoded bigint
+        // would fail creation and a decoded Date would flatten to a string. This is
+        // the first point that can hand the handler the real values.
+        const event = { ...makeEvent(), payload: encodeWire({ at: new Date(0), total: 9_007_199_254_740_993n }) as Record<string, unknown> };
+        const ctx = createWorkflowRunContext({ env: { LUNORA_ORIGIN_URL: "x" }, event, exportName: "orderPipeline", step: makeStep() });
+
+        expect(ctx.params).toStrictEqual({ at: new Date(0), total: 9_007_199_254_740_993n });
+
+        // Pure-JSON params are untouched, so a directly created instance is unaffected.
+        const plain = createWorkflowRunContext({
+            env: { LUNORA_ORIGIN_URL: "x" },
+            event: { ...makeEvent(), payload: { orderId: "o1" } },
+            exportName: "orderPipeline",
+            step: makeStep(),
+        });
+
+        expect(plain.params).toStrictEqual({ orderId: "o1" });
     });
 
     it("assembles the handler context with params, event, step, env, run, and log", () => {
@@ -125,7 +149,9 @@ describe("createWorkflowRunContext", () => {
     it("wires ctx.run through the shared dispatch runner (POST + workflow label on error)", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ ok: true })));
+        // The shard's envelope (`ShardDO.buildDispatchResponse`), not the bare
+        // return value — `ctx.run` unwraps `result` and `decodeWire`s it.
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: { ok: true } })));
         const ctx = createWorkflowRunContext({
             env: { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" },
             event: makeEvent(),
@@ -148,6 +174,58 @@ describe("createWorkflowRunContext", () => {
         await expect(failing.run({ __lunoraRef: "a:b" })).rejects.toThrow(/@lunora\/workflow: function dispatch failed \(500\): boom/);
     });
 
+    it("pins a replay-stable dedup id on ctx.run, so a replayed body applies each call once", async () => {
+        expect.assertions(2);
+
+        // A top-level `ctx.run` is NOT durable: the body re-executes from the top
+        // on every activation (after a `step.sleep`, a `waitForEvent`, an
+        // eviction), so without a replay-stable id the second activation charges
+        // the customer again. Two contexts over the same event ARE the replay.
+        const ids: unknown[] = [];
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            ids.push((JSON.parse((init as RequestInit).body as string) as { id?: string }).id);
+
+            return okResponse(JSON.stringify({ result: null }));
+        });
+        const env = { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" };
+
+        const activation = async (): Promise<void> => {
+            const ctx = createWorkflowRunContext({ env, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() });
+
+            await ctx.run({ __lunoraRef: "payments:charge" }, { orderId: "o1" });
+            await ctx.run({ __lunoraRef: "orders:markPaid" }, { orderId: "o1" });
+        };
+
+        await activation();
+        await activation();
+
+        expect(ids).toStrictEqual(["inst-1#body.1", "inst-1#body.2", "inst-1#body.1", "inst-1#body.2"]);
+
+        // A caller-supplied id wins — the escape hatch for a body whose call order
+        // is not deterministic, and the only way to make a bare `ctx.run` inside a
+        // raw `ctx.step.do(...)` callback exactly-once across that step's retries.
+        const ctx = createWorkflowRunContext({ env, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() });
+
+        await ctx.run({ __lunoraRef: "payments:charge" }, {}, { dedupId: "charge:o1" });
+
+        expect(ids.at(-1)).toBe("charge:o1");
+    });
+
+    it("re-exposes the injected fetch so a body building its own dispatcher uses the same transport", () => {
+        expect.assertions(2);
+
+        // `ctx.run` is not the only dispatcher a body builds — `@lunora/agent`'s
+        // loop builds its own to carry the run's identity. Consuming the
+        // injection without re-exposing it sends that runner to a global `fetch`
+        // the host replaced, or to none at all.
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: null })));
+
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() }).fetchImpl).toBe(fetchImpl);
+        // Absent stays absent: a present key holding `undefined` reads as "the
+        // host injected nothing" to a spread, and as an injection to `in`.
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() })).not.toHaveProperty("fetchImpl");
+    });
+
     it("prefixes ctx.log with the workflow name", () => {
         expect.assertions(1);
 
@@ -157,5 +235,29 @@ describe("createWorkflowRunContext", () => {
         ctx.log.info("hi", 1);
 
         expect(spy).toHaveBeenCalledWith("[workflow:orderPipeline]", "hi", 1);
+    });
+});
+
+describe("createWorkflowRunContext — undecodable params", () => {
+    it("fails the instance without retrying instead of raising a bare codec error", () => {
+        expect.assertions(3);
+
+        // The params are already durable, so every retry decodes the identical
+        // bytes to the identical failure. A bare `TypeError`/`RangeError` here
+        // is retryable to the platform, so it burned the whole retry budget
+        // re-deriving that same answer.
+        const event = { ...makeEvent(), payload: ["$lunora.wire$", "bigint", "not-a-number"] as unknown as { orderId: string } };
+
+        let thrown: unknown;
+
+        try {
+            createWorkflowRunContext({ env: {}, event, exportName: "orderPipeline", step: makeStep() });
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as Error).name).toBe("NonRetryableError");
+        expect((thrown as Error).message).toMatch(/orderPipeline/u);
     });
 });

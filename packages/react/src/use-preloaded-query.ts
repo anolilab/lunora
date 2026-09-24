@@ -1,8 +1,8 @@
 "use client";
 
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -21,10 +21,27 @@ import { useLunora } from "./lunora-provider";
  * value directly. Apps that want to share a pre-populated QueryClient across
  * many preloaded queries can pass their own `queryClient` to `LunoraProvider`
  * and hydrate it themselves via TanStack's `hydrate(qc, dehydratedState)`.
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (a
+ * session expiry, an RLS denial). Without it such an error is dropped and the
+ * hook keeps rendering the SSR snapshot as if it were live.
  */
-const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
+const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
     const client = useLunora();
     const queryClient = useQueryClient();
+
+    // The attach effect keys on the serialized query key, so an inline `onError`
+    // must not change its identity — register a stable wrapper and read the
+    // latest handler through a ref (the same shape `useQuery` uses).
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
+
+    const stableOnError = useCallback<SubscriptionErrorCallback>((error) => {
+        onErrorRef.current?.(error);
+    }, []);
 
     const { args, functionPath, shardKey, value } = preloaded;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
@@ -48,9 +65,9 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
     useEffect(() => {
         const registry = getSubscriptionRegistry(client);
 
-        return registry.attach(queryClient, queryKey, functionRef, args, shardKey);
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `client` is provider-stable (swapping it remounts the provider subtree).
-    }, [client, queryClient, serializeQueryKey(queryKey)]);
+        return registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError });
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is provider-stable (swapping it remounts the provider subtree).
+    }, [client, queryClient, serializeQueryKey(queryKey), stableOnError]);
 
     // TanStack types `data` as `T | undefined` even with `initialData` because
     // the option could be a falsy value. We always pass the preloaded `value`,
@@ -74,9 +91,9 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
  * It carries React's Rules-of-Hooks contract (it calls hooks internally), so
  * call it like a hook — at the top level of a component, unconditionally.
  */
-const hydratePreloaded = function <T>(preloaded: Preloaded<T>): T {
+const hydratePreloaded = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
     // react-doctor-disable-next-line react-doctor/rules-of-hooks -- `hydratePreloaded` is a deliberate hook alias (documented above): it carries React's Rules-of-Hooks contract and must be called like a hook. The lowercase name is the framework-neutral public primitive every adapter exposes; renaming it to `use*` would break the cross-adapter API.
-    return usePreloadedQuery(preloaded);
+    return usePreloadedQuery(preloaded, options);
 };
 
 export { hydratePreloaded };

@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "feedbackId": {
                                                 "description": "Id<\"feedback\">",
@@ -154,7 +153,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "feedbackId": {
                                                 "description": "Id<\"feedback\">",
@@ -218,7 +216,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "title": {
                                                 "type": "string"
@@ -297,7 +294,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"feedback\">",
@@ -361,7 +357,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "status": {
                                                 "anyOf": [
@@ -458,7 +453,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "voterEmail": {
                                                 "type": "string"
@@ -520,7 +514,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"feedback\">",
@@ -584,7 +577,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"feedback\">",
@@ -677,7 +669,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "feedbackId": {
                                                 "description": "Id<\"feedback\">",
@@ -745,7 +736,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "limit": {
                                                 "type": "number"
@@ -805,7 +795,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -861,7 +850,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"summaries\">",

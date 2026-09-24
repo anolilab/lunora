@@ -25,13 +25,26 @@
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
- *   2. Add the webhook HTTP route via `httpRouter()`:
+ *   2. Add the webhook HTTP route via `httpRouter()`. Answer with
+ *      `webhookResponse(result)` — NOT `Response.json(result)`: only the JSON
+ *      payload crosses the `runAction` boundary, so the status has to be
+ *      re-applied at the edge. Otherwise an orphaned (out-of-order) event's
+ *      deliberate 500 becomes a 200, the provider never retries it, and the
+ *      update is lost for good.
  *      ```ts
+ *      import { webhookResponse } from "@lunora/payment";
+ *
+ *      // Every header an adapter verifies with; add yours if it signs with another.
+ *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
+ *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
+ *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
  *          const body = await request.text();
- *          const signature = request.headers.get("stripe-signature") ?? "";
- *          const result = await ctx.runAction(processWebhook, { body, signature });
- *          return Response.json(result);
+ *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
+ *              const value = request.headers.get(name);
+ *              return value === null ? [] : [[name, value]];
+ *          }));
+ *          return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
  *      }));
  *      ```
  *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.
@@ -39,18 +52,49 @@
  *      `.dev.vars` (locally) and push the secrets to production with
  *      `wrangler secret put`.
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 
+import { LunoraError } from "@lunora/errors";
+import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
 import { SUBSCRIPTIONS_TABLE } from "./schema.js";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it is a `tsc` error in a fresh scaffold. The
+ * generated `CloudflareBindings` is the open index signature this needs; the
+ * value stays `unknown`, so `appOrigin` still has to narrow it.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * Public origin of this deployment, used to build the checkout return URLs and
  * the billing-portal return URL. Read from env rather than the request: a Lunora
  * context carries no `Request` (a mutation can be replayed, a query re-run from
  * a live subscription), so there is nothing to derive an origin from at handler
- * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. That is a RUNTIME split, not a typing one:
+ * `.dev.vars` is read locally and never deployed, so a var declared only there
+ * is absent from the deployed Worker; the `vars` entry is what carries it to
+ * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
+ * the type — `env` above is the `cloudflare:workers` export narrowed to the
+ * generated `CloudflareBindings`. Unnarrowed it is `Cloudflare.Env`, which only
+ * `wrangler types` populates, so that narrowing is what makes this read compile
+ * at all, and what it yields is `unknown` — hence the check below.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
  */
 const appOrigin = (): string => {
     const value = env["APP_BASE_URL"];
@@ -74,7 +118,9 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: checkout requires an authenticated user — pass `resolveIdentity` to `createWorker`");
     }
 
     const result = await ctx.payments.createCheckout({
@@ -97,7 +143,7 @@ export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean 
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: track requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: track requires an authenticated user");
     }
 
     const result = await ctx.payments.track({ featureId: "api_calls", referenceId });
@@ -113,7 +159,7 @@ export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; 
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: check requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: check requires an authenticated user");
     }
 
     const result = await ctx.payments.check({ featureId: "api_calls", referenceId });
@@ -130,16 +176,63 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: portal requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: portal requires an authenticated user");
     }
 
     return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
 });
 
+/*
+ * Column readers for the raw `subscriptions` row. `ctx.db` hands back
+ * `Record<string, unknown>`, and a bare `row["x"] as string` types a MISSING
+ * column as `string` while handing the client `undefined` — so a row written
+ * before a column existed reaches a screen as a non-string claiming to be one.
+ * These narrow instead of asserting, and an absent optional column reads back as
+ * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
+ */
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? (row[column] as string) : "");
+
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined =>
+    typeof row[column] === "number" ? (row[column] as number) : undefined;
+
+const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
+    const value = row[column];
+
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+};
+
+/**
+ * What a billing screen reads. A hand-rolled projection rather than
+ * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
+ * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
+ * here has to be kept in step with `packages/payment/src/schema.ts` by hand.
+ */
 interface SubscriptionRow {
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    /** Start of the billing period metered usage is summed over. Without it a client falls back to `createdAt` and shows LIFETIME usage against a per-period limit. */
+    currentPeriodStart?: number;
+    /** The PRIMARY price id — `priceIds[0]`. For display; match plans against `priceIds`. */
+    priceId: string;
+
+    /**
+     * EVERY price id the subscription bills. This — not `priceId` — is what a plan
+     * lookup tests membership in, mirroring `hasActivePrice`: a Stripe subscription
+     * is a list of items, so a base plan alongside an add-on or a metered price has
+     * a `priceId` naming only one of them.
+     *
+     * Absent on rows written by the webhook path (which carries one price id);
+     * read it as `priceIds ?? [priceId]`.
+     */
+    priceIds?: string[];
+    /** Which provider's row this is. Load-bearing while two providers coexist during a migration. */
+    provider: string;
     providerSubscriptionId: string;
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
+    quantity: number;
     referenceId: string;
-    state: string;
+    state: SubscriptionState;
 }
 
 /**
@@ -159,7 +252,7 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
     const referenceId = ctx.auth.userId;
 
     if (!referenceId) {
-        throw new Error("@lunora/payment: mySubscriptions requires an authenticated user");
+        throw new LunoraError("UNAUTHORIZED", "@lunora/payment: mySubscriptions requires an authenticated user");
     }
 
     const rows = await ctx.db
@@ -168,9 +261,16 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .collect();
 
     return rows.map((row) => ({
-        providerSubscriptionId: row["providerSubscriptionId"] as string,
-        referenceId: row["referenceId"] as string,
-        state: row["state"] as string,
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
     }));
 });
 
@@ -179,21 +279,27 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
  * action (which runs at the Worker edge with no `ctx.db`) so the work happens
  * inside the shard, where `ctx.payments` — and its store — exist.
  *
- * The HTTP route must extract the raw body and the provider-specific signature
- * header from the incoming request and forward them here via `ctx.runAction`.
+ * The HTTP route must forward the raw body and every header an adapter can verify
+ * with here via `ctx.runAction` — not one named signature header, because which
+ * one carries the signature is the provider's choice and these functions are
+ * provider-agnostic: Stripe signs with `stripe-signature`, Creem with
+ * `creem-signature`, Polar and Dodo Payments with the Standard-Webhooks trio
+ * (`webhook-id` / `webhook-timestamp` / `webhook-signature`), Autumn with `svix-*`.
+ * Forwarding only `stripe-signature` verified Stripe and failed everything else.
  *
- * Stripe example headers: `stripe-signature`
- * Polar example headers: `polar-signature`
+ * An allowlist of those, not the whole `request.headers`: nothing downstream needs
+ * a hostile POST's `cookie` / `authorization`, and the entity headers
+ * (`content-encoding`, `content-length`) would describe a body that the `text()`
+ * below has already decoded.
  */
 export const processWebhook = internalAction
-    .input({ body: v.string(), signature: v.string() })
-    .action(async ({ args: { body, signature }, ctx }): Promise<{ applied: boolean; status: number }> => {
-        // `handleWebhook` reads the provider-specific signature header from the
-        // reconstructed request — the caller passes the header value as `signature`
-        // and the HTTP route's provider header name is baked into the adapter config.
+    .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
+    .action(async ({ args: { body, headers }, ctx }): Promise<{ applied: boolean; status: number }> => {
+        // `handleWebhook` reads whichever header the configured adapter verifies with,
+        // off the reconstructed request.
         const request = new Request("https://internal/payment/webhook", {
             body,
-            headers: { "stripe-signature": signature },
+            headers,
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);

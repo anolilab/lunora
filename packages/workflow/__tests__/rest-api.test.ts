@@ -84,8 +84,8 @@ describe("createWorkflowsRestClient", () => {
         expect(detail.output).toStrictEqual({ ok: true });
     });
 
-    it("pATCHes instance status for a lifecycle action", async () => {
-        expect.assertions(3);
+    it("pATCHes the instance's /status sub-resource for a lifecycle action", async () => {
+        expect.assertions(4);
 
         const { calls, fetch } = fakeFetch(200, { result: { status: "paused" }, success: true });
         const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
@@ -93,6 +93,8 @@ describe("createWorkflowsRestClient", () => {
         const result = await client.setInstanceStatus({ action: "pause", instanceId: "a", workflowName: "wf" });
 
         expect(result).toStrictEqual({ status: "paused" });
+        // The lifecycle action hangs off `/status`; the bare instance path has no PATCH handler.
+        expect(calls[0]?.url).toBe("https://api.cloudflare.com/client/v4/accounts/acc/workflows/wf/instances/a/status");
         expect(calls[0]?.init?.method).toBe("PATCH");
         expect(calls[0]?.init?.body).toBe(JSON.stringify({ status: "pause" }));
     });
@@ -157,6 +159,27 @@ describe("createWorkflowsRestClient", () => {
         const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
 
         await expect(client.listInstances({ workflowName: "wf" })).rejects.toThrow(WorkflowsRestError);
+    });
+
+    it("caps the upstream body in the message and keeps the whole of it on cause", async () => {
+        expect.assertions(4);
+
+        // `WORKFLOWS_REST_ERROR` is a catalogued (non-internal) code, so
+        // `toErrorBody` echoes this message VERBATIM to whoever called the
+        // action — an uncapped body puts a multi-KB gateway page, or the
+        // Cloudflare API's auth error text, on the wire to a browser.
+        const body = `<html>${"A".repeat(10_000)}</html>`;
+        const { fetch } = fakeFetch(502, body);
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        const error = (await client.listInstances({ workflowName: "wf" }).catch((error_: unknown) => error_)) as WorkflowsRestError;
+
+        expect(error).toBeInstanceOf(WorkflowsRestError);
+        expect(error.status).toBe(502);
+        expect(error.message.length).toBeLessThan(400);
+        // The full text is still available server-side, on `cause` — which
+        // `toErrorBody` never serialises.
+        expect(error.cause).toBe(body);
     });
 
     it("calls the global fetch bound to globalThis (no `this`-strict 'Illegal invocation')", async () => {

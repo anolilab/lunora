@@ -15,8 +15,8 @@
         "typecheck": "lunora codegen && react-router typegen && tsc"
     },
     "dependencies": {
-        "@lunora/react": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
+        "@lunora/react": "^0.0.0",
         "lunorash": "^0.0.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",

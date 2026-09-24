@@ -180,6 +180,13 @@ interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
  *
  * Each operation is a read-then-write; inside a mutation/action that pair runs
  * under the DO's input gate, so it is atomic against concurrent calls.
+ *
+ * **Consumption commits with the procedure.** A mutation's `ctx.db` writes ride
+ * its storage transaction, so a handler that throws after `limit()` rolls the
+ * consumed unit back with everything else — inside a mutation this store counts
+ * successful calls, not attempts. To charge every attempt (a login limiter),
+ * consume from an action, where each write commits on its own, or return a
+ * failure value from the mutation instead of throwing.
  */
 const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;

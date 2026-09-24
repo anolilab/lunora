@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { subscribeToPush } from "../src/web";
+import { isPushSupported, subscribeToPush } from "../src/web";
 
 /**
  * Encode bytes as base64url — the inverse of `web.ts`'s `urlBase64ToUint8Array`,
@@ -26,6 +26,7 @@ const OLD_KEY_BYTES = new Uint8Array([4, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90,
 const VAPID_PUBLIC_KEY = toBase64Url(CURRENT_KEY_BYTES);
 
 interface FakeSubscription {
+    endpoint: string;
     options: { applicationServerKey: ArrayBuffer | null };
     toJSON: () => unknown;
     unsubscribe: () => Promise<boolean>;
@@ -35,6 +36,7 @@ const fakeSubscription = (applicationServerKey: ArrayBuffer | null, label: strin
     let unsubscribed = false;
 
     return {
+        endpoint: `https://push.example/${label}`,
         options: { applicationServerKey },
         toJSON: () => {
             return { endpoint: `https://push.example/${label}`, expirationTime: null, keys: { auth: "a", p256dh: "p" } };
@@ -84,7 +86,7 @@ describe("subscribeToPush — VAPID key rotation", () => {
 
         expect(subscribeCalls).toHaveLength(0);
         expect(existing.unsubscribed()).toBe(false);
-        expect(result).toMatchObject({ endpoint: "https://push.example/existing" });
+        expect(result.subscription).toMatchObject({ endpoint: "https://push.example/existing" });
     });
 
     it("unsubscribes and re-subscribes when the existing key does not match (post-rotation)", async () => {
@@ -97,7 +99,7 @@ describe("subscribeToPush — VAPID key rotation", () => {
 
         expect(existing.unsubscribed()).toBe(true);
         expect(subscribeCalls).toHaveLength(1);
-        expect(result).toMatchObject({ endpoint: "https://push.example/fresh" });
+        expect(result.subscription).toMatchObject({ endpoint: "https://push.example/fresh" });
     });
 
     it("subscribes fresh when there is no existing subscription", async () => {
@@ -108,7 +110,41 @@ describe("subscribeToPush — VAPID key rotation", () => {
         const result = await subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY });
 
         expect(subscribeCalls).toHaveLength(1);
-        expect(result).toMatchObject({ endpoint: "https://push.example/fresh" });
+        expect(result.subscription).toMatchObject({ endpoint: "https://push.example/fresh" });
+        expect(result.replacedEndpoint).toBeUndefined();
+    });
+
+    it("reports the replaced endpoint so the orphaned server row can be unregistered", async () => {
+        expect.hasAssertions();
+
+        // The rotation drops the old browser subscription but mints a NEW
+        // endpoint, hence a new `webPushId`, so the old row is never upserted
+        // over. `403 VapidPkHashMismatch` is correctly not a "gone" signal, so
+        // it is never pruned either — every later broadcast pays a POST and a
+        // write for that orphan forever. Handing the old endpoint back is what
+        // lets the caller unregister it (`ctx.push.unregister(webPushId(e))`).
+        const existing = fakeSubscription(new Uint8Array(OLD_KEY_BYTES).buffer, "existing");
+
+        installBrowser(existing);
+
+        const result = await subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY });
+
+        expect(result.replacedEndpoint).toBe("https://push.example/existing");
+        expect(result.subscription).toMatchObject({ endpoint: "https://push.example/fresh" });
+    });
+
+    it("reports Web Push as unsupported when `Notification` is missing", async () => {
+        expect.hasAssertions();
+
+        // Support detection covered service workers + PushManager but not
+        // `Notification`, which `subscribeToPush` then calls unguarded — so a
+        // browser without it got a bare `ReferenceError` instead of the
+        // documented "not supported" error.
+        installBrowser(null);
+        vi.stubGlobal("Notification", undefined);
+
+        expect(isPushSupported()).toBe(false);
+        await expect(subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY })).rejects.toThrow(/not supported in this browser/u);
     });
 });
 
@@ -161,7 +197,7 @@ describe("subscribeToPush — base64url key decoding (padding lengths + substitu
         // Reused: the round-trip decode matched, so no new subscription was minted.
         expect(subscribeCalls).toHaveLength(0);
         expect(existing.unsubscribed()).toBe(false);
-        expect(result).toMatchObject({ endpoint: "https://push.example/existing" });
+        expect(result.subscription).toMatchObject({ endpoint: "https://push.example/existing" });
     };
 
     // base64url strips `=` padding, so the stripped length is only ever

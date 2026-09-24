@@ -18,6 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../../shared/cap-error-body";
 import SelectBuilder from "./builder";
 import type { QueryExecutor } from "./query";
 import type { Sql } from "./sql";
@@ -65,12 +66,15 @@ const inferColumns = (rows: Record<string, unknown>[]): R2SqlColumn[] => {
 
 /**
  * Thrown when R2 SQL responds with a non-2xx status, an `success: false`
- * envelope, or an unparseable body; carries the HTTP `status` and the raw body
- * for the caller to surface.
+ * envelope, or an unparseable body; carries the HTTP `status` and a capped body
+ * preview for the caller to surface, with the full body on `cause`.
+ *
+ * The preview is capped because the engine's SQL error text quotes the query
+ * back, and `R2_SQL_ERROR` is non-internal — the message reaches the browser.
  */
 export class R2SqlError extends LunoraError {
     public constructor(status: number, body: string) {
-        super("R2_SQL_ERROR", `R2 SQL query failed (${String(status)}): ${body}`, { name: "R2SqlError", status });
+        super("R2_SQL_ERROR", `R2 SQL query failed (${String(status)}): ${capErrorBody(body)}`, { cause: body, name: "R2SqlError", status });
     }
 }
 

@@ -354,14 +354,45 @@ const tokenChunker = (options: TokenChunkerOptions): ((text: string) => Readonly
 
     /**
      * A sentence over budget on its own is split by characters, scaled by its
-     * token overshoot. Approximate, but it applies only to the pathological
-     * atom, and every piece is strictly smaller than the original.
+     * token overshoot — then any piece that STILL counts over `maxTokens` is
+     * split again.
+     *
+     * The scaled window is only a guess: it assumes the atom's tokens are spread
+     * evenly across its characters, and a run whose density is uneven (a long
+     * URL or identifier followed by ordinary words, code, a table, CJK) breaks
+     * that assumption badly enough to emit pieces several times over budget.
+     * Emitting one is precisely the silent truncation at the embedding model
+     * this chunker exists to prevent, so the guess is refined until every piece
+     * measures within budget. The window shrinks by at least one character per
+     * pass, so this terminates; a single character that still counts over budget
+     * cannot be split further and is emitted as-is.
      */
     const splitOversized = (atom: string): ReadonlyArray<string> => {
-        const tokens = countTokens(atom);
-        const pieceSize = Math.max(1, Math.floor((atom.length * maxTokens) / Math.max(1, tokens)));
+        const pieces: string[] = [];
+        // Depth-first over a stack, pushing sub-pieces in reverse, so the output
+        // keeps the atom's own character order.
+        const pending: string[] = [atom];
 
-        return fixedWindowChunks(atom, pieceSize, 0);
+        while (pending.length > 0) {
+            const piece = pending.pop() as string;
+            const tokens = countTokens(piece);
+
+            if (tokens <= maxTokens || piece.length <= 1) {
+                pieces.push(piece);
+
+                continue;
+            }
+
+            const scaled = Math.floor((piece.length * maxTokens) / Math.max(1, tokens));
+            const pieceSize = Math.min(piece.length - 1, Math.max(1, scaled));
+            const split = fixedWindowChunks(piece, pieceSize, 0);
+
+            for (let index = split.length - 1; index >= 0; index -= 1) {
+                pending.push(split[index] as string);
+            }
+        }
+
+        return pieces;
     };
 
     return (text: string): ReadonlyArray<string> => {

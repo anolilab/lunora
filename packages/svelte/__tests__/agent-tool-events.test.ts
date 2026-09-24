@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AgentLiveEvent } from "../src/agent-chat";
 import type { AgentToolEventsApi } from "../src/agent-tool-events";
@@ -26,6 +26,21 @@ const buildApi = (): AgentToolEventsApi =>
             agentMessages: makeRef(MESSAGES_REF),
         },
     }) as unknown as AgentToolEventsApi;
+
+// Every subscribing primitive in this package gates on a browser `window` (the
+// SSR guard — svelte's server runtime subscribes to `{$store}` during
+// `render()`, so a `readable`'s start callback runs on the server too). The
+// vitest env is `node`, so define one for the client-path tests. Mirrors the
+// same stub in `flag.test.ts` / `presence.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe(agentToolEvents, () => {
     it("derives the durable tool lifecycle (call, result, awaiting-approval) from agentMessages", () => {

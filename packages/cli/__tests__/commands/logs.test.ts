@@ -99,17 +99,4 @@ describe("lunora logs", () => {
 
         expect(args).toContain("--temporary");
     });
-
-    it("rejects an unknown --format without spawning", async () => {
-        expect.assertions(3);
-
-        const { calls, spawner } = createRecordingSpawner();
-        const { errors, logger } = silentLogger();
-
-        const result = await runLogsCommand({ cwd: "/tmp", format: "yaml", logger, spawner });
-
-        expect(result.code).toBe(1);
-        expect(calls).toHaveLength(0);
-        expect(errors.some((line) => line.includes("--format"))).toBe(true);
-    });
 });

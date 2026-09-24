@@ -74,6 +74,24 @@ const nestedInterfaces = (levels: number, leaf = "string"): string => {
     return `${declarations.join("\n")}\ndeclare const subject: L0;`;
 };
 
+/**
+ * A sibling module whose exported factory returns a NON-exported alias the
+ * checker inlines — `@lunora/values`'s `ObjectShapeType`/`OptionalizeShape` pair,
+ * reduced to the two lines that matter.
+ *
+ * Two properties make it the #810 reproduction rather than a paraphrase: the
+ * aliases are unexported (so `isExportedFromItsModule` is false), and the
+ * checker prints their STRUCTURE — an intersection of an optional half and a
+ * required half — never their names.
+ */
+const INLINED_SHAPE_MODULE: Record<string, string> = {
+    "/app/shape.ts": [
+        "type OptionalizeShape<M> = { [K in keyof M as undefined extends M[K] ? K : never]?: M[K] } & { [K in keyof M as undefined extends M[K] ? never : K]: M[K] };",
+        "type ObjectShapeType<S> = OptionalizeShape<{ [K in keyof S]: S[K] }>;",
+        "export declare function make(): ObjectShapeType<{ title: string; body: string | undefined }> | null;",
+    ].join("\n"),
+};
+
 /** The same chain, exported from a sibling module the handler does NOT import (so it prints as its own `import(…)` qualifier). */
 const nestedModule = (levels: number, leaf: string): Record<string, string> => {
     const declarations = Array.from({ length: levels }, (_unused, index) => {
@@ -177,6 +195,66 @@ describe("expandUnreachableType", () => {
         );
     });
 
+    it("expands a non-exported type from another module, which has no `import(…)` qualifier", () => {
+        expect.assertions(2);
+
+        const hidden = { "/app/types.ts": `interface Hidden { id: string }\nexport declare function make(): Hidden;` };
+        const shown = { "/app/types.ts": `export interface Shown { id: string }\nexport declare function make(): Shown;` };
+
+        expect(expand(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, hidden)).toBe("{ id: string }");
+        // The exported control keeps the checker's own qualifier rather than
+        // expanding — the fix is narrow to declarations a module keeps to itself.
+        expect(expand(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, shown)).toBe('import("./types").Shown');
+    });
+
+    it("keeps a non-exported alias the checker INLINED verbatim, rather than expanding it", () => {
+        expect.assertions(1);
+
+        // The other half of the rule above, and the half that got lost (#810).
+        // "Not exported from its own module" does not imply "printed bare": an
+        // alias the checker has already inlined prints as its STRUCTURE, which is
+        // self-contained and needs no renaming at all.
+        //
+        // This is the shape `v.object(...)` infers — a mapped type split into an
+        // optional half and a required half — so answering `expand` here erased
+        // the return type of every `Infer<v.object(…)>` procedure to `unknown`.
+        expect(expand(`import { make } from "./shape";\ndeclare const subject: ReturnType<typeof make>;`, INLINED_SHAPE_MODULE)).toBe(
+            "({ body?: string | undefined; } & { title: string; }) | null",
+        );
+    });
+
+    it("still expands a non-exported name carrying a `$`, which is both an identifier character and a regex anchor", () => {
+        expect.assertions(1);
+
+        // The bare-name test builds a pattern from the name. `$` is legal in an
+        // identifier (and TypeScript itself mints `Foo$1` when two declarations
+        // collide), so an unescaped one would anchor at end-of-input, match
+        // nothing, and wave the bare name through as "already inlined" — a
+        // TS2304 in `_generated/`, which is precisely what #781 closed.
+        expect(
+            expand(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, {
+                "/app/types.ts": `interface Page$1 { id: string }\nexport declare function make(): Page$1;`,
+            }),
+        ).toBe("{ id: string }");
+    });
+
+    it("expands an INTERSECTION rather than declining it", () => {
+        expect.assertions(2);
+
+        // `expandObjectType`'s `isObject()` guard is false for an intersection, so
+        // before this branch existed an intersection reaching expansion returned
+        // `undefined` and the caller fell back to `unknown` — the failure mode
+        // behind #810, independent of which classification sent it here.
+        expect(expand(`interface A { a: string }\ninterface B { b: number }\ntype Both = A & B;\ndeclare const subject: Both;`)).toBe(
+            "{ a: string } & { b: number }",
+        );
+        // `[]` binds tighter than `&`, so an unparenthesised element would read
+        // as `{ a: string } & ({ b: number }[])` — a different type that compiles.
+        expect(expand(`interface A { a: string }\ninterface B { b: number }\ntype Both = A & B;\ndeclare const subject: Both[];`)).toBe(
+            "({ a: string } & { b: number })[]",
+        );
+    });
+
     it("expands an anonymous object that embeds an unreachable local interface", () => {
         expect.assertions(1);
 
@@ -215,6 +293,43 @@ describe("referencesUnreachableLocalType", () => {
         // Not imported at the handler, so the printed text is self-contained and
         // resolves from `_generated/` unchanged.
         expect(unreachable(`declare const subject: import("./types").Post;`, { "/app/types.ts": `export interface Post { id: string }` })).toBe(false);
+    });
+
+    it("is true for a type another module does NOT export — there is no `import(…)` qualifier for the checker to print", () => {
+        expect.assertions(1);
+
+        // The `import("…").X` form is spelled as an export access, so a module
+        // that keeps a declaration to itself has no such spelling and the checker
+        // falls back to the bare name. Treating "not imported here" as "already
+        // self-contained" put that bare name into `api.ts` AND `functions.ts` as a
+        // TS2304 while `lunora codegen` exited 0.
+        expect(
+            unreachable(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, {
+                "/app/types.ts": `interface Hidden { id: string }\nexport declare function make(): Hidden;`,
+            }),
+        ).toBe(true);
+    });
+
+    it("is false for a non-exported alias the checker INLINED — there is no name in the text to rename", () => {
+        expect.assertions(1);
+
+        // The paired half of the case above, and the one that was over-caught
+        // (#810): "not exported from its own module" was read as "printed bare",
+        // but the checker prints an already-inlined alias as its structure. The
+        // text is then self-contained, and answering `true` sent it to an
+        // expander that cannot reproduce an intersection — so the whole return
+        // type became `unknown`, silently, with codegen exiting 0.
+        expect(unreachable(`import { make } from "./shape";\ndeclare const subject: ReturnType<typeof make>;`, INLINED_SHAPE_MODULE)).toBe(false);
+    });
+
+    it("is false for a member of an ambient `declare module` block, which is exported without the keyword", () => {
+        expect.assertions(1);
+
+        expect(
+            unreachable(`declare const subject: import("virtual:thing").Thing;`, {
+                "/app/ambient.d.ts": `declare module "virtual:thing" { interface Thing { id: string } }`,
+            }),
+        ).toBe(false);
     });
 
     it("is true for a type the handler IMPORTS — the checker prints it bare, which does not resolve", () => {

@@ -32,6 +32,15 @@ const createInMemoryPersistence = (): PersistenceAdapter => {
 
             return Promise.resolve();
         },
+        // `Map.set` on an existing key keeps its insertion position, so the
+        // record stays where it was in FIFO order.
+        replace: (mutation) => {
+            if (entries.has(mutation.id)) {
+                entries.set(mutation.id, clone(mutation));
+            }
+
+            return Promise.resolve();
+        },
     };
 };
 
@@ -100,6 +109,18 @@ const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): 
 
                 if (key !== undefined) {
                     await promisifyRequest(store.delete(key));
+                }
+            });
+        },
+        // Lookup + `put` under ONE `readwrite` transaction, so the swap either
+        // lands whole or not at all and the autoincrement key — which is what
+        // orders `load()` — is reused rather than re-minted at the tail.
+        replace: async (mutation) => {
+            await withStore("readwrite", async (store) => {
+                const key = await promisifyRequest(store.index(ID_INDEX).getKey(mutation.id));
+
+                if (key !== undefined) {
+                    await promisifyRequest(store.put(mutation, key));
                 }
             });
         },

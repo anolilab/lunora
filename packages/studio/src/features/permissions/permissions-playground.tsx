@@ -224,7 +224,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                         data-testid="pp-user"
                         id="pp-user"
                         onChange={onUserIdChange}
-                        placeholder={t("Leave empty to run as admin")}
+                        placeholder={t("Required — the identity to probe as")}
                         value={runAsUserId}
                     />
                 </div>
@@ -252,6 +252,27 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                     <Badge variant="secondary">{t("Allowed")}</Badge>
                     <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
                         {formatValue(outcome.value)}
+                    </pre>
+                </div>
+            )}
+
+            {outcome !== null && outcome.kind === "invalid" && (
+                <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
+                    <Badge variant="outline">{t("Not run")}</Badge>
+                    <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
+                        {outcome.message}
+                    </p>
+                </div>
+            )}
+
+            {outcome !== null && outcome.kind === "errored" && (
+                <div className="flex flex-col gap-2" data-testid="pp-outcome-errored">
+                    <Badge variant="outline">{t("Errored")}</Badge>
+                    <p className="text-sm text-muted-foreground">
+                        {t("The call failed for a reason that is not an access verdict, so it says nothing about the policy.")}
+                    </p>
+                    <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-errored" role="alert">
+                        {outcome.message}
                     </pre>
                 </div>
             )}

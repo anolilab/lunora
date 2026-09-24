@@ -46,6 +46,7 @@ import type {
     VectorizeUpsertMutation,
     VectorizeVector,
     VectorMetric,
+    VectorValues,
 } from "@lunora/platform";
 
 import { isBareIdentifier } from "../../../shared/bare-identifier";
@@ -145,7 +146,21 @@ interface PgVectorIndexOptions {
 }
 
 /** Render a vector as the `[1,2,3]` text literal pgvector parses on the `::vector` cast. */
-const vectorLiteral = (values: ReadonlyArray<number>): string => `[${values.join(",")}]`;
+const vectorLiteral = (values: VectorValues): string => `[${[...values].join(",")}]`;
+
+/**
+ * Whether `value`'s own enumerable entries ARE its contents — the only shape
+ * `JSON.stringify` preserves field-for-field, and the only one the containment
+ * filter's walk can inspect.
+ */
+const isPlainObject = (value: object): boolean => {
+    const prototype: unknown = Object.getPrototypeOf(value);
+
+    return prototype === null || prototype === Object.prototype;
+};
+
+/** Best-effort class name for an error message. */
+const constructorName = (value: object): string => (value.constructor as { name?: string } | undefined)?.name ?? "non-plain object";
 
 /**
  * Reject a metadata filter this store cannot honour.
@@ -160,6 +175,13 @@ const vectorLiteral = (values: ReadonlyArray<number>): string => `[${values.join
  * The walk is recursive and descends into arrays because both are reachable:
  * `{ author: { profile: { $gt: 3 } } }` hides the operator one level down, and
  * `{ tags: [{ $in: [...] }] }` hides it inside an array.
+ *
+ * Every object it meets — the filter itself included — must be plain
+ * ({@link isPlainObject}). A `Map`, `Set` or class instance has no own
+ * enumerable entries, so walking it inspects nothing and the value stringifies
+ * to `{}`, which JSONB containment matches for every row that has metadata at
+ * all. That is a fail-OPEN filter across tenants, which is why the shape is
+ * rejected outright rather than walked.
  */
 const assertContainmentFilter = (filter: Record<string, unknown>, name: string): void => {
     const reject = (reason: string, key: string): never => {
@@ -210,6 +232,18 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
             return;
         }
 
+        // A `Map`, a `Set`, a `Date`, a class instance — anything whose own
+        // enumerable entries are not its contents — serialises to something
+        // other than its fields, and `Object.entries` is `[]` for it, so the
+        // walk below inspects nothing and rejects nothing. `{"tenant": new Map()}`
+        // stringifies to `{"tenant":{}}`, which JSONB containment matches for
+        // EVERY row that has metadata: the filter fails open, across tenants.
+        // Reject by prototype rather than by walking own entries, since walking
+        // is exactly what cannot see this.
+        if (!isPlainObject(value)) {
+            reject(`is a ${constructorName(value)}, whose fields JSON does not preserve`, path);
+        }
+
         for (const [key, nested] of Object.entries(value)) {
             if (key.startsWith("$")) {
                 reject("uses a comparison operator", path);
@@ -218,6 +252,14 @@ const assertContainmentFilter = (filter: Record<string, unknown>, name: string):
             walk(nested, `${path}.${key}`);
         }
     };
+
+    // The top level is subject to the same prototype rule as every nested one —
+    // and it is the more dangerous of the two, because `Object.keys(someMap)` is
+    // empty, so the caller's `Object.keys(filter).length > 0` gate skipped both
+    // this guard and the containment clause and issued an UNFILTERED query.
+    if (!isPlainObject(filter)) {
+        reject(`is a ${constructorName(filter)}, whose fields JSON does not preserve`, "filter");
+    }
 
     for (const [key, value] of Object.entries(filter)) {
         // Vectorize's own operators are legal at the top level too.
@@ -456,7 +498,11 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 throw new TypeError(`@lunora/hyperdrive: pgvector index "${name}" needs a positive integer \`topK\` — got ${String(topK)}`);
             }
 
-            if (queryOptions?.filter !== undefined && Object.keys(queryOptions.filter).length > 0) {
+            // Guarded on presence, NOT on `Object.keys(...).length`: a `Map` (or
+            // any other non-plain object) has no own enumerable keys, so keying
+            // the guard off the count let exactly the value the guard exists to
+            // reject walk straight past it.
+            if (queryOptions?.filter !== undefined) {
                 assertContainmentFilter(queryOptions.filter, name);
             }
 
@@ -466,7 +512,10 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             await ensure();
 
             const wantValues = queryOptions?.returnValues === true;
-            const wantMetadata = (queryOptions?.returnMetadata ?? "none") !== "none";
+            // `returnMetadata` also carries Cloudflare's legacy boolean arm, so "not
+            // \"none\"" is not on its own the answer: `false` means no metadata.
+            const requested = queryOptions?.returnMetadata ?? "none";
+            const wantMetadata = requested !== "none" && requested !== false;
 
             const parameters: unknown[] = [];
             // `push` returns the new length, which IS the 1-based bind index — so

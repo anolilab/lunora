@@ -31,6 +31,7 @@ const EXPECTED_EXPORTS = [
     "emailOTP",
     "genericOAuth",
     "haveIBeenPwned",
+    "inviteOnly",
     "jwt",
     "lastLoginMethod",
     "magicLink",

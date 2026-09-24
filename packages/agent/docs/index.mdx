@@ -194,8 +194,15 @@ a thread that already has a _different_ instance in flight:
 
 - **`"reject"`** (default): fail the new run fast with a `CONFLICT` error.
 - **`"replace"`**: terminate the in-flight instance and take the thread over.
-- **`"queue"`**: reserved for a future durable queue; currently degrades to
-  `"reject"` (no queue exists yet).
+- **`"queue"`**: park the new run behind the one in flight (FIFO, **up to five
+  deep**) and hibernate it until the thread is handed over. Each parked run is a
+  live Workflow instance waiting on an event, so the depth cap is a real
+  resource bound — a sixth start is rejected exactly as `"reject"` would be, and
+  a parked run waits at most **12 hours** for its turn. A `"replace"` arriving
+  later supersedes the run in _flight_, not the queue. A dispatch with no
+  instance id (the inbound-email / inbound-channel paths) cannot be parked —
+  nothing later could tell it apart from another such dispatch to wake it — so
+  `"queue"` rejects those.
 
 A workflow _replay_ re-enters under the same instance id and is never treated as
 a concurrent run.
@@ -226,6 +233,16 @@ helpers dispatch it). On approve the tool runs exactly as normal; on reject it
 is skipped and a tool result explaining the rejection is persisted so the next
 turn recovers. Because `needsApproval` runs on replay, keep it deterministic
 (no `Date.now()`/`Math.random()`).
+
+**An unanswered approval is not pending forever.** The wait carries a timeout —
+`approvalTimeout` on the agent config, default `"3 days"`, **clamped to one
+week** — and when it elapses the call is recorded as **rejected** ("approval
+timed out") and the run continues down the normal rejection path. It has to: a
+wait that outlived the thread's abandoned-run horizon would let a new run
+reclaim the thread while the approval was still pending, so the approval could
+never be answered at all. Size `approvalTimeout` to your on-call reality, and do
+not assume an approval raised before a long weekend is still waiting on
+Monday.
 
 ## Client hooks
 
@@ -345,8 +362,12 @@ Each returns an `AgentToolDefinition` you drop into the `tools` map:
   Workflow binding, polls to completion, and returns the child's final answer.
   Child `threadKey` + instance id derive from the parent's (replay-stable), so a
   retried step reuses the same child run (idempotent). Options: `name` (child
-  export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 120),
-  `pollIntervalMs` (default 500).
+  export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 600),
+  `pollIntervalMs` (default 500) — together a **five-minute** wall-clock budget,
+  past which the child is terminated and the parent is told it did not finish.
+  The child thread inherits the parent run's `owner`, so it stays under the same
+  RLS scope. A child that runs out of turns reports its turn cap rather than
+  returning an empty answer.
 - **`mcpTools`**: adapt the tools an MCP server lists. Pass a pre-connected
   `client` (the SSE/HTTP transport cannot run in workerd), optionally filtered
   with `only` and namespaced with `prefix`.
@@ -355,7 +376,7 @@ Each returns an `AgentToolDefinition` you drop into the `tools` map:
 import { agentAsTool, functionTool, mcpTools } from "@lunora/agent";
 
 tools: {
-    lookupOrder: functionTool({ description: "Look up an order by id.", functionPath: "orders:byId", inputSchema }),
+    lookupOrder: functionTool("orders:byId", { description: "Look up an order by id.", inputSchema }),
     research: agentAsTool({ description: "Delegate deep research.", name: "researcher" }),
     ...mcpTools({ client: docsClient, prefix: "docs_" }),
 }
@@ -374,8 +395,10 @@ import { browserTool, containerTool, defineAgent, fsTool } from "@lunora/agent";
 export const operator = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     tools: {
-        // One tool, every browser op — the model picks via `op`.
-        browser: browserTool(),
+        // One tool, every browser op — the model picks via `op`. `bucket` is
+        // required for `screenshot`/`pdf`: the render goes to R2 and the model
+        // gets its key back (see below).
+        browser: browserTool({ bucket: "SANDBOX_BUCKET", root: "renders" }),
         // Talks to `ctx.containers.sandbox` (a `lunora/containers.ts` export).
         sandbox: containerTool("sandbox"),
         // A persistent R2-backed filesystem scoped to `agents/operator`.
@@ -386,7 +409,15 @@ export const operator = defineAgent({
 
 - **`browserTool(opts?)`** exposes Cloudflare Browser Rendering as one tool. The
   model sets `op` to `screenshot` \| `pdf` \| `content` \| `scrape` plus a `url`;
-  `screenshot`/`pdf` return base64 bytes, `content`/`scrape` return HTML. The
+  `content`/`scrape` return HTML. `screenshot`/`pdf` write the render to
+  `opts.bucket` and return `{ bytes, key, mediaType }` — **not** the bytes: a
+  tool result is capped at 4000 characters before it is persisted, and base64 of
+  even a small PNG is several times that, so inline bytes arrived truncated
+  mid-string after the render had already been billed. Each render lands at
+  `<root>/<threadKey>/<toolCallId>.<ext>`, derived only from replay-stable
+  identifiers, so a retried step overwrites its own object instead of leaking one
+  per attempt. Without a `bucket` those two ops are refused as a tool result and
+  never dispatched, so nothing is billed. The
   model picks the `url` with no allowlist, so this is an **SSRF surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
   **unattended by default**; pass `opts.needsApproval` (a boolean or a predicate)
@@ -404,8 +435,39 @@ export const operator = defineAgent({
   unattended, so scope the container's read routes accordingly. Pass
   `opts.needsApproval` (a boolean or a predicate over the input) to widen or
   disable the gate. An `exec` that fails to run at all is returned to the model
-  as text rather than thrown, so an approved command is never re-executed by a
-  step retry.
+  as text rather than thrown, so a command whose _result_ was lost is not
+  re-executed by its own throw. That is not exactly-once: the tool call reaches
+  the container as a dispatch, and a dispatch whose reply is lost after the
+  command ran fails the tool's durable step, whose retry execs again. The
+  sandbox action takes no `idempotencyKey` — there is nothing on an action ctx
+  to dedupe one against, and the approval decision is memoized in its own step,
+  so the gate does not re-ask either. Make a command that cannot afford to run
+  twice idempotent, or have it mark its own completion inside the container.
+
+    Every call is addressed to **one instance per thread**, not a random pool
+    member, so `exec("pnpm install")` and `exec("pnpm test")` on the same thread
+    share a filesystem. Size the container's `maxInstances` for the number of
+    threads you expect to be live at once.
+
+    **Time budgets and the ceiling that remains.** A dispatch defaults to a 30s
+    cap, and a dispatch that times out answers 503 — transient, so the tool's
+    durable step rethrows and the host retries it, dispatching the same call
+    again while the first is still running. For an `exec` that is the command
+    running twice. The sandbox therefore dispatches a browser op with a 150s
+    budget over a 120s navigation deadline, and a container op with a 150s budget
+    over a 120s `exec` deadline, so the **inner** deadline is always the one that
+    fires and the op ends rather than being abandoned. That widens the window; it
+    does not make an `exec` exactly-once. A command that outlives its 120s
+    deadline is killed, and one that somehow outlives the dispatch budget on top
+    of that is still re-dispatched by the step retry. Removing that ceiling needs
+    a fire-then-poll shape, which needs somewhere durable to record the op id —
+    which an action ctx does not have.
+
+    A container `fetch` reads at most 1MB of the response before the read is cut
+    and the reader cancelled (the result is marked `[truncated at … bytes]`), the
+    same bound `exec` has always had: the body is buffered in a 128MB isolate
+    shared with every other in-flight request.
+
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.
@@ -470,10 +532,29 @@ consuming step rebuild it.
 This is a **safe interpreted data-flow** between the whitelisted tools you hand
 `codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
-durable context a normal call gets, keeping its RLS and its own `needsApproval`
-gate (a script can't smuggle a call past a sub-tool's approval). Scripts are
-capped at `maxSteps` (default 16). Running arbitrary model-authored _code_ in an
-isolate (the Cloudflare Worker Loader path) is a separate future mode.
+durable context a normal call gets, keeping its RLS, and each step's resolved
+input goes through the same check a top-level call gets — no more and no less.
+That check is only as strong as the tool's own `inputSchema`: a schema carrying
+a validator (a Standard Schema such as zod/valibot, or
+`jsonSchema(schema, { validate })`) rejects a wrong-typed argument before the
+tool runs, while a **bare `jsonSchema(schema)` validates nothing** — the AI SDK
+treats a validator-less schema as pass-through, on this path and on the
+top-level one alike. Without a validator the argument reaches the tool and its
+own rejection (a dispatched function's `400`, say) is recorded as a tool error
+the model reads and corrects on its next turn, rather than failing the run.
+
+A composed tool's own `needsApproval` gate is **not** carried, because a script
+runs its steps in one shot and cannot hibernate mid-way for a human decision.
+`codeTool` therefore refuses at construction to compose any tool that declares
+one — the agent module throws on load rather than silently bypassing the gate.
+Expose that tool as a normal top-level tool, or gate the whole script with
+`codeTool`'s own `needsApproval`.
+
+Scripts are capped at `maxSteps` (default 16); a
+longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
+prefix, so the model can split the work instead of silently losing its trailing
+steps. Running arbitrary model-authored _code_ in an isolate (the Cloudflare
+Worker Loader path) is a separate future mode.
 
 ## Skills
 
@@ -635,9 +716,16 @@ export const support = defineAgent({
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     onEmail: (email) => {
         // The handler has already bounced any message whose `From` domain is not
-        // vouched for by an aligned DMARC, SPF or DKIM pass. Add your own policy on
-        // top — here, only a full DMARC pass is trusted.
-        if (email.authentication.dmarc !== "pass") {
+        // vouched for by an ALIGNED DMARC, SPF or DKIM pass — that gate is
+        // `authenticatesFrom` from `@lunora/mail/inbound`, the same helper to reach
+        // for in a handler of your own. Never hand-roll it as "did any clause
+        // pass?": an attacker gets a genuine pass for the domain they control.
+        //
+        // Layer your own policy on top of that gate — this is NOT the gate. Here:
+        // narrow to a full DMARC pass, stricter than the handler's
+        // DMARC-or-SPF-or-DKIM. It needs no alignment check of its own because a
+        // DMARC pass already checked alignment at the MX.
+        if (!email.authentication.dmarc.some((entry) => entry.result === "pass")) {
             return null; // declined — no run, no bounce
         }
 
@@ -658,10 +746,12 @@ export const support = defineAgent({
 **Security: inbound mail is untrusted and a run dispatches privileged.**
 Cloudflare Email Routing authenticates only the _recipient_ domain, not the
 _sender_: the envelope `from`, subject, and body are trivially spoofable. Before
-any mapper runs, the handler bounces a message unless a DMARC pass, or an SPF or
-DKIM pass whose domain (`spfDomain` / `dkimDomain`) equals the `From` domain,
-vouches for the sender — alignment is strict (`mail.example.com` does not vouch
-for `example.com`), and a pass with no reported domain is rejected. Layer any
+any mapper runs, the handler bounces a message unless some reported DMARC, SPF or
+DKIM clause both passes and names a `domain` equal to the `From` domain
+(`email.authentication.dkim` / `.spf` / `.dmarc` are lists, because one header
+legitimately reports a method more than once) — alignment is strict
+(`mail.example.com` does not vouch for `example.com`), and a pass with no
+reported domain is rejected. Layer any
 stricter policy on `email.authentication` inside the mapper, and treat every
 mapped field as attacker-controlled input. A message no agent claims is
 dropped silently; a throw while parsing or dispatching bounces the message with a
@@ -744,6 +834,15 @@ and internal-only visibility on every write.
 - **Messages persist idempotently.** Every write is keyed
   `INSTANCE:ROLE:POSITION` and deduped by a unique index, so replays never
   duplicate the thread.
+- **The loop's own dispatches are at-least-once.** They carry no replay-dedup
+  id: most of them are made from inside a memoized `step.do` callback, so any
+  id numbered by call order is re-issued to a _different_ call on the next
+  activation — and the shard's dedup table, keyed `(identity, mutationId)` with
+  no function path in it, would answer that call with the first one's cached
+  result. What makes a redelivery harmless instead is that every `agents:*`
+  function the loop calls is idempotent on its own key: keyed appends,
+  get-or-create threads, an instance-ownership guard on completion, and
+  absolute (never additive) status/usage/state writes.
 
 ## Memory (RAG)
 
@@ -855,8 +954,12 @@ export const support = defineAgent({
   rendering deterministic `- alice —[works_at]→ acme` triples that are injected
   like any other memory context. Reads are always bounded; **storage is not**.
 - **Storage grows unbounded, with no eviction or TTL (yet).** Every run appends new
-  entities/edges (deduped by normalized name / triple, weight last-write-wins),
-  and nothing prunes stale ones. Traversal stays fast because it is bounded by
+  entities/edges, deduped by normalized name / triple. Weight is **monotonic**,
+  not last-write-wins: an edge's weight becomes `max(prior, confidence)` and an
+  entity's weight is never updated after insert, so a later extraction that
+  lowers a relation's confidence has no effect — a stale high-confidence edge
+  keeps out-ranking under `fanOut` and cannot be corrected by restating it more
+  weakly. Nothing prunes stale ones. Traversal stays fast because it is bounded by
   the knobs above, but the tables keep growing over an owner's lifetime; a
   weight/age-based prune is a planned follow-up. Note too that normalization is
   light (trim / collapse whitespace / lowercase), so distinct senses of the same
@@ -894,8 +997,10 @@ export const support = defineAgent({
 - **Recency recall on read.** A `memory:recall` step returns the owner's most
   recent `recall` episodes (default 5, max 20) rendered oldest → newest as
   `- <summary>` lines, injected like any other memory context.
-- Same accumulate-forever caveat as the graph tier: episodes are never evicted
-  (a weight/age prune is a follow-up).
+- Unlike the graph tier, episodes **are** capped: every `agentEpisodeUpsert`
+  deletes the owner's oldest rows beyond **200**, so the table is bounded but is
+  not an audit log — once an owner passes 200 runs, the earliest episodes are
+  gone.
 
 ## Testing
 

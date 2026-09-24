@@ -15,9 +15,14 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
  * import postgres from "postgres";
  *
- * // inside an action (never a query/mutation):
- * const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- * ctx.sql = fromPostgresJs(postgres(connectionString));
+ * // Wire the client once, on the app builder — called per shard construction,
+ * // not per request. `ctx.sql` is emitted `readonly`; it is never assigned.
+ * const app = defineApp<Env>()
+ *     .shard((env) => env.SHARD)
+ *     .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)))
+ *     .build();
+ *
+ * // Then, inside an action (never a query/mutation):
  * const rows = await ctx.sql.query("select id from users where org = $1", [orgId]);
  * ```
  * @remarks

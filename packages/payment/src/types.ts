@@ -95,7 +95,18 @@ export interface Subscription {
     /** Start of the current billing period — the window `check` sums metered usage over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+    /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe subscription
+     * can carry an add-on or a metered price alongside the base plan, and a customer paying for one is
+     * entitled to it — so entitlements test membership here (see `hasActivePrice`).
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only `priceId`; absent
+     * reads as `[priceId]`, which is exactly right for the single-item case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
@@ -217,6 +228,11 @@ export interface TrackInput {
      * resets to, rather than reading the current total and appending a delta. Concurrent `"set"` calls
      * for the same reference therefore resolve last-writer-wins instead of over- or under-counting, and
      * a replayed `"set"` is idempotent — neither mode needs a serialized context or a per-reference lock.
+     *
+     * `"set"` reconciles the LOCAL period total only, so `track` rejects it with `VALIDATION_ERROR` on a
+     * provider that meters usage upstream: those meters are additive and cannot take a period total, and
+     * a set that LOWERS usage has no negative delta to forward — the provider would keep billing the
+     * higher figure while the local ledger holds the lower one. Use `"add"` with a metered provider.
      */
     readonly mode?: "add" | "set";
 
@@ -319,6 +335,32 @@ export interface RefundInput {
 }
 
 /**
+ * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
+ * for the refund it just issued.
+ *
+ * `RefundResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * @experimental
+ */
+export interface RefundResult extends PaymentSession {
+    /**
+     * The provider accepted the refund but has NOT moved the money yet — Dodo answers
+     * `refunds.create` with `pending`/`review` and settles later via `refund.succeeded`, or never,
+     * via `refund.failed`. The facade leaves its ledger untouched for one of these and lets the
+     * confirming webhook carry the money, because a `refund.failed` reverses nothing. Absent (the
+     * default) means the refund is already settled — Stripe and Polar refund synchronously.
+     */
+    readonly pending?: boolean;
+
+    /**
+     * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
+     * identity the facade keys its local refund marker on, so two in-flight refunds of the same
+     * amount on one session stay distinct. `undefined` only where a provider reports no id, which
+     * falls the marker back to the (colliding) amount.
+     */
+    readonly refundId?: string;
+}
+
+/**
  * `CancelSubscriptionOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
@@ -333,6 +375,14 @@ export interface CancelSubscriptionOptions {
  * @experimental
  */
 export interface SubscriptionPatch {
+    /**
+     * Override the outbound idempotency key. Honoured by the Stripe adapter only — no other provider's
+     * plan-change endpoint accepts a key at all (see the `idempotency` module docblock). Stripe
+     * otherwise derives one from the subscription and the target plan/quantity, which is stable across
+     * retries of the same intent; pass your own only to re-issue a target that was already applied and
+     * then changed away from, which a stable key would replay rather than prorate again.
+     */
+    readonly idempotencyKey?: string;
     readonly priceId?: string;
     readonly quantity?: number;
 }
@@ -386,11 +436,29 @@ export interface WebhookAction {
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;
     readonly priceId?: string;
+
+    /**
+     * EVERY price/product id the subscription bills, when the adapter could establish the whole set.
+     * `sync.ts` applies it as a WHOLESALE replacement, so it must be complete or absent — never a
+     * subset, which would silently drop prices the stored row already had.
+     *
+     * `undefined` leaves the stored set standing (see {@link Subscription.priceIds}). That is the
+     * single-price providers' case, and the fail-closed answer for a provider whose embedded item
+     * list is paginated and whose event carries only the first page.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity?: number;
     /** Raw provider event, retained for the events log / debugging. */
     readonly raw?: unknown;
     readonly referenceId?: string;
+
+    /**
+     * Provider id of the refund this event reports (refund actions only). Carries the per-refund
+     * identity the sync layer matches against the marker `refundPayment` left behind, so a second
+     * facade refund of the same amount is not mistaken for the first one's confirmation.
+     */
+    readonly refundId?: string;
     readonly sessionId?: string;
     readonly subscriptionId?: string;
     readonly type: WebhookActionType;

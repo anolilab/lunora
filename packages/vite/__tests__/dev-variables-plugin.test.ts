@@ -24,12 +24,27 @@ const RESOLVED = (projectRoot: string) => {
     };
 };
 
-/** Drive the plugin's `configResolved` hook (the only place it acts). */
-const runConfigResolved = async (plugin: Plugin): Promise<void> => {
-    const hook = plugin.configResolved;
-    const fn = typeof hook === "function" ? hook : hook?.handler;
+/**
+ * Drive the plugin through Vite's hook order — `config` (the only place
+ * `isPreview` is exposed), then `configResolved` (where it acts).
+ */
+const runHooks = async (plugin: Plugin, isPreview = false): Promise<void> => {
+    const configHook = plugin.config;
+    const configFunction = typeof configHook === "function" ? configHook : configHook?.handler;
 
-    await (fn as (config: unknown) => Promise<void>).call(plugin, {});
+    (configFunction as (userConfig: unknown, environment: { command: string; isPreview: boolean }) => void).call(
+        plugin,
+        {},
+        {
+            command: "serve",
+            isPreview,
+        },
+    );
+
+    const hook = plugin.configResolved;
+    const resolvedHook = typeof hook === "function" ? hook : hook?.handler;
+
+    await (resolvedHook as (config: unknown) => Promise<void>).call(plugin, {});
 };
 
 describe("devVariablesPlugin", () => {
@@ -61,7 +76,7 @@ describe("devVariablesPlugin", () => {
         // resolves false → the example's AUTH_SECRET is NOT scaffolded. But
         // fillDevSecrets still ensures the (locally-generated) admin token, since
         // the Studio needs it and there's nothing to prompt about.
-        await runConfigResolved(devVariablesPlugin(RESOLVED(dir)));
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
 
         const content = existsSync(join(dir, ".dev.vars")) ? readFileSync(join(dir, ".dev.vars"), "utf8") : "";
 
@@ -76,7 +91,7 @@ describe("devVariablesPlugin", () => {
         // What `lunora add auth` writes into .dev.vars directly: a blank secret, no admin token.
         writeFileSync(join(dir, ".dev.vars"), "BETTER_AUTH_SECRET=\n", "utf8");
 
-        await runConfigResolved(devVariablesPlugin(RESOLVED(dir)));
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
 
         const content = readFileSync(join(dir, ".dev.vars"), "utf8");
 
@@ -87,15 +102,47 @@ describe("devVariablesPlugin", () => {
         expect(content).toContain("BETTER_AUTH_SECRET=");
     });
 
+    it("marks the dev worker's environment in .dev.vars, the one channel every host reads", async () => {
+        expect.assertions(2);
+
+        // `.dev.vars` is what BOTH `@cloudflare/vite-plugin` and `wrangler dev`
+        // load, so this reaches the worker whether Lunora added the Cloudflare
+        // plugin or the project did (`cloudflare: false`, the vinext default).
+        writeFileSync(join(dir, ".dev.vars"), "AUTH_SECRET=\n", "utf8");
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toMatch(/WORKER_ENV="development"/u);
+
+        // A value the developer already declares is never overwritten.
+        writeFileSync(join(dir, ".dev.vars"), `WORKER_ENV=${JSON.stringify("staging")}\n`, "utf8");
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)));
+
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toMatch(/WORKER_ENV="staging"/u);
+    });
+
+    it("writes nothing under `vite preview`, which resolves as a `serve` command", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(dir, ".dev.vars.example"), 'AUTH_SECRET="replace-me-openssl"\n', "utf8");
+
+        await runHooks(devVariablesPlugin(RESOLVED(dir)), true);
+
+        // No prompt, no minted secrets, no `.dev.vars` at all: previewing a built
+        // app is not a dev session.
+        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+    });
+
     it("is among the leading plugins so it scaffolds `.dev.vars` before the worker boots", () => {
         expect.assertions(3);
 
         const plugins = lunora({ cloudflare: false, overlay: false, projectRoot: dir, validateWrangler: false });
         const names = plugins.map((plugin) => plugin.name);
 
-        // The command probe leads (it must capture serve/build first); dev-vars
+        // Framework detection leads (later hooks read its result); dev-vars
         // follows, still ahead of codegen and the worker plugins.
-        expect(names[0]).toBe("lunora:command-probe");
+        expect(names[0]).toBe("lunora:framework-detect");
         expect(names).toContain("lunora:dev-vars");
         expect(names.indexOf("lunora:dev-vars")).toBeLessThan(names.indexOf("lunora:codegen"));
     });

@@ -281,6 +281,163 @@ describe("reconcile", () => {
         await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
     });
 
+    it("never regresses a refunded row to partially_refunded", async () => {
+        expect.assertions(3);
+
+        // Regression: the state guard only caught a provider truth of `captured`, so a provider
+        // reporting `partially_refunded` slid a locally `refunded` row back a rung while the refunded
+        // total stayed `max`-ed at full. Reachable today, not hypothetically: Polar's `orderToSession`
+        // and Creem's `checkoutToSession` both map a `partially_refunded` status but fill
+        // `refundedAmount` only for a fully `refunded` one, so a fully refunded row reconciles against
+        // `{ state: "partially_refunded", refundedAmount: 0 }`. The row then claims its whole captured
+        // amount is refunded under a "partially refunded" label — which `check` and every remainder
+        // calculation read, and which is non-terminal where `refunded` is terminal.
+        const store = new MemoryPaymentStore();
+        const refunded = {
+            amount: money(1000, "USD"),
+            capturedAmount: money(1000, "USD"),
+            createdAt: 5,
+            id: "ord_1",
+            provider: "polar" as const,
+            referenceId: "user_1",
+            refundedAmount: money(1000, "USD"),
+            state: "refunded" as const,
+            updatedAt: 5,
+        };
+
+        await store.upsertPaymentSession(refunded);
+
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...refunded, refundedAmount: money(0, "USD"), state: "partially_refunded" as const };
+            },
+            identifier: "polar",
+        } as unknown as PaymentAdapter;
+
+        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+
+        const merged = await store.getPaymentSession("polar", "ord_1");
+
+        expect(merged?.state).toBe("refunded");
+        expect(merged?.refundedAmount.minorUnits).toBe(1000n);
+        // The label and the total agree, which is the invariant `refundPayment` and `sync.ts` both hold.
+        expect(merged?.refundedAmount.minorUnits).toBe(merged?.capturedAmount.minorUnits);
+    });
+
+    it("still advances a partially refunded row to refunded", async () => {
+        expect.assertions(2);
+
+        // The ladder only blocks a regression — a genuine advance up it must still land, or a refund
+        // completed out of band would never reach the row.
+        const store = new MemoryPaymentStore();
+        const partial = {
+            amount: money(1000, "USD"),
+            capturedAmount: money(1000, "USD"),
+            createdAt: 5,
+            id: "ord_1",
+            provider: "polar" as const,
+            referenceId: "user_1",
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded" as const,
+            updatedAt: 5,
+        };
+
+        await store.upsertPaymentSession(partial);
+
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...partial, refundedAmount: money(1000, "USD"), state: "refunded" as const };
+            },
+            identifier: "polar",
+        } as unknown as PaymentAdapter;
+
+        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+
+        const merged = await store.getPaymentSession("polar", "ord_1");
+
+        expect(merged?.state).toBe("refunded");
+        expect(merged?.refundedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("never lets provider truth move a stored subscription referenceId", async () => {
+        expect.assertions(3);
+
+        // Regression: `referenceId` is framework-controlled owner attribution pinned into checkout
+        // metadata, not provider truth. A read that doesn't echo that metadata resolves to `""`
+        // (Stripe, Polar) or falls back to the provider's own CUSTOMER id (Creem, Dodo), and reconcile
+        // wrote it straight over the row — orphaning it from `by_reference`, `check`/`hasActivePrice`
+        // and the default authorizer. `sync.ts` never rewrites the field, so it stayed wrong forever.
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("active"), provider: "creem" });
+
+        const adapter = {
+            getSubscriptionStatus: async () => {
+                return { ...subscription("past_due"), provider: "creem" as const, referenceId: "cust_abc" };
+            },
+            identifier: "creem",
+        } as unknown as PaymentAdapter;
+
+        const result = await reconcile({ adapter, store, subscriptionIds: ["sub_1"] });
+
+        expect(result.updatedSubscriptions).toBe(1);
+
+        const repaired = await store.getSubscription("creem", "sub_1");
+
+        // The lifecycle state IS provider truth and still lands; the owner does not move.
+        expect(repaired?.state).toBe("past_due");
+        expect(repaired?.referenceId).toBe("user_1");
+    });
+
+    it("adopts the provider's referenceId when the store has none", async () => {
+        expect.assertions(1);
+
+        // The guard preserves a reference the framework pinned — it must not strand a row that has
+        // never had one (a subscription first seen by this sweep, or created before the integration).
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("past_due"), referenceId: "" });
+
+        await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.referenceId)).resolves.toBe("user_1");
+    });
+
+    it("skips the usage sweep for a provider whose forward carries no idempotency key", async () => {
+        expect.assertions(3);
+
+        // Regression: the sweep re-sends any row the store still reports as unreported, and a row is
+        // unreported whether the REQUEST failed or only its RESPONSE was lost. Stripe/Polar/Dodo carry
+        // the event key in the ingestion body so both collapse to one debit; `autumn-js` has no
+        // idempotency surface at all, so the retry was a second debit against usage that happened once.
+        const store = new MemoryPaymentStore();
+        const reported: number[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "autumn",
+            reportUsage: async (input: { quantity: number }) => {
+                reported.push(input.quantity);
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "autumn",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        const result = await reconcile({ adapter, store });
+
+        expect(reported).toStrictEqual([]);
+        expect(result.checkedUsage).toBe(0);
+        // Still pending: the sweep declines to guess, it does not mark the row done.
+        await expect(store.listUnreportedUsage("autumn", 10)).resolves.toHaveLength(1);
+    });
+
     it("leaves a usage event pending when the retried forward fails again", async () => {
         expect.assertions(2);
 

@@ -2,15 +2,35 @@ import { describe, expect, it } from "vitest";
 
 import { ShardRegistryDO } from "../src/shard-registry-do";
 
-/** In-memory `DurableObjectState` substitute — same shape SessionDO tests use. */
-const createFakeState = (initial: Record<string, unknown> = {}) => {
-    const storage = new Map<string, unknown>(Object.entries(initial));
+/**
+ * In-memory `DurableObjectState` substitute — same shape SessionDO tests use.
+ *
+ * `putGuard` stands in for the per-value storage limit: a `put` the real DO
+ * would refuse throws here instead, which is the only way to observe what the
+ * registry does to its in-memory map when persistence fails.
+ */
+const createFakeState = (
+    options: { putGuard?: (key: string, value: unknown) => void } = {},
+): {
+    blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
+    storage: {
+        delete: (key: string) => Promise<boolean>;
+        entries: Map<string, unknown>;
+        list: <T>(listOptions: { prefix: string }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+    };
+} => {
+    const storage = new Map<string, unknown>();
 
     return {
         blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => callback(),
         storage: {
-            get: async <T>(key: string): Promise<T | undefined> => storage.get(key) as T | undefined,
+            delete: async (key: string): Promise<boolean> => storage.delete(key),
+            entries: storage,
+            list: async <T>(listOptions: { prefix: string }): Promise<Map<string, T>> =>
+                new Map([...storage].filter(([key]) => key.startsWith(listOptions.prefix)) as [string, T][]),
             put: async (key: string, value: unknown): Promise<void> => {
+                options.putGuard?.(key, value);
                 storage.set(key, value);
             },
         },
@@ -188,6 +208,87 @@ describe("shardRegistryDO", () => {
 
         expect(body.tables["messages"]!.toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
         expect(body.tables["tasks"]).toEqual(["c"]);
+    });
+
+    /**
+     * The registry used to persist the whole `table → [keys]` map as ONE storage
+     * value, which capped it at the per-value limit — 128 KiB on a KV-backed
+     * Durable Object, 2 MB on a SQLite-backed one. Around 3,300 UUID-shaped keys
+     * on the first, ~50k on the second: inside the "one shard per user-created
+     * channel/organisation/project" workload this DO exists for.
+     *
+     * The guard below is the smaller of the two documented limits, so the old
+     * single-value shape fails this on either backend's arithmetic while the
+     * per-key shape is bounded by nothing.
+     */
+    it("registers past the per-value storage limit — no key holds the whole snapshot", async () => {
+        expect.assertions(2);
+
+        const KV_BACKED_VALUE_LIMIT = 128 * 1024;
+        const state = createFakeState({
+            putGuard: (key, value) => {
+                if (key.length + JSON.stringify(value).length > KV_BACKED_VALUE_LIMIT) {
+                    throw new Error("value too large");
+                }
+            },
+        });
+        const registry = new ShardRegistryDO(state, {});
+
+        // 5,000 UUID-shaped keys — ~195 KB as one serialized snapshot.
+        const shardKeys = Array.from({ length: 5000 }, (_unused, index) => `3f2504e0-4f89-11d3-9a0c-${String(index).padStart(12, "0")}`);
+
+        for (const shardKey of shardKeys) {
+            // eslint-disable-next-line no-await-in-loop -- registrations are serialized by `blockConcurrencyWhile` anyway
+            const response = await registry.fetch(post("/register", { shardKey, table: "channels" }));
+
+            if (response.status !== 200) {
+                throw new Error(`register failed at ${shardKey}`);
+            }
+        }
+
+        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const list = await listResponse.json<{ shardKeys: string[] }>();
+
+        expect(list.shardKeys).toHaveLength(5000);
+        expect(state.storage.entries.size).toBe(5000);
+    });
+
+    /**
+     * The in-memory set used to be mutated BEFORE the persist, so a `put` the
+     * platform refused left the registry serving a shard key it had not stored —
+     * until the next eviction dropped it, and the query coordinator's fan-out
+     * quietly stopped including that shard.
+     */
+    it("does not admit a shard key whose write was refused", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState({
+            putGuard: () => {
+                throw new Error("value too large");
+            },
+        });
+        const registry = new ShardRegistryDO(state, {});
+
+        await expect(registry.fetch(post("/register", { shardKey: "channel-1", table: "channels" }))).rejects.toThrow("value too large");
+
+        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const list = await listResponse.json<{ shardKeys: string[] }>();
+
+        expect(list.shardKeys).toStrictEqual([]);
+    });
+
+    it("refuses a table/shardKey pair too long to be a storage key", async () => {
+        expect.assertions(2);
+
+        const registry = new ShardRegistryDO(createFakeState(), {});
+        const response = await registry.fetch(post("/register", { shardKey: "x".repeat(2100), table: "channels" }));
+
+        expect(response.status).toBe(400);
+
+        const listResponse = await registry.fetch(get("/list?table=channels"));
+        const list = await listResponse.json<{ shardKeys: string[] }>();
+
+        expect(list.shardKeys).toStrictEqual([]);
     });
 
     it("state survives a fresh DO instance — load from storage", async () => {

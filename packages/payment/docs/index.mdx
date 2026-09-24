@@ -18,7 +18,8 @@ deliveries safe by construction, and synced into a durable store that rides the
 request's `ctx.db`. Switching providers is a configuration change: the provider
 is a stateless translator; the store owns all state.
 
-Outbound calls carry idempotency keys (no double-charge), and every mutation is
+Outbound calls carry idempotency keys wherever the provider accepts one (no
+double-charge), and every mutation is
 authorized per-caller. Each adapter takes the provider's SDK client by injection.
 The provider SDKs are **optional peer dependencies**, so you install (and bundle) only
 the providers you actually use.
@@ -64,8 +65,10 @@ export const ShardDO = createShardDO({
             client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
-        // Override the default "caller owns the referenceId" rule for org/workspace keys.
-        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
+        // receives `env` only — there is no `ctx` in scope — so an org rule resolves membership from
+        // the reference itself, through a lookup you own.
+        // authorize: async (referenceId) => isMemberOfOrg(referenceId),
         entitlements: {
             plans: {
                 pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_123"] },
@@ -78,12 +81,12 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                                                                           |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                            |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                                           |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                    |
+| Option          | Type                 | Notes                                                                                                                                                       |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                                        |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
 
 ### Provider adapters
 
@@ -221,17 +224,27 @@ const dodo = createDodoPaymentsAdapter({
 Call the facade from an action. Every method authorizes the caller against the
 `referenceId` first.
 
-| Method                                         | Returns            | What it does                                                                    |
-| ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`. |
-| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.      |
-| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no IDOR).    |
-| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                               |
-| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                           |
-| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.            |
-| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                       |
-| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                         |
-| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                  |
+| Method                                         | Returns            | What it does                                                                       |
+| ---------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| `createCheckout(input)`                        | `CheckoutResult`   | Start a hosted checkout (`mode: "payment" \| "subscription"`); returns a `url`.    |
+| `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.         |
+| `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no IDOR).       |
+| `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                  |
+| `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result. |
+| `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                  |
+| `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                   |
+| `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                              |
+| `check(input)`                                 | `CheckResult`      | Is a reference allowed something now? Pass `featureId` or `priceId`.               |
+| `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                          |
+| `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                            |
+| `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                     |
+
+<Callout type="warn">
+    `ctx.payments.adapter` is the raw provider client, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
+    provider-specific extras). **Do not move money through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods
+    above do first: the caller authorization, the over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund
+    on a provider whose API takes no idempotency key), the derived idempotency key, and the store write. The facade ends in the same provider call.
+</Callout>
 
 ```ts
 import { action, query, v } from "./_generated/server";
@@ -269,10 +282,11 @@ active plans cap the same limit, the most-generous value wins.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` (default) increments; `"set"` reconciles the LOCAL period total.
     // Both are a single append — a `"set"` records the absolute target as a marker
     // the period fold resets to, so concurrent or replayed `"set"` calls resolve
     // last-writer-wins instead of double-applying. Neither mode needs a lock.
+    // `"set"` throws on a provider that meters usage upstream — see the callout below.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -297,6 +311,14 @@ updated.
     same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
 </Callout>
 
+<Callout type="warn">
+    **`mode: "set"` is local-only, and throws where the provider meters.** Provider meters are additive: they take events, not period totals, so a `"set"` can
+    only be forwarded as a delta against the total just read — and a `"set"` that LOWERS usage has no negative delta to send. `set 10 → set 5 → set 8` would
+    forward `10` then `3`, billing 13 upstream against a local period total of 8. Rather than over-bill silently, `track` rejects `"set"` with a
+    `VALIDATION_ERROR` on any provider whose `capabilities.usageMetering` is `true` (Stripe, Polar, Dodo, Autumn). Use `mode: "add"`, which is exact on both
+    sides. `"set"` stays available where usage is enforced locally.
+</Callout>
+
 ## Webhooks
 
 Signature verification needs the **raw** request body, so the webhook endpoint
@@ -306,6 +328,7 @@ store exist:
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -317,7 +340,10 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        // `webhookResponse`, not `Response.json(...)`: only the JSON payload crosses the
+        // `runAction` boundary, so the status has to be re-applied on this side or every
+        // outcome — including the deliberate 500 below — answers 200.
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
@@ -351,9 +377,23 @@ There is one deliberate non-200. An **orphaned** event — one that patches a ro
 whose create event has not arrived yet, which is how providers deliver
 out-of-order — returns `500` so the provider retries it, and the update applies
 once the create lands. Do not "fix" that by always answering `200`: swallowing
-the retry is how an out-of-order delivery is lost for good. Malformed deliveries
+the retry is how an out-of-order delivery is lost for good. That is also why the
+route must return `webhookResponse(result)` rather than `Response.json(result)` —
+the status does not survive the `runAction` hop on its own. Malformed deliveries
 (a missing provider event id) likewise surface as a `5xx` rather than a `400`,
 so every provider retries them instead of some treating a `400` as "stop".
+
+The orphan retry is **bounded to exactly one**. The row may never appear at all —
+a subscription created before the integration existed, a store reset, a
+completed-but-unpaid checkout whose create event never arrives — and an event
+retried forever makes the provider hammer the endpoint until it disables it,
+taking every other event down with it. So the first sighting answers `500` and
+the second is acknowledged `200` with `reason: "unhandled"`. That budget is spent
+in wall-clock order, not on a schedule: a sender that retries immediately
+(svix-backed providers such as Polar and Dodo do) can burn it seconds after the
+first delivery, while the create event is still in flight. If the create event
+can lag that far behind, do not lean on the webhook retry — sweep non-terminal
+rows with `reconcile` as below.
 
 <Callout type="warn">
     Webhooks are eventually-but-not-guaranteed: an endpoint down past the provider's retry window can drop an event for good. `reconcile` re-fetches the

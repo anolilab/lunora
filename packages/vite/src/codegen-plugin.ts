@@ -1,96 +1,32 @@
-import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { CODEGEN_ENV, inferLunoraBindings, isCodegenDisabled, LUNORA_CONFIG_FILE, runPostCodegenHook } from "@lunora/config";
+import {
+    CodegenDiagnosticError,
+    createCodegenProject,
+    describeErrorLevelFindings,
+    findTsconfig,
+    PROJECT_CONFIG_FILENAMES,
+    refreshCodegenProject,
+    runCodegen,
+} from "@lunora/codegen";
+import { CODEGEN_ENV, isCodegenDisabled, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
+import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
 import { computeConfigFingerprint } from "./config-fingerprint";
-import { reconcileWranglerCrons } from "./cron-sync";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
+import { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-wrangler";
+import { createRegenerateScheduler, HOOK_SETTLE_MS } from "./regenerate-scheduler";
+import fingerprintSchemaSources from "./schema-fingerprint";
 import type { PendingCloseMap } from "./server-close";
 import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
-
-const DEBOUNCE_MS = 100;
-
-/**
- * How long after a `postcodegen` run the watcher ignores schema-directory
- * changes.
- *
- * `runCodegen` only writes `_generated/`, which `onChange` already skips, so
- * regeneration could never retrigger itself. A `postcodegen` script is arbitrary
- * project code run at the project root, though, and anything it touches under
- * the schema directory looks exactly like a developer's save — regenerate, run
- * the hook, repeat, for as long as the dev server is up. The CLI's own watch loop
- * carries the same guard for the same reason.
- */
-const HOOK_SETTLE_MS = 300;
-
-/**
- * How many times in a row a settle-window recheck may rerun codegen before it
- * gives up and says why.
- *
- * The recheck below reruns when the schema sources changed across a hook run,
- * which converges for any idempotent `postcodegen` (a formatter reaches a fixed
- * point on its second pass). A hook that rewrites a schema-directory file to
- * DIFFERENT bytes every run — a timestamp, a generated id — never would, so cap
- * it rather than hand the dev loop back the spin the settle window exists to
- * prevent.
- */
-const MAX_SETTLE_RERUNS = 2;
-
-/**
- * Content hash of the schema directory's TypeScript sources — everything codegen
- * reads, minus its own `_generated/` output.
- *
- * Taken before codegen runs and compared again after the project's `postcodegen`
- * has settled, this is what tells the hook's own writes apart from a developer's
- * save landing in the same window. Timing cannot: both look identical to the
- * watcher, which is why every save during a multi-second hook used to be dropped
- * outright. Content can — a formatter that rewrites a file to the same bytes
- * leaves the hash alone, and a real edit does not.
- *
- * Cheap by construction (a schema directory is a handful of files, read once per
- * regeneration, not per watcher event). An unreadable directory hashes to a
- * constant so a transient read error reads as "no change" rather than as an
- * edit — degrading toward doing nothing, never toward a spurious rerun.
- */
-const fingerprintSchemaSources = (schemaDirectory: string, generatedDirectory: string): string => {
-    let entries;
-
-    try {
-        entries = readdirSync(schemaDirectory, { recursive: true, withFileTypes: true });
-    } catch {
-        return "unreadable";
-    }
-
-    const hash = createHash("sha256");
-
-    const paths = entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-        .map((entry) => join(entry.parentPath, entry.name))
-        .filter((path) => !(path === generatedDirectory || path.startsWith(generatedDirectory + sep)))
-        .toSorted((a, b) => a.localeCompare(b));
-
-    for (const path of paths) {
-        try {
-            hash.update(path).update("\u0000").update(readFileSync(path));
-        } catch {
-            // A file that vanished mid-walk contributes nothing; the next run sees
-            // the settled tree.
-        }
-    }
-
-    return hash.digest("hex");
-};
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
@@ -115,85 +51,11 @@ const formatExportGapOverlay = (gaps: ReadonlyArray<ExportGap>): string => {
     ].join("\n");
 };
 
-/**
- * Infer the Cloudflare bindings the project's code implies and reconcile them
- * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
- * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
- * once at startup so the user never hand-writes binding boilerplate. A failure
- * here must never abort codegen; the wrangler validator reports real problems.
- *
- * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
- * re-exported by the worker entry, so the caller can raise it in the browser
- * error overlay in addition to the console warning.
- */
-const reconcileBindingsSafely = async (
-    options: Pick<ResolvedLunoraPluginOptions, "projectRoot" | "schemaDir">,
-    logger: { info?: (message: string) => void; warn: (message: string) => void },
-    onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
-): Promise<void> => {
-    try {
-        const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
-
-        if (reconciled.changed) {
-            logger.info?.(`${LUNORA_TAG} inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
-        }
-
-        for (const warning of reconciled.warnings) {
-            logger.warn(`${LUNORA_TAG} ${warning}`);
-        }
-
-        if (reconciled.exportGaps.length > 0) {
-            onExportGaps?.(reconciled.exportGaps);
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`${LUNORA_TAG} binding inference skipped: ${message}`);
-    }
-};
-
 /** Callbacks injected from the dev-server context into {@link runCodegenSafely}. */
 interface OverlayCallbacks {
     /** Called on fatal codegen failure to push the error into the browser overlay. */
     onError: (error: unknown, message: string) => void;
 }
-
-/**
- * Reconcile cron triggers and compatibility date into wrangler.jsonc.
- * Extracted to keep {@link runCodegenSafely}'s cognitive complexity bounded.
- */
-const reconcileWranglerExtras = (
-    projectRoot: string,
-    cronTriggers: ReadonlyArray<string>,
-    logger: { info?: (message: string) => void; warn: (message: string) => void },
-): void => {
-    try {
-        const reconciled = reconcileWranglerCrons(projectRoot, cronTriggers);
-
-        if (reconciled.changed) {
-            logger.info?.(`${LUNORA_TAG} synced ${cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
-        }
-    } catch (cronError: unknown) {
-        const message = cronError instanceof Error ? cronError.message : String(cronError);
-
-        logger.warn(`${LUNORA_TAG} cron trigger sync skipped: ${message}`);
-    }
-
-    try {
-        const reconciled = reconcileWranglerCompatibilityDate(projectRoot);
-
-        if (reconciled.changed) {
-            logger.info?.(
-                `${LUNORA_TAG} bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
-            );
-        }
-    } catch (dateError: unknown) {
-        const message = dateError instanceof Error ? dateError.message : String(dateError);
-
-        logger.warn(`${LUNORA_TAG} compatibility date sync skipped: ${message}`);
-    }
-};
 
 /** {@link runCodegenSafely}'s result. */
 interface CodegenSafelyResult {
@@ -429,6 +291,27 @@ const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: stri
 };
 
 /**
+ * Codegen's logger outside a dev-server context. Module-scoped because two
+ * hooks now share it — `configResolved` (the cold-start run) and `buildStart`
+ * (the post-codegen hook and binding reconcile). The dev server's own logger
+ * is used instead for watch-triggered runs, see `serverLogger` below.
+ */
+const consoleLogger = {
+    error: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.error(message);
+    },
+    info: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.info(message);
+    },
+    warn: (message: string): void => {
+        // eslint-disable-next-line no-console
+        console.warn(message);
+    },
+};
+
+/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -470,7 +353,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // `server.restart()` (Vite re-invokes the hooks on the SAME plugin instance).
     //
     // `configFingerprint` is the binding-relevant baseline of wrangler.jsonc +
-    // lunora.json, refreshed after every Lunora-initiated config write so codegen's
+    // lunora.config.*, refreshed after every Lunora-initiated config write so codegen's
     // own idempotent rewrites never look like drift. `restartInFlight` collapses a
     // burst of edits during the async restart window into one restart.
     //
@@ -493,26 +376,34 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // target logs an ERROR line and still exits 0.
     let command: "build" | "serve" | undefined;
 
+    // `configResolved`'s codegen run, handed to `buildStart` so it escalates and
+    // post-processes that run instead of repeating it. See the hook for why the
+    // run moved earlier.
+    let primedCodegen: CodegenSafelyResult | undefined;
+
     return {
         config(_userConfig, env) {
             command = env.command;
         },
-        async buildStart() {
-            const logger = {
-                error: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.error(message);
-                },
-                info: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.info(message);
-                },
-                warn: (message: string): void => {
-                    // eslint-disable-next-line no-console
-                    console.warn(message);
-                },
-            };
+        // Codegen has to land before any OTHER plugin initialises, not before
+        // our own `buildStart`: `virtual:lunora/worker` imports
+        // `_generated/app.ts`, and Vite runs every `configureServer` — the
+        // Cloudflare plugin's included — before the first `buildStart`. On a
+        // cold `_generated/` that left a window (2.6s in the playground, and
+        // `_generated/` is gitignored so CI is always cold) in which the worker
+        // entry's own import could not resolve; whoever read the entry inside it
+        // failed on a specifier that would exist a moment later. `configResolved`
+        // is the last hook that still runs before the rest of the container, and
+        // codegen is synchronous, so the window closes entirely rather than
+        // getting smaller.
+        configResolved() {
+            if (command !== "build" && codegenDisabled) {
+                return;
+            }
 
+            primedCodegen = runCodegenSafely(options, consoleLogger);
+        },
+        async buildStart() {
             // Build mode: no devServer, no overlay callbacks.
             //
             // {@link isCodegenDisabled} is a DEV switch, honoured only in serve mode:
@@ -522,7 +413,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // shipping against a surface its target cannot serve, CI green the whole
             // way, from a variable someone exported in a shell profile.
             const skipCodegen = command !== "build" && codegenDisabled;
-            const { blockingMessage, failure, outputDirectory } = skipCodegen ? {} : runCodegenSafely(options, logger);
+            const { blockingMessage, failure, outputDirectory } = primedCodegen ?? (skipCodegen ? {} : runCodegenSafely(options, consoleLogger));
+
+            // One-shot: a `server.restart()` rebuilds the plugin container and
+            // re-primes, but if a host ever reuses this instance for a second
+            // `buildStart` it must generate afresh rather than replay a stale run.
+            primedCodegen = undefined;
 
             // Codegen threw: the schema could not be parsed or emitted at all.
             // Without this a `vite build` went on to bundle whatever `_generated/*`
@@ -554,7 +450,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 let hook;
 
                 try {
-                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger });
+                    hook = await runPostCodegenHook({ cwd: options.projectRoot, logger: consoleLogger });
                 } finally {
                     hookRunning = false;
                 }
@@ -595,7 +491,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // re-exported container/workflow is raised in the browser error
             // overlay (Vite buffers it and replays to clients on connect) so the
             // fix surfaces here rather than at a late `wrangler deploy` failure.
-            await reconcileBindingsSafely(options, logger, (gaps) => {
+            await reconcileBindingsSafely(options, consoleLogger, (gaps) => {
                 devServer?.hot.send({
                     err: { loc: undefined, message: formatExportGapOverlay(gaps), stack: "" },
                     type: "error",
@@ -686,24 +582,6 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // after `close` no-ops instead of writing to a dead ws/module graph.
             let closed = false;
 
-            // Per-server-generation debounce timer. Scoped INSIDE configureServer
-            // (not the plugin factory) so a `server.restart()` — which configures the
-            // NEW server before closing the OLD one — can't have the old server's
-            // teardown cancel a codegen run the new server just armed. Nothing outside
-            // configureServer touches it (buildStart never arms a debounce).
-            let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-            // Armed after a `postcodegen` run to re-examine the schema sources once
-            // its settle window has passed — the compensation for the events
-            // `onChange` drops while the hook is running. Its own timer, NOT
-            // `debounceTimer`: the drop path clears that one, which would cancel
-            // exactly the recheck meant to recover the dropped save.
-            let settleRecheckTimer: ReturnType<typeof setTimeout> | undefined;
-
-            // Consecutive recheck-driven reruns, reset by any real watcher event
-            // that schedules a regeneration. See MAX_SETTLE_RERUNS.
-            let settleReruns = 0;
-
             // The reused ts-morph Project. Built on first codegen run and refreshed
             // from disk on each subsequent one, so the dev-loop never re-parses the
             // user's whole TS program per save. Dropped (rebuilt next run) whenever
@@ -740,7 +618,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
              * is its outermost statement — because a timer callback has nobody to
              * hand a rejection to.
              */
-            const regenerate = async (changedFile: string): Promise<void> => {
+            const regenerate = async (changedFile: string, onHookSettled: (consumedSources: string) => void): Promise<void> => {
                 try {
                     // The server may have closed during the debounce window.
                     if (closed) {
@@ -781,7 +659,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // identical either way, and both this call and the recheck's
                     // then read the SAME `absoluteGeneratedDirectory` (the emit
                     // reassigns it one line above) and so exclude the same tree.
-                    const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory);
+                    const consumedSources = fingerprintSchemaSources(absoluteSchemaDirectory);
 
                     // The project's post-generation step, before the client is told
                     // the API changed — the point of the hook is that what the dev
@@ -804,42 +682,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     // Armed only when a hook actually RAN — see HOOK_SETTLE_MS.
                     if (hook.ran) {
                         hookSettledAt = Date.now();
-
-                        // …and because arming it means `onChange` has been
-                        // discarding events for the hook's whole (possibly
-                        // multi-second) duration, re-examine the sources once the
-                        // window closes. A developer's save in that window changed
-                        // them; the hook's own writes did not (or rewrote the same
-                        // bytes), so this reruns for the first and stays silent for
-                        // the second. Without it the save was dropped with no log
-                        // and no rerun, leaving `_generated/` behind `schema.ts`
-                        // until the developer happened to save again.
-                        if (settleRecheckTimer) {
-                            clearTimeout(settleRecheckTimer);
-                        }
-
-                        settleRecheckTimer = setTimeout(() => {
-                            settleRecheckTimer = undefined;
-
-                            if (closed || fingerprintSchemaSources(absoluteSchemaDirectory, absoluteGeneratedDirectory) === consumedSources) {
-                                return;
-                            }
-
-                            settleReruns += 1;
-
-                            if (settleReruns > MAX_SETTLE_RERUNS) {
-                                serverLogger.warn(
-                                    `${LUNORA_TAG} \`postcodegen\` keeps rewriting the schema sources — stopping after ${String(MAX_SETTLE_RERUNS)} reruns. Make the hook idempotent or move it off the schema directory.`,
-                                );
-
-                                return;
-                            }
-
-                            serverLogger.info(`${LUNORA_TAG} schema changed while \`postcodegen\` was running — regenerating`);
-
-                            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; `regenerate`'s catch is its outermost statement
-                            regenerate(changedFile);
-                        }, HOOK_SETTLE_MS);
+                        onHookSettled(consumedSources);
                     }
 
                     // Stop short of the reload when the post-step failed: the
@@ -866,6 +709,25 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     serverLogger.error(`${LUNORA_TAG} codegen watch: ${error instanceof Error ? error.message : String(error)}`);
                 }
             };
+
+            // The watcher's timers and the budget that bounds them. It hands
+            // `regenerate` the arming callback rather than being called back on,
+            // so the two stay one-directional.
+            const scheduler = createRegenerateScheduler({
+                // Late-bound: `regenerate` reassigns `absoluteGeneratedDirectory`
+                // from codegen's emit, and the recheck must exclude the same tree
+                // the pre-hook snapshot did.
+                fingerprint: () => fingerprintSchemaSources(absoluteSchemaDirectory),
+                logger: serverLogger,
+                regenerate: (changedFile: string, onHookSettled: (consumedSources: string) => void): void => {
+                    // Fire-and-forget: `regenerate` reports every failure itself (its
+                    // `catch` is its outermost statement) and there is nothing in a
+                    // timer callback to await it from. Async at all because the
+                    // project's `postcodegen` inside is a subprocess.
+                    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; a rejection here could only come from the catch handler itself
+                    regenerate(changedFile, onHookSettled);
+                },
+            });
 
             const onChange = (file: string): void => {
                 const normalized = resolve(file);
@@ -931,31 +793,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 if (hookRunning || Date.now() - hookSettledAt < HOOK_SETTLE_MS) {
                     // Drop a debounce an earlier event already scheduled too —
                     // otherwise the hook's first write still lands a queued rerun.
-                    if (debounceTimer) {
-                        clearTimeout(debounceTimer);
-                        debounceTimer = undefined;
-                    }
+                    scheduler.cancelPending();
 
                     return;
                 }
 
-                if (debounceTimer) {
-                    clearTimeout(debounceTimer);
-                }
-
-                // A real save: the recheck's runaway-hook budget starts over.
-                settleReruns = 0;
-
-                debounceTimer = setTimeout(() => {
-                    debounceTimer = undefined;
-
-                    // Fire-and-forget: `regenerate` reports every failure itself
-                    // (the `catch` below is its outermost statement) and there is
-                    // nothing in a timer callback to await it from. Async at all
-                    // because the project's `postcodegen` inside is a subprocess.
-                    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- resolve-only by construction; a rejection here could only come from the catch handler itself
-                    regenerate(normalized);
-                }, DEBOUNCE_MS);
+                scheduler.onSave(normalized);
             };
 
             // A tsconfig DELETION can't be caught by the `normalized === findTsconfig(...)`
@@ -999,14 +842,18 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // in place. Both wrangler candidate names are watched (even if absent
             // now) so creating one mid-session is caught. `@cloudflare/vite-plugin`
             // already restarts on its own wrangler config change when the Cloudflare
-            // integration is active, but it does NOT watch lunora.json (the remote-
+            // integration is active, but it does NOT watch lunora.config.* (the remote-
             // binding preference) — and Vite's `server.restart()` coalesces
             // concurrent calls via its `_restartPromise`, so a same-tick double
             // restart is harmless. Under the BYO (`cloudflare: false`) path nothing
             // else watches wrangler.jsonc, so this becomes the sole restart trigger.
             const configWatchPaths = new Set<string>([
                 ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
-                resolve(options.projectRoot, LUNORA_CONFIG_FILE),
+                // Every candidate name, so CREATING the config mid-session is
+                // picked up: `load()` reads it once when the composed entry is
+                // built and nothing invalidates a virtual module, so an unwatched
+                // create silently did nothing until a manual restart.
+                ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(options.projectRoot, name)),
             ]);
 
             for (const configPath of configWatchPaths) {
@@ -1095,15 +942,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // parsed TS program isn't held past the server's life.
                 cachedProject = undefined;
 
-                if (debounceTimer) {
-                    clearTimeout(debounceTimer);
-                    debounceTimer = undefined;
-                }
-
-                if (settleRecheckTimer) {
-                    clearTimeout(settleRecheckTimer);
-                    settleRecheckTimer = undefined;
-                }
+                scheduler.dispose();
 
                 server.watcher.off("add", onChange);
                 server.watcher.off("change", onChange);

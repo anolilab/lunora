@@ -73,11 +73,29 @@ describe("@better-auth/core/db/internal contract", () => {
     it("resolves table-level indexes to physical columns with a name", () => {
         expect.assertions(3);
 
-        const { indexesByTable } = getAuthTablesWithResolvedIndexes(OPTIONS);
+        // A table-level index on a core table can only come from a plugin schema:
+        // `buildAuthTables` reads `indexes` off the merged plugin schema, never off
+        // `options.<table>.indexes`. better-auth did carry a built-in
+        // `(issuer, accountId)` unique index on `account` in 1.7.0-1.7.1, but 1.7.3
+        // dropped it along with the `issuer` column, so a plugin is the only source
+        // left — and it is the path a Lunora auth plugin's own tables travel.
+        //
+        // `accountId` is renamed to a different physical column on purpose: it is what
+        // makes the logical-to-physical mapping observable rather than a tautology.
+        const { indexesByTable } = getAuthTablesWithResolvedIndexes({
+            ...OPTIONS,
+            account: { fields: { accountId: "provider_account_id" } },
+            plugins: [
+                {
+                    id: "contract-test",
+                    schema: { account: { fields: {}, indexes: [{ fields: ["accountId", "providerId"], unique: true }] } },
+                },
+            ],
+        });
         const [accountIndex] = indexesByTable.get("account") ?? [];
 
         // `columns` (physical), not `fields` (logical) — the DDL quotes these directly.
-        expect(accountIndex?.columns).toStrictEqual(["issuer", "accountId"]);
+        expect(accountIndex?.columns).toStrictEqual(["provider_account_id", "providerId"]);
         expect(accountIndex?.name).toBeTypeOf("string");
         expect(accountIndex?.unique).toBe(true);
     });

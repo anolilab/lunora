@@ -1,3 +1,5 @@
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
@@ -7,6 +9,8 @@ import { buildModelMessages } from "./model-messages";
 import { agentBindingName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import { traceToolExecution } from "./telemetry/tool-execution";
+import { capToolOutputText } from "./tool-output";
 import type {
     AgentApprovalContext,
     AgentCompact,
@@ -124,6 +128,8 @@ interface TurnContext {
     memoryContext: string | undefined;
     /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
     onTokenDelta: AgentTokenSink | undefined;
+    /** Verified owner of THIS run's thread (`params.owner`), handed to every tool context. */
+    owner: string | undefined;
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
@@ -144,6 +150,31 @@ interface ApprovalDecision {
 
 /** JSON-encode a tool's non-string output; `undefined` encodes as "null". */
 const stringifyOutput = (output: unknown): string => (output === undefined ? "null" : JSON.stringify(output));
+
+/**
+ * Record a FAILED run's terminal state without letting the recording replace the
+ * failure.
+ *
+ * The completion patch is a dispatch, so it can reject on its own. When it did,
+ * its error escaped the run-level catch and became what the workflow instance
+ * recorded — the operator saw a persist error where the actual cause should have
+ * been. The original error is what propagates; the dispatch failure rides along
+ * as its `cause`.
+ */
+const finishFailedRun = async (
+    finishRun: (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }) => Promise<void>,
+    error: unknown,
+    usage: AgentUsage | undefined,
+): Promise<void> => {
+    try {
+        await finishRun({ error: error instanceof Error ? error.message : String(error), status: "error", ...(usage === undefined ? {} : { usage }) });
+    } catch (finishError: unknown) {
+        if (error instanceof Error && error.cause === undefined) {
+            // eslint-disable-next-line no-param-reassign -- annotating the run's own failure IS the fix: the caller rethrows this exact error, and the dispatch failure has nowhere else to go
+            error.cause = finishError;
+        }
+    }
+};
 
 /** Normalize the config's `stopWhen` (a condition or array) to an array. */
 const normalizeStopWhen = (stopWhen: AgentConfig["stopWhen"]): ReadonlyArray<StopCondition<ToolSet>> => (stopWhen === undefined ? [] : [stopWhen].flat());
@@ -351,8 +382,41 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     return decision;
 };
 
+/**
+ * Wrapper key under which a tool step memoizes its outcome.
+ *
+ * `step.do` memoizes BY NAME, and the tool step's name (`tool:<name>:<id>`) is
+ * stable across deploys — so a run PARKED across a deploy (approval
+ * hibernation, a long multi-turn) resumes and is handed back whatever shape the
+ * previous build wrote. The outcome envelope arrived after the raw tool output
+ * did, which is why old memos have to stay readable: without this key the
+ * replayed raw output was read as an envelope, persisting the tool row as
+ * `"undefined"` (poisoning every later turn on the thread) or, for a
+ * string/number/null memo, throwing `Cannot use 'in' operator`.
+ *
+ * A distinct wrapper rather than probing for `ok`/`failed` on the value itself:
+ * `{ ok: true }` is an ordinary tool result, and a bare probe would unwrap it to
+ * `true`. A tool result cannot be mistaken for an envelope it does not carry.
+ */
+const TOOL_OUTCOME_KEY = "lunoraToolOutcome";
+
+/** The tool step's outcome: the raw output, or a deterministic failure not worth retrying. */
+type ToolOutcome = { failed: string } | { ok: unknown };
+
+/** What the tool step memoizes — {@link ToolOutcome} behind {@link TOOL_OUTCOME_KEY}. */
+type ToolOutcomeMemo = { [TOOL_OUTCOME_KEY]: ToolOutcome };
+
+/** Read a tool step's memoized value, treating anything without the wrapper as a pre-envelope raw output. */
+const readToolOutcome = (memo: unknown): ToolOutcome => {
+    if (typeof memo === "object" && memo !== null && TOOL_OUTCOME_KEY in memo) {
+        return (memo as ToolOutcomeMemo)[TOOL_OUTCOME_KEY];
+    }
+
+    return { ok: memo };
+};
+
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { depth, env, getState, instanceId, onTokenDelta, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { agent, depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -366,6 +430,25 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         return;
     }
 
+    // The provider's arguments failed the tool's input schema (or did not parse
+    // as JSON), so the AI SDK refused to execute the call and only reported it —
+    // `call.input` is the raw value, not a validated one. Running it anyway
+    // handed `execute` garbage, and the throw that followed retried the durable
+    // step until the whole run failed. Recorded the same way a hallucinated tool
+    // NAME is, so the next turn lets the model correct its arguments.
+    if (call.invalid !== undefined) {
+        await persist({
+            content: `Error: invalid input for tool "${call.name}" — it was not run. ${call.invalid}`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
     // Ephemeral progress: tees onto the SAME live-only sink the token deltas
     // ride. A no-op when the runtime wired no sink (the durable default), and —
     // because it fires from inside the tool's memoized `step.do` below — never
@@ -374,7 +457,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { depth, env, getState, idempotencyKey: stepName, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
+    const toolContext = { depth, env, getState, idempotencyKey: stepName, owner, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
@@ -414,10 +497,69 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         status = "approved";
     }
 
-    const output: unknown = await step.do(stepName, () => Promise.resolve(tool.execute(call.input as never, toolContext)));
+    // The `invalid` branch above only fires for a tool whose `inputSchema`
+    // carries a `validate` — a bare `jsonSchema()` (every batteries-included
+    // tool here, and the documented `functionTool` shape) has none, and the AI
+    // SDK's `safeValidateTypes` waves an unvalidated schema straight through.
+    // So a type-wrong model argument does not arrive as `invalid`; it arrives as
+    // the dispatched function's own 400 thrown out of `execute`, and the SAME
+    // 400 comes back on every retry. Recorded as a tool result the next turn can
+    // read, exactly as an `invalid` call is, rather than burning the durable
+    // step's retry budget re-dispatching it until the run fails. Only the
+    // branded deterministic statuses are converted — a transient failure keeps
+    // the host's retry, which is the whole point of running in a step. Mirrors
+    // `@lunora/workflow`'s `createRunStep`, which the loop does not route
+    // through.
+    //
+    // Caught INSIDE `step.do` so the outcome is what the host memoizes: caught
+    // outside, the step would have already exhausted its retries before the
+    // throw reached us.
+    const outcome = readToolOutcome(
+        await step.do(stepName, async (): Promise<ToolOutcomeMemo> => {
+            try {
+                // Reported to the agent's telemetry integrations from HERE, the
+                // only place a tool actually runs: the SDK is handed schema-only
+                // tools and so never fires its own tool-execution events. Inside
+                // the step body, so a replayed (memoized) call emits nothing.
+                const runTool = (): Promise<unknown> => Promise.resolve(tool.execute(call.input, toolContext) as unknown);
+                const output = await traceToolExecution(agent.telemetry, { id: call.id, input: call.input, name: call.name }, runTool);
+
+                return { [TOOL_OUTCOME_KEY]: { ok: output } };
+            } catch (error: unknown) {
+                if (isDeterministicDispatchFailure(error)) {
+                    return { [TOOL_OUTCOME_KEY]: { failed: error.message } };
+                }
+
+                throw error;
+            }
+        }),
+    );
+
+    if ("failed" in outcome) {
+        await persist({
+            // Capped for the same reason the success path is (see below): the
+            // message is server-supplied and unbounded, and this row is
+            // re-rendered into every later turn on the thread.
+            content: capToolOutputText(`Error: tool "${call.name}" failed and will not be retried. ${outcome.failed}`),
+            messageKey,
+            role: "tool",
+            stepName,
+            ...(status === undefined ? {} : { status }),
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    const output: unknown = outcome.ok;
 
     await persist({
-        content: typeof output === "string" ? output : stringifyOutput(output),
+        // Capped, like `codeTool`'s per-step results: this row is re-rendered
+        // into the prompt of every later turn AND every later run on the thread,
+        // so one `fsTool` read of a big file (or an unbounded MCP result) is a
+        // permanent per-turn tax that ends in a context-window overflow.
+        content: capToolOutputText(typeof output === "string" ? output : stringifyOutput(output)),
         messageKey,
         role: "tool",
         stepName,
@@ -1173,12 +1315,26 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     };
 
     /**
+     * Whether this run already told the thread how it ended.
+     *
+     * `agentCompleteRun` is an at-least-once dispatch whose caller stays the
+     * thread's owner, so a completion that reaches the shard and loses its reply
+     * (a dispatch timeout is a retryable 503 even when the mutation committed) is
+     * re-appliable — but only with the SAME outcome. The run-level catch below
+     * reads this to tell a run that failed from one that already reported its
+     * outcome and then tripped on delivering it.
+     */
+    const completion = { dispatched: false };
+
+    /**
      * End the run: write the terminal status and, in the same mutation, hand the
      * thread to the next queued run. Only then is the dequeued run woken — it
      * already owns the thread by that point, so there is no window in which two
      * runs believe they may append.
      */
     const finishRun = async (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }): Promise<void> => {
+        completion.dispatched = true;
+
         const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
 
         if (outcome?.dequeued !== undefined) {
@@ -1243,6 +1399,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         listMessages,
         memoryContext,
         onTokenDelta,
+        owner: params.owner,
         deleteMessage: deleteMessageByKey,
         patchThread: patchThreadByKey,
         persist,
@@ -1337,15 +1494,21 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // then rethrow so the workflow records/retries per its policy. A failed
         // run still hands the thread on: the next queued run is waiting for THIS
         // one to end, not for it to succeed.
-        await finishRun({
-            error: error instanceof Error ? error.message : String(error),
-            status: "error",
-            ...(usageBox.value === undefined ? {} : { usage: usageBox.value }),
-        });
+        //
+        // Unless the run already dispatched its outcome. `agentCompleteRun` is an
+        // absolute write the completing run stays the owner of, so re-completing
+        // from here would overwrite the outcome the run REACHED with the failure
+        // of reporting it: a run that answered, delivered its reply and committed
+        // `idle` — and then lost the dispatch's reply — would land on the thread
+        // as `error`, blaming the run for its transport. The replay re-dispatches
+        // the same terminal write, which converges on the right one.
+        if (!completion.dispatched) {
+            await finishFailedRun(finishRun, error, usageBox.value);
+        }
 
         throw error;
     }
 };
 
 export type { AgentLoopOptions };
-export { compactHistory, runAgentLoop, splitForCompaction };
+export { approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };

@@ -46,17 +46,17 @@ describe("observability tool definitions", () => {
     });
 });
 
-describe("token-tier gating", () => {
-    it("omits the observability tools from the advertised list when no admin token resolved", () => {
+describe("observability-tier gating", () => {
+    it("omits the observability tools from the advertised list without the opt-in", () => {
         expect.assertions(2);
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
         expect(names.some((name) => OBSERVABILITY_NAMES.includes(name))).toBe(false);
     });
 
-    it("advertises them once a token resolved, without disturbing the write tier", () => {
+    it("advertises them once opted in, without disturbing the write tier", () => {
         expect.assertions(2);
 
         expect(toolDefinitions(false, true).map((tool) => tool.name)).toStrictEqual([
@@ -64,6 +64,7 @@ describe("token-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
         ]);
         expect(toolDefinitions(true, true).map((tool) => tool.name)).toStrictEqual([
@@ -71,13 +72,14 @@ describe("token-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
     });
 
-    it("keeps the token tier independent of the write tier", () => {
+    it("keeps the observability tier independent of the write tier", () => {
         expect.assertions(1);
 
         // `--allow-writes` must not smuggle in the privileged reads.
@@ -86,23 +88,24 @@ describe("token-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
     });
 
-    it.each(OBSERVABILITY_NAMES)("refuses %s at dispatch when no admin token resolved, without touching the client", async (name) => {
+    it.each(OBSERVABILITY_NAMES)("refuses %s at dispatch without the opt-in, without touching the client", async (name) => {
         expect.assertions(3);
 
         const mock = mockClient();
         const result = await callTool(mock.asClient, name, {});
 
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("admin token");
+        expect(result.content[0]!.text).toContain("LUNORA_MCP_ALLOW_OBSERVABILITY");
         expect(mock.query).not.toHaveBeenCalled();
     });
 
-    it("refuses at dispatch even when writes are enabled but no token resolved", async () => {
+    it("refuses at dispatch even when writes are enabled but observability is not", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
@@ -123,7 +126,7 @@ describe("lunora_get_logs", () => {
 
         expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: ADMIN_FUNCTIONS.getLogs }, {}, {});
         expect(result.isError).toBeUndefined();
-        expect(result.structuredContent).toStrictEqual({ entries: [entries[0], entries[1]], total: 3 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [entries[0], entries[1]], total: 3 });
         // The text block stays, for a client on a pre-2025-06-18 revision.
         expect(JSON.parse(result.content[0]!.text)).toStrictEqual(result.structuredContent);
     });
@@ -135,8 +138,21 @@ describe("lunora_get_logs", () => {
         const mock = mockClient({ [ADMIN_FUNCTIONS.getLogs]: { entries } });
         const result = await callTool(mock.asClient, "lunora_get_logs", { level: "error", limit: 1 }, false, true);
 
-        expect(result.structuredContent).toStrictEqual({ entries: [entries[1]], total: 2 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [entries[1]], total: 2 });
         expect((result.structuredContent as { entries: unknown[] }).entries).toHaveLength(1);
+    });
+
+    it("forwards the ring's dropped counter so a saturated ring is not read as the whole picture", async () => {
+        expect.assertions(2);
+
+        const entries = [logEntry(1, "info"), logEntry(2, "info")];
+        const mock = mockClient({ [ADMIN_FUNCTIONS.getLogs]: { dropped: 49_998, entries } });
+        const result = await callTool(mock.asClient, "lunora_get_logs", {}, false, true);
+
+        // Without this the tool reports `total: 2` for a shard that logged
+        // 50,000 lines, and the model reports it as complete.
+        expect(result.structuredContent).toStrictEqual({ dropped: 49_998, entries, total: 2 });
+        expect(JSON.parse(result.content[0]!.text)).toStrictEqual(result.structuredContent);
     });
 
     it("ignores an unrecognized level rather than filtering everything out", async () => {
@@ -146,7 +162,7 @@ describe("lunora_get_logs", () => {
         const mock = mockClient({ [ADMIN_FUNCTIONS.getLogs]: { entries } });
         const result = await callTool(mock.asClient, "lunora_get_logs", { level: "LOUD" }, false, true);
 
-        expect(result.structuredContent).toStrictEqual({ entries, total: 1 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries, total: 1 });
     });
 
     it("forwards a shardKey, since these reads are per-shard", async () => {
@@ -166,7 +182,7 @@ describe("lunora_get_logs", () => {
         const result = await callTool(mock.asClient, "lunora_get_logs", {}, false, true);
 
         expect(result.isError).toBeUndefined();
-        expect(result.structuredContent).toStrictEqual({ entries: [], total: 0 });
+        expect(result.structuredContent).toStrictEqual({ dropped: 0, entries: [], total: 0 });
     });
 
     it("maps a bigint / bytes leaf so structuredContent survives the transport's JSON.stringify", async () => {
@@ -182,6 +198,7 @@ describe("lunora_get_logs", () => {
         expect(result.isError).toBeUndefined();
         expect(() => JSON.stringify(result.structuredContent)).not.toThrow();
         expect(result.structuredContent).toStrictEqual({
+            dropped: 0,
             entries: [{ fields: { blob: "AQID", id: "9007199254740993" }, level: "info", message: "m", timestamp: 1 }],
             total: 1,
         });

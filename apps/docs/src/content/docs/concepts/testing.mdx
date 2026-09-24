@@ -96,17 +96,17 @@ afterEach(() => {
 
 `lunoraTest(schema)` returns a `TestHarness`:
 
-| Method                      | Description                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| `query(reference, args)`    | Run a registered `query`. Internal queries are rejected on this external surface. |
-| `mutation(reference, args)` | Run a registered `mutation`. Internal mutations are rejected here.                |
-| `action(reference, args)`   | Run a registered `action`. Internal actions are rejected here.                    |
-| `query(inline)`             | Run an inline `(ctx) => …` with a read-only `QueryCtx`.                           |
-| `mutation(inline)`          | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                       |
-| `action(inline)`            | Run an inline `(ctx) => …` with an `ActionCtx`.                                   |
-| `run(fn)`                   | Direct db access at mutation level (read + write), mirroring Convex's `run`.      |
-| `withIdentity(identity)`    | A harness view sharing this db but reporting the given identity on `ctx.auth`.    |
-| `close()`                   | Close the in-memory database. Idempotent.                                         |
+| Method                      | Description                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `query(reference, args)`    | Run a registered `query`. Internal queries are rejected on this external surface.                 |
+| `mutation(reference, args)` | Run a registered `mutation`. Internal mutations are rejected here.                                |
+| `action(reference, args)`   | Run a registered `action`. Internal actions are rejected here.                                    |
+| `query(inline)`             | Run an inline `(ctx) => …` with a `QueryCtx` (read-only in the type, not at runtime — see below). |
+| `mutation(inline)`          | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                                       |
+| `action(inline)`            | Run an inline `(ctx) => …` with an `ActionCtx`.                                                   |
+| `run(fn)`                   | Direct db access at mutation level (read + write), mirroring Convex's `run`.                      |
+| `withIdentity(identity)`    | A harness view sharing this db but reporting the given identity on `ctx.auth`.                    |
+| `close()`                   | Close the in-memory database. Idempotent.                                                         |
 
 Each method accepts **either** a registered function reference plus its args,
 **or** a bare inline handler, handy for poking at `ctx.db` directly without
@@ -206,13 +206,24 @@ test("internal functions are only reachable via ctx.run*", async () => {
 
 ### What the harness stubs (v1)
 
-`ctx.storage`, `ctx.scheduler`, `ctx.vectors`, and an action's `ctx.fetch` are
+`ctx.storage`, `ctx.vectors`, `ctx.secrets` and `ctx.workflows` are
 clearly-throwing stubs. A handler that never touches one runs fine; one that
 does fails with a descriptive error the first time it reaches for it (e.g.
-`ctx.scheduler is not available in the in-memory @lunora/testing harness (v1)`).
-HTTP actions, scheduled-function draining, real R2 storage, `.global()` / D1
-tables, and Vectorize are deferred to a follow-up; exercise those over a
-running worker instead.
+`ctx.storage is not available in the in-memory @lunora/testing harness (v1)`).
+HTTP actions, real R2 storage, `.global()` / D1 tables, and Vectorize are
+deferred to a follow-up; exercise those over a running worker instead.
+
+Two are **not** stubs. `ctx.scheduler` is a working fake with a virtual clock —
+`t.scheduler.list()` / `advance(ms)` / `runPending()` / `failures()` drive it, so
+scheduled work is testable here (see
+[`@lunora/testing`](/docs/packages/testing)). An action's `ctx.fetch` is the stub
+only when you do not supply one: pass `lunoraTest(schema, { fetch })` to inject
+your own.
+
+`QueryCtx`'s read-only-ness is a **TypeScript** property. At runtime an inline
+`t.query` holds the same writer `t.mutation` gets, so a cast (or plain JS) can
+write from a "read-only" query — outside any transaction, and without notifying
+`t.subscribe` listeners. Don't; it does not mirror a real query.
 
 ## Mail-catcher helpers (E2E)
 

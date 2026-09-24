@@ -3,11 +3,13 @@
  *
  * Flow: claim the event id (inbound idempotency) → map the action to an FSM transition → upsert
  * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
- * caller — with one exception: an event whose target row does not exist yet reports `"orphaned"`,
- * which the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because
- * absorbing it would burn the event id before the row it patches exists.
+ * caller — with one exception: an event that arrives before the row it patches is ready (a
+ * subscription update before its create, a refund before its capture) reports `"orphaned"`, which
+ * the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because absorbing it
+ * would burn the event id while the change it carries is still unapplied.
  */
 import { LunoraPaymentError } from "./errors";
+import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
 import { addMoney, compareMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -36,6 +38,9 @@ const SUBSCRIPTION_STATE_BY_TYPE: Partial<Record<WebhookActionType, Subscription
  */
 const ORPHAN_RETRY_MARKER = "orphan-retry:";
 
+/** Claim `type` recorded for an {@link ORPHAN_RETRY_MARKER} row — internal bookkeeping, not a provider delivery. */
+const ORPHAN_RETRY_CLAIM_TYPE = "marker.orphan_retry";
+
 const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, SubscriptionAction>> = {
     "subscription.active": "activate",
     "subscription.canceled": "cancel",
@@ -45,6 +50,79 @@ const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, Subscriptio
 
 /** The larger of two same-currency amounts. */
 const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
+
+/**
+ * States in which the money has not been captured yet. A refund that lands on one of them is
+ * out-of-order delivery, not an illegal transition — see the `orphaned` branch in `applyPayment`.
+ */
+const PRE_CAPTURE_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["authorized", "initiated"]);
+
+/** What {@link foldRefundOnce} resolved, plus the undo for the claim it minted. */
+interface RefundFold {
+    /** The action to apply — amount zeroed when this refund is already in the row. */
+    readonly action: WebhookAction;
+
+    /**
+     * Undo the claim this fold minted. Call it on any path that does NOT write the refund into the
+     * row, or the claim outlives the fold it stands for and the provider's retry books nothing.
+     */
+    readonly release: () => Promise<void>;
+}
+
+const noRelease = async (): Promise<void> => {};
+
+/**
+ * Book a DELTA provider's refund at most once, whoever reports it first.
+ *
+ * A delta event carries one refund's own amount, so the sync layer ADDS it — which is only correct
+ * if each refund reaches this fold once. Two things break that.
+ *
+ * `refundPayment` folds the refund it issued into the row immediately (that ledger is what stops a
+ * retry from issuing it twice) and leaves a marker; the confirming webhook is that same money coming
+ * back.
+ *
+ * And a provider can report ONE refund under more than one event id. Polar maps both
+ * `refund.created` and `refund.updated` to a refund event, so a refund that reaches `succeeded` and
+ * is then touched again (a dispute attaching to it, say) restates the same money under a fresh event
+ * id — which the `markEventProcessed` dedupe cannot catch, because the event ids genuinely differ.
+ *
+ * Both are the same shape, so one marker answers both: claim `local-refund:<session>:id:<refundId>`
+ * and KEEP it. Whoever claims it first books the money, and every later restatement of that refund
+ * id zeroes its amount, carrying only its state transition. An ABSOLUTE provider (Stripe's
+ * cumulative `amount_refunded`) resolves to `max(...)` and is idempotent without any of this, so it
+ * is skipped.
+ *
+ * Without a provider refund id the key falls back to `(session, amount)`, which two genuinely
+ * distinct same-amount refunds SHARE — keeping that claim would swallow the second one. So that case
+ * keeps the old test-and-release behaviour: it still cancels the facade's own marker, and carries
+ * the collision documented on `localRefundKey` rather than dropping real money.
+ */
+const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existing: PaymentSession | undefined): Promise<RefundFold> => {
+    if (!existing || !action.sessionId || !action.amount || action.amountKind === "absolute") {
+        return { action, release: noRelease };
+    }
+
+    const key = localRefundKey(action.sessionId, action.refundId, action.amount);
+    const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
+    const zeroed: WebhookAction = { ...action, amount: zeroMoney(action.amount.currency) };
+
+    if (action.refundId === undefined) {
+        await store.releaseEvent(action.provider, key);
+
+        return { action: unclaimed ? action : zeroed, release: noRelease };
+    }
+
+    if (!unclaimed) {
+        return { action: zeroed, release: noRelease };
+    }
+
+    return {
+        action,
+        release: async () => {
+            await store.releaseEvent(action.provider, key);
+        },
+    };
+};
 
 /**
  * Compute the new refunded total a refund action implies, honoring its `amountKind`.
@@ -68,6 +146,14 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
         return undefined;
     }
 
+    // `max` rather than `+` because an absolute total already includes every earlier refund. It does
+    // NOT include a lost-dispute reversal, which is a `"delta"` this same field accumulated: a
+    // dispute lost for 30 followed by a refund of 20 resolves to `max(20, 30) = 30`, understating the
+    // 50 that actually left. Unreachable on Stripe — it refuses to refund a charge with a lost
+    // dispute, so that order never happens, and the reverse (refund 20, then dispute 30) adds to 50
+    // correctly. Kept as a `max` on purpose: the alternative over-counts every ordinary re-delivered
+    // cumulative total, which is reachable. If Stripe ever allows a refund after a lost dispute, this
+    // is the line that has to change.
     const prospective = action.amountKind === "absolute" ? maxMoney(action.amount, base.refundedAmount) : addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
@@ -75,6 +161,21 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
     }
 
     return prospective;
+};
+
+/**
+ * The refund transition `action` implies on `existing`: "partial" while the resulting refunded total
+ * stays below the captured total, a full "refund" otherwise. `refundedTotalFor` resolves the
+ * absolute-vs-delta semantics, so the partial/full decision and the stored amount always agree.
+ */
+const resolveRefundAction = (existing: PaymentSession | undefined, action: WebhookAction): PaymentAction => {
+    if (!existing) {
+        return "refund";
+    }
+
+    const prospective = refundedTotalFor(existing, action);
+
+    return prospective && compareMoney(prospective, existing.capturedAmount) < 0 ? "partial_refund" : "refund";
 };
 
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
@@ -87,23 +188,27 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const now = Date.now();
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
-    let resolvedAction = paymentAction;
+    const refund = paymentAction === "refund" ? await foldRefundOnce(store, action, existing) : undefined;
+    const effective = refund?.action ?? action;
 
-    // A refund is "partial" while the resulting refunded total stays below the captured total.
-    // `refundedTotalFor` resolves absolute-vs-delta semantics so the partial/full decision and the
-    // stored amount agree.
-    if (paymentAction === "refund" && existing) {
-        const prospective = refundedTotalFor(existing, action);
-
-        if (prospective && compareMoney(prospective, existing.capturedAmount) < 0) {
-            resolvedAction = "partial_refund";
-        }
-    }
+    const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, effective) : paymentAction;
 
     const toState = nextPaymentState(fromState, resolvedAction);
 
     if (!toState) {
-        return { applied: false, reason: "illegal_transition" };
+        // A refund cannot apply before the capture it refunds. Providers do not guarantee ordering
+        // (Stripe explicitly does not), so that is out-of-order delivery, not an illegal event:
+        // report it as `orphaned` so the claim is released and the provider's ONE bounded retry
+        // applies it once the capture lands. Dropping it would burn the event id and lose the refund
+        // permanently — leaving a refunded customer entitled.
+        const outOfOrder = paymentAction === "refund" && PRE_CAPTURE_STATES.has(fromState);
+
+        // Nothing is written, so the claim must not stand: an `orphaned` refund is retried once and
+        // has to book its money then, and an `illegal_transition` would leave a claim no event ever
+        // consumes. Same reason on the two paths below.
+        await refund?.release();
+
+        return { applied: false, reason: outOfOrder ? "orphaned" : "illegal_transition" };
     }
 
     const base: PaymentSession = existing ?? {
@@ -124,26 +229,65 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         capturedAmount = action.amount;
     }
 
-    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount) {
-        const prospective = refundedTotalFor(base, action);
+    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && effective.amount) {
+        const prospective = refundedTotalFor(base, effective);
 
         if (!prospective) {
+            await refund?.release();
+
             return { applied: false, reason: "invalid_refund_amount" };
         }
 
         refundedAmount = prospective;
     }
 
-    await store.upsertPaymentSession({
-        ...base,
-        capturedAmount,
-        referenceId: action.referenceId ?? base.referenceId,
-        refundedAmount,
-        state: toState,
-        updatedAt: now,
-    });
+    try {
+        await store.upsertPaymentSession({
+            ...base,
+            capturedAmount,
+            referenceId: action.referenceId ?? base.referenceId,
+            refundedAmount,
+            state: toState,
+            updatedAt: now,
+        });
+    } catch (error) {
+        // The claim is taken before the row, because a concurrent restatement of the same refund must
+        // not double-count while this write is in flight. There is no transaction across the two, so a
+        // failed write would otherwise leave the claim standing, and the provider's retry — which the
+        // caller's rethrow triggers — would zero the amount and lose the refund entirely.
+        await refund?.release();
+
+        throw error;
+    }
 
     return { applied: true, reason: "ok" };
+};
+
+/**
+ * Pick the FSM action a webhook implies, given where the row already is.
+ *
+ * Two arrivals at `active` are not the same transition, and no adapter can tell them
+ * apart — every provider (Stripe, Creem, Dodo) reports both a renewal and a resume as
+ * the same `subscription.active` event, so the current state is what disambiguates:
+ *
+ * Already `active` means `renew` (a period roll, a legal self-loop). `paused` means
+ * `resume`, the only edge out of `paused` back to `active` — mapping it to `activate`
+ * (illegal from `paused`) rejected every resume as `illegal_transition`, so a customer
+ * who resumed and paid stayed denied by `check`/`hasActivePrice` until somebody ran
+ * `reconcile` by hand.
+ */
+const resolveSubscriptionAction = (from: SubscriptionState, targetState: SubscriptionState, type: WebhookActionType): SubscriptionAction | undefined => {
+    if (targetState === "active") {
+        if (from === "active") {
+            return "renew";
+        }
+
+        if (from === "paused") {
+            return "resume";
+        }
+    }
+
+    return SUBSCRIPTION_ACTION_BY_TYPE[type];
 };
 
 const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
@@ -169,6 +313,11 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
             currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
             priceId: action.priceId ?? existing.priceId,
+            // A plan change REPLACES the item set, so a reported set wins outright rather than
+            // merging — an item removed upstream has to disappear here too. The adapter only reports
+            // a set it could establish completely, so `undefined` means "unknown", not "empty", and
+            // leaves the stored set standing for the next reconcile sweep to confirm.
+            priceIds: action.priceIds ?? existing.priceIds,
             quantity: action.quantity ?? existing.quantity,
             updatedAt: now,
         });
@@ -190,6 +339,10 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             currentPeriodStart: action.currentPeriodStart ?? now,
             id: action.subscriptionId,
             priceId: action.priceId ?? "",
+            // Left ABSENT rather than defaulted to `[]`: an empty set would grant nothing, whereas
+            // absent falls back to `[priceId]` on read — the right answer for the single-price
+            // providers and for an adapter that could not establish the full set.
+            priceIds: action.priceIds,
             provider: action.provider,
             quantity: action.quantity ?? 1,
             referenceId: action.referenceId ?? "",
@@ -200,9 +353,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         return { applied: true, reason: "ok" };
     }
 
-    // A repeated "active" (renewal/period roll) is a legal self-loop; otherwise use the mapped action.
-    const subscriptionAction: SubscriptionAction | undefined =
-        existing.state === "active" && targetState === "active" ? "renew" : SUBSCRIPTION_ACTION_BY_TYPE[action.type];
+    const subscriptionAction = resolveSubscriptionAction(existing.state, targetState, action.type);
 
     const nextState = subscriptionAction ? nextSubscriptionState(existing.state, subscriptionAction) : undefined;
 
@@ -216,6 +367,8 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
         priceId: action.priceId ?? existing.priceId,
+        // Same wholesale-replace-or-preserve rule as the metadata patch above.
+        priceIds: action.priceIds ?? existing.priceIds,
         quantity: action.quantity ?? existing.quantity,
         state: nextState,
         updatedAt: now,
@@ -243,7 +396,7 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         throw new LunoraPaymentError("WEBHOOK_EVENT_ID_MISSING", `webhook event id is missing or blank for provider "${action.provider}"`);
     }
 
-    const fresh = await store.markEventProcessed(action.provider, action.eventId);
+    const fresh = await store.markEventProcessed(action.provider, action.eventId, action.type);
 
     if (!fresh) {
         notifyObserver(observer, { eventId: action.eventId, provider: action.provider, type: "webhook.duplicate" });
@@ -280,7 +433,7 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, ob
         // every other event down with it. A companion marker in the same claim store records that the
         // event has already had its retry; the second sighting keeps the claim and acknowledges, so
         // the event stops rather than the endpoint. The observer sees `reason: "unhandled"` for it.
-        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`);
+        const retryable = await store.markEventProcessed(action.provider, `${ORPHAN_RETRY_MARKER}${action.eventId}`, ORPHAN_RETRY_CLAIM_TYPE);
 
         if (retryable) {
             await store.releaseEvent(action.provider, action.eventId);

@@ -35,6 +35,9 @@
  * `backfillRankIndexes`.
  */
 
+import type { SQL } from "drizzle-orm";
+import { sql as dsql } from "drizzle-orm";
+
 import { matchesStaticWhere } from "./aggregate-sql";
 import { compareStrings } from "./aggregate-tally";
 import type { RankIndexDefinitionLike } from "./schema-types";
@@ -182,7 +185,65 @@ const rankKeyFromDocument = (
     };
 };
 
-export { encodePartitionKey, RANK_TIEBREAK, rankKeyFromDocument as rankKeyFromDoc, rankTableName, resolveRankPartition, sortColumnName };
+/**
+ * One pivot column's comparison for a lexicographic rank seek — the shared core
+ * of `rankPage`'s strict-after cursor and `rank()`/`rankBefore()`'s
+ * strictly-before count, on both the DO and the SQL-store side.
+ *
+ * `wantLater` is which side is being sought: `true` for the forward page seek,
+ * `false` for the "how many sort before this row" count.
+ *
+ * **NULL is why this is not a comparator lookup**, and it is the same reasoning
+ * `pivotCondition` (`query-args.ts`) writes out for the row-store keyset seek.
+ * `col > NULL` and `col < NULL` are both UNKNOWN, so no comparator expresses
+ * either side of a NULL pivot, and none reaches a NULL row sitting on the far
+ * side of a non-null pivot. A rank sort column genuinely holds NULL:
+ * `syncRankIndexEntry` writes `record[field] ?? null`, so a document simply
+ * missing the field is a NULL in `__sort_k<i>__`.
+ *
+ * The NULL placement written out here is the one the rank companion's btree is
+ * built under — SQLite's, NULLs FIRST ascending and LAST descending — so a
+ * non-null row is on the wanted side of a NULL pivot exactly when
+ * `ascending === wantLater`, and NULL rows are on the wanted side of a non-null
+ * pivot exactly when it is not. Every `ORDER BY` that pairs with this seek has
+ * to agree; Postgres does not by default, so `@lunora/sql-store` states the
+ * placement explicitly on its rank reads.
+ *
+ * `undefined` is the same pivot as `null`: a cursor position for a column the
+ * row never carried arrives here as `undefined`.
+ * @returns the pivot's predicate, or `undefined` when nothing can sort on the wanted side of it (the caller drops the whole branch)
+ */
+const rankPivotConditionSql = (column: string, value: unknown, direction: "asc" | "desc", wantLater: boolean): SQL | undefined => {
+    const nonNullWanted = (direction !== "desc") === wantLater;
+
+    if (value === null || value === undefined) {
+        // The NULL group is the extreme of this ordering: either every non-null
+        // row is on the wanted side of it, or nothing at all is.
+        return nonNullWanted ? dsql`${dsql.identifier(column)} IS NOT NULL` : undefined;
+    }
+
+    const comparison = dsql`${dsql.identifier(column)} ${dsql.raw(nonNullWanted ? ">" : "<")} ${value}`;
+
+    if (nonNullWanted) {
+        return comparison;
+    }
+
+    // The NULL rows sort on the wanted side of this pivot and no comparator can
+    // reach them.
+    //
+    // Emitted unconditionally, where the row-store's `pivotCondition` gates the
+    // same arm on the column's declared nullability — a second
+    // disjunct on the pivot column is not answerable from the companion's
+    // `(__partition__, __sort_k0__ …, __id__)` btree, so the planner falls back
+    // to a scan for this branch. A rank index definition carries no nullability
+    // (`RankIndexDefinitionLike.sortBy` is field + direction) and the companion
+    // writer NULLs a missing field regardless of what the schema declares, so
+    // there is nothing here to gate on yet. Thread the column's validator
+    // through if a wide partition makes the scan measurable.
+    return dsql`(${comparison} OR ${dsql.identifier(column)} IS NULL)`;
+};
+
+export { encodePartitionKey, RANK_TIEBREAK, rankKeyFromDocument as rankKeyFromDoc, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName };
 
 // Cheap predicate test against the index's static `where` (literal equality /
 // `{ eq }` only) — the identical check aggregates use, aliased for the rank seam.

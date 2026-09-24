@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createMemo } from "solid-js";
 
@@ -22,8 +22,13 @@ type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "ru
  */
 interface AgentThreadRecord {
     createdAt?: number;
-    /** The failure message when `status === "error"`. */
-    error?: string;
+
+    /**
+     * The failure message when `status === "error"`, `null` once a later run
+     * cleared it, absent on a thread that has never failed. Read it for
+     * truthiness — `null` and absent both mean "no error".
+     */
+    error?: null | string;
     /** The workflow instance id of the in-flight run — the handle `cancel` targets. */
     instanceId?: string;
     messageCount?: number;
@@ -62,6 +67,13 @@ interface CreateAgentOptions {
     cancel?: FunctionReference<"mutation">;
 
     /**
+     * Called when the live thread subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `thread` / `status` are cleared until a later frame arrives.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * The app mutation that starts (or continues) a run — a thin wrapper over
      * `ctx.agents.<name>.run(...)`. Called with `{ threadKey, input }` merged with
      * {@link CreateAgentOptions.runArgs} and the per-call args.
@@ -79,6 +91,8 @@ interface CreateAgentResult {
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
+    /** The live thread subscription's last error, or `undefined`. */
+    error: Accessor<Error | undefined>;
     /** `true` while a `run` invocation is in flight. */
     pending: Accessor<boolean>;
     /** Start (or continue) a run with a user message; extra args merge over `runArgs`. */
@@ -113,13 +127,17 @@ const resolveMaybe = <T>(value: MaybeAccessor<T>): T => (typeof value === "funct
  * key re-subscribes to the new thread.
  */
 const createAgent = (options: CreateAgentOptions): CreateAgentResult => {
-    const { api, cancel: cancelReference, run: runReference, runArgs, threadKey } = options;
+    const { api, cancel: cancelReference, onError, run: runReference, runArgs, threadKey } = options;
 
     const runMutation = createMutation(runReference);
     const cancelMutation = createMutation(cancelReference ?? NO_MUTATION_REF);
-    const { data: threadData } = createSubscription(api.agents.agentThread, () => {
-        return { key: resolveMaybe(threadKey) };
-    });
+    const { data: threadData, error } = createSubscription(
+        api.agents.agentThread,
+        () => {
+            return { key: resolveMaybe(threadKey) };
+        },
+        { onError },
+    );
 
     const thread = createMemo(() => threadData() as unknown as AgentThreadRecord | undefined);
     const status = createMemo(() => thread()?.status);
@@ -139,7 +157,7 @@ const createAgent = (options: CreateAgentOptions): CreateAgentResult => {
         await cancelMutation.mutate({ instanceId, threadKey: resolveMaybe(threadKey) });
     };
 
-    return { cancel, pending: runMutation.pending, run, status, thread };
+    return { cancel, error, pending: runMutation.pending, run, status, thread };
 };
 
 export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentOptions, CreateAgentResult, MaybeAccessor };

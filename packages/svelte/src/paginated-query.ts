@@ -1,9 +1,10 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
@@ -22,10 +23,19 @@ type PageItemOf<F extends FunctionReference> = ReturnOf<F> extends { page: (infe
 interface PaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` store). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface PaginatedQueryHandle<T> {
+    /**
+     * The last page subscription error, or `undefined`. A tail page that fails
+     * before its first frame is dropped so `status` returns to `"CanLoadMore"`
+     * and `loadMore` can retry it; cleared by the next successful frame,
+     * `loadMore`, or an args emission.
+     */
+    error: Readable<SubscriptionError | undefined>;
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: Readable<boolean>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
@@ -38,10 +48,14 @@ interface PaginatedQueryHandle<T> {
 interface InfiniteQueryOptions {
     /** Page size for the first page (and the default for `fetchNextPage`). */
     initialNumItems: number;
+    /** Called when a page subscription reports an error (also surfaced on the `error` store). */
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
 interface InfiniteQueryHandle<T> {
+    /** The last page subscription error, or `undefined` — see `PaginatedQueryHandle.error`. */
+    error: Readable<SubscriptionError | undefined>;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
     fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */
@@ -84,15 +98,19 @@ const createPaginatedEngine = <T>(
     client: LunoraClient,
     function_: FunctionReference,
     baseArgs: "skip" | Record<string, unknown> | Readable<"skip" | Record<string, unknown>>,
-    options: { initialNumItems: number; shardKey?: string },
+    options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
 ): {
+    error: Readable<SubscriptionError | undefined>;
     loadMore: (numberItems: number) => void;
     pageResults: Readable<(PaginationResult<T> | undefined)[]>;
+    /** Whether the currently-resolved base args are the `"skip"` sentinel. */
+    skipped: Readable<boolean>;
     status: Readable<PaginationStatus>;
 } => {
-    const { initialNumItems, shardKey } = options;
+    const { initialNumItems, onError, shardKey } = options;
 
     const pagesStore = writable<Page[]>(initialPages(initialNumItems));
+    const errorStore = writable<SubscriptionError | undefined>();
     // pageResultsStore is a writable used as the source; pageResults is the
     // public Readable that the lazy start/stop callback wires up.
     const pageResultsInternal = writable<(PaginationResult<T> | undefined)[]>([]);
@@ -222,6 +240,7 @@ const createPaginatedEngine = <T>(
 
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
+                    errorStore.set(undefined);
 
                     rebuildPageResults();
 
@@ -245,7 +264,34 @@ const createPaginatedEngine = <T>(
                         }
                     }
                 },
-                { shardKey },
+                {
+                    onError: (subscriptionError) => {
+                        pendingPageKeys.delete(key);
+                        errorStore.set(subscriptionError);
+
+                        // A tail that fails before its first frame is dropped so
+                        // the feed leaves `LoadingMore` (status falls back to the
+                        // previous page's cursor) and `loadMore` can retry it. The
+                        // first page has nothing to fall back to and stays.
+                        const current = get(pagesStore);
+                        const tail = current.at(-1);
+
+                        if (
+                            current.length > 1 &&
+                            tail &&
+                            !resultsByKey.has(key) &&
+                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgsRecord)) === key
+                        ) {
+                            pagesStore.set(current.slice(0, -1));
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
+                            syncSubscriptions();
+                            rebuildPageResults();
+                        }
+
+                        onError?.(subscriptionError);
+                    },
+                    shardKey,
+                },
             );
 
             activeSubs.set(key, unsub);
@@ -297,9 +343,18 @@ const createPaginatedEngine = <T>(
     };
 
     // pageResults is a lazy Svelte readable: subscriptions open on the first
-    // $-read and close when the last subscriber unsubscribes — matching the
-    // pattern used by `query.ts` so no WS handles leak after unmount.
+    // browser-side $-read and close when the last subscriber unsubscribes —
+    // matching the pattern used by `query.ts` so no WS handles leak after
+    // unmount and a server render opens nothing.
     const pageResults: Readable<(PaginationResult<T> | undefined)[]> = readable<(PaginationResult<T> | undefined)[]>([], (set) => {
+        // Server-render guard: svelte's server runtime subscribes to `{$store}`
+        // during `render()`, so this start callback runs on the server too. See
+        // `query.ts` for why opening there is wrong (and, on a relative-URL
+        // client, throws out of the render).
+        if (!isBrowser()) {
+            return () => {};
+        }
+
         // Wire internal store updates through to this readable's subscribers.
         const unsubInternal = pageResultsInternal.subscribe(set);
 
@@ -315,6 +370,7 @@ const createPaginatedEngine = <T>(
             return () => {
                 teardownAll();
                 pagesStore.set(initialPages(initialNumItems));
+                errorStore.set(undefined);
             };
         });
 
@@ -329,6 +385,12 @@ const createPaginatedEngine = <T>(
         pageResults,
         (results) => derivePaginationStatus(currentBaseArgs === "skip", results).status,
     );
+
+    // A skipped feed reports `status === "LoadingFirstPage"` (it has no first
+    // page and never will), so `isLoading` must not derive from `status` alone —
+    // it would spin forever. Piggyback on `pageResults` the way `status` does so
+    // a reactive args source that flips to/from `"skip"` re-evaluates.
+    const skipped = derived<Readable<(PaginationResult<T> | undefined)[]>, boolean>(pageResults, () => currentBaseArgs === "skip");
 
     const loadMore = (numberItems: number): void => {
         if (currentBaseArgs === "skip") {
@@ -373,12 +435,13 @@ const createPaginatedEngine = <T>(
             }
         }
 
+        errorStore.set(undefined);
         pagesStore.set(next);
         syncSubscriptions();
         rebuildPageResults();
     };
 
-    return { loadMore, pageResults, status };
+    return { error: { subscribe: errorStore.subscribe }, loadMore, pageResults, skipped, status };
 };
 
 /**
@@ -416,18 +479,18 @@ export function paginatedQuery<F extends FunctionReference>(
     const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ReactivePaginatedArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as PaginatedQueryOptions;
 
-    const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, skipped, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const results = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => page?.page ?? []),
     );
 
-    const isLoading = derived<Readable<PaginationStatus>, boolean>(
-        status,
-        (currentStatus) => currentStatus === "LoadingFirstPage" || currentStatus === "LoadingMore",
+    const isLoading = derived(
+        [status, skipped],
+        ([currentStatus, isSkipped]) => !isSkipped && (currentStatus === "LoadingFirstPage" || currentStatus === "LoadingMore"),
     );
 
-    return { isLoading, loadMore, results, status };
+    return { error, isLoading, loadMore, results, status };
 }
 
 /**
@@ -461,21 +524,21 @@ export function infiniteQuery<F extends FunctionReference>(
     const options = (hasExplicitClient ? maybeOptions : argumentsOrOptions) as InfiniteQueryOptions;
     const { initialNumItems } = options;
 
-    const { loadMore, pageResults, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
+    const { error, loadMore, pageResults, skipped, status } = createPaginatedEngine<PageItemOf<F>>(client, functionRef, args, options);
 
     const pages = derived<Readable<(PaginationResult<PageItemOf<F>> | undefined)[]>, PageItemOf<F>[][]>(pageResults, (currentResults) =>
         currentResults.flatMap((page) => (page ? [page.page] : [])),
     );
 
-    const isLoading = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "LoadingFirstPage");
+    const isLoading = derived([status, skipped], ([s, isSkipped]) => !isSkipped && s === "LoadingFirstPage");
     const hasNextPage = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "CanLoadMore");
-    const isFetchingNextPage = derived<Readable<PaginationStatus>, boolean>(status, (s) => s === "LoadingMore");
+    const isFetchingNextPage = derived([status, skipped], ([s, isSkipped]) => !isSkipped && s === "LoadingMore");
 
     const fetchNextPage = (numberItems?: number): void => {
         loadMore(numberItems ?? initialNumItems);
     };
 
-    return { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
+    return { error, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, pages, status };
 }
 
 export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions, ReactivePaginatedArgs };

@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -132,7 +131,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"drafts\">",
@@ -203,7 +201,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "id": {
                                                 "description": "Id<\"posts\">",
@@ -267,7 +264,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -323,7 +319,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "title": {
                                                 "type": "string"
@@ -392,7 +387,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "contentType": {
                                                 "type": "string"
@@ -454,7 +448,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "text": {
                                                 "type": "string"

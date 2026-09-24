@@ -34,13 +34,27 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`. Read at
-     * dispatch to decide whether the function runs system-trusted: `init` and
-     * `reactor` have no caller identity, so RLS has no user to scope to.
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`/`onWhisper`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * `init` and `reactor` have no caller identity, so RLS has no user to scope
+     * to. `whisper` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
+    /**
+     * `.x402({ price })` tag on a paid public procedure. The origin worker
+     * paywalls it; the shard refuses to subscribe it (`isPaidFunction`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -79,11 +93,8 @@ return { "name": source["name"] };
 installCompiledValidatorMap(lunora_messages_1.attachmentUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["channelId"] !== "string") return DEFER;
-if (source["channelId"].length > 128) return DEFER;
-if (typeof source["key"] !== "string") return DEFER;
-if (source["key"].length > 512) return DEFER;
-return { "channelId": source["channelId"], "key": source["key"] };
+if (typeof source["messageId"] !== "string") return DEFER;
+return { "messageId": source["messageId"] };
 });
 installCompiledValidatorMap(lunora_messages_1.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -165,9 +176,9 @@ return { "channelId": source["channelId"] };
 installCompiledValidatorMap(lunora_profiles_3.avatarUrl.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["key"] !== "string") return DEFER;
-if (source["key"].length > 512) return DEFER;
-return { "key": source["key"] };
+if (typeof source["userId"] !== "string") return DEFER;
+if (source["userId"].length > 128) return DEFER;
+return { "userId": source["userId"] };
 });
 installCompiledValidatorMap(lunora_profiles_3.requestAvatarUpload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -195,17 +206,25 @@ return { "name": source["name"], ...(__has1 ? { "avatarKey": __val1 } : {}) };
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
- * per Durable Object instance before any handler runs (`init`), and after a
- * write flush when a watched read's result changed (`reactor`). Each path also
- * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; `init` and `reactor` have no caller, so they run
- * anonymous — all via system dispatch.
+ * per Durable Object instance before any handler runs (`init`), after a
+ * write flush when a watched read's result changed (`reactor`), and before a
+ * socket joins or broadcasts to a whisper topic (`whisper`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket-scoped moments run under
+ * the socket's verified identity; `init` and `reactor` have no caller, so they
+ * run anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: {
+    connect: readonly string[];
+    disconnect: readonly string[];
+    init: readonly string[];
+    reactor: readonly string[];
+    whisper: readonly string[];
+} = {
     connect: [],
     disconnect: [],
     init: [],
     reactor: [],
+    whisper: [],
 };
 
 /**
@@ -242,7 +261,7 @@ export interface Caller {
         list: (args?: {}) => Promise<import("./dataModel.js").Doc_channels[]>;
     };
     messages: {
-        attachmentUrl: (args: { channelId: string; key: string }) => Promise<string>;
+        attachmentUrl: (args: { messageId: Id<"messages"> }) => Promise<string>;
         list: (args: { channelId: string }) => Promise<import("./dataModel.js").Doc_messages[]>;
         requestAttachmentUpload: (args: { channelId: string; contentType: string }) => Promise<{ key: string; url: string; }>;
         search: (args: { channelId: string; text: string }) => Promise<import("./dataModel.js").Doc_messages[]>;
@@ -254,7 +273,7 @@ export interface Caller {
         list: (args: { channelId: string }) => Promise<import("./dataModel.js").Doc_presence[]>;
     };
     profiles: {
-        avatarUrl: (args: { key: string }) => Promise<string>;
+        avatarUrl: (args: { userId: string }) => Promise<string>;
         list: (args?: {}) => Promise<import("./dataModel.js").Doc_profiles[]>;
         requestAvatarUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
         save: (args: { name: string; avatarKey?: string }) => Promise<Id<"profiles">>;
@@ -266,6 +285,27 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
+    }
+
+    // A mutation is routed through the caller's own `ctx.runMutation` rather than
+    // invoked directly, so `createCaller(ctx).ns.someMutation()` gets exactly what
+    // `ctx.runMutation(api.ns.someMutation)` gets: the BEGIN/COMMIT span (or the
+    // enclosing one, when the caller is already inside a transaction), the jobs it
+    // schedules held until that span commits, and the deferred object deletes
+    // flushed only once it has. Called straight, a mutation composed from an action
+    // or a stream had none of the three — its writes autocommitted one row at a
+    // time and its `ctx.scheduler` calls dispatched immediately, so a mid-handler
+    // throw left the earlier writes durable and the job already enqueued.
+    //
+    // The fallback covers a context that is not a shard dispatch (`runMutation` is
+    // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
+    // no transaction to join in that case, so a direct call is all there is.
+    if (registered.kind === "mutation") {
+        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+
+        if (typeof runMutation === "function") {
+            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        }
     }
 
     return (await registered.handler(context, args ?? {})) as R;

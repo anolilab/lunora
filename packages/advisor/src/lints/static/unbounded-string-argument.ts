@@ -6,9 +6,12 @@ import type { Lint } from "../../types";
  *
  * A string field that accepts an unbounded value lets a client send megabytes of
  * text per request — inflating storage, blowing the row/document size budget, and
- * driving CPU/memory on every handler that processes it. A `.check()`/`.meta()`
- * max-length bound caps the blast radius. Advisory (INFO): a deliberately-open
- * free-text field is sometimes legitimate, so this nudges rather than blocks.
+ * driving CPU/memory on every handler that processes it. A `.max(n)` (or
+ * `.length(n)`) bound caps the blast radius. Only those two count: `.meta({
+ * maxLength })` publishes a cap the parser never enforces, and a bare `.check()`
+ * may predicate anything — neither is evidence the length is bounded. Advisory
+ * (INFO): a deliberately-open free-text field is sometimes legitimate, so this
+ * nudges rather than blocks.
  *
  * Runs only when the codegen feeder supplies arg evidence
  * (`context.argValidators`, public procedures only); a runtime caller flags
@@ -22,7 +25,7 @@ const unboundedStringArgument: Lint = {
     level: "INFO",
     name: "unbounded_string_arg",
     remediation:
-        "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
+        "Add an enforced max-length bound with `.max(n)` on the string validator (e.g. cap a name at 256, a body at a few KB). `.meta({ maxLength })` only documents a cap — the parser does not enforce it. Size the cap to the field's real-world maximum.",
     run: (context) => {
         if (context.argValidators === undefined) {
             return [];

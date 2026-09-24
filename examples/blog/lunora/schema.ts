@@ -1,7 +1,7 @@
-import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 import { EMBED_DIMENSIONS, embedText } from "./embed.js";
+import { ratelimit } from "./ratelimit/schema.js";
 
 /**
  * blog — exercises the Lunora add-on stack.

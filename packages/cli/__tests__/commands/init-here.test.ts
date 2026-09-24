@@ -130,6 +130,63 @@ describe("lunora init --here", () => {
         expect(log).toContain("httpRouter");
     });
 
+    it("lists @lunora/vite in the install command whenever it writes it into the config", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@tanstack/react-start": "^1.95.0" });
+        writeFileSync(join(workdir, "vite.config.ts"), 'import { defineConfig } from "vite";\n\nexport default defineConfig({ plugins: [] });\n', "utf8");
+
+        const logger = capturingLogger();
+
+        await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+        const installLine = logger.lines.find((line) => line.includes("install the adapter"));
+
+        // The patch writes `import { lunora } from "@lunora/vite"` into the config,
+        // and only the create-vite overlay ever added the dependency — so following
+        // step 1 verbatim left the very config this run just wrote unresolvable.
+        expect(readFileSync(join(workdir, "vite.config.ts"), "utf8")).toContain("@lunora/vite");
+        expect(installLine).toContain("@lunora/vite");
+    });
+
+    it("omits @lunora/vite for a framework whose Vite config it deliberately leaves alone", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+        writeFileSync(
+            join(workdir, "vite.config.ts"),
+            'import { sveltekit } from "@sveltejs/kit/vite";\nimport { defineConfig } from "vite";\n\nexport default defineConfig({ plugins: [sveltekit()] });\n',
+            "utf8",
+        );
+
+        const logger = capturingLogger();
+
+        await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+        const installLine = logger.lines.find((line) => line.includes("install the adapter"));
+
+        expect(installLine).toContain("@lunora/svelte");
+        expect(installLine).not.toContain("@lunora/vite");
+    });
+
+    it("scaffolds a schema and sample function that reference only tables the schema declares", async () => {
+        expect.assertions(3);
+
+        writePackageJson(workdir, { lodash: "^4.0.0" });
+
+        await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        const schema = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
+        const functions = readFileSync(join(workdir, "lunora", "messages.ts"), "utf8");
+
+        // `v.id("channels")` named a table the one-table sample schema never
+        // declares, so codegen emitted no `Id<"channels">` and every scaffolded
+        // project failed `tsc` with TS2345 on the sample function's first argument.
+        expect(schema).not.toContain('v.id("channels")');
+        expect(functions).not.toContain('v.id("channels")');
+        expect(schema).toContain("channelId: v.string()");
+    });
+
     it("class B (sveltekit): scaffolds lunora/ without a vite.config and prints svelte adapter + hook-injection steps", async () => {
         expect.assertions(5);
 
@@ -148,6 +205,27 @@ describe("lunora init --here", () => {
 
         expect(log).toContain("@lunora/svelte");
         expect(log).toContain("/_lunora/*");
+    });
+
+    it("class B (sveltekit) leaves the vite.config every SvelteKit project actually has alone", async () => {
+        expect.assertions(3);
+
+        // The fixture above deliberately omits `vite.config.ts` — but SvelteKit
+        // cannot build without one, so in a real project the class-B skip sat
+        // behind a condition that never held and `lunora()` was patched in.
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const viteConfig =
+            'import { sveltekit } from "@sveltejs/kit/vite";\nimport { defineConfig } from "vite";\n\nexport default defineConfig({ plugins: [sveltekit()] });\n';
+
+        writeFileSync(join(workdir, "vite.config.ts"), viteConfig, "utf8");
+
+        const logger = capturingLogger();
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(workdir, "vite.config.ts"), "utf8")).toBe(viteConfig);
+        expect(existsSync(join(workdir, "lunora", "schema.ts"))).toBe(true);
     });
 
     it("class C (no framework, no vite config): creates a minimal vite.config and scaffolds lunora/", async () => {

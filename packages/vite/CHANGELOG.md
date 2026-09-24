@@ -1,3 +1,1128 @@
+## @lunora/vite [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.243...@lunora/vite@1.0.0-alpha.244) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.207
+* **@lunora/config:** upgraded to 1.0.0-alpha.244
+
+## @lunora/vite [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.242...@lunora/vite@1.0.0-alpha.243) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.206
+* **@lunora/config:** upgraded to 1.0.0-alpha.243
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/studio:** upgraded to 1.0.0-alpha.205
+
+## @lunora/vite [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.241...@lunora/vite@1.0.0-alpha.242) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.205
+* **@lunora/config:** upgraded to 1.0.0-alpha.242
+* **@lunora/studio:** upgraded to 1.0.0-alpha.204
+
+## @lunora/vite [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.240...@lunora/vite@1.0.0-alpha.241) (2026-09-24)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a schema with a table named after a `ctx.db` writer method (`aggregate`,
+`count`, `findMany`, `rank`, `restore`, …) is now rejected at discovery. Such a schema was
+already broken at runtime; rename the table.
+
+### Bug Fixes
+
+* **codegen:** reserve every ctx.db writer method as a table name ([#807](https://github.com/anolilab/lunora/issues/807)) ([e344e62](https://github.com/anolilab/lunora/commit/e344e62f7a64252e8103d336d063c08a16de982b)), closes [#805](https://github.com/anolilab/lunora/issues/805)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.204
+* **@lunora/config:** upgraded to 1.0.0-alpha.241
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/studio:** upgraded to 1.0.0-alpha.203
+
+## @lunora/vite [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.239...@lunora/vite@1.0.0-alpha.240) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.240
+* **@lunora/studio:** upgraded to 1.0.0-alpha.202
+
+## @lunora/vite [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.238...@lunora/vite@1.0.0-alpha.239) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.203
+* **@lunora/config:** upgraded to 1.0.0-alpha.239
+* **@lunora/studio:** upgraded to 1.0.0-alpha.201
+
+## @lunora/vite [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.237...@lunora/vite@1.0.0-alpha.238) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.202
+* **@lunora/config:** upgraded to 1.0.0-alpha.238
+
+## @lunora/vite [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.236...@lunora/vite@1.0.0-alpha.237) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.201
+* **@lunora/config:** upgraded to 1.0.0-alpha.237
+* **@lunora/studio:** upgraded to 1.0.0-alpha.200
+
+## @lunora/vite [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.235...@lunora/vite@1.0.0-alpha.236) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.236
+* **@lunora/studio:** upgraded to 1.0.0-alpha.199
+
+## @lunora/vite [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.234...@lunora/vite@1.0.0-alpha.235) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.200
+* **@lunora/config:** upgraded to 1.0.0-alpha.235
+* **@lunora/studio:** upgraded to 1.0.0-alpha.198
+
+## @lunora/vite [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.233...@lunora/vite@1.0.0-alpha.234) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.199
+* **@lunora/config:** upgraded to 1.0.0-alpha.234
+* **@lunora/studio:** upgraded to 1.0.0-alpha.197
+
+## @lunora/vite [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.232...@lunora/vite@1.0.0-alpha.233) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.198
+* **@lunora/config:** upgraded to 1.0.0-alpha.233
+* **@lunora/studio:** upgraded to 1.0.0-alpha.196
+
+## @lunora/vite [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.231...@lunora/vite@1.0.0-alpha.232) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.197
+* **@lunora/config:** upgraded to 1.0.0-alpha.232
+* **@lunora/studio:** upgraded to 1.0.0-alpha.195
+
+## @lunora/vite [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.230...@lunora/vite@1.0.0-alpha.231) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.196
+* **@lunora/config:** upgraded to 1.0.0-alpha.231
+* **@lunora/studio:** upgraded to 1.0.0-alpha.194
+
+## @lunora/vite [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.229...@lunora/vite@1.0.0-alpha.230) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.194
+* **@lunora/config:** upgraded to 1.0.0-alpha.230
+* **@lunora/studio:** upgraded to 1.0.0-alpha.193
+
+## @lunora/vite [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.228...@lunora/vite@1.0.0-alpha.229) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.229
+* **@lunora/studio:** upgraded to 1.0.0-alpha.192
+
+## @lunora/vite [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.227...@lunora/vite@1.0.0-alpha.228) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.193
+* **@lunora/config:** upgraded to 1.0.0-alpha.228
+* **@lunora/studio:** upgraded to 1.0.0-alpha.191
+
+## @lunora/vite [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.226...@lunora/vite@1.0.0-alpha.227) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.192
+* **@lunora/config:** upgraded to 1.0.0-alpha.227
+* **@lunora/studio:** upgraded to 1.0.0-alpha.190
+
+## @lunora/vite [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.225...@lunora/vite@1.0.0-alpha.226) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.191
+* **@lunora/config:** upgraded to 1.0.0-alpha.226
+* **@lunora/studio:** upgraded to 1.0.0-alpha.189
+
+## @lunora/vite [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.224...@lunora/vite@1.0.0-alpha.225) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.190
+* **@lunora/config:** upgraded to 1.0.0-alpha.225
+* **@lunora/studio:** upgraded to 1.0.0-alpha.188
+
+## @lunora/vite [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.223...@lunora/vite@1.0.0-alpha.224) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.189
+* **@lunora/config:** upgraded to 1.0.0-alpha.224
+* **@lunora/studio:** upgraded to 1.0.0-alpha.187
+
+## @lunora/vite [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.222...@lunora/vite@1.0.0-alpha.223) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.188
+* **@lunora/config:** upgraded to 1.0.0-alpha.223
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/studio:** upgraded to 1.0.0-alpha.186
+
+## @lunora/vite [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.221...@lunora/vite@1.0.0-alpha.222) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.187
+* **@lunora/config:** upgraded to 1.0.0-alpha.222
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/studio:** upgraded to 1.0.0-alpha.185
+
+## @lunora/vite [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.220...@lunora/vite@1.0.0-alpha.221) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.186
+* **@lunora/config:** upgraded to 1.0.0-alpha.221
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/studio:** upgraded to 1.0.0-alpha.184
+
+## @lunora/vite [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.219...@lunora/vite@1.0.0-alpha.220) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.184
+* **@lunora/config:** upgraded to 1.0.0-alpha.220
+* **@lunora/studio:** upgraded to 1.0.0-alpha.182
+
+## @lunora/vite [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.218...@lunora/vite@1.0.0-alpha.219) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.183
+* **@lunora/config:** upgraded to 1.0.0-alpha.219
+* **@lunora/studio:** upgraded to 1.0.0-alpha.181
+
+## @lunora/vite [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.217...@lunora/vite@1.0.0-alpha.218) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.182
+* **@lunora/config:** upgraded to 1.0.0-alpha.218
+* **@lunora/studio:** upgraded to 1.0.0-alpha.180
+
+## @lunora/vite [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.216...@lunora/vite@1.0.0-alpha.217) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.180
+* **@lunora/config:** upgraded to 1.0.0-alpha.217
+* **@lunora/studio:** upgraded to 1.0.0-alpha.178
+
+## @lunora/vite [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.215...@lunora/vite@1.0.0-alpha.216) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.179
+* **@lunora/config:** upgraded to 1.0.0-alpha.216
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/studio:** upgraded to 1.0.0-alpha.177
+
+## @lunora/vite [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.214...@lunora/vite@1.0.0-alpha.215) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.178
+* **@lunora/config:** upgraded to 1.0.0-alpha.215
+* **@lunora/studio:** upgraded to 1.0.0-alpha.176
+
+## @lunora/vite [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.213...@lunora/vite@1.0.0-alpha.214) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.177
+* **@lunora/config:** upgraded to 1.0.0-alpha.214
+* **@lunora/studio:** upgraded to 1.0.0-alpha.175
+
+## @lunora/vite [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.212...@lunora/vite@1.0.0-alpha.213) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.176
+* **@lunora/config:** upgraded to 1.0.0-alpha.213
+* **@lunora/studio:** upgraded to 1.0.0-alpha.174
+
+## @lunora/vite [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.211...@lunora/vite@1.0.0-alpha.212) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.175
+* **@lunora/config:** upgraded to 1.0.0-alpha.212
+* **@lunora/studio:** upgraded to 1.0.0-alpha.173
+
+## @lunora/vite [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.210...@lunora/vite@1.0.0-alpha.211) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.174
+* **@lunora/config:** upgraded to 1.0.0-alpha.211
+* **@lunora/studio:** upgraded to 1.0.0-alpha.172
+
+## @lunora/vite [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.209...@lunora/vite@1.0.0-alpha.210) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.173
+* **@lunora/config:** upgraded to 1.0.0-alpha.210
+* **@lunora/studio:** upgraded to 1.0.0-alpha.171
+
+## @lunora/vite [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.208...@lunora/vite@1.0.0-alpha.209) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.172
+* **@lunora/config:** upgraded to 1.0.0-alpha.209
+* **@lunora/studio:** upgraded to 1.0.0-alpha.170
+
+## @lunora/vite [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.207...@lunora/vite@1.0.0-alpha.208) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.171
+* **@lunora/config:** upgraded to 1.0.0-alpha.208
+* **@lunora/studio:** upgraded to 1.0.0-alpha.169
+
+## @lunora/vite [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.206...@lunora/vite@1.0.0-alpha.207) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.170
+* **@lunora/config:** upgraded to 1.0.0-alpha.207
+* **@lunora/studio:** upgraded to 1.0.0-alpha.168
+
+## @lunora/vite [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.205...@lunora/vite@1.0.0-alpha.206) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.169
+* **@lunora/config:** upgraded to 1.0.0-alpha.206
+* **@lunora/studio:** upgraded to 1.0.0-alpha.167
+
+## @lunora/vite [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.204...@lunora/vite@1.0.0-alpha.205) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.168
+* **@lunora/config:** upgraded to 1.0.0-alpha.205
+* **@lunora/studio:** upgraded to 1.0.0-alpha.166
+
+## @lunora/vite [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.203...@lunora/vite@1.0.0-alpha.204) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.167
+* **@lunora/config:** upgraded to 1.0.0-alpha.204
+* **@lunora/studio:** upgraded to 1.0.0-alpha.165
+
+## @lunora/vite [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.202...@lunora/vite@1.0.0-alpha.203) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.166
+* **@lunora/config:** upgraded to 1.0.0-alpha.203
+* **@lunora/studio:** upgraded to 1.0.0-alpha.164
+
+## @lunora/vite [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.201...@lunora/vite@1.0.0-alpha.202) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.202
+
+## @lunora/vite [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.200...@lunora/vite@1.0.0-alpha.201) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.165
+* **@lunora/config:** upgraded to 1.0.0-alpha.201
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/studio:** upgraded to 1.0.0-alpha.163
+
+## @lunora/vite [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.199...@lunora/vite@1.0.0-alpha.200) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.200
+* **@lunora/studio:** upgraded to 1.0.0-alpha.162
+
+## @lunora/vite [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.198...@lunora/vite@1.0.0-alpha.199) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.164
+* **@lunora/config:** upgraded to 1.0.0-alpha.199
+* **@lunora/studio:** upgraded to 1.0.0-alpha.161
+
+## @lunora/vite [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.197...@lunora/vite@1.0.0-alpha.198) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.162
+* **@lunora/config:** upgraded to 1.0.0-alpha.198
+* **@lunora/studio:** upgraded to 1.0.0-alpha.160
+
+## @lunora/vite [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.196...@lunora/vite@1.0.0-alpha.197) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **scheduler,config:** an entry in `triggers.crons` that Lunora did not generate is no
+longer removed, and the first reconcile of an existing config rewrites the file
+to add the ownership marker.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): test the cron surface for emptiness, not presence
+
+`hasLunoraCrons` decides whether Lunora owns `scheduled` or the framework host
+keeps its own, and it read `options.crons ?? options.cronJobs ?? options.backupCron`.
+`??` stops at the first non-nullish value, and codegen emits `cronJobs:
+LUNORA_CRONS` unconditionally — `{}` for an app that declares no cron. So the
+predicate was `true` for every app built through
+`defineApp().buildFrameworkWorker(host)`, the preservation branch was
+unreachable, and the host's own `scheduled` was dropped in all of them.
+
+Counts the keys instead. The regression test is driven by the committed
+generated shape (`cronJobs: {}`); the existing coverage passed only because
+hand-built option objects omit the key entirely.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): name the env var the DO really dispatches from
+
+The SchedulerDO takes its callback origin from `env.LUNORA_ORIGIN_URL` and
+deliberately ignores the `originUrl` on the schedule request (a caller-supplied
+target is an SSRF vector), but the docs described that ignored option as the live
+one and never named the env var. `examples/blog` followed them: it passes
+`LUNORA_WORKER_ORIGIN` as `originUrl` and sets no `LUNORA_ORIGIN_URL`, so every
+`ctx.scheduler.runAfter` in it is refused with `ORIGIN_NOT_CONFIGURED`.
+
+Docs now name the var and what happens without it; the example sets both (they
+are different origins to different readers — the cross-shard relation resolver
+reads `LUNORA_WORKER_ORIGIN`).
+
+The dead required `originUrl` on `createScheduler`/`createWorkpool` is left in
+place: it is live for the Queues-backed `httpDispatcher`, and removing it from
+the shared options type reaches codegen's emitter and committed generated output.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): record cron ownership in the manifest
+
+The ownership marker was a `// lunora:crons [...]` comment above `triggers.crons`, written by
+structural position and read back by a non-global regex over the whole file. Those are different
+locations: a stale duplicate marker higher in the file — a merge that repeated a hunk, a copy-paste —
+was read as the record, so the entry it named was cleared. That entry is the hand-written `backupCron`
+trigger, which is the one thing the marker exists to protect.
+
+The comment also broke `wrangler.json`, a supported config name. Wrangler routes it through its JSONC
+parser and survives, but the project's own `JSON.parse`, its deploy wrapper and its editor's JSON
+schema validation do not, and one `lunora deploy` or dev-server schema save was enough.
+
+The record now lives in the project's `package.json` under `lunora.crons`. It is committed, so it
+still survives the fresh CI clone that ruled out gitignored `.lunora/` state; it is valid JSON, so a
+`.json` config behaves exactly like a `.jsonc` one with no second code path; and it is read and
+written at one address, so there is nothing to find in the wrong place. A plain key in the wrangler
+config is not an option — wrangler reports unknown fields on every command.
+
+Per-entry tagging (`"0 * * * *", // lunora`) was weighed and rejected: it is still a comment, so it
+does not fix the `.json` case, and `modify()` rewrites the array wholesale, so the tags would have to
+be hand-serialized with their own indent and line-ending detection.
+
+The wrangler config is now written only when an entry actually moves, so `changed` — which deploy and
+the vite plugin print `synced N cron trigger(s)` on — no longer reports a sync that moved nothing.
+`ReconcileResult.preserved` names the entries kept but not generated, and both callers print them.
+Each file's own indentation and line endings are matched, so a CRLF config no longer grows a bare LF.
+
+`@lunora/vite`'s cron-sync suite is deleted: `cron-sync.ts` is a pure re-export of `@lunora/config`,
+and two suites over one implementation only diverge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): refuse an invalid schedule id
+
+`resolveScheduleId` minted a fresh random id whenever the caller's `RunOptions.id` failed
+`^\w[\w-]{0,63}$` — including the leading-`-` case. But `id` is documented as NOT an idempotency key:
+an id already scheduled is refused with `409 DUPLICATE_SCHEDULE_ID`. Silently swapping an invalid one
+meant `runAt(ts, ref, args, { id: "-daily-2026-09-06" })` minted a different id on every call, so
+calling it twice scheduled the job twice where it used to 409 — and left the handler holding an id no
+record was stored under, so its later `cancel` missed.
+
+An id the caller supplied that is not a safe key segment now throws `INVALID_SCHEDULE_ID`; only an
+absent one is minted. `SchedulerDO` answers the coded `400` envelope its client already re-raises,
+and `@lunora/server`'s deferred facade throws synchronously from the mutation, like its delay and
+instant guards. Id resolution and the duplicate check move behind one `resolveId` on the DO, which is
+a branch cheaper in `handleSchedule` than the pair it replaces.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): clear only the crons key, not the whole lunora manifest
+
+Clearing dropped the entire `lunora` object whenever it held a single key,
+without checking that the key was `crons`. So an app carrying any other Lunora
+setting — a `registryUrl`, say — lost it the first time every cron was removed
+from `lunora/crons.ts`: the code whose whole purpose is not to delete user-owned
+config deleted user-owned config.
+
+Test the keys rather than count them. This branch is also what establishes
+`lunora.*` as a namespace worth putting settings in, so the collision was a
+matter of time rather than a hypothetical.
+
+Proven both ways: against the unfixed reconciler the new case reports
+`expected undefined to be 'https://registry.example.test'`; with the fix the
+sibling key survives, `crons` is still cleared, and the user's hand-written
+trigger is still left alone. 13 config cron tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): never let a manifest problem cost the cron write
+
+`readManifest` normalises a non-object `lunora` to `undefined`, but the manifest
+TEXT still holds it — so `modify(text, ["lunora", "crons"], …)` threw
+`Can not add index to parent of type string` on a project whose `package.json`
+had `"lunora": "…"` or an array.
+
+The throw was the smaller half. `recordManagedCrons` ran BEFORE the wrangler
+write, and both callers swallow a throw into a single `warn` line — so `lunora
+deploy` printed one warning among its output and shipped a config whose
+`triggers.crons` had never been updated. Every scheduled function silently never
+fired, for as long as that key stayed in the manifest.
+
+Two changes. Ownership is now recorded AFTER the config is on disk, so a manifest
+failure can never take the write down with it — and recording a set the config
+does not yet reflect would let the next pass clear a cron that is still declared.
+And a `lunora` value that is not a plain object is left completely alone rather
+than replaced: whatever it means it is the app's, and overwriting user config is
+the exact failure this ownership record exists to avoid. The cost is that
+ownership goes unrecorded for that project, so the reconciler degrades to
+add-only until the manifest is repaired — a cron that outlives its declaration,
+versus silent data loss.
+
+Proven both ways: against the unfixed reconciler the new case reports
+`Error: Can not add index to parent of type string` and the config keeps its old
+crons; with the fix the generated cron lands, the hand-written one is preserved,
+and the foreign `lunora` value is untouched. 666 config tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): say so when the cron ownership record is unusable
+
+`lunora.crons` is what tells the reconciler which `triggers.crons` entries it
+generated and may therefore clear. A merge conflict or a hand-edit that leaves it
+a non-array — or an array with non-string entries — degraded silently to "we own
+nothing": the generated cron the reconciler itself wrote on the last pass is then
+reported back to the user as a hand-written trigger and, by this module's design,
+is never cleared again. A permanent orphan, announced as `kept 1 hand-written
+cron trigger(s)`.
+
+Degrading is still the right direction — deleting a trigger on a guess is the
+worse failure — but it now travels as `ReconcileResult.warnings` for the caller
+to print, alongside the existing case where `lunora` itself is a value that
+cannot be indexed into. Mirrors `reconcileWranglerBindings`, which already
+returns warnings both callers loop over.
+
+Also moves the `kept N hand-written cron trigger(s)` line here as
+`describePreservedCrons`: `lunora deploy` and the Vite plugin printed two
+byte-identical copies of it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): print the kept-cron line only when it is news
+
+`reconcileWranglerExtras` logged `kept N hand-written cron trigger(s)` on every
+codegen pass — in a dev server, on every schema save — for a set that had not
+moved since the last one. A line that repeats is a line the reader learns to
+skip, including on the pass where it finally changes. It now prints when the
+config was actually written or when the preserved set itself moved, and the
+damaged-ownership-record warnings are surfaced next to it.
+
+The two reconcile-plus-log helpers move out of `codegen-plugin.ts` into
+`reconcile-wrangler.ts`: neither touches the plugin, and the file had crossed
+1000 lines. 1003 → 924. `codegenPlugin` is now its file's sole export, so it
+becomes a default one.
+
+`lunora deploy` prints the shared `describePreservedCrons` line and the same
+warnings.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(blog): commit the cron ownership record
+
+`lunora/crons.ts` declares one schedule, so the first `lunora dev` or `lunora
+deploy` writes `lunora.crons` into this tracked manifest — leaving a permanently
+dirty working tree for anyone who runs the example. Committed the same way
+`wrangler.jsonc`'s `triggers.crons` already is; a reconcile over it is now a
+no-op. It is the only workspace project with a hand-written `lunora/crons.ts`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): drop the originUrl nobody reads
+
+`createScheduler` and `createWorkpool` required an `originUrl`, put it in the
+`/schedule` body, and the SchedulerDO declared the field only to ignore it — the
+dispatch target comes from `env.LUNORA_ORIGIN_URL` at fire time, deliberately,
+because a caller-supplied one would be an SSRF vector. So every schedule
+serialised a value so the receiver could pointedly not read it, and the docs had
+grown a comment apologising for it in two places.
+
+Removed from `LunoraSchedulerOptions`, `SchedulerHostOptions`,
+`ScheduleRequestBody` and the guard in `assertSchedulerOptions`.
+
+`SchedulerDeclaration.origin` goes with it — its only consumer was that argument,
+and it gated the whole surface: `.scheduler({ namespace })` without an `origin`
+resolved `ctx.scheduler` to `undefined`, silently, for a value the DO was never
+going to use. The generated resolver now needs only the namespace.
+
+`HttpDispatcherOptions.originUrl` stays: the Queues-backed dispatcher seeds
+`LUNORA_ORIGIN_URL` from it, and that one really is the target.
+* **scheduler,config:** `createScheduler`, `createWorkpool` and `createSchedulerHost` no
+longer accept `originUrl`, and `.scheduler(...)` no longer accepts `origin`. Set
+`LUNORA_ORIGIN_URL` on the SchedulerDO's env instead — it was already the only
+thing that worked.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite,errors): unbreak the postinstall gate and catalog the new code
+
+Two defects this branch shipped, both caught only by gates a local
+`pnpm run <script>` never reaches.
+
+**A raw NUL byte in `reconcile-wrangler.ts`.** The separator in
+`preserved.join(...)` was written as a literal 0x00, which makes git classify the
+file as binary and trips the root `scripts/no-nul-bytes.mjs` gate. That gate runs
+from postinstall, so it fails during `pnpm install --frozen-lockfile` — turning
+every CI job red in its setup step, with the cause named in none of them. A local
+script run never installs, so this branch's seven green gates could not see it.
+Now written as the escape form, which is byte-identical at runtime; the gate
+exits 0.
+
+**`INVALID_SCHEDULE_ID` was minted but never catalogued.** `resolveScheduleId`
+began throwing it when this branch made an invalid caller-supplied id an error
+rather than silently minting a replacement, and `catalog-registration.test.ts`
+fails on any code that is not a catalog key: `Found error code(s) minted outside
+
+### Bug Fixes
+
+* **scheduler,config:** stop dead-lettering jobs and deleting crons ([#629](https://github.com/anolilab/lunora/issues/629)) ([1df421d](https://github.com/anolilab/lunora/commit/1df421d771b7dcd9f92952f3438c20959522c3f8)), closes [#621](https://github.com/anolilab/lunora/issues/621)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.161
+* **@lunora/config:** upgraded to 1.0.0-alpha.197
+* **@lunora/studio:** upgraded to 1.0.0-alpha.159
+
+## @lunora/vite [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.195...@lunora/vite@1.0.0-alpha.196) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.160
+* **@lunora/config:** upgraded to 1.0.0-alpha.196
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/studio:** upgraded to 1.0.0-alpha.158
+
+## @lunora/vite [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.194...@lunora/vite@1.0.0-alpha.195) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.159
+* **@lunora/config:** upgraded to 1.0.0-alpha.195
+* **@lunora/studio:** upgraded to 1.0.0-alpha.157
+
+## @lunora/vite [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.193...@lunora/vite@1.0.0-alpha.194) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.194
+* **@lunora/studio:** upgraded to 1.0.0-alpha.156
+
+## @lunora/vite [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.192...@lunora/vite@1.0.0-alpha.193) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** `@lunora/config` no longer exports `ResourceGraph`,
+`NamedResource`, `ShardNamespaceResource`, `ProvisionResult` or `DriverContext`,
+and `DeployDriver` is now `{ id, name, toolchain? }` — `infer` and `provision`
+are gone. `@lunora/bindings/images` no longer exports `DrawOverlay`, and
+`TransformOptions` has no `draw` key.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** gate on the context binding, not the identifier text ([#609](https://github.com/anolilab/lunora/issues/609)) ([c0bc210](https://github.com/anolilab/lunora/commit/c0bc2105833a32d44b71fec7e05ff503ac94d86d))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.158
+* **@lunora/config:** upgraded to 1.0.0-alpha.193
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/studio:** upgraded to 1.0.0-alpha.155
+
+## @lunora/vite [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.191...@lunora/vite@1.0.0-alpha.192) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.192
+* **@lunora/studio:** upgraded to 1.0.0-alpha.154
+
+## @lunora/vite [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.190...@lunora/vite@1.0.0-alpha.191) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.191
+
+## @lunora/vite [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.189...@lunora/vite@1.0.0-alpha.190) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* the KV mutual-exclusion error is raised with code `BAD_REQUEST`
+instead of `INTERNAL`, and it now fires from the admin `putValue` path as well as
+`createKv`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): materialize the remote wrangler config after bindings are provisioned
+
+`planViteRemoteBindings` ran at plugin-factory time, before any Vite hook. The temp
+config it writes is a copy of `wrangler.jsonc` with `"remote": true` injected on each
+eligible binding, and Lunora provisions the bindings the project's code implies from
+`wranglerValidatorPlugin`'s `config` hook — so the copy was always taken one write too
+early. Under `LUNORA_REMOTE` the cloudflare plugin was then pointed at a snapshot that
+predated the provisioning, and the dev worker booted without the binding that had just
+been written. This is the remote twin of the local defect that moving the reconcile into
+`config` closed; that move did not reach this path.
+
+Observed live against a real account on an example app: `vite dev` logged
+"inferred bindings -> AI (Workers AI) (written to .../wrangler.jsonc)", the file on disk
+gained `"ai": { "binding": "AI" }`, the materialized temp config did not, and a probe
+route reported `["DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]`. After the change the
+same probe reports `["AI","DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]` and the temp
+config carries `"ai": { "binding": "AI", "remote": true }`.
+
+Materialization now happens in the `config` hook, which is registered after the
+validator's and therefore runs after it (both are `enforce: "pre"`). The build gate moves
+with it, so `vite build` no longer writes a temp config it never uses. Cleanup folds into
+the same plugin because the disposer cannot be captured before the plan exists; a
+re-entered `config` hook disposes the previous generation rather than orphaning its file.
+* `remoteBindingsConfigPlugin` and `remoteBindingsCleanupPlugin` are
+replaced by a single `remoteBindingsPlugin(options, planOptions)`, which takes the plan
+inputs rather than an already-materialized plan.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(notify): close the register-side takeover and the dead-device blackout
+
+`ctx.push.register()` upserted a subscription with `user_id = ?` in the `DO UPDATE SET` list, so
+registering an endpoint already stored for someone else re-owned it. The id is derived from the
+endpoint, i.e. a caller-controlled key — the same precondition `unregister` was given an atomic
+`deleteOwned` for. Registering a victim's endpoint with garbage keys under your own id took their
+device dark (an encryption failure is not a gone signal, so it was never pruned either) and handed
+you `unregister` over it. Both stores now refuse a put that would move a row to a different owner —
+D1 in the `ON CONFLICT … DO UPDATE`'s own `WHERE`, memory with no await between check and write —
+and the legacy-prefix eviction inside `put`, a DELETE on a different primary key the guarded upsert
+never sees, is scoped the same way (with the CLAIM predicate, so an anonymous device that signs in
+still loses its old row).
+
+FCM dead tokens were never detected as gone. The provider forwards `body.error.message` only, and
+FCM HTTP v1 keeps `UNREGISTERED` in `error.details[].errorCode`, which it drops — so the codes
+`isGoneError` matched could not arrive and every uninstalled device stayed registered forever, was
+re-POSTed on every broadcast, and counted `failed`. Match the `NOT_FOUND` prose the transport
+actually emits, still scoped to FCM.
+
+A gone subscription also cost four POSTs and ~2.2 s of backoff before being deleted, because
+`retryMiddleware` had no `shouldRetry`; those attempts then fed a circuit breaker whose counter is
+closure state shared by every channel, so two dead devices blacked out `chat`/`webhook`/`inApp` for
+30 s — and the second device's result became `Circuit open`, which is not a gone signal, so it
+survived to repeat it. Permanent failures are no longer retried, and the breaker is per provider and
+ignores them; it still opens for five consecutive transient failures.
+
+On the retry path a gone receipt was reported `failed`, so the pruned id went back into `failedIds`
+and the narrower retry could only throw `no registered subscription` until the queue dead-lettered
+an unsubscribe. It settles as `expired` now, kinded by the id's own prefix, as does an id whose row
+is already gone.
+
+Seeded `email` columns used faker's `free_email` default, so generated rows carried deliverable
+gmail/hotmail/yahoo addresses; seed a staging database, run any user-driven mail flow, and the app
+mails real strangers from its own verified domain. They are built on the RFC 2606 reserved
+`example.com` now — goldens regenerated, since an explicit provider also shifts faker's draw.
+
+Also: the mail capture sink logs when it has nowhere to record instead of returning a success-shaped
+`uncaptured` in silence; the inbound `verify` gate proceeds only on `true`/`undefined` rather than
+on anything but `false`; the queue recipe and `idempotencyKey` docs say that consumer-side dedupe is
+the only mechanism, since no transport can reach Resend's `Idempotency-Key` request header; the
+studio seed host answers `409 fk-parents-empty` (a code its client already decoded and nothing ever
+sent) instead of returning children whose fabricated parents it drops; and `flagshipProvider`
+refuses a literal empty `authToken` as the thunk path already did.
+* `SubscriptionStore.put` must refuse a put that would move a row to a different
+owner, and `ctx.push.register()` now rejects with `FORBIDDEN` for an endpoint registered to another
+user. `@lunora/seed` generates `@example.com` addresses, changing every seeded email value.
+`handleSeedRequest` returns 409 instead of 200 for a table whose foreign-key parents were not
+supplied in `existingIds`.
+
+Test doubles were the reason two of these went unnoticed and are tightened here: the notify mock
+engine now wires the real resilience middleware through the same `attachResilience` production
+uses (a bare `createNotification` exercised none of it), the mock push provider answers each
+provider's real gone phrasing per kind, and `fakeD1` models the `ON CONFLICT … DO UPDATE … WHERE`
+refusal and each of the three `DELETE` owner predicates instead of overwriting and deleting
+unconditionally.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): spawn compensations under an id the engine accepts
+
+The Workflows engine validates an instance id on `create` before it does anything
+else: at most 100 characters matching `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. `:` is not in
+that class, so `ctx.parallel`'s group-saga rollback — spawned as
+`<childId>:compensate` — was rejected on every attempt, in every deployment. The
+rejection is not a duplicate-instance error, so the durable step burned its whole
+retry budget, the catch in `compensateCompleted` logged it and moved on, and the
+group failed with the completed branches never rolled back. A `chargeCard` branch
+with `compensateWith: "refundCard"` took the money and refunded nothing.
+
+The five unit tests hard-coded the `:compensate` id against a `create` double that
+accepted any string, and the workerd smoke never spawns, so nothing caught it. The
+double now applies the engine's own id check, and a new test asserts that every id
+the package mints from a Cloudflare-shaped parent — children and compensations
+alike — satisfies that grammar, so a future suffix carrying a `:` fails there.
+
+Only the suffix is ours to constrain. The parent id it is appended to belongs to
+the host, and `@lunora/platform-node` runs this same orchestrator on
+`@visulima/workflow`, whose `generateRunId` mints `<definitionId>:<uuid>` and
+accepts no override. A test pins that a host-issued parent id the Cloudflare engine
+would refuse still fans out and compensates, so the Cloudflare grammar stays in the
+assertion that belongs to Cloudflare rather than leaking into the portable path.
+
+Also in this change:
+
+- `ctx.parallel` reads an attached child's terminal `status()` instead of waiting
+  for an event that has already been consumed. `instance.restart()` on a parent
+  that had fanned out wipes the parent's step cache AND its event map, so the
+  re-run spawn steps re-attach to children that already signalled; the joins then
+  hibernated for the branch timeout (24 hours by default) and failed the group with
+  the finished children's results sitting unread on their handles. The status read
+  costs nothing on a first spawn — only the attach path performs it — and also
+  recovers a join whose signal was lost for any other reason.
+
+- `isDuplicateInstanceError` no longer misses an `already_exists` spelling. The
+  predicate cannot be pinned against a live engine (miniflare never rejects a
+  duplicate create at all, so the attach branch is unreachable under workerd), and
+  the test now records why along with the separator variants it does defend.
+* a group-saga compensation instance is now created as
+`<childId>-compensate`, not `<childId>:compensate`. Nothing could observe the old
+id — the engine rejected it — but an app that derived the name itself must update.
+The `lunora:spawn:*` durable step now memoizes a branch outcome rather than the
+child id; a parent already in flight replays the old string and joins as before.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): key the readiness gate on the run, not on onStop
+
+`lunoraReadiness` was cleared only in `onStop`, but the base reaches that hook
+solely through `syncPendingStoppedEvents` — which `start()` never calls (only
+`startAndWaitForPorts`, `stop()` and the alarm loop do), while the monitor callback
+that observes a container exit merely records the state. So an explicit `start()`
+inside the up-to-three-minute window before the next alarm found the finished run's
+settled gate and returned early, skipping BOTH `armHardTimeout` and the `readyOn`
+probes: run 2 had no hard timeout at all and was proxied to before it reported
+ready. The hard timeout's own SIGTERM lands squarely in that window, so the
+runaway-cost backstop disarmed itself on the way out.
+
+The mirror case is why "always re-arm" is not the answer: a no-op `start()` on an
+already-running container — an isolate recycled under a live run, or a periodic
+"ensure started" call — begins no new run, and re-arming stamped a fresh generation
+that orphaned the live schedule row and pushed the total-lifetime cap out
+indefinitely.
+
+Both now hang off one synchronous observation taken before anything is started:
+the container was not running (a new run — drop the old gate, arm, probe) or it was
+(no new run — probe for this isolate, leave the armed schedule alone). Read before
+any await, so two concurrent starts of a stopped container still share one gate.
+The two sites that drop a failed gate are identity-checked, so a gate failing late
+for a run that has since ended cannot discard the current run's.
+
+The existing test called `onStop` by hand between the two starts, encoding exactly
+the assumption that does not hold; it now lets the run end the way the base does.
+The start double stubs both entry points and flips the container's `running` flag
+the way `doStartContainer` does, so a no-op start is distinguishable from a first
+start.
+
+Also in this change:
+
+- `startAndWaitForPorts()` resolves the Secrets Store env. It was the only start
+  entry that did not, despite being the path `containerFetch` routes through and the
+  one an app can call itself; `doStartContainer` reads `this.envVars`, so a container
+  started that way booted without its `secretsStore` values. Resolution moves out of
+  `containerFetch`, which now performs it only when a start is actually needed.
+
+- `hardTimeout` is documented as what it is. `stop()` sends SIGTERM and does not
+  escalate to `destroy()`, so a container that traps or ignores the signal outlives
+  its cap; the docs promised it would "never run longer than an hour, busy or not".
+  The hook docblock names the escalation an app can add.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* build: regenerate the lockfile against the released manifest versions
+
+`alpha`'s release commits bumped `@lunora/observability` to alpha.56 and
+`@lunora/platform-cloudflare` to alpha.32 without updating `pnpm-lock.yaml`, so
+every CI job fails in its setup step: the workflows install with
+`--frozen-lockfile`, which refuses a lockfile whose specifiers disagree with the
+manifests. That turns roughly a dozen checks red at once, including both
+required ones, for reasons that look unrelated to the change under review.
+
+Regenerated rather than hand-edited — a text-merged lockfile passes locally and
+fails on the merge ref CI actually builds.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(flags): reword a comment that tripped the secret-entropy rule
+
+The literal env-var reference in the new test's comment reads as a high-entropy
+string to `no-secrets`, which fails `lint:eslint` at --max-warnings=0. The
+comment says the same thing without spelling the identifier.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the id, run-identity and provisioning gaps left open
+
+`ctx.parallel`'s group-saga rollback was still unreachable, gated on length instead of the colon.
+The engine's create-time id check tests `id.length > 100` BEFORE the character class, and a branch
+id is caller-controlled right up to that ceiling — an explicit `branch(…, { id })`, or a derived
+`<parentId>-c<n>` under a long host-issued parent. Adding `-compensate` puts the rollback over it,
+`create` rejects, `compensateCompleted` logs and continues, and a completed branch that took payment
+is never refunded. An over-long compensation id now folds back under the ceiling, keeping a digest
+of the whole child id and the readable suffix. The regression test's short synthetic parent only
+ever exercised the character class; it says so now, and a 90-character branch id covers the rest.
+
+`codeTool` and `agent.asTool()` could never be used together. `codeTool` gives each script step a
+tool-call id of `${toolCallId}:${step.id}` and takes any tool in its map, so `agentAsTool`'s
+`sub-<name>-<toolCallId>` carried a colon into `create`, which rejects it — not as a duplicate, so
+it rethrows and the per-step `step.do` burns its retries. The call id is hashed into the instance id
+now (the thread key still carries it raw), and the docblock that called this "a note for whoever
+changes the shape, not a live hazard" is gone. The agent binding double applies the engine's own id
+check, which is what let this pass unnoticed.
+
+The attach path returned a child's outcome straight into the durable step cache while only the event
+path bounded it. Both channels cap at 1 MiB, and a step return the host cannot serialise aborts the
+instance rather than failing one branch, so the attach path bounds it the same way.
+
+Provisioning was reachable only through `validateWrangler`. `reconcileBindingsSafely` lived in the
+wrangler validator's `config` hook, so turning the CHECKS off — an option whose name promises
+nothing about writes — took the write back out of `config`, and the Cloudflare plugin parsed
+`wrangler.jsonc`, and `remoteBindingsPlugin` copied it, before the binding existed: the exact
+missing-`env.DB` boot that hook was moved to fix. It is its own unconditionally registered plugin
+now, still `enforce: "pre"` and still ahead of the remote-bindings copy.
+
+A re-entrant Vite `config` pass left `configPath` naming a deleted file: cleanup unlinked temp A, a
+new plan wrote temp B, and `withRemoteBindings` read the A still on the options object as a
+user-supplied path and returned unchanged. The plugin tracks what it injected, so only a path it did
+not write counts as the user's.
+
+The container's `beginStart()` snapshot was a TOCTOU across two awaits — a Secrets Store RPC, and
+the base's own pre-start work. A container exiting in that window let a new run start with
+`wasRunning === true`, so the hard timeout was never armed and (via `start()`) the readiness probes
+were skipped too: run 2 ran uncapped and was proxied to before it reported ready. The snapshot moved
+past the secrets resolution, and an `onStop` observed ACROSS the base call now demotes it. What
+remains uncovered is an exit inside `start()`'s own base call, which never syncs pending stop
+events — documented on `beginStart`, along with the hard timeout being a one-shot signal that
+nothing re-sends to a container ignoring SIGTERM.
+
+Docs and comments that overstated a guarantee: the mail queue recipe promised exactly-once for a
+mark written after the send and read from an eventually-consistent store; `register()`'s owner guard
+hard-fails browser account switching, because `subscribeToPush` reuses the browser's subscription
+and every account derives the same id, so the README now makes the sign-out `unregister` part of the
+recipe rather than an aside; the half-open breaker lets through every send already in flight, not
+"exactly one"; `isPermanentFailure` is channel-less as well as kind-less and now governs retry for
+chat/webhook/inApp; the duplicate-instance matcher is unreachable LOCALLY, not in production, which
+is why `createOrAttach` exists at all.
+* `flagshipProvider({ authToken: "" })` now throws at construction instead of
+evaluating flags against their checked-in defaults — a deployment reading an unset secret straight
+off `env` fails to boot rather than failing closed in silence. Omit `authToken` for an
+unauthenticated endpoint, or pass a thunk. A sub-agent child run's instance id is now
+`sub-<name>-<digest>` rather than `sub-<name>-<toolCallId>`, so a run in flight across the upgrade
+starts a second child instead of re-attaching.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(deps): regenerate the lockfile after merging alpha
+
+The merge took the branch's lockfile, which still carried the released-version
+specifiers the new root overrides replace.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* make saga compensation, container restarts and push ownership actually work ([#592](https://github.com/anolilab/lunora/issues/592)) ([6fae07a](https://github.com/anolilab/lunora/commit/6fae07a056a6c93fea1fc11aa88c8d35ee031019))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.157
+* **@lunora/config:** upgraded to 1.0.0-alpha.190
+* **@lunora/studio:** upgraded to 1.0.0-alpha.153
+
+## @lunora/vite [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.188...@lunora/vite@1.0.0-alpha.189) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.156
+* **@lunora/config:** upgraded to 1.0.0-alpha.189
+* **@lunora/studio:** upgraded to 1.0.0-alpha.152
+
+## @lunora/vite [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.187...@lunora/vite@1.0.0-alpha.188) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.154
+* **@lunora/config:** upgraded to 1.0.0-alpha.188
+* **@lunora/studio:** upgraded to 1.0.0-alpha.150
+
+## @lunora/vite [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.186...@lunora/vite@1.0.0-alpha.187) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.153
+* **@lunora/config:** upgraded to 1.0.0-alpha.187
+* **@lunora/studio:** upgraded to 1.0.0-alpha.149
+
+## @lunora/vite [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.185...@lunora/vite@1.0.0-alpha.186) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.152
+* **@lunora/config:** upgraded to 1.0.0-alpha.186
+* **@lunora/studio:** upgraded to 1.0.0-alpha.148
+
+## @lunora/vite [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.184...@lunora/vite@1.0.0-alpha.185) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.151
+* **@lunora/config:** upgraded to 1.0.0-alpha.185
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/studio:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/vite [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.183...@lunora/vite@1.0.0-alpha.184) (2026-09-02)
 
 

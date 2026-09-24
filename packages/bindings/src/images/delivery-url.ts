@@ -34,10 +34,9 @@ const stripLeadingSlash = (value: string): string => (value.startsWith("/") ? va
  * Serialize transform options into the comma-joined `key=value` option string
  * the `/cdn-cgi/image/...` endpoint expects (e.g. `width=256,height=256,fit=cover`).
  * Only string/number scalars are emitted; non-scalar keys are dropped because the
- * `/cdn-cgi/image/` URL form can't express them — `gravity: {x,y}` coordinates and
- * `draw` overlays (overlays are Workers-only: use `ctx.images.transform`'s
- * `overlays` argument, or the signed-delivery flow which re-applies them via the
- * binding).
+ * `/cdn-cgi/image/` URL form can't express them — today that is `gravity: {x,y}`
+ * coordinates. Overlays are Workers-only and have no transform key at all: pass
+ * them as `ctx.images.transform`'s `overlays` argument.
  */
 const serializeTransform = (transform: TransformOptions): string =>
     Object.entries(transform)

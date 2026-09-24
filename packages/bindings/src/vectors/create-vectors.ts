@@ -161,7 +161,16 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
             throw new LunoraError("INTERNAL", `@lunora/bindings/vectors: binding for "${indexName}" does not implement describe()`);
         }
 
-        return index.describe();
+        const details = await index.describe();
+
+        // Cloudflare renamed the row count between API generations (`vectorsCount`
+        // on the beta `VectorizeIndex`, `vectorCount` on the current `Vectorize`).
+        // Both are optional on the projection so either binding satisfies it, which
+        // would otherwise leave every caller to guess which one is populated — so
+        // answer with both filled in.
+        const count = details.vectorCount ?? details.vectorsCount;
+
+        return { ...details, vectorCount: count, vectorsCount: count };
     };
 
     return { deleteByIds, describe, getByIds, query, upsert, upsertMany };

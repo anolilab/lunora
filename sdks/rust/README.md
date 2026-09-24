@@ -45,8 +45,11 @@ let id = client.subscribe("messages:list", args, on_data, on_error);
 ```
 
 `handle_frame(raw)` is what you call with each inbound WebSocket message;
-`resend_subscriptions()` re-subscribes everything after a reconnect, carrying
-each subscription's resume cursor.
+`resend_subscriptions()` re-subscribes everything after a reconnect — queries
+from their resume cursor and shape views from their checkpoint and epoch. A
+`data`/`delta` payload the wire codec refuses is reported on that subscription's
+own `on_error` as `INVALID_FRAME` rather than returned from `handle_frame`, so
+one bad frame cannot end your read loop and with it every other subscription.
 
 ## Optimistic updates and offline writes
 
@@ -63,14 +66,18 @@ client.offline_queue = OfflineQueue::new()
     .with_persistence(Box::new(my_store))
     .with_version("v2");
 
+// Read the query back before the write borrows the client mutably.
+let listed = client.query_value("messages:list", &list_args, None).cloned();
+
 let outcome = client.submit(
     SubmitOptions::new("messages:send", args)
-        // Layered onto every subscription registered under the same (path, args,
-        // shard). An `Arc`, because each of those gets its own layer and each
-        // rebases independently onto its own base.
-        .with_optimistic(Arc::new(|current| append_pending(current)))
-        // A constant override for a differently-named query.
-        .with_optimistic_query("messages:unread", list_args, WireValue::Number(4.0)),
+        // Constant overrides that NAME the queries this write affects — the
+        // general form. (`with_optimistic` takes a transform instead, but layers
+        // it onto subscriptions registered under the write's OWN path and args:
+        // the shorthand for a counter or a document by id, and a no-op for a
+        // `send`/`list` pair.)
+        .with_optimistic_query("messages:list", list_args, append_pending(listed))
+        .with_optimistic_query("messages:unread", unread_args, WireValue::Number(4.0)),
 )?;
 
 if outcome.status == MutationStatus::Queued {
@@ -85,9 +92,17 @@ queued writes when its socket returns, and `client.hydrate_offline_queue()`
 restores what a prior session persisted, returning the shard keys to flush.
 
 A queued write whose args cannot be wire-encoded settles terminally on the first
-flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
-discard — including one the capacity cap evicts out of a _restored_ queue, which
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and a
+_restored_ record whose args no longer decode is purged and settled
+`OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute arguments. Every
+discard — including one the capacity cap evicts out of a restored queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
+
+A flush chunks itself by bytes as well as by entries, and a chunk the worker
+refuses with `413 PAYLOAD_TOO_LARGE` is halved and retried rather than settled
+`rejected` whole. A rate-limited replay (`TOO_MANY_REQUESTS`) is re-queued, not
+dropped: `FlushReport::retry_after_ms` reports the envelope's delay and the
+client holds the next flush off until it passes.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

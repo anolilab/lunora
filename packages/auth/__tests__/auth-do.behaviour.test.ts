@@ -194,8 +194,8 @@ describe("lunoraAuthDO", () => {
         expect(body.role).toBe("user");
     });
 
-    it("drives the real worker-side wiring end to end, expiry and role intact", async () => {
-        expect.assertions(2);
+    it("drives the real worker-side wiring end to end, expiry, role and profile claims intact", async () => {
+        expect.assertions(4);
 
         const { authDo } = createDo({ emailAndPassword: { enabled: true }, plugins: [admin()] });
 
@@ -225,6 +225,13 @@ describe("lunoraAuthDO", () => {
 
         expect(identity?.expiresAtMs).toBeGreaterThan(Date.now());
         expect(identity?.role).toBe("user");
+
+        // `email` / `name` are what `ctx.auth.getIdentity()` is documented to carry
+        // ("email, name, roles, custom claims"). Dropping them here made the
+        // documented `me` query — `identity?.email` — resolve `undefined` on every
+        // app using the built-in DO wiring.
+        expect(identity?.["email"]).toBe("linus@acme.test");
+        expect(identity?.["name"]).toBe("Linus");
     });
 
     it("serves the audit log to a trusted caller, creating its table on demand", async () => {
@@ -300,6 +307,58 @@ describe("lunoraAuthDO", () => {
         );
 
         expect(response.status).toBe(400);
+    });
+
+    /**
+     * `ensureAuthAuditTable` single-flights its DDL in a `WeakMap` keyed on the
+     * executor object. Building a fresh `doExecutor(storage)` per request gave
+     * every read a brand-new key, so the cache never hit: every audit read
+     * re-ran `CREATE TABLE IF NOT EXISTS` plus an `ALTER TABLE` that always
+     * throws and is swallowed.
+     */
+    it("runs the audit DDL once across repeated reads, not once per read", async () => {
+        expect.assertions(2);
+
+        const storage = createDoStorage(database);
+        const ddl: string[] = [];
+        const spying = {
+            ...storage,
+            sql: {
+                exec: (query: string, ...bindings: unknown[]) => {
+                    if (query.includes("__lunora_auth_audit__") && (query.startsWith("CREATE TABLE") || query.startsWith("ALTER TABLE"))) {
+                        ddl.push(query.split("\n")[0]!.trim());
+                    }
+
+                    return storage.sql.exec(query, ...bindings);
+                },
+            },
+        };
+        const authDo = new LunoraAuthDO(
+            { storage: spying },
+            () => {
+                return { secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+
+        const read = async (): Promise<Response> =>
+            authDo.fetch(
+                new Request(`https://example.test${READ_AUDIT_PATH}`, {
+                    body: JSON.stringify({}),
+                    headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET },
+                    method: "POST",
+                }),
+            );
+
+        const first = await read();
+
+        expect(first.status).toBe(200);
+
+        await read();
+        await read();
+
+        // One CREATE + one ALTER, from the first read only.
+        expect(ddl).toHaveLength(2);
     });
 
     it("refuses the audit log without the secret", async () => {

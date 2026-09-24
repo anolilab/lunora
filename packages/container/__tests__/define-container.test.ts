@@ -161,6 +161,15 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", rollout: { stepPercentage: 101 } })).toThrow("rollout.stepPercentage");
     });
 
+    it("rejects a fractional or negative rollout gracePeriodSeconds, but accepts 0", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ image: "./app", rollout: { gracePeriodSeconds: -1 } })).toThrow("rollout.gracePeriodSeconds");
+        expect(() => defineContainer({ image: "./app", rollout: { gracePeriodSeconds: 1.5 } })).toThrow("rollout.gracePeriodSeconds");
+        // 0 is a meaningful value — no grace period — not a missing one.
+        expect(defineContainer({ image: "./app", rollout: { gracePeriodSeconds: 0 } }).rollout).toStrictEqual({ gracePeriodSeconds: 0 });
+    });
+
     it("rejects an empty { build } source", () => {
         expect.assertions(1);
 

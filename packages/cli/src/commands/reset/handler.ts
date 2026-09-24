@@ -1,9 +1,10 @@
 import { existsSync, rmSync } from "node:fs";
 
-import { join } from "@visulima/path";
+import { join, relative } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { tuiConfirm } from "../../util/tui-prompts";
 import type { ResetOptions } from "./index";
@@ -32,21 +33,25 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
     }
 
     if (!options.yes) {
+        // Named from `targets`, not hardcoded: both strings said ".wrangler/state"
+        // while `--all` also deletes `.lunora-cache`, so the operator confirmed
+        // less than the command was about to remove.
+        const what = targets.map((target) => relative(cwd, target)).join(" and ");
         const isTty = process.stdin.isTTY;
 
         if (!isTty && options.confirm === undefined) {
-            options.logger.error("reset: stdin is not a TTY — re-run with --yes to confirm deleting .wrangler/state");
+            options.logger.error(`reset: stdin is not a TTY — re-run with --yes to confirm deleting ${what}`);
 
-            return { code: 1, removed: [] };
+            return { code: EXIT_CODE.USAGE, removed: [] };
         }
 
         const confirmer = options.confirm ?? tuiConfirm;
-        const confirmed = await confirmer("This will delete .wrangler/state. Continue?");
+        const confirmed = await confirmer(`This will delete ${what}. Continue?`);
 
         if (!confirmed) {
             options.logger.info("reset: aborted");
 
-            return { code: 1, removed: [] };
+            return { code: EXIT_CODE.CANCELLED, removed: [] };
         }
     }
 

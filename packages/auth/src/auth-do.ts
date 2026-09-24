@@ -27,6 +27,8 @@
  * staleness window on revocation, which is the trade to make deliberately.
  * @experimental
  */
+import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
@@ -37,6 +39,8 @@ import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
+import type { SqlExecutor } from "./sql-store";
 
 /**
  * The Durable Object state slice this class needs — structural so unit tests can
@@ -105,9 +109,6 @@ const parseReadAuditOptions = (parsed: unknown): { error: string } | { options: 
  * @experimental
  */
 interface AuthDoOptions {
-    /** Base path the auth routes are served under. Must match the worker's. */
-    basePath?: string;
-
     /**
      * Shared secret authenticating the worker on {@link RESOLVE_SESSION_PATH}.
      *
@@ -138,6 +139,18 @@ interface AuthDoOptions {
  * @experimental
  */
 class LunoraAuthDO {
+    /**
+     * One executor for the object's lifetime, not one per request.
+     *
+     * `ensureAuthAuditTable` single-flights its DDL in a `WeakMap` keyed on the
+     * executor object, so a fresh `doExecutor(this.#storage)` per read is a
+     * fresh key every time: the cache never hits and every audit read re-runs
+     * `CREATE TABLE IF NOT EXISTS` plus an `ALTER TABLE` that always throws and
+     * is swallowed. The executor is a stateless pair of closures over `storage`,
+     * so sharing it is free.
+     */
+    readonly #auditExecutor: SqlExecutor;
+
     readonly #options: AuthDoOptions;
 
     readonly #optionsFactory: () => LunoraAuthOptions;
@@ -155,6 +168,7 @@ class LunoraAuthDO {
      */
     public constructor(state: AuthDoState, optionsFactory: () => LunoraAuthOptions, options: AuthDoOptions = {}) {
         this.#storage = state.storage;
+        this.#auditExecutor = doExecutor(state.storage);
         this.#optionsFactory = optionsFactory;
         this.#options = options;
     }
@@ -199,6 +213,10 @@ class LunoraAuthDO {
                 [...this.#storage.sql.exec(statement)];
             }
 
+            // The mirror image, and the only column this ever removes. See
+            // `legacy-issuer.ts` for what better-auth 1.7.0 added and 1.7.3 reverted.
+            this.#dropLegacyIssuerColumn(resolved);
+
             this.#schemaApplied = true;
         }
 
@@ -221,11 +239,70 @@ class LunoraAuthDO {
     }
 
     /**
+     * Remove the `account.issuer` column better-auth 1.7.0 required and 1.7.3 reverted, if
+     * this object still carries it. See `legacy-issuer.ts`.
+     *
+     * Skipped entirely when better-auth's own resolved schema declares the column, because
+     * then it is the app's — added through `account.additionalFields` — not the reverted
+     * one. That check is what keeps this from fighting `authDoColumnAdditions`, which runs
+     * first and re-adds every declared-but-missing column: without it the two steps would
+     * add and drop the same column on every cold start.
+     *
+     * **Best-effort.** Nothing here is allowed to escape. `#schemaApplied` and `#auth` are
+     * both set after this returns, so a throw would leave them unset and re-run — and
+     * re-throw — on every later request, and `fetch` does not catch, so the stub call would
+     * reject for *all* the worker's traffic rather than just `/api/auth/*`. A database that
+     * still carries the column is no worse off than before the attempt, which makes failing
+     * loudly here strictly worse than not trying. The next cold start retries.
+     */
+    #dropLegacyIssuerColumn(resolved: LunoraAuthOptions): void {
+        const { tables } = getAuthTablesWithResolvedIndexes(resolved);
+        const { account } = tables;
+
+        if (account === undefined) {
+            return;
+        }
+
+        const declared = Object.entries(account.fields).map(([key, field]) => field.fieldName ?? key);
+
+        if (schemaDeclaresIssuer(declared) || !this.#columnNames(account.modelName).includes("issuer")) {
+            return;
+        }
+
+        try {
+            // Enumerated, not derived: better-auth names an index after the physical
+            // columns, so a renamed `accountId` changes the name, and any index left behind
+            // makes the `DROP COLUMN` fail. Inside the `try` because a failed metadata read
+            // is just another reason the cleanup cannot run — letting it escape would wedge
+            // every route, which is the thing this method is careful not to do.
+            const indexes = [...this.#storage.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`, account.modelName)].map(
+                (row) => {
+                    return { name: String(row["name"]), sql: typeof row["sql"] === "string" ? row["sql"] : undefined };
+                },
+            );
+
+            for (const statement of legacyIssuerCleanupStatements(account.modelName, indexesReferencingIssuer(indexes))) {
+                [...this.#storage.sql.exec(statement)];
+            }
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error(
+                "@lunora/auth: could not drop the reverted `account.issuer` column; if it is still present, sign-ups will fail until it is removed.",
+                error,
+            );
+        }
+    }
+
+    /**
      * Read the audit log — the worker's `authAuditReader` in DO mode.
      *
      * `AuthAuditEntry` is entirely JSON-safe (`ts` and `seq` are numbers, there are no
      * `Date` values), so proxying it over HTTP is lossless rather than a lossy
      * serialisation the studio would have to compensate for.
+     *
+     * Ordering comes from the reader: newest-first without a cursor, oldest-first
+     * when the body carries `sinceSeq`, so a caller walking the cursor forward
+     * reaches every row rather than re-reading the head of the log.
      *
      * The body is parsed and validated defensively (plan 280 §5 S3): a
      * malformed body (not JSON at all) previously threw an unhandled exception
@@ -255,14 +332,13 @@ class LunoraAuthDO {
             return Response.json({ error: parsed.error }, { status: 400 });
         }
 
-        const executor = doExecutor(this.#storage);
-
         // The audit table is not part of `authTables`, so the schema pass does not
         // create it. Ensuring it here (rather than on every cold start) keeps it off
-        // the request path for apps that never read the log.
-        await ensureAuthAuditTable(executor);
+        // the request path for apps that never read the log; the shared executor is
+        // what lets the single-flight cache actually hit after the first read.
+        await ensureAuthAuditTable(this.#auditExecutor);
 
-        const entries = await createAuthAuditReader(executor).read(parsed.options);
+        const entries = await createAuthAuditReader(this.#auditExecutor).read(parsed.options);
 
         return Response.json({ entries } satisfies { entries: AuthAuditEntry[] });
     }
@@ -286,9 +362,14 @@ class LunoraAuthDO {
      * Resolve the identity behind a request's headers — the worker's
      * `resolveIdentity` in DO mode.
      *
-     * Answers `{ expiresAtMs, role, userId }`, or `{}` for an anonymous request;
-     * never the session record itself. The worker only needs those three, and a
-     * narrow reply keeps session material inside the object.
+     * Answers `{ email, expiresAtMs, name, role, userId }`, or `{}` for an
+     * anonymous request; never the session record itself. The narrow reply keeps
+     * the rest of the session material inside the object.
+     *
+     * `email` and `name` are the claims `ctx.auth.getIdentity()` is documented to
+     * carry ("email, name, roles, custom claims"). Dropping them made the
+     * documented `me` query — `identity?.email` — resolve `undefined` on both
+     * built-in wirings, so the doc and the built-in resolver disagreed.
      *
      * `expiresAtMs` is the socket credential expiry the runtime forwards as
      * `x-lunora-identity-exp`: without it the DO's expiry check never fires and a
@@ -315,18 +396,25 @@ class LunoraAuthDO {
         // better-auth hands back a `Date`; anything else means the adapter did not
         // hydrate it, and a missing expiry is safer to omit than to guess at.
         const expiresAt = session?.session.expiresAt;
-        const role = (session?.user as { role?: unknown } | undefined)?.role;
+        const user = session?.user as { email?: unknown; name?: unknown; role?: unknown } | undefined;
+        const role = user?.role;
 
         return Response.json({
+            ...(typeof user?.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
             ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
+            ...(typeof user?.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
             ...(typeof role === "string" && role.length > 0 ? { role } : {}),
             userId,
         });
     }
 
     /**
-     * Serve an auth request. Routes under `basePath` go to better-auth; the internal
+     * Serve an auth request. Routes under `/api/auth` go to better-auth; the internal
      * session route is handled here; anything else is a 404.
+     *
+     * The base path is not configurable. The worker half only ever forwards
+     * `/api/auth/*` (`createDoAuthWiring`, which codegen calls with no base path),
+     * so a second knob here could only ever disagree with it.
      */
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
@@ -340,7 +428,7 @@ class LunoraAuthDO {
         }
 
         const auth = this.#ensureReady();
-        const response = await handleAuthRequest(auth, request, this.#options.basePath);
+        const response = await handleAuthRequest(auth, request);
 
         return response ?? Response.json({ error: "not an auth route" }, { status: 404 });
     }

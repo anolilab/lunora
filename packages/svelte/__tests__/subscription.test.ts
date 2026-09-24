@@ -1,6 +1,7 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { get, writable } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { subscription } from "../src/subscription";
 
@@ -10,10 +11,15 @@ const args = { channelId: "c1" } as unknown;
 const createFakeClient = () => {
     const unsubscribeSpy = vi.fn<() => void>();
     let lastCallback: ((value: unknown) => void) | undefined;
-    let lastOnError: ((error: { message: string }) => void) | undefined;
+    let lastOnError: ((error: { code?: string; message: string }) => void) | undefined;
 
     const subscribeSpy = vi.fn<
-        (function_: unknown, args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => () => void
+        (
+            function_: unknown,
+            args: unknown,
+            callback: (value: unknown) => void,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => () => void
     >((_fn, _args, callback, options) => {
         lastCallback = callback;
         lastOnError = options?.onError;
@@ -26,11 +32,26 @@ const createFakeClient = () => {
     return {
         client,
         emit: (value: unknown) => lastCallback?.(value),
-        emitError: (message: string) => lastOnError?.({ message }),
+        emitError: (message: string, code?: string) => lastOnError?.(code === undefined ? { message } : { code, message }),
         subscribeSpy,
         unsubscribeSpy,
     };
 };
+
+// Every subscribing primitive in this package gates on a browser `window` (the
+// SSR guard — svelte's server runtime subscribes to `{$store}` during
+// `render()`, so a `readable`'s start callback runs on the server too). The
+// vitest env is `node`, so define one for the client-path tests. Mirrors the
+// same stub in `flag.test.ts` / `presence.test.ts`.
+/* eslint-disable vitest/require-top-level-describe -- the `window` stub is shared by every describe in this file, so it belongs at file scope */
+beforeAll(() => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+});
+
+afterAll(() => {
+    Reflect.deleteProperty(globalThis, "window");
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 describe("subscription store", () => {
     it("data is undefined before any push", () => {
@@ -107,6 +128,25 @@ describe("subscription store", () => {
         stopError();
     });
 
+    it("preserves the server-supplied code on the error store as a LunoraError", () => {
+        // Sibling gap: Vue/Solid's subscription primitives keep `code` so a
+        // consumer can branch on UNAUTHORIZED vs NOT_FOUND; a bare `Error` lost it.
+        const { client, emitError } = createFakeClient();
+        const { data, error } = subscription(client, fnRef, args);
+
+        const stop = data.subscribe(() => {});
+
+        emitError("denied", "FORBIDDEN");
+
+        const captured = get(error);
+
+        expect(captured).toBeInstanceOf(LunoraError);
+        expect((captured as LunoraError).code).toBe("FORBIDDEN");
+        expect(captured?.message).toBe("denied");
+
+        stop();
+    });
+
     it("clears the error store once a healthy value arrives after an error", () => {
         const { client, emit, emitError } = createFakeClient();
         const { data, error } = subscription(client, fnRef, args);
@@ -150,7 +190,7 @@ describe("subscription store", () => {
 
 describe("subscription store with reactive args", () => {
     it("re-subscribes with the new args when the args store emits", () => {
-        const { client, subscribeSpy, unsubscribeSpy } = createFakeClient();
+        const { client, emit, subscribeSpy, unsubscribeSpy } = createFakeClient();
         const argsStore = writable<unknown>({ channelId: "c1" });
         const { data } = subscription(client, fnRef, argsStore);
 
@@ -159,7 +199,14 @@ describe("subscription store with reactive args", () => {
         expect(subscribeSpy).toHaveBeenCalledTimes(1);
         expect(subscribeSpy.mock.calls[0]?.[1]).toStrictEqual({ channelId: "c1" });
 
+        emit([{ id: "1" }]);
+
+        expect(get(data)).toStrictEqual([{ id: "1" }]);
+
         argsStore.set({ channelId: "c2" });
+
+        // The previous args' value does not survive the switch.
+        expect(get(data)).toBeUndefined();
 
         // The previous subscription is torn down before the new one opens.
         expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
@@ -189,5 +236,36 @@ describe("subscription store with reactive args", () => {
         expect(get(data)).toBeUndefined();
 
         stop();
+    });
+});
+
+// Regression: `readable`'s start callback is NOT browser-only. Svelte's server
+// runtime resolves `{$store}` by calling `subscribe_to_store`, so every store
+// read in a server-rendered template runs its start callback — opening a live
+// socket per rendered request against a client whose URL does not resolve
+// server-side, and throwing straight out of the render when that URL is the
+// relative/empty one the SvelteKit template builds.
+describe("subscription store during SSR", () => {
+    it("opens no subscription without a browser window", () => {
+        const original = Reflect.getOwnPropertyDescriptor(globalThis, "window");
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        try {
+            const { client, subscribeSpy } = createFakeClient();
+            const { data, error } = subscription(client, fnRef, args);
+
+            const stop = data.subscribe(() => {});
+
+            expect(subscribeSpy).not.toHaveBeenCalled();
+            expect(get(data)).toBeUndefined();
+            expect(get(error)).toBeUndefined();
+
+            stop();
+        } finally {
+            if (original) {
+                Object.defineProperty(globalThis, "window", original);
+            }
+        }
     });
 });

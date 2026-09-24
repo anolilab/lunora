@@ -2,7 +2,7 @@ import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engin
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { mintWsAdminToken } from "../../../shared/ws-admin-token";
+import { adminSocketBinding, mintWsAdminToken } from "../../../shared/ws-admin-token";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -141,7 +141,7 @@ describe("shardDO admin subscriptions", () => {
         const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
-        shard.registerSocket(ws, { admin: true, subs: {} });
+        shard.registerSocket(ws, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
         await shard.driveMessage(ws, adminSub("sub-1", ADMIN_FUNCTIONS.getMetrics));
 
         expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
@@ -158,7 +158,7 @@ describe("shardDO admin subscriptions", () => {
 
         // Two members share a shape and a whisper topic; the admin socket watches
         // neither, so it contributes to the connection count but no topic.
-        shard.registerSocket(admin, { admin: true, subs: {} });
+        shard.registerSocket(admin, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
         shard.registerSocket(member1, { shapes: { s1: { name: "roomMessages" } }, subs: {}, whispers: ["cursor:room"] });
         shard.registerSocket(member2, { shapes: { s2: { name: "roomMessages" } }, subs: {}, whispers: ["cursor:room"] });
 
@@ -188,7 +188,7 @@ describe("shardDO admin subscriptions", () => {
         const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
-        shard.registerSocket(ws, { admin: true, subs: {} });
+        shard.registerSocket(ws, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
         await shard.driveMessage(ws, adminSub("sub-1", ADMIN_FUNCTIONS.readTablePage, { table: "messages" }));
 
         const seeded = dataEnvelopes(ws).at(-1)?.data as { total: number };
@@ -211,13 +211,54 @@ describe("shardDO admin subscriptions", () => {
         expect((dataEnvelopes(ws).at(-1)?.data as { total: number }).total).toBe(2);
     });
 
+    it("stops pushing an admin subscription once LUNORA_ADMIN_TOKEN is rotated", async () => {
+        expect.assertions(3);
+
+        const env: { LUNORA_ADMIN_TOKEN: string } = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
+        const shard = new AdminSubShard(state, env);
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
+        await shard.driveMessage(ws, adminSub("sub-1", ADMIN_FUNCTIONS.getMetrics));
+
+        expect(dataEnvelopes(ws)).toHaveLength(1);
+
+        // The upgrade authorized ONCE; the socket then lives for hours. Rotating
+        // the master token closes the HTTP admin plane on the next request — it
+        // must close this one too, or the sub-token's 60s TTL only bounds how
+        // long an attacker has to OPEN a socket that reads `runSql` forever.
+        env.LUNORA_ADMIN_TOKEN = "rotated-admin-token";
+        shard.changedTable = "documents";
+        await shard.writeRpc();
+
+        expect(dataEnvelopes(ws)).toHaveLength(1);
+        // The stale subscription is torn down, not merely skipped.
+        expect(ws.attachment?.subs).toStrictEqual({});
+    });
+
+    it("refuses a NEW admin subscription on a socket whose authorizing token was rotated", async () => {
+        expect.assertions(2);
+
+        const env: { LUNORA_ADMIN_TOKEN: string } = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
+        const shard = new AdminSubShard(state, env);
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
+        env.LUNORA_ADMIN_TOKEN = "rotated-admin-token";
+
+        await shard.driveMessage(ws, adminSub("sub-1", ADMIN_FUNCTIONS.getMetrics));
+
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ id: "sub-1", type: "error" });
+        expect(dataEnvelopes(ws)).toHaveLength(0);
+    });
+
     it("re-runs a wildcard admin subscription (getMetrics) on any write-flush", async () => {
         expect.assertions(1);
 
         const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
-        shard.registerSocket(ws, { admin: true, subs: {} });
+        shard.registerSocket(ws, { admin: true, adminBinding: await adminSocketBinding(ADMIN_TOKEN), subs: {} });
         await shard.driveMessage(ws, adminSub("sub-1", ADMIN_FUNCTIONS.getMetrics));
 
         // An unrelated-table write still bumps the request counter, so metrics
@@ -314,7 +355,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             Authorization: `Bearer ${ADMIN_TOKEN}`,
         });
 
-        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+        expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
     });
 
     it("stamps admin:true when the upgrade presents a minted ephemeral token via ?token", async () => {
@@ -326,7 +367,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             `https://shard.internal/?token=${encodeURIComponent(minted.token)}`,
         );
 
-        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+        expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
     });
 
     it("accepts a minted ephemeral token as an alternate credential when LUNORA_WS_BEARER gates the socket", async () => {
@@ -338,7 +379,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             `https://shard.internal/?token=${encodeURIComponent(minted.token)}`,
         );
 
-        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+        expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
     });
 
     it("stamps admin:false when the minted ephemeral token has expired", async () => {
@@ -398,7 +439,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             const minted = await mintWsAdminToken(ADMIN_TOKEN);
             const attachment = await upgradeAndCaptureAttachment(ENFORCED, `https://shard.internal/?token=${encodeURIComponent(minted.token)}`);
 
-            expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+            expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
         });
 
         it("still stamps admin:true for the master token in the Authorization HEADER (no URL leak)", async () => {
@@ -408,7 +449,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
                 Authorization: `Bearer ${ADMIN_TOKEN}`,
             });
 
-            expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+            expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
         });
 
         it("leaves the master token in ?token= working when the env value reads as off", async () => {
@@ -419,7 +460,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
                 `https://shard.internal/?token=${ADMIN_TOKEN}`,
             );
 
-            expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+            expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
         });
     });
 });

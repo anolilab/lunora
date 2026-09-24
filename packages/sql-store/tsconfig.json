@@ -2,7 +2,12 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "moduleResolution": "bundler",
-        "types": ["node"]
+        // `@cloudflare/workers-types` and the vitest-plugin types are here for the
+        // TEST tier only, not for `src/`: the `workerd` suite talks to a real D1
+        // binding through `cloudflare:test`. `src/` stays provider-agnostic — it is
+        // dialect-parameterized logic over an injected exec — so a Cloudflare import
+        // appearing under `src/` is the regression this note exists to catch.
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
         // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `lint:types`
         // is `tsc --noEmit` and the real build is packem (driven by package.json
         // exports), so neither is load-bearing here. A set `rootDir` would raise

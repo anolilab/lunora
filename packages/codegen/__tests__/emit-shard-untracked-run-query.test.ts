@@ -34,7 +34,7 @@ describe("emitShard — untracked ctx.runQuery", () => {
         // The whole point: no `onRead`/`onReadRange` on the sub-context, so the
         // sub-query's reads never reach the subscription's footprint.
         expect(branch).not.toContain("onRead");
-        expect(branch).toContain("this.buildCtx({ functionPath: options.functionPath, headroom: options.headroom");
+        expect(branch).toContain("this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom");
     });
 
     it("pins the identity by value on the untracked sub-context", () => {
@@ -42,8 +42,12 @@ describe("emitShard — untracked ctx.runQuery", () => {
 
         // Load-bearing for RLS: without an explicit `identity`, `buildCtx` reads
         // the shared per-request fields, and a deferred subscription refresh
-        // would run the sub-query as whichever user last touched them.
-        expect(shard()).toContain("identity: { identity, userId }");
+        // would run the sub-query as whichever user last touched them. `ip` rides
+        // the same channel for the same reason — the refresh runs inside the
+        // writing dispatch, so the shared field is the WRITER's. The already
+        // resolved `caller` is forwarded rather than rebuilt member by member, so
+        // the sub-context cannot drift from the context it was spawned from.
+        expect(shard()).toContain("identity: caller");
     });
 
     it("leaves a tracked runQuery, and runMutation/runAction, sharing the caller's ctx", () => {
@@ -52,9 +56,11 @@ describe("emitShard — untracked ctx.runQuery", () => {
         const emitted = shard();
 
         // The default path is unchanged — no second ctx, no behaviour change for
-        // every call site that does not opt in.
-        expect(emitted).toContain(": ctx,\n                );");
-        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx)');
-        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx)');
+        // every call site that does not opt in. (The trailing arguments carry the
+        // caller's kind, and for a mutation its transaction wrapper; the ctx the
+        // callee runs on is still the caller's.)
+        expect(emitted).toContain(": ctx,\n                    contextKind,\n                );");
+        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind,');
+        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind)');
     });
 });

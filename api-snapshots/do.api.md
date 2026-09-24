@@ -29,6 +29,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DispatchBookmark` (interface)
+
+```ts
+interface DispatchBookmark {
+    value: string | undefined;
+}
+```
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -75,6 +83,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ```ts
 interface QueryReadScope {
     footprint: ReadFootprint;
+    markIpRead: () => void;
     tracker: DependencyTracker;
 }
 ```
@@ -100,6 +109,10 @@ const ROOT_SHARD_NAME = "__root__";
 ```
 
 ### `RankIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `RelatedPage` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -150,6 +163,20 @@ interface RunShardBulkRowResult {
 interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
+}
+```
+
+### `RunShardFindRelatedArgs` (interface)
+
+```ts
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
+    table: string;
 }
 ```
 
@@ -209,6 +236,7 @@ interface RunShardRankPageArgs {
 ```ts
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;
@@ -275,12 +303,14 @@ interface SessionRecord {
 ```ts
 abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
+    protected static readonly MAX_ATTACHMENT_BYTES = 16384;
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;
     protected static readonly GLOBAL_SHAPE_RESYNC_MS = 3e4;
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
+    protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
     protected static readonly MAX_WHISPER_BYTES = 4096;
     protected static readonly WHISPER_RATE_BURST = 50;
     protected static readonly WHISPER_RATE_PER_SEC = 25;
@@ -288,6 +318,7 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
@@ -296,8 +327,8 @@ abstract class ShardDO {
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope): Promise<unknown>;
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
     protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;
@@ -308,12 +339,19 @@ abstract class ShardDO {
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
+    protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
-    protected setOutboundBookmark(bookmark: string | undefined): void;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected getCurrentBaselineSeq(): number | undefined;
+    protected recordStalePatchDropped(event: {
+        fields: string[];
+        id: string;
+        table: string;
+    }): void;
     protected getCurrentTraceparent(): string | undefined;
+    protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): {
         rootSpanId: string;
         traceId: string;
@@ -348,14 +386,17 @@ abstract class ShardDO {
         before: number;
         total: number;
     }>;
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage>;
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult>;
     protected runShardCdcSync(args: RunShardCdcSyncArgs): {
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     };
     protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     }>;
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
@@ -369,7 +410,7 @@ abstract class ShardDO {
     protected readIdempotentResult(mutationId: string | undefined): {
         value: unknown;
     } | undefined;
-    protected persistIdempotentResult(result: unknown): void;
+    protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
@@ -383,7 +424,8 @@ abstract class ShardDO {
         strict?: boolean;
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many";
+    protected isPaidFunction(_functionPath: string): boolean;
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;
@@ -398,13 +440,16 @@ abstract class ShardDO {
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
     protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
+    protected scheduleOutbox(): ScheduleOutbox;
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined;
+    protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
     protected ensureShardInit(): Promise<void>;
     protected runShardInit(): Promise<void>;
     protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
+    protected executeStream(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): null | {
         durable?: {
             ttlMs?: number;
         };
@@ -419,9 +464,9 @@ abstract class ShardDO {
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
-    protected isQueryFunction(_functionPath: string): boolean;
+    protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker | undefined;
+    protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
@@ -473,6 +518,7 @@ interface ShardDOState {
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
+        jurisdiction?: string;
         name?: string;
     };
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
@@ -523,6 +569,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `StudioFeaturesResult` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `SubscriptionIdentity` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -708,3 +758,218 @@ const serveRelationFanout: (schema: SchemaLike, database: DatabaseWriterLike, fu
 ### `subscriptionListDeltas` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ClientMutationClass` (type)
+
+```ts
+type ClientMutationClass = {
+    expected: number;
+    kind: "already" | "gap" | "next";
+};
+```
+
+### `ContextLogger` (interface)
+
+```ts
+interface ContextLogger {
+    debug: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    event: (name: string, fields?: LogFields) => void;
+    fatal: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    log: (...args: unknown[]) => void;
+    trace: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    with: (fields: LogFields) => ContextLogger;
+}
+```
+
+### `EvaluationInput` (interface)
+
+```ts
+interface EvaluationInput {
+    label?: string;
+    name: string;
+    score: number;
+}
+```
+
+### `LogFields` (type)
+
+```ts
+type LogFields = Record<string, unknown>;
+```
+
+### `LogSinkContext` (interface)
+
+```ts
+interface LogSinkContext {
+    resourceAttributes?: () => Record<string, boolean | number | string>;
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `MetricEvent` (interface)
+
+```ts
+interface MetricEvent {
+    attributes?: LogFields;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    shardKey?: string;
+    traceId?: string;
+    ts: number;
+    value: number;
+}
+```
+
+### `MetricKind` (type)
+
+```ts
+type MetricKind = "counter" | "gauge" | "histogram";
+```
+
+### `OtlpSpanKind` (type)
+
+```ts
+type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+```
+
+### `QueryAttribution` (interface)
+
+```ts
+interface QueryAttribution {
+    cacheHit?: boolean;
+    readTables?: Set<string>;
+}
+```
+
+### `ReactorRunOutcome` (interface)
+
+```ts
+interface ReactorRunOutcome {
+    digest: string;
+    ran: boolean;
+    tables: ReadonlyArray<string>;
+}
+```
+
+### `RunShardCdcSyncArgs` (interface)
+
+```ts
+interface RunShardCdcSyncArgs {
+    limit?: number;
+    sinceEpoch?: string;
+    sinceSeq: number;
+}
+```
+
+### `SessionDOState` (interface)
+
+```ts
+interface SessionDOState {
+    storage: {
+        delete: (key: string) => Promise<boolean | number>;
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        getAlarm?: () => Promise<number | null>;
+        list?: <T = unknown>(options?: {
+            prefix?: string;
+        }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+        setAlarm?: (scheduledTime: number | Date) => Promise<void>;
+    };
+}
+```
+
+### `ShardRegistryDOState` (interface)
+
+```ts
+interface ShardRegistryDOState {
+    blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
+    storage: {
+        delete: (key: string) => Promise<boolean>;
+        list: <T = unknown>(options: {
+            prefix: string;
+        }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+    };
+}
+```
+
+### `SpanContextIds` (interface)
+
+```ts
+interface SpanContextIds {
+    sampled?: boolean;
+    spanId: string;
+    traceId: string;
+}
+```
+
+### `SpanEvent` (interface)
+
+```ts
+interface SpanEvent {
+    attributes?: LogFields;
+    durationMs: number;
+    events?: SpanEventPoint[];
+    error?: {
+        message: string;
+        type: string;
+    };
+    functionPath: string;
+    kind?: OtlpSpanKind;
+    links?: SpanLink[];
+    name: string;
+    ok: boolean;
+    parentSpanId: string;
+    dispatch?: boolean;
+    sampled?: boolean;
+    shardKey?: string;
+    spanId: string;
+    startTs: number;
+    traceId: string;
+    userId?: string;
+}
+```
+
+### `SpanEventPoint` (interface)
+
+```ts
+interface SpanEventPoint {
+    attributes?: LogFields;
+    name: string;
+    ts: number;
+}
+```
+
+### `SpanHandle` (interface)
+
+```ts
+interface SpanHandle {
+    addEvent: (name: string, attributes?: LogFields) => void;
+    addLink: (link: SpanLink) => void;
+    recordEvaluation: (evaluation: EvaluationInput) => void;
+    recordException: (error: unknown) => void;
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    setAttributes: (fields: LogFields) => void;
+    spanContext: () => SpanContextIds;
+}
+```
+
+### `SpanLink` (interface)
+
+```ts
+interface SpanLink {
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+```

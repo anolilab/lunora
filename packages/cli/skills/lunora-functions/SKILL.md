@@ -70,15 +70,22 @@ Each function declares its inputs with `.input(...)` (a `v.*` map) and ends with
 terminal `.query` / `.mutation` / `.action` handler. Export them as named
 consts from `lunora/*.ts`; codegen surfaces them as `api.<file>.<name>`.
 
-| Kind       | Reads `ctx.db`                    | Writes `ctx.db` | Side effects / `fetch` | Reactive |
-| ---------- | --------------------------------- | --------------- | ---------------------- | -------- |
-| `query`    | yes                               | no              | no                     | yes      |
-| `mutation` | yes                               | yes             | no                     | —        |
-| `action`   | no (use `runQuery`/`runMutation`) | no              | yes                    | —        |
+| Kind       | Reads `ctx.db` | Writes `ctx.db`     | Side effects / `fetch` | Reactive |
+| ---------- | -------------- | ------------------- | ---------------------- | -------- |
+| `query`    | yes            | no                  | no                     | yes      |
+| `mutation` | yes            | yes, transactional  | no                     | —        |
+| `action`   | yes            | yes, autocommitting | yes                    | —        |
+
+The builders are **generated**, not imported from `@lunora/server`: codegen binds
+them to your schema, so `ctx.db`, `v.id("channels")`, and index names are all
+typed. `@lunora/server` exports the schema/HTTP/validator surface and
+`LunoraError`, never `query` / `mutation` / `action`.
 
 ```ts
-import type { Id } from "@lunora/server";
-import { action, LunoraError, mutation, query, v } from "@lunora/server";
+import { LunoraError } from "lunorash/server";
+
+import type { Id } from "#lunora/_generated/server.js";
+import { action, mutation, query, v } from "#lunora/_generated/server.js";
 
 // `api` / `internal` come from codegen:
 // import { api, internal } from "./_generated/api";
@@ -112,8 +119,12 @@ export const notifySlack = action.input({ messageId: v.id("messages") }).action(
 
 - **Pick the right kind.** Reactive read → `query`. Transactional write →
   `mutation`. External I/O (`fetch`, third-party SDKs, calling other functions)
-  → `action`. An action has no `ctx.db`; it reaches data via `ctx.runQuery` /
-  `ctx.runMutation`.
+  → `action`. An action has a `ctx.db`, but its own writes are not
+  transactional: each autocommits as it runs, so a later throw rolls nothing
+  back. Reach data through `ctx.runQuery` / `ctx.runMutation` — a mutation
+  called that way runs in the same all-or-nothing transaction a top-level one
+  gets, so put every write that has to land together in ONE mutation rather
+  than sequencing several from the action.
 - **`internal*` variants** (`internalQuery`, `internalMutation`,
   `internalAction`) are not exposed to clients — use them for server-only logic
   called from actions, crons, or other functions.
@@ -147,6 +158,46 @@ await ctx.db.delete(id);
 **Prefer `withIndex` over `.filter`.** A `.filter(...)` with no covering index
 scans the whole table — `@lunora/advisor` flags it as `filter-without-index`.
 Declare the index and constrain with `.withIndex`.
+
+### Following foreign keys: `ctx.db.related`
+
+Every `v.id("table")` column is an edge in a graph your schema already declares.
+`ctx.db.related` walks it, so "this customer's tickets, and those tickets'
+messages" is one call instead of a hand-written chain of `withIndex` lookups.
+
+```ts
+const { continueCursor, isDone, nodes } = await ctx.db.related(
+    { table: "customers", id: customerId }, // or a row you already loaded
+    { depth: 2, direction: "in", edges: ["tickets.customerId", "messages.ticketId"], limit: 50 },
+);
+
+for (const node of nodes) {
+    node.table; // "messages"
+    node.document; // the row itself
+    node.depth; // 2
+    node.score; // 0.5 — 1 at depth 1, halving per hop
+    node.path; // ["tickets.customerId", "messages.ticketId"]
+    node.pathIds; // ids along the way, start included
+}
+```
+
+- **Edge names are `"<table>.<column>"`.** `edges` restricts the walk to the
+  named ones; a name the schema does not declare is **refused**, not ignored.
+- **`direction`** — `"out"` follows the ids this row holds, `"in"` the rows that
+  point at it, `"both"` (the default) does both.
+- **`depth`** defaults to `1`, max `4`. **`limit`** defaults to `50`, max `200`.
+  Both caps **refuse rather than clamp**, so do not probe for the ceiling.
+- **Only a column is an edge**: a bare `v.id(...)`, `v.optional(v.id(...))` or
+  `v.array(v.id(...))`. An id nested in a `v.object` / `v.union` / `v.record` is
+  not. An array FK is followed **outward only**.
+- **It is an ordinary read** — RLS, column masks, soft delete, `.global()`
+  routing and reactivity all apply, because every hop goes back through
+  `ctx.db`. Under a `.rls("required")` schema each hop gets exactly the verdict a
+  direct read of that table would, so declare a read policy for every table the
+  walk can reach — or narrow it with `edges`.
+- Index the foreign keys. Each inward hop is a `WHERE fk IN (…)` read, and
+  unindexed it scans — see the `lunora-performance-audit` skill for the cost
+  model and the traversal caps.
 
 ## Other `ctx` capabilities
 
@@ -186,23 +237,40 @@ Two exceptions to the usage scan, and one extra requirement:
   action — see `lunora-setup-hyperdrive`. Bindings codegen can provision on its
   own (e.g. `BROWSER` for `ctx.browser`) need no manual wrangler step.
 
-`ctx.browser` and `ctx.sql` are **action-only** by design — they are
-non-deterministic and would break query reactivity and mutation replay.
+`ctx.browser` and `ctx.sql` are **action-only** by design. They are external,
+non-deterministic I/O: a query is re-run on every subscription re-evaluation, so
+a non-deterministic read makes reactivity wrong, and a mutation's writes are
+transactional — a rollback cannot un-send a network call.
 
 ## HTTP endpoints
 
 For webhooks or non-RPC HTTP, use `httpRouter` / `httpRoute` + `httpAction`:
 
+`httpRouter()` takes **no arguments** — it returns a [Hono](https://hono.dev)
+app you mount routes on, and you export the app. Passing it a routes object is a
+type error (`Expected 0 arguments`), and from untyped code the routes simply
+never mount.
+
 ```ts
+// lunora/http.ts
 import { httpAction, httpRouter } from "@lunora/server";
 
-export default httpRouter({
-    "/webhooks/stripe": httpAction(async (ctx, request) => {
+import { internal } from "./_generated/api";
+
+const app = httpRouter();
+
+app.post(
+    "/webhooks/stripe",
+    httpAction(async (ctx, request) => {
         const event = await request.json();
+
         await ctx.runMutation(internal.billing.record, { event });
+
         return new Response("ok");
     }),
-});
+);
+
+export default app;
 ```
 
 ## Checklist
@@ -214,4 +282,6 @@ export default httpRouter({
       `action` (side effects via `runQuery`/`runMutation`).
 - [ ] Server-only logic uses `internal*`; expected failures throw `LunoraError`.
 - [ ] `ctx.db` writes only inside mutations; ids typed with `Id<"table">`.
+- [ ] Any `ctx.db.related` walk is narrowed with `edges` / `direction`, and its
+      foreign keys are indexed.
 - [ ] Ran `lunora codegen`; typecheck is clean.

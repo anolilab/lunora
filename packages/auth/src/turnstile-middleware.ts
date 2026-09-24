@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import type { Middleware } from "@lunora/server";
+import { tagPerDispatchMiddleware } from "@lunora/server";
 
 import type { FetchLike, TurnstileVerifyResult } from "./turnstile";
 import { verifyTurnstile } from "./turnstile";
@@ -85,8 +86,15 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
  *
  * On a `success: false` verdict (or a missing token) it throws a structural
  * `LunoraError` (`{ name: "LunoraError", code: "FORBIDDEN", status: 403 }`) —
- * the runtime maps it to the matching RPC/HTTP status without any runtime
- * import of `@lunora/server` (the `Middleware` import is type-only).
+ * the runtime maps it to the matching RPC/HTTP status without any import of
+ * the error machinery from `@lunora/server`.
+ *
+ * The middleware is tagged PER-DISPATCH: a Turnstile token is single-use, so
+ * verifying one is an effect of the request that a memoized response cannot
+ * stand in for. The builder hoists the mark onto the registered function and
+ * the generated `isCacheableQuery` keeps such a query out of the reactive
+ * cache — a hit answers without running this chain, so one solved token would
+ * otherwise admit every request the memo served.
  *
  * **Failure policy:** if the siteverify call itself throws, the middleware
  * **fails closed by default** (logs and rejects with 403). Pass
@@ -98,9 +106,8 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
  * `validate(result)` predicate) to assert the siteverify response's `hostname`
  * /`action` and reject mismatches with 403.
  */
-export const verifyTurnstileMiddleware =
-    <Context>(options: VerifyTurnstileMiddlewareOptions<Context>): Middleware<Context, Context> =>
-    async ({ ctx, next }) => {
+export const verifyTurnstileMiddleware = <Context>(options: VerifyTurnstileMiddlewareOptions<Context>): Middleware<Context, Context> =>
+    tagPerDispatchMiddleware(async ({ ctx, next }) => {
         const token = options.token(ctx);
 
         if (token === undefined || token === "") {
@@ -131,13 +138,17 @@ export const verifyTurnstileMiddleware =
             throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification unavailable", { cause: error });
         }
 
-        if (!result.success || (options.validate !== undefined && !options.validate(result))) {
+        // `validate` is narrowed to an exact `true` — it is app code asserting the
+        // hostname/action the token was minted for, and a version returning the
+        // matched hostname string (or any other truthy artifact of the comparison)
+        // would otherwise pass every token, including one replayed from another site.
+        if (!result.success || (options.validate !== undefined && (options.validate(result) as unknown) !== true)) {
             throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification failed", {
                 data: result.errorCodes.length > 0 ? { errorCodes: result.errorCodes } : undefined,
             });
         }
 
         return next();
-    };
+    });
 
 export type { VerifyTurnstileMiddlewareOptions };

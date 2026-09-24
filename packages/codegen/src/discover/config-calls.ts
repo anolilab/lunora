@@ -1,8 +1,11 @@
-import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
-import { listSecurityScanFiles } from "./ast";
+import { listSecurityScanFiles, objectLiteralFromCallbackBody } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -27,6 +30,21 @@ const CONSTRUCTOR_CALLEES = new Set(["RateLimiter"]);
  * receiver is a `defineApp()` chain.
  */
 const CALLBACK_CALLEES = new Set(["extend"]);
+
+/**
+ * The `@lunora/vite` plugin factory. `lunora({ allowUnauthenticatedShardAccess:
+ * true })` in `vite.config.*` is the DOCUMENTED opt-in for the auto-composed
+ * class-A worker (`framework-compose-plugin` bakes the flag into the virtual
+ * worker entry), and a class-A app has no worker entry to call `.extend()`
+ * from — so on the default Vite path this is the ONLY place the setting exists.
+ */
+const VITE_PLUGIN_CALLEE = "lunora";
+
+/**
+ * Vite config filenames probed at the project root, in Vite's own resolution
+ * order. Only the first that exists is read — Vite loads exactly one.
+ */
+const VITE_CONFIG_FILES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
 
 /** The subset of {@link ConfigCallIR} a config/callback reader can determine from the argument alone — the caller fills in `callee`/`file`/`line`. */
 type ConfigCallEvidence = Pick<ConfigCallIR, "analyzable" | "presentKeys" | "trueKeys">;
@@ -79,40 +97,6 @@ const keysFromObjectLiteral = (objectLiteral: ObjectLiteralExpression): ConfigCa
 const readConfigArgument = (argument: TsNode | undefined): ConfigCallEvidence =>
     argument && Node.isObjectLiteralExpression(argument) ? keysFromObjectLiteral(argument) : { analyzable: false, presentKeys: [], trueKeys: [] };
 
-/** The sole statement of a single-statement `{ return {...}; }` block, when it returns an object literal. */
-const objectLiteralFromReturnBlock = (block: Block): ObjectLiteralExpression | undefined => {
-    const statements = block.getStatements();
-    const [statement] = statements;
-
-    if (statements.length !== 1 || statement === undefined || !Node.isReturnStatement(statement)) {
-        return undefined;
-    }
-
-    const expression = statement.getExpression();
-
-    return expression !== undefined && Node.isObjectLiteralExpression(expression) ? expression : undefined;
-};
-
-/**
- * The object literal a callback body evaluates to, covering the concise-body
- * form (`() => ({...})`, where the parens make the object literal the whole
- * body) and the block-body form (`() => { return {...}; }`). Anything else
- * (a variable, a multi-statement block, a conditional) is not analyzable.
- */
-const objectLiteralFromCallbackBody = (body: TsNode): ObjectLiteralExpression | undefined => {
-    if (Node.isObjectLiteralExpression(body)) {
-        return body;
-    }
-
-    if (Node.isParenthesizedExpression(body)) {
-        const inner = body.getExpression();
-
-        return Node.isObjectLiteralExpression(inner) ? inner : undefined;
-    }
-
-    return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
-};
-
 /**
  * Read a callback argument (an arrow function or function expression) whose
  * body returns the config object literal — the `.extend(fn)` shape. A
@@ -164,13 +148,52 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
 };
 
 /**
+ * Read the `lunora(...)` plugin options out of the project's Vite config.
+ *
+ * Parsed as source, never executed: this runs inside codegen, and evaluating a
+ * user config would import the whole plugin graph. A config that computes its
+ * options (`lunora(preset)`) reads as not analyzable, exactly like every other
+ * opaque config argument here.
+ *
+ * `file` keeps its extension, unlike the `lunora/`-relative paths: `vite.config`
+ * is not a file anyone can open.
+ */
+const viteConfigCalls = (project: Project, projectRoot: string): ConfigCallIR[] => {
+    for (const name of VITE_CONFIG_FILES) {
+        const filePath = join(projectRoot, name);
+
+        if (!existsSync(filePath)) {
+            continue;
+        }
+
+        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
+        const rows: ConfigCallIR[] = [];
+
+        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+            if (calleeName(call.getExpression()) !== VITE_PLUGIN_CALLEE) {
+                continue;
+            }
+
+            rows.push({ callee: VITE_PLUGIN_CALLEE, file: name, line: call.getStartLineNumber(), ...readConfigArgument(call.getArguments()[0]) });
+        }
+
+        return rows;
+    }
+
+    return [];
+};
+
+/**
  * Discover factory/constructor/callback-builder calls whose config
  * object literal a security lint inspects for a present-or-absent key — the
  * shared input for the config-call security lints (payment authorize,
  * inbound-mail verify, rate-limit store, browser private-targets, unauthenticated
  * shard access). Scans the worker entry as well as `lunora/` (see
  * {@link listSecurityScanFiles}) — every one of these factories is constructed in
- * the entry by convention, so a `lunora/`-only walk found nothing to lint. Records the callee name and, when the config was a statically
+ * the entry by convention, so a `lunora/`-only walk found nothing to lint — plus
+ * the project's Vite config (see {@link viteConfigCalls}), which on the default
+ * class-A path is the only place the unauthenticated-shard-access opt-in can be
+ * set at all. Records the callee name and, when the config was a statically
  * readable object literal (a bare argument, or a callback's returned object
  * literal), the keys present and the subset assigned the literal `true`; the
  * lints decide what an absent (or present-and-true) key means.
@@ -183,6 +206,8 @@ const discoverConfigCalls = (project: Project, lunoraDirectory: string): ConfigC
 
         calls.push(...configCallsInSourceFile(sourceFile, displayPath));
     }
+
+    calls.push(...viteConfigCalls(project, dirname(lunoraDirectory)));
 
     return calls;
 };

@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
@@ -10,10 +12,11 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
@@ -27,8 +30,16 @@ interface VerifyCommandOptions {
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+
+    /**
+     * Cloudflare environment name. Validates the `env.<name>` view of
+     * `wrangler.jsonc`, the way `lunora deploy --env` does — omitted, the top
+     * level is validated, which is the wrong surface for an env-scoped project.
+     */
+    env?: string;
+
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     /** Injectable fetch for the health probe; defaults to the global `fetch`. */
     healthFetch?: HealthFetch;
 
@@ -43,8 +54,15 @@ interface VerifyCommandOptions {
     spawner?: Spawner;
 
     /**
+     * Fail on ERROR-level codegen advisories. `undefined` leaves the CI-vs-local
+     * default (`resolveStrictAdvisories`) in charge, exactly as for `codegen`,
+     * `prepare`, `build` and `deploy`.
+     */
+    strictAdvisories?: boolean;
+
+    /**
      * Deploy target the drift gate's snapshot is emitted for. Defaults to
-     * `"target"` in `lunora.json`, then `"cloudflare"`. Verify never writes, but
+     * `"target"` in `lunora.config.*`, then `"cloudflare"`. Verify never writes, but
      * a snapshot emitted for the wrong target compares against the wrong
      * baseline.
      */
@@ -53,13 +71,17 @@ interface VerifyCommandOptions {
     typecheck?: boolean;
 }
 
-interface VerifyCommandResult {
-    code: number;
-    /** Set when the run aborted before validation ran: an invalid `--format`, or an unregistered deploy target. */
-    error?: string;
+/** The `--format json` payload: everything the gate found, and where it looked. */
+interface VerifyCommandData {
     errors: ReadonlyArray<string>;
     warnings: ReadonlyArray<string>;
     wranglerPath: string | undefined;
+}
+
+interface VerifyCommandResult extends VerifyCommandData {
+    code: number;
+    /** Set when the run aborted before validation ran — an unregistered deploy target. */
+    error?: string;
 }
 
 /**
@@ -67,13 +89,15 @@ interface VerifyCommandResult {
  * `{ error }` when type-checking failed, `{ warning }` when it was skipped (no
  * tsconfig), or an empty object on success.
  */
-const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?: string; warning?: string }> => {
+const runTypecheckStep = async (cwd: string, spawner: Spawner, format: OutputFormat): Promise<{ error?: string; warning?: string }> => {
     if (!existsSync(join(cwd, "tsconfig.json"))) {
         return { warning: "no tsconfig.json found — skipping TypeScript type-check" };
     }
 
     const exec = execArgsFor(detectPackageManager(cwd), "tsc", ["--noEmit", "-p", "tsconfig.json"]);
-    const result = await spawner({ args: exec.args, command: exec.command, cwd });
+    // tsc writes its diagnostics to stdout, which in json mode belongs to the
+    // result document alone — the type errors would otherwise be spliced into it.
+    const result = await spawner({ args: exec.args, command: exec.command, cwd, stdoutToStderr: format === "json" });
 
     return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
 };
@@ -108,6 +132,29 @@ const probeHealthIfRequested = async (options: VerifyCommandOptions, logger: Log
     return probe.error;
 };
 
+/**
+ * The blocking-advisory error for this run, or `undefined` when nothing blocks.
+ *
+ * ERROR-level advisories mean the call throws at runtime, and `verify` is the
+ * documented pre-deploy gate — it already runs the other two gates a codegen run
+ * produces (the platform diagnostics and the schema-drift gate). Nothing read
+ * `codegen.advisories`, so verify went green on exactly the projects `prepare`
+ * and `deploy` refuse. Same opt-out and same CI-on/local-off default as every
+ * other caller (`resolveStrictAdvisories`).
+ */
+const blockingAdvisoryError = (advisories: CodegenResult["advisories"], options: VerifyCommandOptions): string | undefined => {
+    const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(advisories, resolveStrictAdvisories(options));
+
+    if (!shouldBlock) {
+        return undefined;
+    }
+
+    return (
+        `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+        `Pass --no-strict-advisories to downgrade this to a warning and continue.`
+    );
+};
+
 /** Log the collected errors/warnings and build the command result. */
 const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[], wranglerPath: string | undefined): VerifyCommandResult => {
     if (errors.length === 0 && warnings.length === 0) {
@@ -139,7 +186,9 @@ const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[]
             }
         }
 
-        return { code: 1, errors, warnings, wranglerPath };
+        // The first error is the reason the envelope carries; the rest are in
+        // `data.errors`, so a consumer never has to scrape the prose above.
+        return { code: 1, error: errors[0], errors, warnings, wranglerPath };
     }
 
     logger.success("verify: project is valid (with warnings)");
@@ -158,17 +207,9 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const cwd = options.cwd ?? process.cwd();
     // In `--format json` mode every human/progress line goes to stderr so
     // stdout carries only the serialized structured result.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
-    const formatError = validateOutputFormat("verify", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
-    }
-
-    const validation = validateWrangler({ projectRoot: cwd });
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
     const errors: string[] = [...validation.report.errors];
     const warnings: string[] = [...validation.report.warnings];
 
@@ -186,7 +227,10 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 
             logger.error(message);
 
-            return { code: 1, error: message, errors: [message], warnings: [], wranglerPath: undefined };
+            // Exit 2, the same bucket the `--format` guard above uses: an
+            // unresolved `--target` is a flag naming a driver that does not
+            // exist, not a verification that found a problem.
+            return { code: EXIT_CODE.USAGE, error: message, errors: [message], warnings: [], wranglerPath: undefined };
         }
 
         const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
@@ -201,6 +245,12 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         errors.push(...platform.errors);
         warnings.push(...platform.warnings);
 
+        const advisoryError = blockingAdvisoryError(codegen.advisories, options);
+
+        if (advisoryError !== undefined) {
+            errors.push(advisoryError);
+        }
+
         const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {
@@ -213,7 +263,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     }
 
     if (options.typecheck !== false) {
-        const typecheck = await runTypecheckStep(cwd, options.spawner ?? defaultSpawner);
+        const typecheck = await runTypecheckStep(cwd, options.spawner ?? defaultSpawner, options.format ?? "pretty");
 
         if (typecheck.error !== undefined) {
             errors.push(typecheck.error);
@@ -232,33 +282,33 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         errors.push(healthError);
     }
 
-    const result = reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
-
-    if (isJsonFormat(options.format)) {
-        printJson(result);
-    }
-
-    return result;
+    return reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
 };
 
 /** `lunora verify` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions, VerifyCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runVerifyCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
-        format: options.format,
+        env: options.env,
+        format,
         healthUrl: options.healthUrl,
         logger,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
         // under the negated `typecheck` key (false when passed, true when absent).
         typecheck: options.typecheck === false ? false : undefined,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { errors: result.errors, warnings: result.warnings, wranglerPath: result.wranglerPath },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { VerifyCommandOptions, VerifyCommandResult };
+export type { VerifyCommandData, VerifyCommandOptions, VerifyCommandResult };
 export { runVerifyCommand };

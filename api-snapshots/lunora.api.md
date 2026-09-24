@@ -277,6 +277,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `HttpRunners` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `HttpStreamHandlerOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -673,6 +677,34 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredWhisperAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RelationBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -737,6 +769,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShapeGuardDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeReadWhereRequest` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -753,11 +789,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -810,6 +854,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageRulesOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthzContext` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1009,6 +1061,14 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WhisperAuthorizeHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WhisperEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowCreateOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1050,6 +1110,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `asBucketStorage` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1229,6 +1301,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `isPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `isSafeHeaderValue` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1257,6 +1333,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `onWhisper` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `presenceExtension` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1281,6 +1361,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `tagPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `toWhereInput` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1290,6 +1374,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1727,6 +1815,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `TransportError` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `Unsubscribe` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1897,11 +1989,27 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ## `lunorash/client/auth`
 
+### `AUTH_STATUSES` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AuthStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `IdentityStore` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `getIdentityStore` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isAuthenticatedStatus` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isLoadingStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2221,6 +2329,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DispatchBookmark` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2281,6 +2393,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `RlsPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2302,6 +2418,10 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `RunShardExportArgs` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `RunShardFindRelatedArgs` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2394,6 +2514,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `StudioFeaturesResult` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `SubscriptionIdentity` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2636,6 +2760,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `flattenHint` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `getCatalogEntry` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -3557,6 +3685,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `VectorValues` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `VectorizeDeleteMutation` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -4229,6 +4361,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `QueueForwardBatch` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardHandler` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardMessage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `QueueForwardResult` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `RankFanOutRequest` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4438,6 +4586,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `TraceTrustSignal` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `TriggerTrace` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4975,6 +5127,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `HttpRunners` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `HttpStreamHandlerOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -5371,6 +5527,34 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredWhisperAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RelationBuilder` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5435,6 +5619,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShapeGuardDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeReadWhereRequest` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5451,11 +5639,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5508,6 +5704,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageRulesOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthorizer` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageServeAuthzContext` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5707,6 +5911,14 @@ Re-exported from `@lunora/scheduler` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WhisperAuthorizeHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WhisperEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowCreateOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5748,6 +5960,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `asBucketStorage` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `beginDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5927,6 +6151,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `isPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `isSafeHeaderValue` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5955,6 +6183,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `onWhisper` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `presenceExtension` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5979,6 +6211,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `tagPerDispatchMiddleware` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `toWhereInput` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5988,6 +6224,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `withDeferredDeletes` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `withDeferredSchedules` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7185,6 +7425,30 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RelationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7249,11 +7513,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `SpanContextIds` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `SpanEvaluation` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SpanIdentity` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7441,6 +7713,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WhisperEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowCreateOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7604,6 +7880,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `ValidatorMap` (type)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `acceptsAbsent` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

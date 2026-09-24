@@ -5,22 +5,32 @@ import type { ObservabilityEvent, ObservabilitySink } from "../src/observability
 import { emitRpcEvent } from "../src/observability";
 import { beginDispatchTrace } from "../src/otel-trace";
 
-// A trace id whose first 8 hex chars are `19999999` → ~0.1 on the unit interval,
-// so it is kept at headRate 0.2 and dropped at 0.05. The suffix is padding to a
-// full 32-hex id and never read by the sampler.
-const LOW_TRACE_ID = "19999999000000000000000000000000";
-// First 8 hex `e6666666` → ~0.9, the mirror image: dropped at 0.2, kept at 0.95.
-const HIGH_TRACE_ID = "e6666666000000000000000000000000";
+// A trace id whose LAST 8 hex chars are `19999999` → ~0.1 on the unit interval,
+// so it is kept at headRate 0.2 and dropped at 0.05. The `ffffffff` PREFIX is
+// deliberately the opposite extreme: the sampler reads the low bits, so a
+// high-bit-heavy prefix (an X-Ray-style epoch-seconds header, say) must not move
+// the verdict.
+const LOW_TRACE_ID = "ffffffff000000000000000019999999";
+// Last 8 hex `e6666666` → ~0.9, the mirror image: dropped at 0.2, kept at 0.95.
+// Zero-padded high bits, the shape a 64-bit-id system propagates.
+const HIGH_TRACE_ID = "000000000000000000000000e6666666";
 
 describe("shared/sampling — deterministic head decision", () => {
-    it("derives a stable [0,1) value from the first 8 hex chars of the trace id", () => {
-        expect.assertions(3);
+    it("derives a stable [0,1) value from the LAST 8 hex chars of the trace id", () => {
+        expect.assertions(5);
 
-        expect(traceIdToUnitInterval("00000000ffffffffffffffffffffffff")).toBe(0);
+        expect(traceIdToUnitInterval("ffffffffffffffffffffffff00000000")).toBe(0);
         // 0x80000000 / 2^32 = exactly one half.
-        expect(traceIdToUnitInterval("80000000ffffffffffffffffffffffff")).toBe(0.5);
+        expect(traceIdToUnitInterval("ffffffffffffffffffffffff80000000")).toBe(0.5);
         // A malformed / empty id leans keep (0), never silently dropped.
         expect(traceIdToUnitInterval("")).toBe(0);
+
+        // The two shapes that made a high-bit sampler read 0% / 100% instead of
+        // the configured rate: a 64-bit id left-padded into a W3C context, and an
+        // X-Ray id carrying epoch seconds in the leading 8 hex. Same low bits →
+        // same value, so the prefix cannot steer the verdict.
+        expect(traceIdToUnitInterval("0000000000000000a1b2c3d4e5f60718")).toBe(traceIdToUnitInterval("ffffffff00000000a1b2c3d4e5f60718"));
+        expect(isTraceHeadSampled("0000000000000000a1b2c3d4e5f60718", 0.01)).toBe(isTraceHeadSampled("ffffffff00000000a1b2c3d4e5f60718", 0.01));
     });
 
     it("returns the same verdict for the same id across repeated calls", () => {

@@ -80,12 +80,22 @@ export const warm = onShardInit(async (ctx, event) => {
 `onShardInit` fires **once per Durable Object instance**, before any handler on
 that instance can run. The ordering is a framework guarantee, not a convention:
 every memory table is cleared, then every init hook runs to completion, and only
-then does the dispatch that triggered the cold start proceed. No handler,
-subscription refresh, alarm, or shape poke can observe a memory table in the gap.
+then does the dispatch that triggered the cold start proceed. On the happy path
+no handler, subscription refresh, alarm, or shape poke observes a memory table
+in the gap.
 
 Hooks run sequentially in manifest order, so one may depend on state an earlier
 one wrote. A hook that throws is logged and contained — it does not fail the
 request that woke the shard, and the memory table is simply left empty.
+
+The one case where a handler _can_ see a stale table is a throw **before or
+during** the clear itself (a failing migration, or the clear failing): init is
+absorbed so it cannot take down the request that woke the shard, and the
+previous instance's rows are still in SQLite. Reads then see stale presence
+rather than none, with only a log-ring entry to say so. Memory-table rows sit in
+SQLite until the clear deletes them — an eviction alone does not remove them —
+so treat them as a cache to be refreshed, never as evidence a peer is live: give
+presence rows a timestamp and ignore old ones.
 
 Without a hook, a memory table just comes back empty. That is a correct state for
 presence and a wrong one for something being treated as authoritative — which is

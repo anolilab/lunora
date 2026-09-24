@@ -78,6 +78,7 @@ export type {
     VectorMatchLike,
     VectorMetric,
     VectorRecordLike,
+    VectorValues,
 } from "./bindings";
 
 // Capability matrix

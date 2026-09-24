@@ -12,10 +12,33 @@ export interface AgentFunctionReference {
 }
 
 /**
+ * Per-call options an {@link AgentRunFunction} forwards to the dispatcher —
+ * a structural subset of `@lunora/dispatch`'s `RunFunctionOptions`, declared
+ * locally so this module stays free of that import.
+ * @experimental
+ */
+export interface AgentRunOptions {
+    /**
+     * Abort the dispatch after this many ms, overriding the runner's 30s
+     * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
+     *
+     * Load-bearing for any tool whose target legitimately runs longer than
+     * that. A dispatch timeout answers 503, which is NOT a deterministic
+     * dispatch failure, so the tool's `step.do` rethrows and the host retries
+     * the step — dispatching the same call again while the FIRST one is still
+     * running. For a side-effecting target (a container command, a billed page
+     * render) that is a second execution, not a second attempt. Set this at
+     * least as wide as the target's own budget, and give the target an inner
+     * deadline strictly under it so the target aborts itself first.
+     */
+    timeoutMs?: number;
+}
+
+/**
  * `ctx.run`-shaped dispatcher the loop uses to call Lunora functions.
  * @experimental
  */
-export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>) => Promise<unknown>;
+export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>, options?: AgentRunOptions) => Promise<unknown>;
 
 /**
  * Structural subset of the Cloudflare Workflows durable-step API the loop needs.
@@ -83,6 +106,15 @@ export interface AgentToolContext {
     idempotencyKey: string;
 
     /**
+     * Verified owner of the thread this run belongs to (the loop copies it off
+     * {@link AgentRunInput.owner}); `undefined` on an anonymous/single-tenant
+     * thread. `agent.asTool` forwards it to the CHILD run, so a sub-agent thread
+     * under an owned parent inherits the same RLS scope instead of being created
+     * ownerless — which left it readable by anyone who knew its key.
+     */
+    owner?: string;
+
+    /**
      * Emit an EPHEMERAL progress event for this tool call on the agent's live
      * channel — the same live-only sink the streamed token deltas ride. NOT
      * persisted and NEVER replayed: it fires only while `execute` runs inside the
@@ -93,6 +125,7 @@ export interface AgentToolContext {
      * {@link AgentToolContext.toolCallId}. `data` must be JSON-serializable.
      */
     reportProgress: (data: unknown) => void;
+
     /** Dispatch a Lunora function (the workflow `ctx.run`). */
     run: AgentRunFunction;
 
@@ -914,7 +947,7 @@ export interface AgentAsToolOptions {
     /** What the sub-agent does — shown to the parent's model (it decides from it). */
     description: string;
 
-    /** Cap on child-run status polls before giving up — a positive integer. Default 120. */
+    /** Cap on child-run status polls before giving up — a positive integer. Default 600 (with the 500 ms default interval, a five-minute budget). */
     maxPolls?: number;
 
     /**
@@ -964,16 +997,20 @@ export interface AgentDefinition extends AgentConfig {
 /**
  * What `agentEnsureThread` reports back to the loop.
  *
- * A discriminated union rather than a bag of optional booleans: the four
- * outcomes are mutually exclusive, and the data each carries only exists for its
- * own case. `queued` has a position, `replaced` has the instance it took the
- * thread from, and the other two have nothing — encoding that as five
- * independent optional fields made every reader re-derive which combination was
- * legal.
+ * A discriminated union rather than a bag of optional booleans: the outcomes are
+ * mutually exclusive, and the data each carries only exists for its own case.
+ * `queued` has a position, `replaced` has the instance it took the thread from,
+ * and the rest have nothing — encoding that as independent optional fields made
+ * every reader re-derive which combination was legal.
+ *
+ * `completed` is the odd one: the thread was NOT (re)opened. This run already
+ * reported its outcome and is replaying because only the reply was lost, so it
+ * takes no ownership and revives nothing — it runs its body out of the step
+ * journal to re-dispatch the effects that never landed.
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).
@@ -1106,6 +1143,15 @@ export interface AgentMessageRow {
 export interface AgentToolCall {
     id: string;
     input: unknown;
+
+    /**
+     * Why this call was REJECTED before it could run: the model's arguments
+     * failed the tool's input schema, or did not parse as JSON. Present only on
+     * a rejected call — the loop records it as a recoverable tool result and
+     * never executes the tool, because the `input` above is the raw value the
+     * provider sent, not a validated one.
+     */
+    invalid?: string;
     name: string;
 }
 

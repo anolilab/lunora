@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { defineQueue } from "@lunora/queue";
+import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { defineWorkflow } from "@lunora/workflow";
 import { describe, expect, it } from "vitest";
 
@@ -87,6 +88,94 @@ describe("createNodePlatform", () => {
             expect(bare.objectStorage).toBeUndefined();
         } finally {
             rmSync(bucketDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("binds the declared global-table store, and binds nothing when undeclared", async () => {
+        expect.hasAssertions();
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-node-platform-global-"));
+
+        try {
+            const schema = {
+                tables: {
+                    notes: {
+                        indexes: [],
+                        shape: { body: { _meta: { column: { notNull: true } }, kind: "string" } as ValidatorLike },
+                        shardMode: { kind: "global" },
+                    },
+                },
+            } as unknown as SchemaLike;
+
+            using platform = createNodePlatform({ globalTablesPath: join(workdir, "global.sqlite3") });
+
+            // The fourth member of the same set as queues / workflows / object
+            // storage: `globalTables` is rated `emulated`, so codegen emits the
+            // whole `.global()` surface for this target with no diagnostic, and
+            // this root had no store to offer a caller at all. What it offers is
+            // a building block — the round-trip below is over the very `writer`
+            // a caller hands to `createShardDO` as `globalDb`; nothing here can
+            // make that hop for them, because nothing here builds a shard DO.
+            expect(platform.capabilities.features.globalTables?.level).toBe("emulated");
+
+            const store = platform.globalTables!;
+
+            await store.migrate(schema);
+
+            const writer = store.writer({ schema });
+            const id = await writer.insert("notes", { body: "hello" });
+
+            await expect(writer.get(id)).resolves.toMatchObject({ body: "hello" });
+
+            // Nothing declared, nothing bound — same reasoning as the bucket: a
+            // store silently rooted at `:memory:` loses every write on exit.
+            using bare = createNodePlatform();
+
+            expect(bare.globalTables).toBeUndefined();
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    // Construction is not atomic without help: the shard connection, the registry
+    // and the scheduler are built before queues, object storage and global tables,
+    // and a throw from any of the later steps returns no platform at all — so
+    // there is nothing left to call `close()` on and the sqlite handle stays open
+    // for the life of the process. The `-wal`/`-shm` sidecars are the observable:
+    // the shard host opens its database in WAL mode, and sqlite removes them when
+    // the connection closes.
+    it.each([
+        [
+            "a queue names a dead-letter queue nothing declares",
+            (shardPath: string): (() => unknown) => {
+                const orders = defineQueue({ deadLetterQueue: "undeclared", handler: () => undefined });
+
+                return () => createNodePlatform({ onQueueBatch: () => undefined, path: shardPath, queues: { orders } });
+            },
+            /no declared queue provides/,
+        ],
+        [
+            "the global-table store cannot open its file",
+            // A path *inside* the shard's own database file: nothing can open it.
+            (shardPath: string): (() => unknown) =>
+                () =>
+                    createNodePlatform({ globalTablesPath: join(shardPath, "global.sqlite3"), path: shardPath }),
+            /unable to open database file/,
+        ],
+    ])("closes what it already built when %s", (_label, build, message) => {
+        expect.assertions(3);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-node-platform-rollback-"));
+
+        try {
+            const shardPath = join(workdir, "shard.sqlite3");
+
+            expect(build(shardPath)).toThrow(message);
+
+            expect(existsSync(`${shardPath}-wal`)).toBe(false);
+            expect(existsSync(`${shardPath}-shm`)).toBe(false);
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
         }
     });
 

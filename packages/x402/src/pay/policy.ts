@@ -425,9 +425,15 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
         // release` clamps at 0 either way, so it stays fail-safe.
         try {
             if (policy.onPaymentRequired !== undefined) {
-                const approved = await policy.onPaymentRequired(requirement);
+                // Exact `true`, never truthiness: this is a SPEND approval, and
+                // the policy check below treats the mere presence of
+                // `onPaymentRequired` as satisfying "bounded spend". A confirmation
+                // hook returning its UI result object (`{ confirmed: false }`, a
+                // dialog handle) would otherwise auto-approve every payment on a
+                // wallet whose owner believes it is gated.
+                const approved: unknown = await policy.onPaymentRequired(requirement);
 
-                if (!approved) {
+                if (approved !== true) {
                     state.release(amount);
 
                     return { abort: true, reason: "x402 policy: payment was declined by onPaymentRequired." };

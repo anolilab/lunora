@@ -5,7 +5,7 @@ export { defineWorkflowEvent, isWorkflowEventDefinition } from "./define-event";
 export { defineStep, isStepDefinition } from "./define-step";
 export { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName } from "./define-workflow";
 export type { NativeNonRetryableErrorConstructor } from "./errors";
-export { convertNonRetryableError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError } from "./errors";
+export { convertNonRetryableError, isDuplicateInstanceError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError } from "./errors";
 export { branch, MAX_BRANCHES } from "./fan-out";
 export type {
     WorkflowInstanceAction,

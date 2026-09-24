@@ -74,6 +74,14 @@ internal fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), n
 /** Canonical text form so two structures compare independent of key order. */
 private fun canonical(value: Any?): String = Key.stableStringify(value)
 
+/**
+ * Renders a value the way `Client.kt` puts it on the socket, with `Json.write`. Separate from
+ * [canonical], which is free to normalise: `stableStringify` spells every number the ECMAScript
+ * way, so `1.0` and `1` compare EQUAL through it — the divergence a round-trip case exists to
+ * catch. Dart's dates went out as `1700000000000.0` for exactly that reason, on a green suite.
+ */
+private fun wireText(value: Any?): String = Json.write(value)
+
 private fun wireCodecRoundTrip() {
     covers("wire_codec_round_trip")
 
@@ -91,6 +99,10 @@ private fun wireCodecRoundTrip() {
         val expected = if (testCase.containsKey("reencoded")) testCase["reencoded"] else encoded
 
         check(canonical(roundTripped) == canonical(expected), "round-trip mismatch for ${testCase["name"]}")
+        // And again as the BYTES the transport sends: a round-trip assertion
+        // measured on a string the transport never sends cannot see the
+        // divergence it exists to catch.
+        check(wireText(roundTripped) == wireText(expected), "wire-text mismatch for ${testCase["name"]}")
     }
 }
 
@@ -123,10 +135,12 @@ private fun overLongBigIntRejected() {
 private fun rejects(value: Any?): Boolean = try {
     Wire.decode(value)
     false
-} catch (error: RuntimeException) {
-    // Wire.decode's own bounds (bigint length, depth) throw its typed
-    // WireFormatException; a nested decoder (Base64 on a malformed bytes tag)
-    // throws its own unwrapped RuntimeException. Both are a rejection.
+} catch (error: WireFormatException) {
+    // ONLY the codec's own type counts. This used to catch RuntimeException,
+    // which was wider than the codec — `decodeBytes` wraps Base64's
+    // IllegalArgumentException — so a regression letting a raw JDK exception
+    // escape `Wire.decode` still read as a rejection, while a caller catching
+    // WireFormatException caught nothing.
     true
 }
 
@@ -253,6 +267,16 @@ private fun depthCapEnforced() {
 
     check(client.handleFrame(Json.write(envelope)) == "data", "a MAX_DEPTH value must survive its frame envelope")
     check(seen.size == 1, "and reach onData")
+
+    // A `data` frame is ONE envelope level, and measuring the cap only there is
+    // how it shipped a level short. The deepest envelope the protocol has is the
+    // batch response (protocol/README.md §4.3) at four, and an offline flush that
+    // could not parse its own 200 body classified a committed batch as a
+    // transport failure and replayed it forever.
+    val slot = linkedMapOf<String, Any?>("id" to 0, "status" to 200, "body" to linkedMapOf("result" to deepest))
+    val batch = Json.write(linkedMapOf("results" to listOf(slot)))
+
+    check(Json.parse(batch) != null, "a MAX_DEPTH value must survive the batch-response envelope")
 }
 
 private fun stableWireKeyFixtures() {
@@ -287,6 +311,11 @@ private fun formatNumberMatchesEcmaScript() {
         0.0 to "0", 3.0 to "3", 1.5 to "1.5", -2.5 to "-2.5",
         1e-5 to "0.00001", 1e-6 to "0.000001", 1e-7 to "1e-7", 1.5e-7 to "1.5e-7",
         1e-21 to "1e-21", 1e20 to "100000000000000000000", 1e21 to "1e+21",
+        // An integral double past 2^53 keeps ECMAScript's shortest-digits
+        // spelling rather than the exact expansion 1152921504606846976.
+        1.152921504606847e18 to "1152921504606847000",
+        // Negative zero keeps its sign; every integer conversion drops it.
+        -0.0 to "-0",
     )
 
     for ((value, want) in cases) {
@@ -357,12 +386,25 @@ private fun non2xxWithoutEnvelopeThrows() {
     covers("non_2xx_without_error_envelope_fails")
 
     // protocol/README.md §4.2. Without the status check this returned null and
-    // threw nothing — the caller believes its mutation committed.
-    try {
-        Client.parseRpcResponse(mapOf("message" to "bad gateway"), 502)
-        check(false, "a 502 without an error envelope must throw")
-    } catch (error: ApiException) {
-        check(error.code == "INTERNAL", "the transport error is INTERNAL")
+    // threw nothing — the caller believes its mutation committed. The fixture's
+    // non-object `error` slots are the other half: a slot holding a string, a
+    // null or an array is not an envelope either, and a port reading one without
+    // a type check throws its LANGUAGE's exception rather than ApiException,
+    // escaping every handler the caller wrote.
+    for (entry in fixture("rpc.json")["responseTransportError"] as List<*>) {
+        val testCase = entry as Map<*, *>
+        val response = testCase["response"] as Map<*, *>
+        val status = (testCase["status"] as Number).toInt()
+
+        try {
+            Client.parseRpcResponse(response, status)
+            check(false, "expected an ApiException for ${testCase["name"]}")
+        } catch (error: ApiException) {
+            check(error.code == testCase["code"], "code for ${testCase["name"]}")
+            // Nothing reached the shard, so a queued write must be replayed
+            // rather than dropped — the batch path already says so.
+            check(error.transient, "transient for ${testCase["name"]}")
+        }
     }
 }
 
@@ -392,12 +434,16 @@ private fun clientFrameBuilders() {
 
 private fun serverFrameConsumer() {
     covers("server_frame_consumer")
+    covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    var cancellations = 0
 
     for (entry in fixture("ws-frames.json")["serverFrames"] as List<*>) {
         val testCase = entry as Map<*, *>
         val client = Client("https://app.example")
+        val sent = mutableListOf<Map<String, Any?>>()
 
-        client.attachSocket { }
+        client.attachSocket { sent.add(it) }
 
         val seen = mutableListOf<WireValue>()
         val errors = mutableListOf<SubscriptionError>()
@@ -408,6 +454,7 @@ private fun serverFrameConsumer() {
             { seen.add(it) },
             { errors.add(it) },
         )
+        sent.clear()
 
         val kind = client.handleFrame(Json.write(testCase["frame"]))
         val expect = testCase["expect"] as Map<*, *>
@@ -423,7 +470,26 @@ private fun serverFrameConsumer() {
             check(errors.size == 1, "onError should fire once")
             check(errors[0].code == expect["code"], "error code")
         }
+
+        // Cancelled AND kept. Removing the entry takes it out of the map
+        // `resendSubscriptions` walks, which froze the query across every future
+        // reconnect with nothing reported.
+        if (expect["resendsAfterReconnect"] == true) {
+            cancellations++
+            check(errors.size == 1, "a complete frame cancels once")
+            check(errors[0].code == expect["code"], "cancellation code")
+            check(errors[0].message == expect["message"], "cancellation message")
+            client.resendSubscriptions()
+            check(
+                sent.filter { it["type"] == "subscribe" }.map { it["id"] } == listOf(expect["id"]),
+                "the cancelled subscription is resent on reconnect",
+            )
+        }
     }
+
+    // A conditional assertion that never runs is worse than none: without this,
+    // renaming the fixture key would leave every suite green.
+    check(cancellations == 1, "serverFrames must carry one cancelling case")
 }
 
 /**
@@ -470,6 +536,76 @@ private fun shapeSubscribeFrame() {
             canonical(shape["shape-subscribe-cold"]),
         "shape-subscribe-cold",
     )
+}
+
+/**
+ * A reconnect re-subscribes the SHAPES as well as the queries.
+ *
+ * A resend that walks only the query registry leaves every shape view subscribed
+ * to a socket that no longer exists — silently, and for the rest of the process's
+ * life, because a shape only ever learns of new rows through a poke.
+ */
+private fun shapeSubscriptionsResendAfterReconnect() {
+    covers("shape_subscriptions_resend_after_reconnect")
+
+    val client = Client("https://app.example")
+    val args = WireValue.Obj(listOf("room" to WireValue.Text("general")))
+
+    client.attachSocket { }
+    client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))), { })
+    client.subscribeShape("roomMessages", args, { })
+
+    // The cursors a resume carries are written by the frame handler, so they have
+    // to exist before the resend is built.
+    client.handleFrame(Json.write(mapOf("cursor" to 9, "data" to emptyList<Any?>(), "epoch" to "e1", "id" to "sub_1", "type" to "data")))
+    client.handleFrame(Json.write(mapOf("epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeStart")))
+    client.handleFrame(Json.write(mapOf("pokeId" to "poke-1", "reset" to true, "rowsPatch" to emptyList<Any?>(), "shapeId" to "shape_1", "type" to "pokePart")))
+    client.handleFrame(Json.write(mapOf("checkpoint" to 5, "epoch" to "e1", "pokeId" to "poke-1", "type" to "pokeEnd")))
+
+    val resent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { resent.add(it) }
+    client.resendSubscriptions()
+
+    check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
+    check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
+    check(resent[1]["id"] == "shape_1", "the shape frame carries the registered id")
+
+    val shape = resent[1]["shape"] as Map<*, *>
+
+    // Name and args are only available because `subscribeShape` keeps them; a
+    // registry holding the callbacks alone cannot build this frame at all.
+    check(shape["name"] == "roomMessages", "and the shape's name")
+    check(canonical(shape["args"]) == canonical(Wire.encode(args)), "and its args")
+    check((resent[1]["sinceCheckpoint"] as Number).toInt() == 5, "resuming from the tracked checkpoint")
+    check(resent[1]["sinceEpoch"] == "e1", "and the tracked epoch")
+}
+
+/**
+ * A payload the codec refuses reaches the addressed subscription's error
+ * callback, and goes no further.
+ *
+ * Thrown out of [Client.handleFrame] it ends the caller's read loop, taking every
+ * OTHER subscription on the client down with it — one malformed row on one query
+ * silences the whole client.
+ */
+private fun refusedPayloadStaysOnItsOwnSubscription() {
+    val errors = mutableListOf<SubscriptionError>()
+    val second = mutableListOf<WireValue>()
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { }, { errors.add(it) })
+    client.subscribe("messages:other", null, { second.add(it) })
+
+    val kind = client.handleFrame("{\"data\":[\"${Wire.TAG}\",\"bigint\",\"not-a-number\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    check(kind == "error", "the refused frame is reported as an error rather than thrown")
+    check(errors.map { it.code } == listOf("INVALID_FRAME"), "the addressed subscription's error callback fires")
+
+    client.handleFrame("{\"data\":[1],\"id\":\"sub_2\",\"type\":\"data\"}")
+
+    check(second.size == 1, "and a later good frame on another subscription still delivers")
 }
 
 private fun pokeSequenceMaterialisesRows() {
@@ -665,6 +801,8 @@ fun main() {
     serverFrameConsumer()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
+    shapeSubscriptionsResendAfterReconnect()
+    refusedPayloadStaysOnItsOwnSubscription()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     resetPokeReplacesShapeMembership()

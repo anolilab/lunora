@@ -20,6 +20,12 @@ import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPA
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
 
+/** W3C `sampled` bit — the value OTLP's per-span `flags` field carries when the trace was kept by the head decision. */
+const SAMPLED_TRACE_FLAG = 1;
+
+/** Trace flags with `sampled` clear — a trace the head decision dropped, exported anyway by the tail bias. */
+const UNSAMPLED_TRACE_FLAG = 0;
+
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     const attributes = [encodeAttribute(LUNORA_ATTR.functionPath, event.functionPath), encodeAttribute(LUNORA_ATTR.ok, event.ok)];
@@ -171,6 +177,11 @@ const otlpSpanBody = (event: SpanEvent): unknown => {
             event.attributes,
         ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
+        // W3C trace flags, mirroring the trace's settled verdict. Without it a
+        // collector reading `flags` sees 0 (UNSAMPLED) on every `ctx.trace`,
+        // `ctx.fetch` and db span we ship, including the ones it is meant to
+        // keep. Absent verdict reads as keep, like every other tier.
+        flags: event.sampled === false ? UNSAMPLED_TRACE_FLAG : SAMPLED_TRACE_FLAG,
         // Defaults to SPAN_KIND_INTERNAL — right for the vast majority of
         // `ctx.trace` spans — but honours an explicit kind so a call OUT to another
         // service can be CLIENT and a queue hop PRODUCER/CONSUMER. That is what a
@@ -235,7 +246,13 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
     // `deltatocumulative` processor and Prometheus remote-write paths treat as
     // invalid and may drop. Omitting it lets the collector infer the interval
     // from the previous export, which is what it does for a stream of deltas.
-    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
+    // The measurement's OTel **exemplar**: the trace id the shard stamped when
+    // the measurement ran inside a dispatch. This is the entire point of
+    // carrying `MetricEvent.traceId` — without it on the wire, a spike on a
+    // chart cannot be navigated to a trace that produced it. `spanId` is
+    // deliberately absent: the shard stamps the trace, not a particular span.
+    const exemplars = event.traceId === undefined ? undefined : [{ asDouble: event.value, timeUnixNano, traceId: event.traceId }];
+    const dataPoint = { asDouble: event.value, attributes, ...(exemplars === undefined ? {} : { exemplars }), timeUnixNano };
 
     if (event.kind === "gauge") {
         return { gauge: { dataPoints: [dataPoint] }, name: event.name };
@@ -250,6 +267,7 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
                         attributes,
                         bucketCounts: ["1"],
                         count: "1",
+                        ...(exemplars === undefined ? {} : { exemplars }),
                         explicitBounds: [],
                         max: event.value,
                         min: event.value,
@@ -305,6 +323,50 @@ const otlpLogBody = (event: LogEvent): unknown => {
 /** Above this serialized size, an OTLP body is gzipped; tiny single-span posts skip it (the CPU isn't worth the few saved bytes). */
 const OTLP_GZIP_THRESHOLD = 1024;
 
+/** How many rejected OTLP posts one isolate reports before it goes quiet. */
+const MAX_OTLP_REJECTION_REPORTS = 5;
+
+/** Rejections already reported by {@link reportOtlpRejection} in this isolate. */
+let otlpRejectionReports = 0;
+
+/**
+ * Surface a collector that is REFUSING the export, at most
+ * {@link MAX_OTLP_REJECTION_REPORTS} times per isolate.
+ *
+ * Mirrors the rate-limited `console.error` `otlpSink` already uses for a
+ * throwing `tailSampler`, and for the same reason: without it, a wrong token
+ * (401), a wrong path (404), or a collector rejecting the body (422) is
+ * indistinguishable from a working pipeline — every post "succeeds", nothing is
+ * ever logged, and the only symptom is telemetry that never arrives, on every
+ * isolate, forever. Rate-limited because the failure is by definition on every
+ * export, and an unbounded `console.error` in a Workers runtime is the noise
+ * loop the batching pipeline exists to avoid.
+ *
+ * Only the status and the endpoint HOST are reported — never the response body
+ * or the URL's path/query, either of which can echo credentials or user data
+ * back into the platform log.
+ */
+const reportOtlpRejection = (url: string, status: number): void => {
+    if (otlpRejectionReports >= MAX_OTLP_REJECTION_REPORTS) {
+        return;
+    }
+
+    otlpRejectionReports += 1;
+
+    let host: string;
+
+    try {
+        host = new URL(url).host;
+    } catch {
+        host = "<unparseable endpoint>";
+    }
+
+    const silencing = otlpRejectionReports === MAX_OTLP_REJECTION_REPORTS ? " Further OTLP rejections are silenced until the isolate restarts." : "";
+
+    // eslint-disable-next-line no-console
+    console.error(`[lunora:otlp] collector ${host} rejected the export with HTTP ${String(status)}; the batch is DROPPED (there is no retry).${silencing}`);
+};
+
 /** Gzip a UTF-8 string to an `ArrayBuffer` (a `BodyInit`) via the platform `CompressionStream` (no dependency). */
 const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
     const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -320,6 +382,16 @@ const gzipEncode = async (text: string): Promise<ArrayBuffer> => {
  * window it handed to `waitUntil`), while the unbatched paths only need
  * fire-and-forget — so this promise-returning form is the primitive and
  * {@link otlpPost} is the thin wrapper over it.
+ *
+ * **There is no retry, by design.** A Workers isolate can vanish between the
+ * buffer and the network, so a retry queue would trade bounded, understandable
+ * data loss for unbounded memory inside the request path; durability is the
+ * collector's problem. A dropped batch is therefore permanently dropped — which
+ * is exactly why a REJECTED post (a non-2xx status: bad token, wrong path,
+ * unacceptable body) is reported once per isolate through
+ * {@link reportOtlpRejection} rather than swallowed. A transport error stays
+ * silent: it is the ordinary, self-healing failure, and it cannot be told apart
+ * from a collector that is offline for a moment.
  */
 const otlpSend = async (url: string, body: unknown, headers: Record<string, string>, keepAlive?: KeepAlive): Promise<void> => {
     try {
@@ -334,9 +406,18 @@ const otlpSend = async (url: string, body: unknown, headers: Record<string, stri
                 ? fetch(url, { body: json, headers, method: "POST" })
                 : gzipEncode(json).then((gz) => fetch(url, { body: gz, headers: { ...headers, "content-encoding": "gzip" }, method: "POST" }))
         ).then(
-            () => undefined,
+            (response) => {
+                if (!response.ok) {
+                    reportOtlpRejection(url, response.status);
+                }
+
+                return undefined;
+            },
             () => {
-                // Network error / non-OK response / gzip failure — intentionally ignored.
+                // Network error / gzip failure — intentionally ignored: transient,
+                // self-healing, and indistinguishable from a collector that is
+                // offline for a moment. A REJECTION (handled above) is the durable
+                // misconfiguration worth a line in the log.
             },
         );
 

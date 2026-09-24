@@ -1,12 +1,16 @@
 import type { JsonSchema, SchemaNodeReader } from "@lunora/values";
-import { jsonSchemaFromNode, objectSchemaFromNodes } from "@lunora/values";
+import { acceptsAbsent, jsonSchemaFromNode, objectSchemaFromNodes } from "@lunora/values";
 
 import type { ValidatorIR } from "./ir";
 
+/** A bigint literal as the IR records its source text — digits with the `n` suffix, optionally signed. */
+const BIGINT_LITERAL = /^-?\d+n$/u;
+
 /**
  * Render a `v.literal(...)` value as a JSON Schema `const`. The IR carries the
- * literal as verbatim source text (`"admin"`, `42`, `true`, `null`), so parse it
- * back to a JSON value; a bigint-style literal is carried as its decimal string.
+ * literal as verbatim source text (`"admin"`, `42`, `true`, `null`, `5n`), so
+ * parse it back to a JSON value; a bigint literal is carried as its decimal
+ * string, matching both the runtime reader and the `bigint` scalar node.
  */
 const literalConst = (literalValue: string | undefined): JsonSchema => {
     if (literalValue === undefined) {
@@ -43,6 +47,14 @@ const literalConst = (literalValue: string | undefined): JsonSchema => {
         return { const: trimmed.slice(1, -1), type: "string" };
     }
 
+    // A bigint literal reaches here as its SOURCE text (`5n`), which is not a
+    // number and not JSON — it used to fall through to `{ const: "5n" }`, a
+    // third spelling of a value the runtime reader emits as `{ const: "5" }`
+    // and the `bigint` scalar as an int64 string. One carrier for all three.
+    if (BIGINT_LITERAL.test(trimmed)) {
+        return { const: trimmed.slice(0, -1), format: "int64", type: "string" };
+    }
+
     const asNumber = Number(trimmed);
 
     if (!Number.isNaN(asNumber)) {
@@ -66,6 +78,7 @@ const irReader: SchemaNodeReader<ValidatorIR> = {
     constraints: () => undefined,
     inner: (validator) => validator.inner,
     isNullable: (validator) => validator.column?.notNull === false,
+    keyChild: (validator) => validator.keyType,
     // `ValidatorIR.kind` is a loose `string` (build-time AST); narrow it to the
     // shared reader's `ValidatorKind`. Unknown kinds fall through the mapper's
     // `default` branch to an empty schema, exactly as before.
@@ -89,6 +102,41 @@ const validatorIrToJsonSchema = (validator: ValidatorIR): JsonSchema => jsonSche
 
 /** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@lunora/values`' object mapping). */
 const objectSchema = (shape: Record<string, ValidatorIR>): JsonSchema => objectSchemaFromNodes(shape, irReader);
+
+/**
+ * {@link irReader}, with one narrowing the api emitter needs and JSON Schema does
+ * not: an expression the AST→IR step could NOT resolve to a concrete validator is
+ * recorded as `{ kind: "any", sourceText: "<expression>" }`, and that is not a
+ * `v.any()` — the validator it stands for may well be required. Reporting it as
+ * `from` (the kind for a foreign validator whose acceptance is opaque) keeps it
+ * out of the absent-tolerant set, so an unreadable validator emits a REQUIRED
+ * key instead of letting callers omit an argument the runtime then rejects.
+ * `compile-validator` declines the same nodes on the same grounds.
+ *
+ * JSON Schema keeps the plain {@link irReader}: its `required` list has always
+ * been the lenient side of this call (a spec that requires a field the server
+ * does not cannot be satisfied by a generated client), and it describes rather
+ * than type-checks.
+ */
+const emitOptionalityReader: SchemaNodeReader<ValidatorIR> = {
+    ...irReader,
+    kind: (validator) => (validator.sourceText === undefined ? irReader.kind(validator) : "from"),
+};
+
+/**
+ * True when the runtime parser accepts this IR node's field ABSENT — the single
+ * optionality rule the api emitter renders `key?: T` from.
+ *
+ * The same `@lunora/values` predicate the JSON Schema `required` list and
+ * `Infer`'s `undefined extends …` rule use, read through the IR. Sharing it is
+ * the point: `kind === "optional"` alone called `v.any()` (and a `v.union(...)`
+ * with an `any`/optional member) a required key, while `.input({ data: v.any() })`
+ * parses an absent `data` happily and `Infer` types it optional — so a handler's
+ * own `args` did not typecheck against the `_generated/api.ts` reference for a
+ * procedure declaring the identical validator (issue #688).
+ * @returns `true` when an absent value parses.
+ */
+const acceptsAbsentIr = (validator: ValidatorIR): boolean => acceptsAbsent(validator, emitOptionalityReader);
 
 /**
  * The machine-readable `LunoraError` codes Lunora emits on the RPC + REST
@@ -115,4 +163,4 @@ const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "VALIDATION_ERROR",
 ];
 
-export { literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };
+export { acceptsAbsentIr, literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };

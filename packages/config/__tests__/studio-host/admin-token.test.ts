@@ -37,6 +37,9 @@ describe("parseDevVariable", () => {
     });
 });
 
+/** The token the local worker verifies — the one the studio must embed. */
+const LOCAL_TOKEN = "local-dev-token";
+
 describe("resolveAdminToken", () => {
     afterEach(() => {
         vi.unstubAllEnvs();
@@ -45,7 +48,6 @@ describe("resolveAdminToken", () => {
     it("reads an export-prefixed, comment-trailed token like wrangler does", () => {
         expect.assertions(1);
 
-        // Ensure the env-var branch does not shadow the `.dev.vars` read.
         vi.stubEnv("LUNORA_ADMIN_TOKEN", "");
 
         const root = mkdtempSync(join(tmpdir(), "lunora-admin-token-"));
@@ -53,5 +55,42 @@ describe("resolveAdminToken", () => {
         writeFileSync(join(root, ".dev.vars"), "export LUNORA_ADMIN_TOKEN=abc # local\n");
 
         expect(resolveAdminToken(root)).toBe("abc");
+    });
+
+    it("uses the .dev.vars token — the only one the local worker verifies — and warns about a differing shell export", () => {
+        expect.assertions(2);
+
+        // `LUNORA_ADMIN_TOKEN` in the shell is the documented way to run
+        // `lunora backup` / `deploy --migrate` against PRODUCTION. Nothing
+        // forwards it into the dev worker's env, so preferring it both failed the
+        // studio's admin gate and put a production bearer in every document
+        // served on the developer's machine.
+        vi.stubEnv("LUNORA_ADMIN_TOKEN", "production-bearer");
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-admin-token-env-"));
+
+        writeFileSync(join(root, ".dev.vars"), `LUNORA_ADMIN_TOKEN=${JSON.stringify(LOCAL_TOKEN)}\n`);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const token = resolveAdminToken(root);
+
+        expect(token).toBe(LOCAL_TOKEN);
+        expect(warn.mock.calls.join(" ")).toContain("LUNORA_ADMIN_TOKEN");
+
+        warn.mockRestore();
+    });
+
+    it("returns undefined when .dev.vars carries no token, rather than falling back to the shell", () => {
+        expect.assertions(1);
+
+        vi.stubEnv("LUNORA_ADMIN_TOKEN", "production-bearer");
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-admin-token-none-"));
+
+        writeFileSync(join(root, ".dev.vars"), 'AUTH_SECRET="x"\n');
+
+        // The studio prompts instead — a token the worker cannot verify is worse
+        // than no token, and this one is a production credential.
+        expect(resolveAdminToken(root)).toBeUndefined();
     });
 });

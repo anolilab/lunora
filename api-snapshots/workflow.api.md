@@ -87,6 +87,7 @@ class NonRetryableError extends Error {
 
 ```ts
 interface RunFunctionOptions {
+    dedupId?: string;
     shardKey?: string;
 }
 ```
@@ -397,6 +398,7 @@ type WorkflowRollbackHandlerLike<T = unknown> = (context: WorkflowRollbackContex
 interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly env: Record<string, unknown>;
     readonly event: WorkflowEventLike<Params>;
+    readonly fetchImpl?: typeof fetch;
     readonly log: WorkflowLogger;
     readonly parallel: WorkflowParallelFunction;
     readonly params: Readonly<Params>;
@@ -643,6 +645,12 @@ const defineWorkflow: <Params = Record<string, unknown>, Output = unknown>(confi
 const defineWorkflowEvent: <Payload>(type: string, payload: Validator<Payload>) => WorkflowEventDefinition<Payload>;
 ```
 
+### `isDuplicateInstanceError` (const)
+
+```ts
+const isDuplicateInstanceError: (error: unknown) => boolean;
+```
+
 ### `isNonRetryableError` (const)
 
 ```ts
@@ -706,5 +714,46 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     #private;
     constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>, definition: WorkflowDefinition<Params, Output>, exportName?: string);
     override run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output>;
+}
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `RunContextOptions` (interface)
+
+```ts
+interface RunContextOptions<Params> {
+    env: Record<string, unknown>;
+    event: WorkflowEventLike<Params>;
+    exportName: string;
+    fetchImpl?: typeof fetch;
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    step: WorkflowStepLike;
+}
+```
+
+### `RunStepDeps` (interface)
+
+```ts
+interface RunStepDeps {
+    env: Record<string, unknown>;
+    instanceId: string;
+    log: WorkflowLogger;
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    run: WorkflowRunFunction;
+    step: WorkflowStepLike;
+}
+```
+
+### `WaitForEventDeps` (interface)
+
+```ts
+interface WaitForEventDeps {
+    nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
+    step: WorkflowStepLike;
 }
 ```

@@ -76,7 +76,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "name": {
                                                 "type": "string"
@@ -138,7 +137,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -194,18 +192,15 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
-                                            "channelId": {
-                                                "type": "string"
-                                            },
-                                            "key": {
-                                                "type": "string"
+                                            "messageId": {
+                                                "description": "Id<\"messages\">",
+                                                "type": "string",
+                                                "x-lunora-table": "messages"
                                             }
                                         },
                                         "required": [
-                                            "channelId",
-                                            "key"
+                                            "messageId"
                                         ],
                                         "type": "object"
                                     },
@@ -260,7 +255,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -322,7 +316,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -388,7 +381,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -454,7 +446,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -526,7 +517,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -596,7 +586,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -662,7 +651,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "channelId": {
                                                 "type": "string"
@@ -724,14 +712,13 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
-                                            "key": {
+                                            "userId": {
                                                 "type": "string"
                                             }
                                         },
                                         "required": [
-                                            "key"
+                                            "userId"
                                         ],
                                         "type": "object"
                                     },
@@ -786,7 +773,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {},
                                         "required": [],
                                         "type": "object"
@@ -842,7 +828,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "contentType": {
                                                 "type": "string"
@@ -904,7 +889,6 @@ export const openApiSpec: Record<string, unknown> = {
                                 "additionalProperties": false,
                                 "properties": {
                                     "args": {
-                                        "additionalProperties": false,
                                         "properties": {
                                             "name": {
                                                 "type": "string"

@@ -1,3 +1,128 @@
+## @lunora/browser [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.50...@lunora/browser@1.0.0-alpha.51) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/browser [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.49...@lunora/browser@1.0.0-alpha.50) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/browser [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.48...@lunora/browser@1.0.0-alpha.49) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
+## @lunora/browser [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.47...@lunora/browser@1.0.0-alpha.48) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/browser [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.46...@lunora/browser@1.0.0-alpha.47) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/browser [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.45...@lunora/browser@1.0.0-alpha.46) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/browser [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.44...@lunora/browser@1.0.0-alpha.45) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/browser [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.43...@lunora/browser@1.0.0-alpha.44) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
+## @lunora/browser [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.42...@lunora/browser@1.0.0-alpha.43) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/browser [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.41...@lunora/browser@1.0.0-alpha.42) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/browser [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.40...@lunora/browser@1.0.0-alpha.41) (2026-09-05)
+
+### Bug Fixes
+
+* **client,react:** encode SSR payloads and stop three surfaces silently blanking ([#607](https://github.com/anolilab/lunora/issues/607)) ([a17366a](https://github.com/anolilab/lunora/commit/a17366a43ca0ea2a69f05912d68a678a0450c270))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/browser [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.39...@lunora/browser@1.0.0-alpha.40) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+
+## @lunora/browser [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.38...@lunora/browser@1.0.0-alpha.39) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* `SubscriptionStore` requires `deleteOwned(id, userId)`. Both
+shipped stores implement it; an external store must make the predicate and the
+removal atomic rather than reintroduce the read-then-write race. Seeding a
+`.unique()` self-referencing column into a non-empty table is now refused.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close twelve review findings, three fail-open ([#587](https://github.com/anolilab/lunora/issues/587)) ([74c2ac0](https://github.com/anolilab/lunora/commit/74c2ac0028a77c357870ca120e0b76d65627581e))
+
+## @lunora/browser [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.37...@lunora/browser@1.0.0-alpha.38) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+## @lunora/browser [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.36...@lunora/browser@1.0.0-alpha.37) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/browser [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.35...@lunora/browser@1.0.0-alpha.36) (2026-09-02)
 
 

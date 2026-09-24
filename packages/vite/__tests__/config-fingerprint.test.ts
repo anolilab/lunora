@@ -70,7 +70,7 @@ describe("config-fingerprint", () => {
     });
 
     describe("computeConfigFingerprint", () => {
-        it("joins the two config parts with a NUL and marks absent files", () => {
+        it("joins the config parts with a NUL and marks absent files", () => {
             expect.assertions(2);
 
             // The separator is a NUL. Derived via `String.fromCodePoint(0)` rather
@@ -79,9 +79,29 @@ describe("config-fingerprint", () => {
             const nul = String.fromCodePoint(0);
             const fingerprint = computeConfigFingerprint(workdir);
 
-            // No wrangler.jsonc and no lunora.json in a fresh dir -> both parts absent.
+            // Nothing in a fresh dir -> every part absent.
             expect(fingerprint).toContain(nul);
             expect(fingerprint).toBe(`absent${nul}absent`);
+        });
+
+        it("moves when lunora.config.ts changes, so the watcher is not inert", () => {
+            expect.assertions(2);
+
+            // The dev watcher watches this file, but `onConfigChange` returns early
+            // when the fingerprint has not moved — so watching it without
+            // fingerprinting it did nothing at all.
+            const appConfigPath = join(workdir, "lunora.config.ts");
+            const absent = computeConfigFingerprint(workdir);
+
+            writeFileSync(appConfigPath, "export const configureApp = (app) => app;\n", "utf8");
+
+            const present = computeConfigFingerprint(workdir);
+
+            expect(present).not.toBe(absent);
+
+            writeFileSync(appConfigPath, "export const configureApp = (app) => app.global({ d1: (env) => env.DB });\n", "utf8");
+
+            expect(computeConfigFingerprint(workdir)).not.toBe(present);
         });
 
         it("adding the first cron does not change the fingerprint (anti-loop)", () => {

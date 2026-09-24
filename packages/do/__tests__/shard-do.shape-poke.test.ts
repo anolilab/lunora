@@ -74,6 +74,15 @@ class ShapePokeShard extends ShardDO {
 
                 break;
             }
+            // A write to a table no shape in this suite watches, so the flush it
+            // triggers carries `changed = {roomMembers}` and still advances the CDC
+            // cursor — the "unrelated table" half of the empty-advance path.
+            case "rooms:join": {
+                await writer.insert("roomMembers", { _id: args["_id"], roomId: args["roomId"] ?? "r1", userId: "u1" }, { allowExplicitId: true });
+                this.recordChangedTable("roomMembers");
+
+                return { ok: true };
+            }
             default: {
                 break;
             }
@@ -245,6 +254,71 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
         await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "three" }));
 
         expect(partBases(ws)[2]).toBe(afterFirst);
+    });
+
+    /**
+     * A failed poke has to survive the next flush on an UNRELATED table.
+     *
+     * The shape's memo is deliberately left where it was when a send fails, so the
+     * rows are re-emitted. But the next flush that does not touch the shape's table
+     * used to force-advance that memo's `cursor` straight past the undelivered
+     * range while `delivered` stayed behind — so the rows were never diffed again,
+     * and the poke after that stamped `baseCheckpoint = delivered`, exactly where
+     * the client already was. The client's own gap check therefore PASSED and it
+     * spliced newer rows onto a permanently incomplete view.
+     *
+     * Both flushes are required to see it: a suite that only fails one send watches
+     * the (correct) re-emit on the next write to the same table and never reaches
+     * the force-advance.
+     */
+    it("re-delivers rows a failed poke owes even when the next flush changes another table", async () => {
+        expect.assertions(4);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        sockets.push(ws);
+
+        await subscribeShape(shard, ws, "c1");
+        ws.sent.length = 0;
+
+        // Flush A — the shape's own table changes, but the poke never lands. The
+        // realistic trigger is an oversized `pokePart` frame on an otherwise
+        // healthy socket: `pokeStart` is already on the wire when the part throws.
+        const healthy = ws.send.bind(ws);
+
+        ws.send = (data: string): void => {
+            if ((JSON.parse(data) as { type: string }).type === "pokePart") {
+                throw new Error("frame too large");
+            }
+
+            healthy(data);
+        };
+
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "owed" }));
+
+        expect(pokeOps(ws)).toStrictEqual([]);
+
+        ws.send = healthy;
+        ws.sent.length = 0;
+
+        // Flush B — an unrelated table. The shape is absent from `changed`, which
+        // is the force-advance the client can never recover from.
+        await shard.fetch(write("rooms:join", { _id: "rm1", roomId: "r1" }));
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "m1", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m1", text: "owed" }) }]);
+
+        // …and the shape is settled again afterwards: the next in-channel write
+        // carries only its own row, stamped against the checkpoint the re-delivery
+        // above actually reached.
+        const redeliveredAt = endCheckpoints(ws).at(-1);
+
+        ws.sent.length = 0;
+
+        await shard.fetch(write("messages:send", { _id: "m2", channelId: "c1", text: "after" }));
+
+        expect(pokeOps(ws)).toStrictEqual([{ key: "m2", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m2", text: "after" }) }]);
+        expect(partBases(ws)[0]).toBe(redeliveredAt);
     });
 
     it("pokes an insert when a new row joins the shape", async () => {

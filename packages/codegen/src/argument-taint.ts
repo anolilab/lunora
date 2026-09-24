@@ -1,5 +1,74 @@
-import type { Identifier, Node as TsNode } from "ts-morph";
+import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
+
+/**
+ * The parameter binding element that declares `name`, searched from the
+ * innermost enclosing function outward so a shadowing parameter wins over an
+ * outer one. Only PARAMETER patterns are searched: `({ args: { url } })` is the
+ * house style every handler is written in, and a parameter cannot be
+ * reassigned out from under the use the way a later `const` can, so this needs
+ * none of {@link singleHopInitializer}'s scope-order care.
+ */
+const parameterBindingFor = (identifier: Identifier): BindingElement | undefined => {
+    const name = identifier.getText();
+    const declares = (candidate: BindingElement): boolean => {
+        const nameNode = candidate.getNameNode();
+
+        return Node.isIdentifier(nameNode) && nameNode.getText() === name;
+    };
+
+    for (const ancestor of identifier.getAncestors()) {
+        if (!Node.isArrowFunction(ancestor) && !Node.isFunctionExpression(ancestor) && !Node.isFunctionDeclaration(ancestor)) {
+            continue;
+        }
+
+        for (const parameter of ancestor.getParameters()) {
+            const element = parameter.getDescendantsOfKind(SyntaxKind.BindingElement).find((candidate) => declares(candidate));
+
+            if (element !== undefined) {
+                return element;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The property name the outermost element of `element`'s destructuring chain
+ * reads off the parameter object — `({ args: { url: target } })`'s `target`
+ * resolves to `"args"`, and so does the `...rest` of `({ args: { url,
+ * ...rest } })`, because a rest element holds what is left of the same object.
+ * `undefined` when the chain is not rooted directly in a parameter's pattern
+ * (an array pattern, or a nested function's own binding).
+ */
+const destructuringRootName = (element: BindingElement): string | undefined => {
+    let outermost = element;
+
+    for (;;) {
+        const pattern = outermost.getParent();
+
+        if (!Node.isObjectBindingPattern(pattern)) {
+            return undefined;
+        }
+
+        const owner = pattern.getParent();
+
+        if (Node.isBindingElement(owner)) {
+            outermost = owner;
+
+            continue;
+        }
+
+        if (!Node.isParameterDeclaration(owner)) {
+            return undefined;
+        }
+
+        // The renamed spelling reads `propertyName`; a shorthand (and a rest
+        // element) reads its own name.
+        return (outermost.getPropertyNameNode() ?? outermost.getNameNode()).getText();
+    }
+};
 
 /**
  * True when `identifier` is a *value* reference to the binding named `name` —
@@ -9,19 +78,33 @@ import { Node, SyntaxKind } from "ts-morph";
  * member access and the key of an explicit `{ <name>: … }` property, which name
  * a different `<name>` and carry no taint; a `{ <name> }` shorthand IS a value
  * reference and is kept.
+ *
+ * A handler that destructures its parameter — `({ args: { url }, ctx }) => …
+ * url` — binds `url` to a field OF `args`, so `url` is a value reference to
+ * `args` just as `args.url` is. Renaming (`{ args: { url: target } }`),
+ * nesting, and rest elements all resolve through the same chain walk. Without
+ * this the destructured spelling (the one every registry item, example and doc
+ * snippet is written in) carried no taint at all, so three ERROR/WARN sink
+ * lints could not fire on the code this repo itself ships.
  */
 const isValueReference = (identifier: Identifier, name: string): boolean => {
-    if (identifier.getText() !== name) {
-        return false;
-    }
-
     const parent = identifier.getParent();
 
     if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
         return false;
     }
 
-    return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
+    if (Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    if (identifier.getText() === name) {
+        return true;
+    }
+
+    const element = parameterBindingFor(identifier);
+
+    return element !== undefined && destructuringRootName(element) === name;
 };
 
 /** True when `node` is, or textually contains, a value reference to the binding named `name`. */

@@ -76,17 +76,25 @@ const config = {
 // enforcing the configured rate the moment the DO instance is sharded,
 // replicated, or recreated.
 // As procedure middleware — throws a structural LunoraError (429/403) on rejection.
-export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+// `key` must resolve to a string — a resolver returning `undefined` throws
+// rather than silently sharing one bucket across every keyless caller.
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx }) => {
     // …
 });
 ```
 
-Or call the limiter directly, inside a mutation/action so `ctx.db` is available:
+Or call the limiter directly, inside a mutation/action so `ctx.db` is available.
+A login limiter belongs in an **action**: a mutation's `ctx.db` writes ride its
+storage transaction, so a handler that throws (a wrong password) rolls the
+consumed unit back and every failed attempt is free. An action's writes commit
+on their own, so the charge stays whether or not the handler throws.
 
 ```ts
 import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
-export const login = mutation.mutation(async ({ ctx, args }) => {
+import { action } from "./_generated/server";
+
+export const login = action.action(async ({ ctx, args }) => {
     const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
     const status = await limiter.limit("login", { key: args.email });
 

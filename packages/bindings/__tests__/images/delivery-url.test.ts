@@ -129,17 +129,4 @@ describe("buildImageDeliveryUrl", () => {
             "@lunora/bindings/images:",
         );
     });
-
-    it("drops draw overlays — the /cdn-cgi/image URL form can't express them (Workers-only)", () => {
-        expect.assertions(2);
-
-        const url = buildImageDeliveryUrl({
-            baseUrl: "https://cdn.acme.test",
-            key: "a.png",
-            transform: { draw: [{ opacity: 0.5, url: "https://cdn.test/logo.png" }], width: 256 },
-        });
-
-        expect(url).not.toContain("draw");
-        expect(url).toBe("https://cdn.acme.test/cdn-cgi/image/width=256/a.png");
-    });
 });

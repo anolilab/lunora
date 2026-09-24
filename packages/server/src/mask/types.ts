@@ -89,10 +89,13 @@ export type MaskPolicies<Context = unknown> = Record<string, MaskColumns<Context
  * - `roles` registers the role→permission grants that back `ctx.auth.can(...)`
  * inside a {@link MaskFn} — identical to `rls(policies, { roles })`. A role
  * not listed grants no permissions (fails closed for unknown roles).
- * - `bypass` is a procedure-wide escape hatch: when it returns `true` the whole
- * mask is skipped (the caller sees raw values). Use it for a privileged
+ * - `bypass` is a procedure-wide escape hatch: when it returns exactly `true` the
+ * whole mask is skipped (the caller sees raw values). Use it for a privileged
  * viewer — `bypass: ({ auth }) => auth.can("pii:view")`. Prefer this over
  * branching every column when an entire class of caller should see clear data.
+ * The verdict is compared to `true`, never evaluated for truthiness: returning
+ * a claim (`auth.identity?.role`) rather than a decision is a DENIAL here, not
+ * an unmasked read.
  * - `indexFields` closes the bare-index-scan / rank / geo position oracle (see
  * the `mask/middleware` module docblock's "Residual read-position oracles" section).
  */

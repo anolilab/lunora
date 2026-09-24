@@ -57,19 +57,20 @@ path). Internally `fetch`:
 
 `shardDO` is the only required option. The rest are opt-in:
 
-| Option                                                     | Purpose                                                                                        |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                     |
-| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s |
-| `resolveIdentity`                                          | `(request, env) => identity \| null`; sets `ctx.auth` on the shard                             |
-| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                             |
-| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)       |
-| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)             |
-| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints     |
-| `security`                                                 | The secure-by-default HTTP edge: headers, CORS, CSRF (see `SecurityOptions`)                   |
-| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                          |
-| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                               |
-| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                             |
+| Option                                                     | Purpose                                                                                                                       |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                                                    |
+| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s                                |
+| `resolveIdentity`                                          | `(request, env) => identity \| null`; sets `ctx.auth` on the shard                                                            |
+| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                                                            |
+| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)                                      |
+| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)                                            |
+| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints                                    |
+| `security`                                                 | The secure-by-default HTTP edge: headers, CORS, CSRF (see `SecurityOptions`)                                                  |
+| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                                                         |
+| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                                                              |
+| `queueHandler`                                             | The queue fan-out seam; `POST /_lunora/scheduled` needs no option — see _Running crons and queues where the host has neither_ |
+| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                                                            |
 
 Cross-shard access is **default-denied**. A request that names a non-default
 shard (`shardKey !== defaultShardKey`, default `__root__`) or a fan-out is
@@ -183,7 +184,7 @@ const build = (env: Env): LunoraWorker =>
         // Built-in backup: on this cron, export every table to NDJSON and write
         // it (plus a manifest sidecar) to the bound R2 bucket.
         backupStore: env.BACKUPS, // any R2 bucket binding
-        backupCron: "0 3 * * *", // must match a wrangler triggers.crons entry
+        backupCron: "0 3 * * *", // a literal here is written into triggers.crons for you
         backupRetain: 14, // the window: `lunora backup prune` keeps the newest 14
         // backupPrefix: "backups/", // key prefix (default)
         // backupTables: ["users"],  // omit to back up every table
@@ -313,18 +314,35 @@ available; the snapshot is still readable with `wrangler r2 object get`.
 ```
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
-delivers triggers it declares. To restore a scheduled snapshot, download the
-NDJSON object and feed it to `lunora backup restore <file>` (optionally with
-`--to <time>` for point-in-time replay).
+delivers triggers it declares. `lunora deploy` and the dev server write
+`triggers.crons` for you: codegen reads your `lunora/crons.ts` registrations
+**and** the `backupCron` / `crons` keys your worker entry passes to
+`createWorker`, so a string literal like the one above needs no hand-editing.
+
+A value codegen cannot read statically — `backupCron: env.NIGHTLY_CRON`, or one
+supplied through `.extend((env) => ({ … }))` — still needs its own
+`triggers.crons` entry, and that entry is safe to add: these commands only ever
+remove entries they generated, the set they own being recorded in your
+`package.json` under `lunora.crons`. Anything else is left alone and reported as
+kept. To restore a scheduled snapshot, download the NDJSON object and
+feed it to `lunora backup restore <file>`; for point-in-time recovery use
+`lunora backup pitr --at <time> --restore`.
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
-The runtime's typed error class. Throwing a
-`LunoraError(message, { code, status })` inside a handler causes a
-`{ error: { code, message, ... } }` body to come back over RPC instead of an
-HTTP 500. `toErrorResponse(err)` is the same mapping exposed for add-ons.
+The runtime's transport-level error class, for the **worker entry and runtime
+add-ons** — HTTP routes, middleware you mount on `createWorker`, host adapters.
+Throwing a `LunoraError(message, { code, status })` produces a
+`{ error: { code, message, ... } }` body instead of an HTTP 500.
+`toErrorResponse(err)` is the same mapping exposed for add-ons.
 
-The message comes **first**; `code` and `status` are options:
+<Callout type="warn">
+    **This is not the class you throw inside a query, mutation, or action.** Those use `LunoraError` from `lunorash/server` (`@lunora/errors`), whose signature
+    is `(code, message?, options?)` — the **code first**, resolved against the shared error catalog. The two classes share a name and a wire shape but take
+    their arguments in opposite orders, so always import deliberately.
+</Callout>
+
+Here the message comes **first**; `code` and `status` are options:
 
 ```ts
 import { LunoraError } from "@lunora/runtime";
@@ -336,6 +354,57 @@ Reversing them (`new LunoraError("NOT_FOUND", "no such post")`) does not
 compile, and from untyped code it mints an error whose _message_ is
 `"NOT_FOUND"` and whose code defaults to `INTERNAL` — a redacted 500, exactly
 what this class exists to avoid.
+
+## Running crons and queues where the host has neither
+
+Some hosts hand a Worker no cron trigger and no queue consumer of its own —
+Cloudflare's Workers for Platforms is the case this exists for: a script in a
+dispatch namespace gets neither, whatever its own `wrangler.jsonc` declares. The
+work still has to run, so the platform drives it over HTTP instead, through two
+reserved endpoints `createWorker` serves. Both are **admin-gated** (the same
+bearer as `/_lunora/admin/*`) and both refuse anything but `POST`.
+
+`POST /_lunora/scheduled` replays one cron firing:
+
+```bash
+curl -X POST https://<tenant>/_lunora/scheduled \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" \
+  -d '{ "cron": "0 9 * * *" }'
+```
+
+Dispatch is keyed on the expression and goes through the same path a native
+trigger takes — user crons, code crons and the scheduled backup all behave
+exactly as they would on a real firing. A body with no `cron` is a `400`; the
+platform is expected to know which expression is due.
+
+`POST /_lunora/queue` hands over a batch the platform's own consumer drained,
+and answers with the ids to redeliver:
+
+```bash
+curl -X POST https://<tenant>/_lunora/queue \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" \
+  -d '{ "queue": "jobs", "messages": [{ "id": "m1", "body": { "userId": "u1" } }] }'
+# => { "retry": ["m1"] }
+```
+
+It needs a `queueHandler` on `createWorker` (`(batch, env, ctx) => { retry? }`);
+without one the endpoint is a `400` rather than a silent success, so a
+misconfigured tenant fails loudly instead of dropping every batch. Messages with
+no string `id` are dropped before the handler sees them — there would be nothing
+to ack or retry them by.
+
+A forwarded batch is capped at **16 MiB** and a larger one is refused with a
+`413` — chunked or not, since the cap is enforced as the bytes arrive rather than
+from `Content-Length`. That is sized for a full Cloudflare Queues batch (100
+messages × 128 KiB) plus the forwarding envelope, so a consumer that respects the
+queue's own limits never meets it. A body that names no `messages` array — an
+empty body included — is a `400` rather than an empty batch, because answering
+`{ "retry": [] }` would tell the consumer to ack messages this worker never read.
+
+Neither endpoint replaces the native triggers where a host has them. On an
+ordinary account-level Worker, `triggers.crons` and a real queue consumer are
+still the path; these are the seam a platform reaches for when the host removed
+it.
 
 ## Health / readiness probe
 
@@ -404,6 +473,66 @@ createWorker({
     restRateLimit: createRestRateLimit(new RateLimiter(/* … */), { name: "rest" }),
 });
 ```
+
+With no `key` callback the limit is keyed on Cloudflare's `CF-Connecting-IP`, and
+only while running on Cloudflare — the edge stamps that header over anything the
+client sent, so it is the one client-address header a caller cannot choose. On any
+other target (`target: "node"`, a container, a bare host) nothing overwrites it, so
+the runtime resolves no IP at all — and the gate then **refuses** the request with
+a `500` naming the fix, rather than pooling every caller behind one bucket. That is
+deliberate on both counts: trusting the header off Cloudflare would let an attacker
+rotate `Cf-Connecting-IP` for a fresh bucket per request and the limit would stop
+applying to exactly the traffic it exists to stop, while a shared bucket inverts a
+per-caller limit into a one-request-per-period lever anyone can pull for the whole
+deployment. Off Cloudflare, pass `key` and identify callers by something they
+cannot forge:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
+```
+
+### Origins behind a proxy: `trustedClientIpHeader`
+
+A non-Cloudflare origin sitting **behind** Cloudflare is the case where the refusal
+is pure loss rather than protection. The edge stamps `CF-Connecting-IP`, the origin
+accepts only Cloudflare traffic, so the header genuinely is trustworthy — yet the
+runtime still resolves no IP, because the code runs on the origin and nothing in
+the request tells it apart from a directly-exposed host. A limit that could have
+been per-IP refuses every request instead.
+
+Only the deployment knows it is fronted, so the deployment says so. Declare the
+header and per-IP limiting comes back:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    functions: LUNORA_FUNCTIONS,
+    // Governs `ctx.ip`.
+    trustedClientIpHeader: "cf-connecting-ip",
+    // Governs the REST limiter's default key. Set both, or the two disagree
+    // about who a request came from.
+    restRateLimit: createRestRateLimit(limiter, { name: "rest", trustedClientIpHeader: "cf-connecting-ip" }),
+});
+```
+
+Declaring it asserts that the named header is set by infrastructure **you
+control**, on every request, replacing whatever the caller sent — so no caller
+can choose its value. A proxy that only forwards or appends a client-supplied
+header is not such a thing, and neither is an origin that can be reached around
+it: if any route bypasses the proxy, a caller arrives with the header they typed,
+rotates it for a fresh bucket per request, and forges the `ctx.ip` your procedures
+key on. Lock the origin to the proxy before setting this. Left unset, the
+fail-closed default above applies; on Cloudflare the option is ignored and
+`CF-Connecting-IP` is used regardless.
+
+A value containing a comma is refused rather than read, because that is an
+appended chain (`x-forwarded-for: <client>, <hop>`) whose leftmost entry is
+client-written. Declare a header your proxy replaces, or key on something else
+with `key`.
+
+This mirrors `@lunora/auth`'s `advanced.ipAddress.trustedProxies` opt-in, which
+solves the same problem for the sign-in limiter. Both are per-deployment
+assertions and neither implies the other, so a fronted origin sets both.
 
 Security guidance: keep the surface small, prefer `.output()` on exposed
 procedures so the response shape is contractual, and rely on the procedure's own

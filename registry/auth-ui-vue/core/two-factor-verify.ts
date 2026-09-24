@@ -5,7 +5,7 @@
 import type { ControllerContext } from "./config";
 import { createFormController } from "./create-form-controller";
 import { assertOk } from "./map-error";
-import { resolveAfterSignIn } from "./redirect-to";
+import { postAuthDestination } from "./redirect-to";
 import type { FormController } from "./types";
 import { required } from "./validators";
 
@@ -30,7 +30,7 @@ const createTwoFactorVerifyController = (context: ControllerContext, options: Tw
 
             assertOk(options.method === "otp" ? await context_.authClient.twoFactor.verifyOtp(input) : await context_.authClient.twoFactor.verifyTotp(input));
 
-            return { redirectTo: resolveAfterSignIn(context_.redirects.afterSignIn) };
+            return { redirectTo: postAuthDestination(context_) };
         },
     });
 

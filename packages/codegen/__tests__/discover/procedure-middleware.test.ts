@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { userCreatingMutationWithoutCaptcha } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -16,7 +17,8 @@ import discoverProcedureMiddleware from "../../src/discover/procedure-middleware
 const PREAMBLE = `
     declare const rateLimit: (options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const dbRateLimit: (config?: unknown, name?: unknown, options?: unknown) => (options: { ctx: unknown }) => unknown;
-    declare const verifyTurnstile: (options?: unknown) => (options: { ctx: unknown }) => unknown;
+    declare const verifyTurnstile: (options?: unknown) => Promise<{ success: boolean }>;
+    declare const verifyTurnstileMiddleware: (options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const protectPublic: (options: { rateLimit?: unknown; captcha?: unknown }) => (options: { ctx: unknown }) => unknown;
     declare const mutation: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "mutation" };
 
@@ -78,6 +80,29 @@ const SPREAD_INPUT_SIGNUP = `${PREAMBLE}
 
     export const signUp = c.mutation
         .input({ ...shared, name: v.string() })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** A spread graph that loops — the fields are dropped, so the verdict must be unknown. */
+const CYCLIC_SPREAD_SIGNUP = `${PREAMBLE}
+    const a = { ...b, name: v.string() };
+    const b = { ...a };
+
+    export const signUp = c.mutation
+        .input({ ...a })
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** The address arrives through a spread codegen CAN read. */
+const RESOLVED_SPREAD_EMAIL_SIGNUP = `${PREAMBLE}
+    const signupArgs = { email: v.string(), password: v.string() };
+
+    export const signUp = c.mutation
+        .input({ ...signupArgs, name: v.string() })
         .mutation(async ({ ctx }) => {
             await ctx.db.insert("users", {});
         });
@@ -348,6 +373,28 @@ const DB_RATE_LIMITED = `${PREAMBLE}
         });
 `;
 
+/**
+ * `.use(verifyTurnstile(...))` — the async verdict FUNCTION, not a middleware.
+ * The chain holds a Promise and nothing is verified, so this must NOT read as a
+ * captcha check.
+ */
+const VERDICT_FUNCTION_SIGNUP = `${PREAMBLE}
+    export const signUp = c.mutation
+        .use(verifyTurnstile({ secret: "s", token: "t" }))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** `.use(verifyTurnstileMiddleware(...))` — the real `.use()`-able guard. */
+const MIDDLEWARE_SIGNUP = `${PREAMBLE}
+    export const signUp = c.mutation
+        .use(verifyTurnstileMiddleware({ secret: "s", token: (c2: { args: { t: string } }) => c2.args.t }))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 /** A builder-form mutation bundled with `protectPublic({ rateLimit, captcha })`. */
 const PROTECTED = `${PREAMBLE}
     export const register = c.mutation
@@ -534,6 +581,33 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]?.hasEmailArg).toBeUndefined();
+    });
+
+    it("leaves the verdict unknown when the spread graph cycles", () => {
+        expect.assertions(1);
+
+        // The parser breaks the cycle by emitting nothing for it, so the keys ARE
+        // dropped. Reporting the shape as fully readable would turn that into a
+        // confident `false` and clear the signup lint.
+        writeFileSync(join(workdir, "lunora", "signup.ts"), CYCLIC_SPREAD_SIGNUP, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]?.hasEmailArg).toBeUndefined();
+    });
+
+    it("finds an email argument that arrives through a READABLE spread", () => {
+        expect.assertions(1);
+
+        // Once a resolvable spread stopped being opaque, a names list that could
+        // not see through it turned "unknown" into a confident `false` — which
+        // CLEARS `signup_mutation_without_disposable_gating` on a signup that
+        // does take an address. Silent, and in the unsafe direction.
+        writeFileSync(join(workdir, "lunora", "signup.ts"), RESOLVED_SPREAD_EMAIL_SIGNUP, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUp", hasEmailArg: true });
     });
 
     it("does not treat `emailVerified` / `emailOptIn` / `emailTemplateId` as an address", () => {
@@ -821,5 +895,24 @@ describe("discoverProcedureMiddleware", () => {
         expect(found[0]?.unboundedAiGeneration).toBeUndefined();
         expect(found[0]?.usesInsertManyUnsafe).toBeUndefined();
         expect(found[0]?.writesUserTable).toBeUndefined();
+    });
+
+    // `verifyTurnstile` is `@lunora/auth`'s async verdict function; only
+    // `verifyTurnstileMiddleware` is `.use()`-able. Counting the former as
+    // protection silenced the lint for a procedure with no captcha check at all.
+    it.each([
+        ["the bare verdict function is not a captcha check", VERDICT_FUNCTION_SIGNUP, 1],
+        ["the middleware is", MIDDLEWARE_SIGNUP, 0],
+    ])("feeds user_creating_mutation_without_captcha: %s", (_label, source, expected) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "signup.ts"), source, "utf8");
+
+        const findings = userCreatingMutationWithoutCaptcha.run({
+            procedureProtections: discoverProcedureMiddleware(project, join(workdir, "lunora")),
+            schema: { tables: [] },
+        });
+
+        expect(findings).toHaveLength(expected);
     });
 });

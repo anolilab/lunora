@@ -14,11 +14,11 @@ description: "Astro integration: single-worker composition plus reactive-loader 
 pnpm add @lunora/astro
 ```
 
-`astro` is an optional peer dependency (`^6.0.0`); the host app provides it.
+`astro` is an optional peer dependency (`>=6.0.0`); the host app provides it.
 
 ## Composition
 
-Add the `lunora` integration to `astro.config`, then wrap the Cloudflare adapter's SSR handler in `src/worker.ts`.
+Add the `lunora` integration to `astro.config`, then wrap the Cloudflare adapter's SSR handler in `src/server.ts`.
 
 <Steps>
 <Step>
@@ -42,7 +42,7 @@ export default defineConfig({
 
 Compose the worker. On Astro 6 / `@astrojs/cloudflare` v13 the adapter no longer emits a `dist/_worker.js` bundle, so import `handle` (the adapter's built-in SSR fetch function) and wrap it:
 
-```ts title="src/worker.ts"
+```ts title="src/server.ts"
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -60,7 +60,7 @@ Point wrangler at the composed entry:
 
 ```jsonc title="wrangler.jsonc"
 {
-    "main": "src/worker.ts",
+    "main": "src/server.ts",
 }
 ```
 
@@ -85,7 +85,7 @@ withLunora(host, optionsInput);
 
 ### `lunora(options)`
 
-The `astro.config` integration object (`{ name, hooks }`). The only option is `serverEntry` (default `"src/worker.ts"`), the module that calls `withLunora` and is the composed worker's `export default`.
+The `astro.config` integration object (`{ name, hooks }`). The only option is `serverEntry` (default `"src/server.ts"`), the module that calls `withLunora` and is the composed worker's `export default`. It is deliberately **not** `src/worker.ts`: `lunora deploy` treats that exact path as a SvelteKit-shaped composed entry and passes it to wrangler positionally, which together with the `@astrojs/cloudflare` redirect's `no_bundle: true` would upload the raw TypeScript source as the worker.
 
 ## Server helpers
 
@@ -96,11 +96,12 @@ The `astro.config` integration object (`{ name, hooks }`). The only option is `s
 import { createServerClient, preloadQuery, serializePreloaded } from "@lunora/astro/server";
 import { api } from "../lunora/_generated/api";
 
-const client = createServerClient({ url: Astro.url.origin + "/_lunora/rpc" });
+const client = createServerClient({ url: Astro.url.origin });
 const preloaded = await preloadQuery(client, api.messages.list, {});
 ---
 
-<my-island data-preloaded={serializePreloaded(preloaded)}></my-island>
+<script id="preloaded" type="application/json" set:html={serializePreloaded(preloaded)}></script>
+<my-island></my-island>
 ```
 
 On the client, deserialize and hand the token to your island adapter's `hydratePreloaded` for the SSR-seed-to-live handoff:
@@ -109,7 +110,7 @@ On the client, deserialize and hand the token to your island adapter's `hydrateP
 import { hydratePreloaded } from "@lunora/react";
 import { deserializePreloaded } from "@lunora/astro/server";
 
-const preloaded = deserializePreloaded(el.dataset.preloaded);
+const preloaded = deserializePreloaded(document.querySelector("#preloaded")!.textContent!);
 const initial = hydratePreloaded(preloaded); // seeds the first paint, then goes live
 ```
 
@@ -120,7 +121,7 @@ Re-exported from `@lunora/astro/server`:
 | `createServerClient`   | Build a request-scoped client (`{ url, token?, fetch? }`). One per request.                 |
 | `preloadQuery`         | Run a query server-side → a serializable `Preloaded` token.                                 |
 | `preloadedQueryResult` | Read the value out of a `Preloaded` token.                                                  |
-| `serializePreloaded`   | Serialize a `Preloaded` token to a string for an island attribute.                          |
+| `serializePreloaded`   | Serialize a `Preloaded` token into a raw-text `<script>` payload.                           |
 | `deserializePreloaded` | Parse a serialized token back on the client.                                                |
 | `getServerSession`     | Resolve the current session from a headers source (`Request`/`Headers`) + an auth instance. |
 

@@ -371,6 +371,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `UseSignUpInvitationsOptions` (type)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `UseStreamOptions` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
@@ -583,6 +587,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `useSignUpInvitations` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `useStream` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
@@ -602,6 +610,12 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useVoiceAgent` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `withoutAmbientCookies` (const)
+
+```ts
+const withoutAmbientCookies: (fetchImpl: typeof fetch) => typeof fetch;
+```
 
 ## `@lunora/react-native/auth`
 

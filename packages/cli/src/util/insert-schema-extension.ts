@@ -16,7 +16,7 @@
  * `@lunora/cli`; this module is only imported from the `add` command's reconcile
  * path, never at CLI start.
  */
-import type { CallExpression, Node as TsNode } from "ts-morph";
+import type { CallExpression, Node as TsNode, SourceFile } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 
 type InsertSchemaExtensionResult =
@@ -42,6 +42,27 @@ const endMarker = (key: string): string => `// lunora:add:${key}:end`;
  * `./<key>/schema`.
  */
 const extensionImportSpecifier = (key: string): string => `./${key}/schema`;
+
+/**
+ * Whether the file already binds `key` at module scope — through any import
+ * clause (default, namespace, or named, under its local alias) or a top-level
+ * declaration. The spliced import introduces `key` as a lexical binding, so any
+ * existing one makes the merged file uncompilable.
+ */
+const bindsIdentifier = (sourceFile: SourceFile, key: string): boolean => {
+    if (sourceFile.getLocal(key) !== undefined) {
+        return true;
+    }
+
+    return sourceFile
+        .getImportDeclarations()
+        .some(
+            (declaration) =>
+                declaration.getDefaultImport()?.getText() === key ||
+                declaration.getNamespaceImport()?.getText() === key ||
+                declaration.getNamedImports().some((named) => (named.getAliasNode() ?? named.getNameNode()).getText() === key),
+        );
+};
 
 /**
  * Locate the `defineSchema(...)` call so we can append a `.extend()` to the end
@@ -107,6 +128,19 @@ const insertSchemaExtension = (source: string, key: string): InsertSchemaExtensi
     });
 
     const sourceFile = project.createSourceFile("schema.ts", source, { overwrite: true });
+
+    // Second idempotency gate, and the one that matters in practice: the markers
+    // only exist in files a previous `add` wrote, and NO template or registry item
+    // ships them — `templates/standalone/lunora/schema.ts` already imports and
+    // chains `ratelimit` by hand. Splicing in a second `import { ratelimit }`
+    // there produced a hard `SyntaxError: Identifier 'ratelimit' has already been
+    // declared` while the command reported "merged .extend(...)" and exited 0.
+    // Read off the AST rather than the raw text so a `ratelimit` inside a comment
+    // or string does not count as a binding.
+    if (bindsIdentifier(sourceFile, key)) {
+        return { ok: false, reason: "already-applied" };
+    }
+
     const callExpressions = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
     const defineSchemaCall = findDefineSchemaCall(callExpressions);
 

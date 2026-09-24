@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError, TABLE_FIRST_METHODS } from "../src/rls-guard";
+import { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError, WRITER_METHOD_GATING } from "../src/rls-guard";
 
 /** A spy writer: every gated method records its table/id and returns a sentinel. */
 const createFakeWriter = () => {
@@ -107,19 +107,19 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
 
     const byName = (a: string, b: string): number => a.localeCompare(b);
 
-    it("covers every method the guard gates by table name", () => {
+    it("covers every method the guard gates in its uniform loop", () => {
         expect.assertions(1);
 
         // Tripwire for the FIRST structural half: this hand-written list drifting
-        // below `TABLE_FIRST_METHODS` is what let `insertMany` /
+        // below `LOOP_GATED_METHODS` is what let `insertMany` /
         // `insertManyUnsafe` be gated in source and unreachable here, so deleting
         // them from the guard left all 61 tests passing. The guard's own list is
         // now derived from an exhaustive `keyof DatabaseWriterLike` map, so a new
-        // table-first method on the real writer reaches this assertion.
-        expect([...tableMethods].toSorted(byName)).toStrictEqual([...TABLE_FIRST_METHODS].toSorted(byName));
+        // loop-gated method on the real writer reaches this assertion.
+        expect([...tableMethods].toSorted(byName)).toStrictEqual([...LOOP_GATED_METHODS].toSorted(byName));
     });
 
-    it("the fake writer declares every table-first method, so it.each actually reaches them", () => {
+    it("the fake writer declares every loop-gated method, so it.each actually reaches them", () => {
         expect.assertions(1);
 
         // The SECOND structural half: `it.each` silently no-ops for a method the
@@ -127,7 +127,7 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
         // `it.each` proves nothing unless the fake implements the whole set.
         const raw = createFakeWriter() as unknown as Record<string, unknown>;
 
-        expect(TABLE_FIRST_METHODS.filter((name) => typeof raw[name] !== "function")).toStrictEqual([]);
+        expect(LOOP_GATED_METHODS.filter((name) => typeof raw[name] !== "function")).toStrictEqual([]);
     });
 
     it.each(tableMethods)("denies %s against the protected table", (method) => {
@@ -489,6 +489,68 @@ describe("guardWriter — erase primitives under .rls('required')", () => {
     });
 });
 
+describe("guardWriter — related is re-bound over the guarded writer", () => {
+    /** A writer whose own `related` would bypass the guard if the `...raw` spread published it. */
+    const createTraversingWriter = (): Record<string, unknown> => {
+        return {
+            ...(createFakeWriter() as unknown as Record<string, unknown>),
+            findMany: vi.fn<(tableName: string) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>>(
+                (tableName: string) => Promise.resolve({ continueCursor: null, isDone: true, page: [{ _id: `${tableName}_1` }] }),
+            ),
+            // Reads through the writer's own closure — exactly the bypass the
+            // re-bind exists to prevent, so it must never be reached.
+            related: vi.fn<() => Promise<{ continueCursor: null | string; isDone: boolean; nodes: unknown[] }>>(() =>
+                Promise.resolve({ continueCursor: null, isDone: true, nodes: [] }),
+            ),
+        };
+    };
+
+    it("replaces every rebound method, so none reaches the caller as the raw one", () => {
+        expect.assertions(2);
+
+        // The gate the old assertion only looked like. Reading one entry out of
+        // the gating map and comparing it to "rebound" restated the map literal,
+        // and would have stayed green while a rebound method arrived UNGATED
+        // through the `...raw` spread. This walks the classification instead, so
+        // a method classified as rebound but not actually re-bound fails here.
+        const reboundNames = Object.entries(WRITER_METHOD_GATING)
+            .filter(([, gating]) => gating === "rebound")
+            .map(([name]) => name);
+
+        const raw = createTraversingWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as Record<string, unknown>;
+
+        expect(reboundNames).not.toStrictEqual([]);
+        expect(reboundNames.filter((name) => guarded[name] === raw[name])).toStrictEqual([]);
+    });
+
+    it("denies a traversal whose start table is protected", async () => {
+        expect.assertions(2);
+
+        const raw = createTraversingWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as {
+            related: (start: unknown, options?: unknown) => Promise<unknown>;
+        };
+
+        await expect(guarded.related({ id: "post_1", table: "posts" })).rejects.toThrow(RlsRequiredError);
+        expect(raw["related"]).not.toHaveBeenCalled();
+    });
+
+    it("denies a hop into a protected table even when the start table is public", async () => {
+        expect.assertions(1);
+
+        const raw = createTraversingWriter();
+        const edges = [{ array: false, column: "statId", name: "posts.statId", sourceTable: "posts", targetTable: "stats" }];
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId, undefined, edges) as unknown as {
+            related: (start: unknown, options?: unknown) => Promise<unknown>;
+        };
+
+        // `stats` is `.public()`, so the start read passes; the in-edge then
+        // reads `posts`, which the guarded `findMany` denies.
+        await expect(guarded.related({ id: "stat_1", table: "stats" }, { direction: "in" })).rejects.toThrow(RlsRequiredError);
+    });
+});
+
 describe("guardWriter — unwrap seam", () => {
     it("exposes the raw writer under RLS_UNWRAP_SYMBOL so the middleware can recover it", () => {
         expect.assertions(1);
@@ -503,5 +565,24 @@ describe("guardWriter — unwrap seam", () => {
         expect.assertions(1);
 
         expect(RLS_UNWRAP_SYMBOL).toBe(Symbol.for("lunora.ctxdb.rls-unwrap"));
+    });
+
+    /**
+     * NON-enumerable, and that is security-relevant. `@lunora/server`'s `rls()`
+     * builds its wrapped writer with `{ ...ctx.db }`; while this property was
+     * enumerable the wrapper re-published the UNGUARDED writer, so a second
+     * `.use(rls(...))` step recovered it, wrapped that instead of the first
+     * wrapper, and silently dropped step one's row filter.
+     */
+    it("hides the raw writer from a spread of the guarded one", () => {
+        expect.assertions(2);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId);
+        const republished = { ...(guarded as unknown as Record<PropertyKey, unknown>) };
+
+        expect(Object.getOwnPropertySymbols(republished)).not.toContain(RLS_UNWRAP_SYMBOL);
+
+        expect(Object.propertyIsEnumerable.call(guarded, RLS_UNWRAP_SYMBOL)).toBe(false);
     });
 });

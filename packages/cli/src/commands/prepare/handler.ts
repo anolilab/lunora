@@ -10,6 +10,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
 import { runPreDeployPipeline } from "../deploy/handler";
@@ -27,7 +28,15 @@ interface PrepareCommandOptions {
     spawner?: Spawner;
 
     /**
-     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`.
+     * Fail on ERROR-level codegen advisories. `undefined` falls back to CI
+     * detection, the same as `lunora deploy` — the two run one pipeline, so the
+     * opt-out has to exist on both or a CI job that `prepare` blocks has no way
+     * past it short of dropping the pre-check the deploy repeats anyway.
+     */
+    strictAdvisories?: boolean;
+
+    /**
+     * Deploy target, matching `deploy` and `logs`. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`.
      * Resolved through the same registry they use so a second driver does not
      * have to be found here separately.
      */
@@ -70,6 +79,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             cwd,
             logger: options.logger,
             spawner: options.spawner,
+            strictAdvisories: options.strictAdvisories,
             target: options.target,
             updateSchemaBaseline: options.updateSchemaBaseline,
         },
@@ -78,7 +88,10 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
 
     if (pipeline.error !== undefined) {
         return {
-            code: 1,
+            // The shared pipeline classifies its own refusals — Docker missing is
+            // MISSING_DEPENDENCY, not a usage error — so keep its code and fall
+            // back only when it resolved none.
+            code: pipeline.code ?? EXIT_CODE.USAGE,
             error: pipeline.error,
             ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
             validation: pipeline.validation,
@@ -103,6 +116,7 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         logger,
+        strictAdvisories: options.strictAdvisories,
         target: options.target,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),

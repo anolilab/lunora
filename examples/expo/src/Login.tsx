@@ -4,6 +4,16 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 
 import { authClient } from "./auth-client";
 
+const styles = StyleSheet.create({
+    button: { alignItems: "center", backgroundColor: "#3b82f6", borderRadius: 8, padding: 14 },
+    buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+    container: { gap: 12, justifyContent: "center", padding: 24 },
+    error: { color: "#dc2626", textAlign: "center" },
+    input: { borderColor: "#d1d5db", borderRadius: 8, borderWidth: 1, fontSize: 16, padding: 12 },
+    pressed: { opacity: 0.85 },
+    switch: { color: "#3b82f6", textAlign: "center" },
+    title: { fontSize: 28, fontWeight: "700", marginBottom: 8, textAlign: "center" },
+});
 type Mode = "signin" | "signup";
 
 /**
@@ -30,7 +40,7 @@ const authenticate = async (mode: Mode, credentials: { email: string; name: stri
  * and `authClient.useSession()` in `App.tsx` flips to the chat on the next
  * render — no token to plumb through by hand.
  */
-export function Login(): ReactElement {
+export const Login = (): ReactElement => {
     const [mode, setMode] = useState<Mode>("signin");
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
@@ -52,9 +62,12 @@ export function Login(): ReactElement {
         <View style={styles.container}>
             <Text style={styles.title}>{mode === "signin" ? "Sign in" : "Create account"}</Text>
 
-            {mode === "signup" ? <TextInput autoCapitalize="words" onChangeText={setName} placeholder="Name" style={styles.input} value={name} /> : null}
+            {mode === "signup" ? (
+                <TextInput accessibilityLabel="Name" autoCapitalize="words" onChangeText={setName} placeholder="Name" style={styles.input} value={name} />
+            ) : null}
 
             <TextInput
+                accessibilityLabel="Email"
                 autoCapitalize="none"
                 autoComplete="email"
                 keyboardType="email-address"
@@ -64,13 +77,32 @@ export function Login(): ReactElement {
                 value={email}
             />
 
-            <TextInput onChangeText={setPassword} placeholder="Password (min 8 chars)" secureTextEntry style={styles.input} value={password} />
+            <TextInput
+                accessibilityLabel="Password, minimum 8 characters"
+                onChangeText={setPassword}
+                placeholder="Password (min 8 chars)"
+                secureTextEntry
+                style={styles.input}
+                value={password}
+            />
 
-            <Pressable disabled={pending} onPress={() => void submit()} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+            <Pressable
+                accessibilityLabel={mode === "signin" ? "Sign in" : "Sign up"}
+                accessibilityRole="button"
+                // `disabled` is invisible to a screen reader without this, and the
+                // spinner that replaces the label is not announced at all.
+                accessibilityState={{ busy: pending, disabled: pending }}
+                disabled={pending}
+                onPress={() => {
+                    void submit();
+                }}
+                style={({ pressed }) => [styles.button, pressed && styles.pressed]}
+            >
                 {pending ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{mode === "signin" ? "Sign in" : "Sign up"}</Text>}
             </Pressable>
 
             <Pressable
+                accessibilityRole="button"
                 onPress={() => {
                     setMode(mode === "signin" ? "signup" : "signin");
                     setError(null);
@@ -79,18 +111,11 @@ export function Login(): ReactElement {
                 <Text style={styles.switch}>{mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}</Text>
             </Pressable>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                    {error}
+                </Text>
+            ) : null}
         </View>
     );
-}
-
-const styles = StyleSheet.create({
-    button: { alignItems: "center", backgroundColor: "#3b82f6", borderRadius: 8, padding: 14 },
-    buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    container: { gap: 12, justifyContent: "center", padding: 24 },
-    error: { color: "#dc2626", textAlign: "center" },
-    input: { borderColor: "#d1d5db", borderRadius: 8, borderWidth: 1, fontSize: 16, padding: 12 },
-    pressed: { opacity: 0.85 },
-    switch: { color: "#3b82f6", textAlign: "center" },
-    title: { fontSize: 28, fontWeight: "700", marginBottom: 8, textAlign: "center" },
-});
+};

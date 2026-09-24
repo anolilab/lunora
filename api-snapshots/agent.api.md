@@ -171,6 +171,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentRunOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentRunResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -240,6 +244,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AnyAgentTool` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `BrowserRenderResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -525,12 +533,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `isDuplicateInstanceError` (const)
-
-```ts
-const isDuplicateInstanceError: (error: unknown) => boolean;
-```
-
 ### `verifyDiscord` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -650,6 +652,10 @@ const replyToEmail: (mailer: Mailer, replyRef: EmailReplyRef, body: ReplyBody) =
 
 ## `@lunora/agent/sandbox`
 
+### `BrowserRenderResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `BrowserToolInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -731,6 +737,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `SentryLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `SentrySpan` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

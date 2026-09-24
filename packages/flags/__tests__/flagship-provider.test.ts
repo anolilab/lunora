@@ -71,6 +71,37 @@ describe("flagshipProvider", () => {
             expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "tok" });
         });
 
+        it("resolves an `authToken` thunk against the Worker env", () => {
+            expect.assertions(2);
+
+            const factory = flagshipProvider({ accountId: "acct", appId: "app-abc", authToken: (env) => env.FLAGSHIP_TOKEN });
+
+            factory({ FLAGSHIP_TOKEN: "from-env" });
+
+            expect(constructed).toHaveLength(1);
+            expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "from-env" });
+        });
+
+        it("refuses a literal empty `authToken`, the same as an empty thunk result", () => {
+            expect.hasAssertions();
+
+            // A config read at module scope, pulling the token straight off the
+            // environment, yields an empty string when the var is unset — the same
+            // misconfiguration the thunk path refuses, arriving through the branch
+            // that passed it straight to the SDK. Eager, like the other shape
+            // refusals here: a literal is known before any env exists.
+            expect(() => flagshipProvider({ appId: "app-abc", authToken: "" })).toThrow(/`authToken` is an empty string/u);
+        });
+
+        it("throws when an `authToken` thunk resolves to nothing rather than sending `Bearer undefined`", () => {
+            expect.assertions(2);
+
+            const factory = flagshipProvider({ appId: "app-abc", authToken: (env) => env.FLAGSHIP_TOKEN });
+
+            expect(() => factory({})).toThrow(/`authToken` resolved to an empty or non-string value/);
+            expect(constructed).toHaveLength(0);
+        });
+
         it("constructs from a full endpoint override", () => {
             expect.assertions(2);
 

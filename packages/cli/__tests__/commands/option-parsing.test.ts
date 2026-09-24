@@ -3,9 +3,11 @@ import { Cerebro } from "@visulima/cerebro";
 import { describe, expect, it } from "vitest";
 
 import { advisorCommand } from "../../src/commands/advisor";
+import { buildCommand } from "../../src/commands/build";
 import { codegenCommand } from "../../src/commands/codegen";
 import { deployCommand } from "../../src/commands/deploy";
 import { devCommand } from "../../src/commands/dev";
+import { prepareCommand } from "../../src/commands/prepare";
 import { verifyCommand } from "../../src/commands/verify";
 
 /**
@@ -67,6 +69,15 @@ describe("command option parsing → handler key mapping", () => {
         expect(parsed.workerPort).toBe(9000);
     });
 
+    it("`dev --inspector-port 9235` camelCases to `inspectorPort`", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev", "--inspector-port", "9235"]);
+
+        // dev/handler.ts reads `options.inspectorPort`; dev/lifecycle.ts forwards it.
+        expect(parsed.inspectorPort).toBe(9235);
+    });
+
     it("`verify --no-typecheck` parses to the negated `typecheck` key the handler reads", async () => {
         expect.assertions(1);
 
@@ -84,8 +95,11 @@ describe("command option parsing → handler key mapping", () => {
     // unconditional `defaultValue: true`, so `strictAdvisories` was NEVER
     // `undefined` — the gate was strict locally regardless of `--help`'s claim.
     it.each([
+        ["build", buildCommand],
         ["codegen", codegenCommand],
         ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
     ])("`%s` (no flags) leaves strictAdvisories undefined so the CI-vs-local default can apply", async (name, command) => {
         expect.assertions(1);
 
@@ -95,8 +109,11 @@ describe("command option parsing → handler key mapping", () => {
     });
 
     it.each([
+        ["build", buildCommand],
         ["codegen", codegenCommand],
         ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
     ])("`%s --strict-advisories` parses to strictAdvisories: true", async (name, command) => {
         expect.assertions(1);
 
@@ -106,8 +123,11 @@ describe("command option parsing → handler key mapping", () => {
     });
 
     it.each([
+        ["build", buildCommand],
         ["codegen", codegenCommand],
         ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
     ])("`%s --no-strict-advisories` parses to strictAdvisories: false", async (name, command) => {
         expect.assertions(1);
 

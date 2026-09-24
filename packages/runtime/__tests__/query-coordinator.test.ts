@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { LunoraError } from "../src/errors";
 import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -352,21 +353,63 @@ describe("error handling", () => {
         expect(result.data).toEqual([{ shard: "a" }, { shard: "c" }]);
     });
 
-    it("thrown error from a shard becomes a ShardError", async () => {
-        expect.assertions(3);
+    it("thrown error from a shard becomes an INTERNAL ShardError with the raw message redacted", async () => {
+        expect.assertions(5);
 
         const registry = createStaticShardRegistry({ messages: ["a"] });
         const coordinator = createQueryCoordinator({ registry });
 
         const spy = createShardSpy(() => {
-            throw new Error("network down");
+            throw new Error("connect ECONNREFUSED for user=svc-admin pw=SECRET-CONN-STRING");
         });
 
         const result = await coordinator.fanOut(spy.namespace, buildRequest());
 
+        // `fanOut` reports failures as DATA — the envelope is `Response.json`-ed
+        // to the caller — so the per-shard message goes through the same
+        // `toErrorBody` shaping as every other error leaving the runtime: a
+        // plain `Error` is `INTERNAL` with its text redacted.
         expect(result.failed).toBe(1);
-        expect(result.errors[0]?.message).toContain("network down");
+        expect(result.errors[0]?.code).toBe("INTERNAL");
+        expect(result.errors[0]?.message).not.toContain("SECRET-CONN-STRING");
+        expect(result.errors[0]?.message).not.toContain("svc-admin");
         expect(result.errors[0]?.timedOut).toBe(false);
+    });
+
+    it("echoes a catalogued LunoraError code and message from a shard unchanged", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy(() => {
+            throw new LunoraError("row not found", { code: "NOT_FOUND", status: 404 });
+        });
+
+        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+
+        expect(result.errors[0]?.code).toBe("NOT_FOUND");
+        expect(result.errors[0]?.message).toContain("row not found");
+    });
+
+    it("echoes a catalogued LunoraError code from a shard's non-2xx response", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // A `LunoraError` with a non-500 status leaves the shard as a non-2xx
+        // `{ error: { code, message } }` envelope rather than as a throw this
+        // coordinator catches — the same catalogued verdict, reached by the other
+        // half of the shard's error path. `ShardError.code` documents itself as
+        // carrying "a shard's own `LunoraError` code when it had one", and read
+        // off the status alone this half carried none of them.
+        const spy = createShardSpy(() => Response.json({ error: { code: "NOT_FOUND", message: "row not found" } }, { status: 404 }));
+
+        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+
+        expect(result.errors[0]?.code).toBe("NOT_FOUND");
+        expect(result.errors[0]?.message).toContain("row not found");
     });
 
     it("slow shard hits the per-shard timeout", async () => {

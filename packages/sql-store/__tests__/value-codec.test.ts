@@ -119,6 +119,86 @@ describe("sqliteEncode", () => {
     });
 });
 
+/**
+ * An untyped column (`v.union()`/`v.any()`/`v.from()`) is TEXT on every engine,
+ * so a number written to one has to be stored as text — and the marked JSON that
+ * used to carry it (`$lunora.wire$42`) sorts `"10"` before `"2"`. The key form
+ * below is the same fix `bigintSqlKey` is, applied to the last column kind left
+ * on the lossy form.
+ */
+describe("sqliteEncode — untyped columns store a number as an order-preserving key", () => {
+    /** Text order over the stored forms, which is the order SQLite applies to the column. */
+    const byStorage = (values: ReadonlyArray<number>): number[] =>
+        values.toSorted((left, right) => {
+            const a = String(sqliteEncode(left, "union"));
+            const b = String(sqliteEncode(right, "union"));
+
+            if (a < b) {
+                return -1;
+            }
+
+            return a > b ? 1 : 0;
+        });
+
+    it("orders numbers numerically, across zero and across magnitudes", () => {
+        expect.assertions(1);
+
+        const values = [1.5, 2, 9, 10, 100, 0, -0.5, -7, -1000, 1e300, -1e300, 5e-324, 2 ** 53];
+
+        expect(byStorage(values)).toStrictEqual(values.toSorted((left, right) => left - right));
+    });
+
+    it("round-trips every number through the marker alone, no kind needed on the way out", () => {
+        expect.assertions(1);
+
+        const values = [0, -0, 1.5, -7, 1e300, 5e-324, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER];
+
+        // `-0` normalizes to `0`: SQL compares the two equal, so two distinct
+        // keys would make an `eq` binding miss half the rows it should match.
+        expect(values.map((value) => sqliteDecode(sqliteEncode(value, "union"), "union"))).toStrictEqual([
+            0,
+            0,
+            1.5,
+            -7,
+            1e300,
+            5e-324,
+            Number.MAX_SAFE_INTEGER,
+            Number.MIN_SAFE_INTEGER,
+        ]);
+    });
+
+    it("keeps every number sorting below `false` and `true`, the position they already held", () => {
+        expect.assertions(1);
+
+        // Asserted as already-ascending rather than by sorting: `<` on these
+        // ASCII forms is byte order, which is the order SQLite applies to the
+        // column, and no JS sort comparator reproduces that for arbitrary text.
+        const forms = [Number.MAX_VALUE, false, true].map((value) => String(sqliteEncode(value, "union")));
+
+        expect(forms.every((form, index) => index === 0 || (forms[index - 1] ?? "") < form)).toBe(true);
+    });
+
+    it("still reads back a number written in the marked JSON an earlier build wrote", () => {
+        expect.assertions(2);
+
+        // What makes a table correct between the format change and the rewrite
+        // pass that converts it — the read side accepts both forms.
+        expect(sqliteDecode("$lunora.wire$42", "union")).toBe(42);
+        expect(sqliteDecode("$lunora.wire$-1.5", "any")).toBe(-1.5);
+    });
+
+    it("leaves a string, a bigint and a composite in the form they already had", () => {
+        expect.assertions(3);
+
+        // The WHERE path binds through `sqliteEncode` for these too, and
+        // `contains`/`startsWith` run their substring test against the stored
+        // string — so only the numbers moved.
+        expect(sqliteEncode("42", "union")).toBe("42");
+        expect(sqliteEncode(42n, "union")).toBe(`1${"42".padStart(39, "0")}`);
+        expect(sqliteEncode({ x: 1 }, "union")).toBe('{"x":1}');
+    });
+});
+
 describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
     it("boolean: 1/0 → true/false; other values verbatim", () => {
         expect.assertions(3);
@@ -290,7 +370,9 @@ describe("decodeBigint / tryJsonParse edge cases", () => {
 });
 
 describe("effectiveColumnKind", () => {
-    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => ({ _meta: inner ? { inner } : {}, kind }) as unknown as ValidatorLike;
+    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => {
+        return { _meta: inner ? { inner } : {}, kind };
+    };
 
     it("returns the validator's own kind when not optional", () => {
         expect.assertions(1);
@@ -314,5 +396,80 @@ describe("effectiveColumnKind", () => {
         expect.assertions(1);
 
         expect(effectiveColumnKind(validator("optional", validator("bytes")))).toBe("bytes");
+    });
+});
+
+describe("effectiveColumnKind — a literal resolves to the kind of its payload", () => {
+    const literal = (value: unknown): ValidatorLike => {
+        return { _meta: { value }, kind: "literal" };
+    };
+
+    // `v.literal(x)` holds exactly one value, so its STORAGE kind is that
+    // value's. Answering `"literal"` sends every payload to a TEXT column with
+    // no encode/decode pairing: SQLite's TEXT affinity rewrites the bound number
+    // `1` as the text `"1.0"`, and the decode has no kind to reverse it with —
+    // so the column reads back a string and the next `patch` fails validation
+    // against its own literal.
+    it.each([
+        ["bigint", 7n, "bigint"],
+        ["boolean", true, "boolean"],
+        ["number", 1, "number"],
+        ["string", "x", "string"],
+        ["null", null, "null"],
+    ])("resolves a %s literal to that kind", (_label, value, expected) => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind(literal(value))).toBe(expected);
+    });
+
+    it("resolves v.optional(v.literal(1)) the same way", () => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind({ _meta: { inner: literal(1) }, kind: "optional" })).toBe("number");
+    });
+
+    it('falls back to "literal" when the validator declares no payload', () => {
+        expect.assertions(1);
+
+        // A hand-built validator with no `_meta.value` keeps the behaviour it
+        // already had rather than silently acquiring a different column type.
+        expect(effectiveColumnKind({ _meta: {}, kind: "literal" })).toBe("literal");
+    });
+});
+
+describe("sqliteEncode/sqliteDecode — a user string that looks like a wire payload", () => {
+    // The wire marker is a bare prefix on the stored text, so a user string that
+    // merely BEGINS with it was decoded as the payload it resembles: the string
+    // `"$lunora.wire$hello"` read back as `"hello"`, and `"$lunora.wire$42"` read
+    // back as the NUMBER 42 — a string field returning a number.
+    it.each(["any", "from", "union"])("round-trips a %s column string beginning with the sentinel", (kind) => {
+        expect.assertions(2);
+
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$hello", kind), kind)).toBe("$lunora.wire$hello");
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$42", kind), kind)).toBe("$lunora.wire$42");
+    });
+
+    it("round-trips a string beginning with the ESCAPED form", () => {
+        expect.assertions(1);
+
+        // The escape must itself be escaped, or the fix only moves the collision
+        // one character along.
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$$abc", "any"), "any")).toBe("$lunora.wire$$abc");
+    });
+
+    it("leaves an ordinary string byte-identical", () => {
+        expect.assertions(2);
+
+        expect(sqliteEncode("plain", "any")).toBe("plain");
+        expect(sqliteDecode("plain", "any")).toBe("plain");
+    });
+
+    it("reads a row stored BEFORE the escape exactly as it did before", () => {
+        expect.assertions(1);
+
+        // Pre-fix rows hold the unescaped text. The decode must not start
+        // reinterpreting them — it keeps returning what it already returned, so
+        // the fix changes no stored row's meaning.
+        expect(sqliteDecode("$lunora.wire$hello", "any")).toBe("hello");
     });
 });
