@@ -92,16 +92,6 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     const projectRoot = input.projectRoot ?? process.cwd();
     const target = resolveRunnableTargetOrThrow(projectRoot, input.target);
 
-    // `@cloudflare/vite-plugin` serves the worker in workerd and builds it for
-    // Cloudflare. A host that ships from its own config projection (celld)
-    // deploys neither artifact, so composing it would serve and build the app
-    // for the wrong runtime while the target says otherwise.
-    if (cloudflareOption !== false && resolveDeployDriver(target).projectConfig !== undefined) {
-        throw new Error(
-            `target "${target}" runs on its own runtime, not through @cloudflare/vite-plugin — set \`lunora({ cloudflare: false })\` and serve the worker with \`lunora dev\`, ship it with \`lunora deploy\``,
-        );
-    }
-
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
@@ -220,6 +210,21 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
         plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
+
+        // A host that ships from a config projection (celld) deploys the Vite
+        // BUILD output, so composing the Cloudflare plugin is right for
+        // `vite build` — but `vite dev` then serves the worker in workerd, not
+        // on the target. Say so instead of letting it pass for the target.
+        if (resolveDeployDriver(resolved.target).projectConfig !== undefined) {
+            plugins.push({
+                configureServer(server) {
+                    server.config.logger.warn(
+                        `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,
+                    );
+                },
+                name: "lunora:target-runtime-notice",
+            });
+        }
     }
 
     return plugins;

@@ -1048,7 +1048,7 @@ const resolveTargetDev = (options: DevCommandOptions, cwd: string, workerPort: n
         options.logger.warn(`--inspector-port is a wrangler dev flag; ${driver.name} dev has no inspector to pin`);
     }
 
-    const { configPath, dropped } = driver.projectConfig(cwd);
+    const { configPath, dropped } = driver.projectConfig(cwd, "dev");
 
     if (dropped.length > 0) {
         options.logger.info(`${driver.name} ignores these wrangler keys, so its dev server runs without them: ${dropped.join(", ")}`);

@@ -37,11 +37,13 @@ export default { target: "celld" };
 - Both commands hand celld a projection of `wrangler.jsonc`, written to `.celld.wrangler.json` beside it: celld refuses the Cloudflare-only keys Lunora writes (`observability`, `limits`, `version_metadata`, …), and the CLI names each one it leaves out. Add `.celld/` and `.celld.wrangler.json` to the app's `.gitignore`.
 - The `celld` binary is run from `PATH` (`curl -fsSL https://celld.dev/install.sh | sh`), never through `npx` / `bun x`; `celld deploy` also needs `esbuild` on `PATH`.
 - `lunora logs` and `lunora env push` refuse the target: celld has no log tail and no secret store — a deployed value lives in wrangler `vars`.
-- The worker entry must be a source file. A Vite virtual entry (`main: "virtual:lunora/worker"`) only exists inside a Vite build, and celld bundles from source with esbuild, so the projection refuses it; the `@lunora/vite` plugin likewise refuses its Cloudflare integration for this target (`lunora({ cloudflare: false })` keeps codegen and the studio).
+- A worker entry that is a Vite virtual module (`main: "virtual:lunora/worker"`, the react-router / tanstack-start / vinext templates) ships from the Vite build output: run the build, then `lunora deploy`. The projection reads the config `@cloudflare/vite-plugin` recorded in `.wrangler/deploy/config.json`, writes `.celld.wrangler.json` into the build's output root with `main` and the assets directory rebased onto it, lets celld re-bundle the chunks (its `no_bundle` loads the entry module only), and removes the plugin's `.assetsignore` when it matches nothing — celld refuses the file. `celld dev` rebuilds from source, which such an entry does not have, so `lunora dev` refuses it and `vite dev` serves the worker in workerd with a notice saying so.
 
 ## Conformance
 
 `pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.5.1: 37 legs pass and 15 skip, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
+
+With `LUNORA_CELLD_S3_ENDPOINT` pointing at an S3-compatible endpoint (moto's server in CI), the same project also deploys the TCK worker to a bucket and runs two production nodes against it: a write through one node is served when read through the other, and when the owning node is killed mid-lease the survivor takes the cell over from the bucket with the write intact.
 
 One difference from workerd surfaced: celld does not deliver a frame sent on an `acceptWebSocket` socket to a peer inside the same cell. Real clients get every frame, which a separate leg drives over the network (host sends, the wake-time socket id, tag fan-out); the engine harness records frames at the send boundary instead of reading them off an in-cell peer.
 
@@ -49,4 +51,4 @@ Ratings derive from celld's documented compatibility surface (`docs/cloudflare-c
 
 ## Scope
 
-Private and gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`. Before graduating: support apps whose worker is built by Vite (deploy the build output with `no_bundle`), and run the TCK against a multi-node fleet, which is where ownership moves and rebalancing live.
+Private and gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`.

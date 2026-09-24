@@ -11,6 +11,10 @@
  * run from inside a cell: a real network client on a hibernation-accepted
  * socket, through the celld host's `SocketHost`.
  *
+ * `/fleet?name=…` reads (GET) or writes (PUT, body as value) one key in the
+ * named cell through the celld host's `ShardKvStore` — the probe the
+ * multi-node test (`celld-fleet.test.ts`) drives from different nodes.
+ *
  * The hosts are built the way `@lunora/do`'s workerd harnesses build them —
  * through the composition root, over the cell's genuine `DurableObjectState` —
  * so this run covers the celld adapters AND their assembly, against celld's
@@ -174,6 +178,11 @@ class TckCell {
         }
 
         const url = new URL(request.url);
+
+        if (url.pathname === "/fleet") {
+            return this.fleetProbe(request);
+        }
+
         const suite = url.searchParams.get("suite") as SuiteName;
         const index = Number(url.searchParams.get("index"));
 
@@ -211,6 +220,18 @@ class TckCell {
         }
     }
 
+    private async fleetProbe(request: Request): Promise<Response> {
+        const { kv } = createCelldShardPlatform(this.state);
+
+        if (request.method === "PUT") {
+            await kv.put("value", await request.text());
+
+            return new Response("stored");
+        }
+
+        return new Response((await kv.get<string>("value")) ?? "");
+    }
+
     private acceptTransport(): Response {
         const { sockets } = createCelldShardPlatform(this.state);
         const pair = new WebSocketPair();
@@ -239,6 +260,10 @@ export default {
 
         if (url.pathname === "/transport") {
             return env.TCK.get(env.TCK.idFromName("transport")).fetch(request);
+        }
+
+        if (url.pathname === "/fleet") {
+            return env.TCK.get(env.TCK.idFromName(url.searchParams.get("name") ?? "fleet")).fetch(request);
         }
 
         if (url.pathname !== "/leg") {
