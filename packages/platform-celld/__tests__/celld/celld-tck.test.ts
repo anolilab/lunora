@@ -130,6 +130,90 @@ describe("celld conformance run", () => {
         });
     });
 
+    describe("binding-backed ratings, through Lunora's adapters", () => {
+        type BindingResult = { message?: string; status: "failed" | "passed" | "pending"; value?: unknown };
+
+        const binding = async (route: string): Promise<BindingResult> => {
+            const response = await fetch(`${fleet.origin}/binding/${route}`);
+
+            return response.json<BindingResult>();
+        };
+
+        /** Poll `route` until `done` accepts its result — deliveries and runs are not instant. */
+        const settle = async (route: string, done: (result: BindingResult) => boolean, deadlineMs: number): Promise<BindingResult> => {
+            const deadline = Date.now() + deadlineMs;
+            let result = await binding(route);
+
+            while (!done(result) && Date.now() < deadline) {
+                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 500);
+                });
+                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+                result = await binding(route);
+            }
+
+            return result;
+        };
+
+        const run = Date.now().toString();
+
+        it.for(["d1", "kv", "r2"])("%s runs the calls Lunora's adapter makes", async (name) => {
+            expect.assertions(1);
+
+            await expect(binding(name)).resolves.toStrictEqual({ status: "passed" });
+        });
+
+        // The consumer is the same worker that exports `fetch` — the topology a
+        // Lunora app has, which celld v0.4.0 refused.
+        it("redelivers a queue message whose first delivery threw, through dispatchQueueBatch", async () => {
+            expect.assertions(2);
+
+            await expect(binding(`queue/start?id=q${run}`)).resolves.toStrictEqual({ status: "passed" });
+
+            const delivered = await settle(`queue/status?id=q${run}`, (result) => result.status !== "pending", 30_000);
+
+            expect(delivered.value).toMatchObject({ attempts: 2 });
+        });
+
+        it("runs a workflow through step.do and waitForEvent, and refuses a rollback step at first use", async () => {
+            expect.assertions(3);
+
+            await binding(`workflow/start?id=w${run}`);
+
+            const waiting = await settle(
+                `workflow/status?id=w${run}`,
+                (result) => (result.value as { status?: string } | undefined)?.status === "waiting",
+                30_000,
+            );
+
+            expect(waiting.value).toMatchObject({ status: "waiting" });
+
+            await binding(`workflow/event?id=w${run}`);
+
+            const finished = await settle(
+                `workflow/status?id=w${run}`,
+                (result) => ["complete", "errored"].includes(String((result.value as { status?: string } | undefined)?.status)),
+                30_000,
+            );
+
+            expect(finished.value).toMatchObject({ output: { approved: true, doubled: 42 }, status: "complete" });
+            // `defineStep({ rollback })` forwards this option; celld refuses it,
+            // which is why the workflows rating names it.
+            expect((finished.value as { output: { rollback: string } }).output.rollback).toMatch(/^refused: .*rollback/u);
+        });
+
+        // One tick of `* * * * *` — up to a minute away.
+        it("fires a cron trigger with the controller fields the scheduled handler reads", async () => {
+            expect.assertions(2);
+
+            const ticked = await settle("cron/status", (result) => result.status !== "pending", 75_000);
+
+            expect(ticked.value).toMatchObject({ cron: "* * * * *" });
+            expect((ticked.value as { scheduledTime: number }).scheduledTime % 60_000).toBe(0);
+        });
+    });
+
     describe("hibernatable sockets over a real transport", () => {
         /** Open a client on `/transport` and collect every frame it is sent. */
         const connect = async (): Promise<{ frames: string[]; socket: WebSocket }> => {

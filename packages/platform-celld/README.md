@@ -41,7 +41,9 @@ export default { target: "celld" };
 
 ## Conformance
 
-`pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.5.1: 37 legs pass and 15 skip, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
+`pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.5.1 the contract legs pass except 15 skips, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
+
+The same run drives the binding-backed ratings through Lunora's own adapters, in the call shapes the runtime uses: D1 via `D1Client` (sessions and bookmarks, `batch`, `UPDATE … RETURNING`, fts5), KV via `createKv` (JSON, metadata, TTL, prefix listing), R2 via `createStorage` plus the raw `sha256` / `startAfter` / `delimiter` calls the CDC archive and backups make, a queue consumed by `dispatchQueueBatch` on the same worker that exports `fetch` (a throwing first delivery comes back with `attempts: 2`), a workflow through `step.do` and `waitForEvent`, and one cron tick. Two gaps surfaced and are named in the ratings: a `defineStep({ rollback })` step fails at first use, and a `defineQueue({ mode: "pull" })` queue is refused at deploy.
 
 With `LUNORA_CELLD_S3_ENDPOINT` pointing at an S3-compatible endpoint (moto's server in CI), the same project also deploys the TCK worker to a bucket and runs two production nodes against it: a write through one node is served when read through the other, and when the owning node is killed mid-lease the survivor takes the cell over from the bucket with the write intact.
 
