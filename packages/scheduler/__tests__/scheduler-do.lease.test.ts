@@ -6,11 +6,13 @@
  * mid-dispatch left an `id:` header with no index — and the successor's
  * `reindexOrphanedRecords` re-armed it and dispatched it again IMMEDIATELY,
  * while the first attempt may still have been running at the origin. For a
- * mutation or workflow target the receiver's dedup absorbs that; for an ACTION
- * it does not, because `@lunora/do` writes the dedup row only after the handler
+ * mutation or workflow target the receiver's dedup absorbed that; for an ACTION
+ * it did not, because `@lunora/do` writes the dedup row only after the handler
  * returns (and deliberately takes no single-writer gate for a non-mutation), so
- * a long action re-fired mid-flight runs a second time CONCURRENTLY with the
- * first.
+ * a long action re-fired mid-flight ran a second time CONCURRENTLY with the
+ * first. (The receiver now declines such a delivery outright — see
+ * `scheduler-do.receiver-decline.test.ts` — but the lease is still what keeps
+ * the two from being minted in the first place, which is what this file pins.)
  *
  * The claim now re-arms the record at `now + DISPATCH_LEASE_MS` instead. The
  * record is never unindexed, so it is never an orphan, so a successor does not
