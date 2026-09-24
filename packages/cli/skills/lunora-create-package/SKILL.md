@@ -73,8 +73,8 @@ A registry item is a directory under `registry/<name>/` with three files:
 Add an entry to `registry/index.json`, then rebuild and check the index:
 
 ```bash
-lunora registry build              # regenerate registry/index.json
-lunora registry build --check      # verify the index is up to date (CI)
+lunora registry build --from ./registry           # regenerate registry/index.json
+lunora registry build --from ./registry --check   # verify the index is up to date (CI)
 lunora registry view <name>        # preview what `add` would do
 lunora registry add <name>         # install into the current project
 ```
@@ -122,7 +122,8 @@ declaration the user must add so codegen wires the typed surface.
 - [ ] Chose the right shape (registry item, workspace package, or both).
 - [ ] Registry item: `registry.json` + `index.ts` + `README.md` authored;
       `bindings`/`envVars`/`requires`/`files` correct.
-- [ ] `lunora registry build` run; `lunora registry build --check` passes.
+- [ ] `lunora registry build --from ./registry` run; the same command with
+      `--check` passes.
 - [ ] Workspace package: scaffolded via `vis generate lunora-package`; no `.js`
       extensions, no mixed default+named exports, catalog versions used.
 - [ ] `lint:types` and `test` pass for the new package.

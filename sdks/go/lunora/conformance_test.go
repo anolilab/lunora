@@ -449,17 +449,25 @@ func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
 
 func TestServerFrameConsumer(t *testing.T) {
 	covers("server_frame_consumer")
+	covers("complete_frame_cancels_without_dropping_the_subscription")
 
 	fixture := loadFixture(t, "ws-frames.json")
 	frames, _ := fixture["serverFrames"].([]any)
+	cancellations := 0
 
 	for _, entry := range frames {
 		testCase, _ := entry.(map[string]any)
 		name, _ := testCase["name"].(string)
 
 		t.Run(name, func(t *testing.T) {
+			var sent []map[string]any
+
 			client := NewClient("https://app.example", nil)
-			client.AttachSocket(func(map[string]any) error { return nil })
+			client.AttachSocket(func(frame map[string]any) error {
+				sent = append(sent, frame)
+
+				return nil
+			})
 
 			var seen []any
 
@@ -472,6 +480,8 @@ func TestServerFrameConsumer(t *testing.T) {
 				func(err SubscriptionError) { errors = append(errors, err) },
 				"",
 			)
+
+			sent = nil
 
 			raw, _ := json.Marshal(testCase["frame"])
 
@@ -510,7 +520,50 @@ func TestServerFrameConsumer(t *testing.T) {
 					t.Errorf("code = %q, want %q", errors[0].Code, code)
 				}
 			}
+
+			// Cancelled AND kept. Deleting the entry takes it out of the map
+			// ResendSubscriptions walks, which froze the query across every
+			// future reconnect with nothing reported.
+			if resend, _ := expect["resendsAfterReconnect"].(bool); resend {
+				cancellations++
+
+				if len(errors) != 1 {
+					t.Fatalf("onError fired %d times, want 1", len(errors))
+				}
+
+				code, _ := expect["code"].(string)
+				message, _ := expect["message"].(string)
+
+				if errors[0].Code != code || errors[0].Message != message {
+					t.Errorf("cancellation = %q/%q, want %q/%q", errors[0].Code, errors[0].Message, code, message)
+				}
+
+				if err := client.ResendSubscriptions(); err != nil {
+					t.Fatalf("resend: %v", err)
+				}
+
+				var resubscribed []string
+
+				for _, frame := range sent {
+					if kind, _ := frame["type"].(string); kind == "subscribe" {
+						id, _ := frame["id"].(string)
+						resubscribed = append(resubscribed, id)
+					}
+				}
+
+				wantID, _ := expect["id"].(string)
+
+				if len(resubscribed) != 1 || resubscribed[0] != wantID {
+					t.Errorf("resent subscribe ids = %v, want [%q]", resubscribed, wantID)
+				}
+			}
 		})
+	}
+
+	// A conditional assertion that never runs is worse than none: without this,
+	// renaming the fixture key would leave every suite green.
+	if cancellations != 1 {
+		t.Errorf("serverFrames carried %d cancelling cases, want 1", cancellations)
 	}
 }
 
@@ -521,21 +574,46 @@ func TestServerFrameConsumer(t *testing.T) {
 //
 // The manifest listed this case from the start; the Go port never had it, and
 // nothing noticed until the manifest became a gate.
+// The non-object `error` slots in the fixture are the other half of the same
+// rule: a slot holding a string, a null or an array is not an envelope either,
+// and reading it without a type check raises the LANGUAGE's error rather than
+// APIError — escaping every handler the caller wrote.
 func TestNon2xxWithoutErrorEnvelopeFails(t *testing.T) {
 	covers("non_2xx_without_error_envelope_fails")
 
-	value, err := ParseRPCResponse(502, []byte(`{"message":"bad gateway"}`))
-	if err == nil {
-		t.Fatalf("a 502 without an error envelope must fail, got value %#v", value)
+	cases, _ := loadFixture(t, "rpc.json")["responseTransportError"].([]any)
+	if len(cases) == 0 {
+		t.Fatal("rpc.json carries no responseTransportError cases")
 	}
 
-	apiError, ok := err.(APIError)
-	if !ok {
-		t.Fatalf("error = %T, want APIError", err)
-	}
+	for _, entry := range cases {
+		testCase, _ := entry.(map[string]any)
+		name, _ := testCase["name"].(string)
 
-	if apiError.Code != "INTERNAL" {
-		t.Errorf("code = %q, want INTERNAL", apiError.Code)
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(testCase["response"])
+			status, _ := testCase["status"].(float64)
+
+			value, err := ParseRPCResponse(int(status), raw)
+			if err == nil {
+				t.Fatalf("a %d with no error envelope must fail, got value %#v", int(status), value)
+			}
+
+			apiError, ok := err.(APIError)
+			if !ok {
+				t.Fatalf("error = %T, want APIError", err)
+			}
+
+			if want, _ := testCase["code"].(string); apiError.Code != want {
+				t.Errorf("code = %q, want %q", apiError.Code, want)
+			}
+
+			// Nothing reached the shard, so a queued write must be replayed
+			// rather than dropped — the batch path already says so.
+			if !apiError.Transient {
+				t.Error("an envelope-less non-2xx reached no verdict and must be transient")
+			}
+		})
 	}
 }
 

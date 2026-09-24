@@ -1,0 +1,129 @@
+---
+title: CLI exit codes
+description: The exit code every lunora command terminates with — what each number means, and how it is derived from the error catalog.
+related:
+    - to: /docs/errors
+    - to: /docs/concepts/ai-tooling
+    - to: /docs/concepts/monorepos-and-iac
+    - to: /docs/packages/cli
+---
+
+Every `lunora` command terminates with a documented exit code. The code is the
+contract a CI step or an AI agent branches on — you never have to parse English
+prose out of stderr to tell "not logged in" from "wrangler is missing" from
+"that name is already taken".
+
+| Code  | Name               | Meaning                                                                                                  |
+| ----- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `0`   | success            | The command did what was asked.                                                                          |
+| `1`   | failure            | A failure that fits none of the narrower buckets (chiefly an internal error).                            |
+| `2`   | usage              | Bad usage, bad input, or a validation failure — the invocation, or the project source it read, is wrong. |
+| `3`   | auth               | Not authenticated: no credential, or an expired one.                                                     |
+| `4`   | permission denied  | Authenticated, but not allowed to do this.                                                               |
+| `5`   | not found          | The named thing does not exist.                                                                          |
+| `6`   | conflict           | The write lost a race, or the name is already taken.                                                     |
+| `7`   | rate limited       | Back off and retry.                                                                                      |
+| `8`   | unavailable        | The far side is unavailable or timed out. Retryable.                                                     |
+| `9`   | missing dependency | A local tool the command shells out to (`wrangler`, `git`, `docker`, …) is missing or not running.       |
+| `130` | cancelled          | You hit Ctrl-C at a prompt. The POSIX `128 + SIGINT` convention.                                         |
+
+A value never changes meaning. A new bucket takes the next free number.
+
+`1` and `2` divide along what the command was for. A command that exists to
+**answer a question** about the project — `doctor`, `verify`, `advisor`, `eval` —
+exits `1` when its verdict is negative: it ran, and the answer is no. A command
+that exists to **do something** exits `2` when it refused because the invocation,
+or the project source it read, was wrong and it never started: `deploy` on an
+invalid `wrangler.jsonc`, `migrate up` with no id, `seed --table` naming a table
+the schema does not define.
+
+## Branching on one
+
+```bash
+lunora deploy --format json > deploy.json
+case $? in
+  0) echo "deployed" ;;
+  3) echo "run \`wrangler login\` first" ;;
+  8) echo "Cloudflare is having a moment — retry" ;;
+  9) echo "install wrangler" ;;
+  *) exit 1 ;;
+esac
+```
+
+`2`, `3`, `4`, `5` and `6` are deterministic: retrying the same invocation
+produces the same code. `7` and `8` are the retryable pair — back off and try
+again. `9` needs a machine change, not a retry.
+
+## The same number, in the document
+
+`--format json` writes one envelope on stdout, and its `code` is this exit code:
+
+```jsonc
+{
+    "code": 2, // the exit code — same number the process terminates with
+    "data": {}, // the command's own payload, absent when the run produced none
+    "error": "…", // the reason, present whenever `code` is non-zero
+}
+```
+
+A **failure answers in the same shape a success does**, so a caller that already
+parses the document never has to fall back to reading stderr to find out what
+went wrong:
+
+```bash
+lunora deploy --format json > deploy.json || jq -r '.error' < deploy.json
+```
+
+See [the CLI reference](/docs/packages/cli) for the per-command `data` payloads.
+
+## Where the numbers come from
+
+The taxonomy is not a second, hand-maintained list. Every Lunora error carries a
+machine-readable `code` that keys into the [error catalog](/docs/errors), and the
+catalog already assigns each code a transport `status`. The CLI maps
+`status → exit code` once:
+
+| Status                       | Exit code             |
+| ---------------------------- | --------------------- |
+| `400`, `405`, `413`, `422`   | `2` usage             |
+| `401`                        | `3` auth              |
+| `403`                        | `4` permission denied |
+| `404`                        | `5` not found         |
+| `409`                        | `6` conflict          |
+| `429`                        | `7` rate limited      |
+| `421`, `502`, `503`, `504`   | `8` unavailable       |
+| `507`                        | `2` usage             |
+| anything else (`500`, `501`) | `1` failure           |
+
+So a new catalog code inherits the right exit code for free. Two kinds of code
+are overridden by name, because their wire status is honest on the wire and
+misleading in a terminal:
+
+- **Build-time codegen diagnostics** (`CODEGEN_DIAGNOSTIC`, `NAMESPACE_COLLISION`,
+  `DUPLICATE_*`, `CRON_*`, `SCHEMA_SNAPSHOT_PARSE`, …) are catalogued `500`
+  because that is what they would be if they ever crossed the wire — they never
+  do. What they actually report is a mistake in your own `lunora/` source, so
+  they exit `2`.
+- **`LOCAL_DEPENDENCY_MISSING`** has no HTTP status that means "that program
+  isn't installed", so it gets exit `9` outright.
+- **`507`** is a ceiling, not a transient. Every `507` this system raises reports
+  that the thing asked for is too big for the place it has to fit (a snapshot past
+  what a Worker isolate will assemble, a durable stream past its chunk ceiling),
+  and it fails identically on every retry until a human narrows the input — so it
+  is `2`, not the retryable `8` its status would otherwise suggest.
+
+When a coded error is rendered in the terminal, the block names the code and the
+exit code it will carry, so the number your script reads and the text you read
+say the same thing.
+
+## From your own code
+
+`@lunora/cli` exports the table and the resolver, for a script or a task runner
+that embeds the CLI rather than shelling out:
+
+```ts
+import { EXIT_CODE, exitCodeForError } from "@lunora/cli";
+
+EXIT_CODE.RATE_LIMITED; // 7
+exitCodeForError(error); // the code `lunora` would exit with
+```

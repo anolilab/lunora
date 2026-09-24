@@ -150,6 +150,21 @@
                 "cursor": 21,
                 "lastMutationId": 3
             }
+        },
+        {
+            "name": "complete",
+            "$comment": "A `complete` addressed to a live SUBSCRIPTION cancels it WITHOUT dropping the registration. Removing it takes the state out of the set the reconnect resubscribe loop walks, which froze the query for the life of the process across every future reconnect — silently, because nothing was reported either. So the observable effect is two things at once: a coded error on the subscription's own error callback, and a registration still there for `resendSubscriptions` to put back. A port whose live query is a stream terminates it through that error, not by hanging.",
+            "frame": {
+                "id": "sub_1",
+                "type": "complete"
+            },
+            "expect": {
+                "kind": "complete",
+                "id": "sub_1",
+                "code": "SUBSCRIPTION_CANCELLED",
+                "message": "subscription was cancelled by the server",
+                "resendsAfterReconnect": true
+            }
         }
     ],
     "pageDeltaFrames": [

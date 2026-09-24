@@ -342,6 +342,13 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     commitOrderedMode?: boolean;
 
     /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the caller's
+     * CDC baseline rather than clobbering the newer value. See the builder method
+     * for the rule, the whole-patch granularity, and why it fails open.
+     */
+    dropStalePatchesMode?: boolean;
+
+    /**
      * Set by `.source(...)` (named `externalSource`, not `source`, so the data
      * field doesn't collide with the fluent `.source()` builder method — same
      * convention as `shardBy()`/`shardMode`). When present, the table is
@@ -703,9 +710,40 @@ interface RunAction {
  * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
  * `init` is per-INSTANCE and fires once per cold start, before any handler runs
  * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
- * a watched read's result changed — see `onQueryChange`.
+ * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
+ * and decides whether a socket may join or broadcast to one — see `onWhisper`
+ * and {@link WhisperEvent}; unlike the other four it is a query, and its return
+ * value is the verdict.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+
+/**
+ * The event a whisper authorizer (`onWhisper`) receives as its second argument.
+ *
+ * Everything on it is either server-stamped from the socket's attachment
+ * (`connectionId`, `shardKey`, `userId`, `context`) or the client-supplied
+ * `topic` the verdict is about. The verified caller identity is also on
+ * `ctx.auth` — the authorizer runs under the socket's own identity.
+ */
+interface WhisperEvent {
+    /**
+     * Which side of the channel is being authorized: `"subscribe"` when the
+     * socket asks to JOIN the topic (and so to receive every message on it),
+     * `"send"` when it asks to BROADCAST to it. Checked separately because they
+     * are separate powers — a read-only observer is a coherent thing to allow.
+     */
+    readonly action: "send" | "subscribe";
+    /** Stable per-socket id, the same one `onConnect` saw. */
+    readonly connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope (e.g. `{ roomId }`). */
+    readonly context?: Record<string, unknown>;
+    /** The shard this socket is bound to — the outer boundary the topic lives inside. */
+    readonly shardKey: string;
+    /** The topic name the client asked for. Client-supplied: validate it, never trust its shape. */
+    readonly topic: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    readonly userId: string | null;
+}
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -933,6 +971,30 @@ interface DatabaseReader {
     query: (tableName: string) => TableReader;
 
     /**
+     * Walk the relation graph out of one row: follow the foreign keys the
+     * schema's `v.id("target")` columns already declare, breadth-first, and
+     * return each reached row with its `depth`, the edge names walked to reach
+     * it (`path`), the ids along the way (`pathIds`), and a depth-decaying
+     * `score`.
+     *
+     * This is the read a keyword or vector search cannot do: "everything
+     * connected to this customer" is a property of the edges, not of the text.
+     * Depth 1 (the default) is the direct neighbourhood; a multi-hop expansion
+     * is the same call with a higher `depth`.
+     *
+     * ```ts
+     * const { nodes } = await ctx.db.related({ table: "customers", id }, { depth: 2 });
+     * ```
+     *
+     * Every hop is a normal `ctx.db` read, so row-level security, column
+     * masking, soft-delete scoping and subscription dependency tracking all
+     * apply per hop. `depth` is capped at 4 and `limit` at 200; a
+     * `v.array(v.id(...))` column is followed outward only (there is no
+     * array-containment filter to find its holders with).
+     */
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
      * Best-effort, read-only reader over Lunora's system tables
      * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
      * part of the transaction snapshot — see {@link SystemDatabaseReader}.
@@ -973,6 +1035,84 @@ interface PaginationResult<T = Record<string, unknown>> {
      * into two adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+}
+
+/** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */
+type RelatedDirection = "both" | "in" | "out";
+
+/** An explicit `{ table, id }` start node for {@link DatabaseReader.related}. */
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: a loaded document (recognised by its `_id`, whose
+ * table the reader resolves), or an explicit `{ table, id }`.
+ *
+ * The document arm requires `_id`, which is what makes the two arms actually
+ * distinguishable: against a bare `Record<string, unknown>` the union collapses
+ * — `{ table, id }` is assignable to it — so a misspelled `{ tabel, id }` used
+ * to type-check and fail only at runtime.
+ */
+type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Options for {@link DatabaseReader.related}. */
+interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood.
+     * Must be an integer in `1 … 4`; anything else is refused rather than
+     * clamped, because a silently-shortened walk looks like a graph with fewer
+     * edges than it has.
+     */
+    depth?: number;
+
+    /**
+     * Which way foreign keys are followed. `"out"` follows the ids the start
+     * row HOLDS (ticket → customer), `"in"` the rows that point AT it (customer
+     * → tickets), `"both"` (the default) does both.
+     */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names — `"<table>.<column>"`, e.g.
+     * `"tickets.customerId"`. Omitted ⇒ every `v.id(...)` column the schema
+     * declares. An unknown name is refused, so a typo cannot silently widen the
+     * traversal.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default 50, capped at 200. */
+    limit?: number;
+}
+
+/** One row reached by {@link DatabaseReader.related}, with how it was reached. */
+interface RelatedNode<T = Record<string, unknown>> {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: T;
+    /** Edge-type names walked from the start node to this one, in order. Length equals `depth`. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance: `1` at depth 1, halving each hop (`0.5 ** (depth - 1)`). */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a {@link DatabaseReader.related} traversal — the {@link PaginationResult} envelope, with `nodes` instead of `page`. */
+interface RelatedPage<T = Record<string, unknown>> {
+    /** Cursor to pass back for the next page, or `null` once `isDone`. */
+    continueCursor: null | string;
+    /** `true` when this page is the last one. */
+    isDone: boolean;
+    /** The reached nodes, nearest first. */
+    nodes: RelatedNode<T>[];
 }
 
 /**
@@ -2240,7 +2380,7 @@ interface SpanOptions {
  * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
  * and put the varying part in `attributes` — a name built from an id makes every
  * span its own group in a collector.
- * @param fn The body to time, receiving a tracer bound to this span for any
+ * @param function_ The body to time, receiving a tracer bound to this span for any
  * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
  * attributes. May be sync or async; the result is awaited.
  * @param attributes Either a plain attribute bag to stamp on the span at start
@@ -2417,7 +2557,8 @@ interface QueryCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Query/mutation handlers must be
-     * deterministic — they may be re-run on OCC retry / subscription re-eval — so
+     * deterministic — they may be re-run on subscription re-evaluation (an OCC
+     * conflict surfaces as a `409` to the caller, not an internal retry) — so
      * read time through `ctx.now` instead of `Date.now()` (the latter is flagged
      * by the `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
@@ -2482,9 +2623,10 @@ interface MutationCtx {
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
      * handler sees a single stable value. Mutation handlers must be deterministic
-     * — they may be re-run on OCC retry — so read time through `ctx.now` instead
-     * of `Date.now()` (the latter is flagged by the `nondeterministic_query_mutation`
-     * advisor). Actions may use `Date.now()`.
+     * — an OCC conflict surfaces as a `409` to the caller rather than an internal
+     * retry, but a caller's own retry is a fresh dispatch — so read time through
+     * `ctx.now` instead of `Date.now()` (the latter is flagged by the
+     * `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
      */
     readonly now: number;
 
@@ -2659,6 +2801,12 @@ export type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
     RestCacheConfig,
     RetryPolicy,
@@ -2723,6 +2871,7 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,

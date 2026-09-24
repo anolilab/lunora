@@ -665,6 +665,18 @@ def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: 
 
             continue
 
+        if "error" in slot and not isinstance(slot["error"], dict):
+            # An `error` key holding a string, a null, an array or a number is
+            # no envelope (``protocol/README.md`` 4.2), and a slot carries no
+            # HTTP status of its own to classify it by — so nothing readable
+            # came back about this entry, which is exactly the position of a
+            # slot the server never returned. 4.3 retries that one. Falling
+            # through to the commit branch below settled a durable write
+            # COMMITTED with a null result and un-persisted it.
+            requeue.append(item)
+
+            continue
+
         envelope = slot.get("error")
 
         if isinstance(envelope, dict):

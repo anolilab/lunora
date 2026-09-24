@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runSeedCommand } from "../../src/commands/seed/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -58,7 +59,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger() });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
 
     it("generates deterministic NDJSON with valid foreign keys on --dry-run", async () => {
@@ -71,9 +72,9 @@ describe("lunora seed", () => {
         const b = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), seed: 1 });
 
         expect(a.code).toBe(0);
-        expect(a.inserted).toBe(0);
+        expect(a.data?.inserted).toBe(0);
         // 4 users + 4 posts.
-        expect(a.generated).toBe(8);
+        expect(a.data?.generated).toBe(8);
         // Same seed ⇒ byte-identical output.
         expect(a.ndjson).toBe(b.ndjson);
 
@@ -106,7 +107,7 @@ describe("lunora seed", () => {
                 .map((line) => (JSON.parse(line) as { table: string }).table),
         );
 
-        expect(result.generated).toBe(3);
+        expect(result.data?.generated).toBe(3);
         expect([...tables]).toEqual(["users"]);
     });
 
@@ -117,7 +118,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger(), table: "nope" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("streams the generated NDJSON through the import pipeline", async () => {
@@ -161,8 +162,8 @@ describe("lunora seed", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(result.generated).toBe(4);
-        expect(result.inserted).toBe(4);
+        expect(result.data?.generated).toBe(4);
+        expect(result.data?.inserted).toBe(4);
         expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
     });
 
@@ -188,7 +189,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 2, cwd: workDir, fetchImpl, logger, token: "t", url: "http://localhost:8787" });
 
-        expect(result.conflicts).toBe(4);
+        expect(result.data?.conflicts).toBe(4);
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("4 row(s) skipped"));
     });
 
@@ -200,8 +201,8 @@ describe("lunora seed", () => {
         const prodResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), prod: true, reset: true, url: "https://app.example.com" });
         const remoteResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), reset: true, url: "https://app.example.com" });
 
-        expect(prodResult.code).toBe(1);
-        expect(remoteResult.code).toBe(1);
+        expect(prodResult.code).toBe(EXIT_CODE.USAGE);
+        expect(remoteResult.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("--reset does not wipe when there is nothing to seed", async () => {
@@ -216,7 +217,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 0, cwd: workDir, logger: silentLogger(), reset: true, yes: true });
 
-        expect(result.generated).toBe(0);
+        expect(result.data?.generated).toBe(0);
         // The wipe used to run first, so `--count 0` destroyed the dev database
         // and then warned there was nothing to insert.
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
@@ -236,7 +237,7 @@ describe("lunora seed", () => {
         // Non-TTY and no --yes: `reset` refuses rather than deleting.
         const result = await runSeedCommand({ count: 2, cwd: workDir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, reset: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
         expect(errors.join("\n")).toContain("--yes");
     });

@@ -83,7 +83,15 @@ export interface OptimisticLayerHandle {
      * the degraded fallback to one-shot behaviour.
      */
     confirm: (commitCursor: number | undefined) => void;
-    /** Failure: remove the layer and re-fold the remainder so the bad value disappears. */
+
+    /**
+     * Failure: remove the layer and re-fold the remainder so the bad value
+     * disappears. Idempotent, and it re-folds even when the layer is already
+     * gone — a write handed to a durable outbox has its layer dropped
+     * (`confirm(undefined)`) at enqueue time while the value stays on screen, so
+     * the later rejection has nothing left to remove and the re-fold is the only
+     * thing that takes the rejected value off the screen.
+     */
     rollback: () => void;
 }
 
@@ -104,6 +112,7 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     }
 
     const layer: OptimisticLayer = { id: Symbol("optimistic"), transform: optimistic };
+    let rolledBack = false;
 
     state.optimisticLayers.push(layer);
     notifySubscription(state, next);
@@ -150,9 +159,17 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
             }
         },
         rollback: () => {
-            if (remove()) {
-                refold();
+            if (rolledBack) {
+                return;
             }
+
+            rolledBack = true;
+            remove();
+            // Unconditional: `remove()` returning false means the layer was
+            // already dropped (a confirming frame, or the outbox's enqueue-time
+            // `confirm(undefined)`) while its value is still what the subscriber
+            // sees. Re-folding from `serverBase` is what actually reverts it.
+            refold();
         },
     };
 };

@@ -14,6 +14,7 @@
  * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
  */
 import type { PaymentAdapter } from "./adapter";
+import { usageForwardIsIdempotent } from "./idempotency";
 import { compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -75,7 +76,13 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
     !sameCurrencyAmount(existing.capturedAmount, current.capturedAmount) ||
     !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
 
-const REFUND_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["partially_refunded", "refunded"]);
+/**
+ * How far a payment has progressed through being refunded. The refunded total only ever moves
+ * forward on a merge, so the state that labels it must not move backward either — states outside
+ * this ladder (`initiated`, `authorized`, `failed`, `canceled`) are not refund progress and are
+ * left entirely to provider truth.
+ */
+const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
 
 /**
  * Merge the provider's payment snapshot over the stored row without regressing owner attribution or a
@@ -85,7 +92,16 @@ const REFUND_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["partial
  * order snapshot carries no `referenceId`. A naive overwrite would then erase a `charge.refunded`
  * webhook (re-entitling a refunded/charged-back customer) or blank a webhook-set reference (orphaning
  * the row from the `by_reference` index and the default authorizer). So never move the refunded total
- * backward, never regress a refund state back to `captured`, and never blank a non-empty reference.
+ * backward, never regress a refund state, and never blank a non-empty reference.
+ *
+ * The state guard is a LADDER, not a single `captured` special case. A status read can report a
+ * refund state that lags the row rather than only a pre-refund one: `orderToSession` (Polar) and
+ * `checkoutToSession` (Creem) both map a `partially_refunded` status while filling `refundedAmount`
+ * only for a fully `refunded` one — so a locally `refunded` row reconciles against
+ * `{ state: "partially_refunded", refundedAmount: 0 }`. The total is `max`-ed and stays full while
+ * the state slid back a rung, leaving a row whose refunded total equals its captured total under a
+ * "partially refunded" label. `check` and every remainder calculation read that row, and
+ * `partially_refunded` is not terminal where `refunded` is.
  */
 const mergePaymentTruth = (existing: PaymentSession | undefined, current: PaymentSession): PaymentSession => {
     if (!existing) {
@@ -95,11 +111,27 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const sameRefundCurrency = existing.refundedAmount.currency === current.refundedAmount.currency;
     const refundedAmount =
         sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
-    const state = current.state === "captured" && REFUND_STATES.has(existing.state) ? existing.state : current.state;
+    const existingRank = REFUND_RANK[existing.state];
+    const currentRank = REFUND_RANK[current.state];
+    const state = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
     const referenceId = current.referenceId === "" ? existing.referenceId : current.referenceId;
 
     return { ...current, referenceId, refundedAmount, state };
 };
+
+/**
+ * The subscription half of {@link mergePaymentTruth}: provider truth decides the lifecycle, but it
+ * must never move `referenceId`.
+ *
+ * `referenceId` is framework-controlled owner attribution pinned into checkout metadata, not
+ * something the provider computes — so a read that does not echo that metadata resolves to `""`
+ * (Stripe, Polar) or falls back to the provider's own CUSTOMER id (Creem, Dodo), and a subscription
+ * created outside a Lunora checkout at all (provider dashboard, migration import) never carries it.
+ * Writing either value orphans the row from the `by_reference` index, from `check`/`hasActivePrice`
+ * and from the default authorizer, so a paying customer is denied access — and `sync.ts` never
+ * rewrites the field on an update, which makes it permanent. Keep what the store has.
+ */
+const keepReferenceId = (existing: string | undefined, current: string): string => (existing === undefined || existing === "" ? current : existing);
 
 // Re-sync one subscription against the provider's truth. Returns whether the store changed.
 const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
@@ -111,7 +143,11 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
     }
 
     // Preserve the original createdAt when we already had the row.
-    await store.upsertSubscription({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    await store.upsertSubscription({
+        ...current,
+        createdAt: existing?.createdAt ?? current.createdAt,
+        referenceId: keepReferenceId(existing?.referenceId, current.referenceId),
+    });
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
@@ -140,10 +176,15 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
  * customer is under-billed and over-entitled, and nothing else in the system ever
  * reads `reportedToProvider`.
  *
- * Forwarding is idempotent on the event's `idempotencyKey`, so a retry that the
- * provider had actually applied (a response we never saw) does not double-count.
  * Only rows the store reports as still owing a forward are seen here — see
  * {@link PaymentStore.listUnreportedUsage}.
+ *
+ * Retrying is safe ONLY where the event's `idempotencyKey` reaches the provider's
+ * ingestion body, because a row is unreported whether the request failed or merely
+ * its response was lost, and nothing here can tell those apart. Stripe, Polar and
+ * Dodo all carry the key, so the second case collapses to one debit. Autumn carries
+ * nothing (`idempotency.ts`), so it would be a second debit — and the customer's
+ * allowance is spent twice over. {@link usageForwardIsIdempotent} gates that out.
  */
 const sweepUnreportedUsage = async (
     adapter: PaymentAdapter,
@@ -155,7 +196,7 @@ const sweepUnreportedUsage = async (
 
     // `reportUsage` first: an adapter without it can't meter at all, and the check
     // is total even for a partial test double that omits `capabilities`.
-    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering) {
+    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering || !usageForwardIsIdempotent(adapter.identifier)) {
         return { checked: 0, failed: 0, updated: 0 };
     }
 

@@ -174,6 +174,58 @@ describe("createWorkflowRunContext", () => {
         await expect(failing.run({ __lunoraRef: "a:b" })).rejects.toThrow(/@lunora\/workflow: function dispatch failed \(500\): boom/);
     });
 
+    it("pins a replay-stable dedup id on ctx.run, so a replayed body applies each call once", async () => {
+        expect.assertions(2);
+
+        // A top-level `ctx.run` is NOT durable: the body re-executes from the top
+        // on every activation (after a `step.sleep`, a `waitForEvent`, an
+        // eviction), so without a replay-stable id the second activation charges
+        // the customer again. Two contexts over the same event ARE the replay.
+        const ids: unknown[] = [];
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            ids.push((JSON.parse((init as RequestInit).body as string) as { id?: string }).id);
+
+            return okResponse(JSON.stringify({ result: null }));
+        });
+        const env = { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" };
+
+        const activation = async (): Promise<void> => {
+            const ctx = createWorkflowRunContext({ env, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() });
+
+            await ctx.run({ __lunoraRef: "payments:charge" }, { orderId: "o1" });
+            await ctx.run({ __lunoraRef: "orders:markPaid" }, { orderId: "o1" });
+        };
+
+        await activation();
+        await activation();
+
+        expect(ids).toStrictEqual(["inst-1#body.1", "inst-1#body.2", "inst-1#body.1", "inst-1#body.2"]);
+
+        // A caller-supplied id wins — the escape hatch for a body whose call order
+        // is not deterministic, and the only way to make a bare `ctx.run` inside a
+        // raw `ctx.step.do(...)` callback exactly-once across that step's retries.
+        const ctx = createWorkflowRunContext({ env, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() });
+
+        await ctx.run({ __lunoraRef: "payments:charge" }, {}, { dedupId: "charge:o1" });
+
+        expect(ids.at(-1)).toBe("charge:o1");
+    });
+
+    it("re-exposes the injected fetch so a body building its own dispatcher uses the same transport", () => {
+        expect.assertions(2);
+
+        // `ctx.run` is not the only dispatcher a body builds — `@lunora/agent`'s
+        // loop builds its own to carry the run's identity. Consuming the
+        // injection without re-exposing it sends that runner to a global `fetch`
+        // the host replaced, or to none at all.
+        const fetchImpl = vi.fn<typeof fetch>(async () => okResponse(JSON.stringify({ result: null })));
+
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", fetchImpl, step: makeStep() }).fetchImpl).toBe(fetchImpl);
+        // Absent stays absent: a present key holding `undefined` reads as "the
+        // host injected nothing" to a spread, and as an injection to `in`.
+        expect(createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() })).not.toHaveProperty("fetchImpl");
+    });
+
     it("prefixes ctx.log with the workflow name", () => {
         expect.assertions(1);
 

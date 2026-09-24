@@ -41,13 +41,6 @@ interface NavAdapter {
 interface PluginFlags {
     admin?: boolean;
     anonymous?: boolean;
-
-    /**
-     * better-auth ships no `apiKey` plugin as of 1.7, so nothing sets this
-     * automatically. It exists so an app running a fork or a later release can
-     * turn the cards on explicitly.
-     */
-    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;

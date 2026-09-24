@@ -11,6 +11,9 @@
  * replaying the move list on every read — buys nothing.
  */
 
+/** A square name like `e4`. */
+const AH_RE = /^[a-h][1-8]$/u;
+
 export type PieceType = "B" | "K" | "N" | "P" | "Q" | "R";
 export type PieceColor = "black" | "white";
 
@@ -54,6 +57,18 @@ export interface ChessMove {
 }
 
 const BACK_RANK: PieceType[] = ["R", "N", "B", "Q", "K", "B", "N", "R"];
+/** The eight squares a king can step to, as (row, col) deltas. */
+const KING_OFFSETS: [number, number][] = [
+    [-1, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, -1],
+    [0, 1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+];
+
 const KNIGHT_OFFSETS = [
     [-2, -1],
     [-2, 1],
@@ -85,12 +100,14 @@ const opposite = (color: PieceColor): PieceColor => (color === "white" ? "black"
 const onBoard = (row: number, col: number): boolean => row >= 0 && row < 8 && col >= 0 && col < 8;
 
 /** `{ row: 6, col: 4 }` → `"e2"`. */
-export const squareToName = (square: Square): string => `${String.fromCodePoint(97 + square.col)}${8 - square.row}`;
+export const squareToName = (square: Square): string => `${String.fromCodePoint(97 + square.col)}${String(8 - square.row)}`;
 
 /** `"e2"` → `{ row: 6, col: 4 }`. Callers validate the shape first. */
-export const nameToSquare = (name: string): Square => ({ col: name.codePointAt(0)! - 97, row: 8 - Number.parseInt(name[1], 10) });
+export const nameToSquare = (name: string): Square => {
+    return { col: (name.codePointAt(0) ?? 97) - 97, row: 8 - Number.parseInt(name[1], 10) };
+};
 
-export const isSquareName = (name: string): boolean => /^[a-h][1-8]$/u.test(name);
+export const isSquareName = (name: string): boolean => AH_RE.test(name);
 
 export const createInitialState = (): ChessState => {
     const board: (ChessPiece | null)[][] = Array.from({ length: 8 }, () => Array.from<ChessPiece | null>({ length: 8 }).fill(null));
@@ -138,78 +155,207 @@ const findKing = (board: (ChessPiece | null)[][], color: PieceColor): Square | n
  * is simulated and then tested), so it stays proportional to the board's rays,
  * not to the piece count.
  */
-const isSquareAttacked = (board: (ChessPiece | null)[][], row: number, col: number, byColor: PieceColor): boolean => {
+/** Is `byColor` attacking (row, col) with a piece that steps rather than slides? */
+const isSteppedAttack = (board: (ChessPiece | null)[][], row: number, col: number, byColor: PieceColor): boolean => {
     // Pawns attack diagonally forward, so an attacker sits one rank *behind*
     // the square from the defender's point of view.
     const pawnRow = row + (byColor === "white" ? 1 : -1);
+    const pawnSquares: [number, number][] = [-1, 1].map((deltaCol) => [pawnRow, col + deltaCol]);
+    const knightSquares: [number, number][] = KNIGHT_OFFSETS.map(([deltaRow, deltaCol]) => [row + deltaRow, col + deltaCol]);
+    const kingSquares: [number, number][] = KING_OFFSETS.map(([deltaRow, deltaCol]) => [row + deltaRow, col + deltaCol]);
 
-    for (const deltaCol of [-1, 1]) {
-        if (onBoard(pawnRow, col + deltaCol)) {
-            const piece = board[pawnRow][col + deltaCol];
+    const occupant = ([squareRow, squareCol]: [number, number]): ChessPiece | null => (onBoard(squareRow, squareCol) ? board[squareRow][squareCol] : null);
+    const held = (squares: [number, number][], type: PieceType): boolean =>
+        squares.some((square) => {
+            const piece = occupant(square);
 
-            if (piece?.type === "P" && piece.color === byColor) {
-                return true;
-            }
+            return piece?.type === type && piece.color === byColor;
+        });
+
+    return held(pawnSquares, "P") || held(knightSquares, "N") || held(kingSquares, "K");
+};
+
+/** Walking one ray from (row, col): does the first piece on it attack the square? */
+const rayHasAttacker = (
+    board: (ChessPiece | null)[][],
+    row: number,
+    col: number,
+    [deltaRow, deltaCol]: number[],
+    byColor: PieceColor,
+    slider: PieceType,
+): boolean => {
+    for (let step = 1; step < 8; step += 1) {
+        const nextRow = row + deltaRow * step;
+        const nextCol = col + deltaCol * step;
+
+        if (!onBoard(nextRow, nextCol)) {
+            return false;
         }
-    }
 
-    for (const [deltaRow, deltaCol] of KNIGHT_OFFSETS) {
-        if (onBoard(row + deltaRow, col + deltaCol)) {
-            const piece = board[row + deltaRow][col + deltaCol];
+        const piece = board[nextRow][nextCol];
 
-            if (piece?.type === "N" && piece.color === byColor) {
-                return true;
-            }
-        }
-    }
-
-    for (let deltaRow = -1; deltaRow <= 1; deltaRow += 1) {
-        for (let deltaCol = -1; deltaCol <= 1; deltaCol += 1) {
-            if ((deltaRow !== 0 || deltaCol !== 0) && onBoard(row + deltaRow, col + deltaCol)) {
-                const piece = board[row + deltaRow][col + deltaCol];
-
-                if (piece?.type === "K" && piece.color === byColor) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    const rays: [number[][], PieceType][] = [
-        [STRAIGHTS, "R"],
-        [DIAGONALS, "B"],
-    ];
-
-    for (const [directions, slider] of rays) {
-        for (const [deltaRow, deltaCol] of directions) {
-            for (let step = 1; step < 8; step += 1) {
-                const nextRow = row + deltaRow * step;
-                const nextCol = col + deltaCol * step;
-
-                if (!onBoard(nextRow, nextCol)) {
-                    break;
-                }
-
-                const piece = board[nextRow][nextCol];
-
-                if (piece) {
-                    if (piece.color === byColor && (piece.type === slider || piece.type === "Q")) {
-                        return true;
-                    }
-
-                    break;
-                }
-            }
+        if (piece) {
+            return piece.color === byColor && (piece.type === slider || piece.type === "Q");
         }
     }
 
     return false;
 };
 
+/** Is `byColor` attacking (row, col) along a rank, file or diagonal? */
+const isSlidingAttack = (board: (ChessPiece | null)[][], row: number, col: number, byColor: PieceColor): boolean => {
+    const rays: [number[][], PieceType][] = [
+        [STRAIGHTS, "R"],
+        [DIAGONALS, "B"],
+    ];
+
+    return rays.some(([directions, slider]) => directions.some((direction) => rayHasAttacker(board, row, col, direction, byColor, slider)));
+};
+
+const isSquareAttacked = (board: (ChessPiece | null)[][], row: number, col: number, byColor: PieceColor): boolean =>
+    isSteppedAttack(board, row, col, byColor) || isSlidingAttack(board, row, col, byColor);
+
 const isInCheck = (board: (ChessPiece | null)[][], color: PieceColor): boolean => {
     const king = findKing(board, color);
 
     return king ? isSquareAttacked(board, king.row, king.col, opposite(color)) : false;
+};
+
+/** Push `to` as a move when it is on the board and not occupied by one's own piece. */
+const pushMove = (moves: ChessMove[], board: (ChessPiece | null)[][], from: Square, to: Square, mover: PieceColor, promotion?: PieceType): void => {
+    if (!onBoard(to.row, to.col)) {
+        return;
+    }
+
+    if (board[to.row][to.col]?.color !== mover) {
+        moves.push({ from, promotion, to });
+    }
+};
+
+/** Walk each ray until the board edge, an own piece, or one capture. */
+const slideRays = (moves: ChessMove[], board: (ChessPiece | null)[][], row: number, col: number, mover: PieceColor, directions: number[][]): void => {
+    for (const [deltaRow, deltaCol] of directions) {
+        for (let step = 1; step < 8; step += 1) {
+            const nextRow = row + deltaRow * step;
+            const nextCol = col + deltaCol * step;
+
+            if (!onBoard(nextRow, nextCol)) {
+                break;
+            }
+
+            const target = board[nextRow][nextCol];
+
+            if (target) {
+                if (target.color !== mover) {
+                    pushMove(moves, board, { col, row }, { col: nextCol, row: nextRow }, mover);
+                }
+
+                break;
+            }
+
+            pushMove(moves, board, { col, row }, { col: nextCol, row: nextRow }, mover);
+        }
+    }
+};
+
+/** Add the castling move for one side, when the right survives and the path is clear and unattacked. */
+const addCastle = (moves: ChessMove[], board: (ChessPiece | null)[][], rank: number, kingSide: boolean, allowed: boolean, enemy: PieceColor): void => {
+    const rookCol = kingSide ? 7 : 0;
+    const between = kingSide ? [5, 6] : [1, 2, 3];
+    const crossed = kingSide ? [4, 5, 6] : [4, 3, 2];
+
+    if (!allowed || board[rank][rookCol]?.type !== "R") {
+        return;
+    }
+
+    if (between.some((square) => board[rank][square]) || crossed.some((square) => isSquareAttacked(board, rank, square, enemy))) {
+        return;
+    }
+
+    moves.push({ from: { col: 4, row: rank }, to: { col: kingSide ? 6 : 2, row: rank } });
+};
+
+/** King steps plus the two castles, when the rights survive and the path is clear. */
+const addKingMoves = (
+    state: ChessState,
+    row: number,
+    col: number,
+    piece: ChessPiece,
+    add: (toRow: number, toCol: number, promotion?: PieceType) => void,
+    castleIfClear: (rank: number, kingSide: boolean, allowed: boolean) => void,
+): void => {
+    for (const [deltaRow, deltaCol] of KING_OFFSETS) {
+        add(row + deltaRow, col + deltaCol);
+    }
+
+    if (piece.color === "white" && row === 7 && col === 4) {
+        castleIfClear(7, true, state.castlingRights.whiteKingSide);
+        castleIfClear(7, false, state.castlingRights.whiteQueenSide);
+    } else if (piece.color === "black" && row === 0 && col === 4) {
+        castleIfClear(0, true, state.castlingRights.blackKingSide);
+        castleIfClear(0, false, state.castlingRights.blackQueenSide);
+    }
+};
+
+/** One diagonal pawn capture: an enemy piece, or the en-passant square. */
+const addPawnCapture = (
+    state: ChessState,
+    toRow: number,
+    toCol: number,
+    enemy: PieceColor,
+    add: (row: number, col: number) => void,
+    addMaybePromoting: (row: number, col: number) => void,
+): void => {
+    if (!onBoard(toRow, toCol)) {
+        return;
+    }
+
+    if (state.board[toRow][toCol]?.color === enemy) {
+        addMaybePromoting(toRow, toCol);
+    }
+
+    if (state.enPassantTarget?.row === toRow && state.enPassantTarget.col === toCol) {
+        add(toRow, toCol);
+    }
+};
+
+/** One push, the two-square opener, both captures, promotions and en passant. */
+const addPawnMoves = (
+    state: ChessState,
+    row: number,
+    col: number,
+    piece: ChessPiece,
+    enemy: PieceColor,
+    add: (toRow: number, toCol: number, promotion?: PieceType) => void,
+): void => {
+    const { board } = state;
+    const direction = piece.color === "white" ? -1 : 1;
+    const startRow = piece.color === "white" ? 6 : 1;
+    const promotionRow = piece.color === "white" ? 0 : 7;
+
+    const addMaybePromoting = (toRow: number, toCol: number): void => {
+        if (toRow === promotionRow) {
+            for (const promotion of PROMOTION_PIECES) {
+                add(toRow, toCol, promotion);
+            }
+
+            return;
+        }
+
+        add(toRow, toCol);
+    };
+
+    if (onBoard(row + direction, col) && !board[row + direction][col]) {
+        addMaybePromoting(row + direction, col);
+
+        if (row === startRow && !board[row + direction * 2][col]) {
+            add(row + direction * 2, col);
+        }
+    }
+
+    for (const deltaCol of [-1, 1]) {
+        addPawnCapture(state, row + direction, col + deltaCol, enemy, add, addMaybePromoting);
+    }
 };
 
 /** Pseudo-legal moves for one piece — everything the piece can reach, ignoring whether it exposes its own king. */
@@ -225,56 +371,15 @@ const getRawMoves = (state: ChessState, row: number, col: number): ChessMove[] =
     const enemy = opposite(piece.color);
 
     const add = (toRow: number, toCol: number, promotion?: PieceType): void => {
-        if (!onBoard(toRow, toCol)) {
-            return;
-        }
-
-        const target = board[toRow][toCol];
-
-        if (!target || target.color !== piece.color) {
-            moves.push({ from: { col, row }, promotion, to: { col: toCol, row: toRow } });
-        }
+        pushMove(moves, board, { col, row }, { col: toCol, row: toRow }, piece.color, promotion);
     };
 
     const slide = (directions: number[][]): void => {
-        for (const [deltaRow, deltaCol] of directions) {
-            for (let step = 1; step < 8; step += 1) {
-                const nextRow = row + deltaRow * step;
-                const nextCol = col + deltaCol * step;
-
-                if (!onBoard(nextRow, nextCol)) {
-                    break;
-                }
-
-                const target = board[nextRow][nextCol];
-
-                if (target) {
-                    if (target.color !== piece.color) {
-                        add(nextRow, nextCol);
-                    }
-
-                    break;
-                }
-
-                add(nextRow, nextCol);
-            }
-        }
+        slideRays(moves, board, row, col, piece.color, directions);
     };
 
     const castleIfClear = (rank: number, kingSide: boolean, allowed: boolean): void => {
-        const rookCol = kingSide ? 7 : 0;
-        const between = kingSide ? [5, 6] : [1, 2, 3];
-        const crossed = kingSide ? [4, 5, 6] : [4, 3, 2];
-
-        if (!allowed || board[rank][rookCol]?.type !== "R") {
-            return;
-        }
-
-        if (between.some((square) => board[rank][square]) || crossed.some((square) => isSquareAttacked(board, rank, square, enemy))) {
-            return;
-        }
-
-        moves.push({ from: { col: 4, row: rank }, to: { col: kingSide ? 6 : 2, row: rank } });
+        addCastle(moves, board, rank, kingSide, allowed, enemy);
     };
 
     switch (piece.type) {
@@ -284,22 +389,7 @@ const getRawMoves = (state: ChessState, row: number, col: number): ChessMove[] =
         }
 
         case "K": {
-            for (let deltaRow = -1; deltaRow <= 1; deltaRow += 1) {
-                for (let deltaCol = -1; deltaCol <= 1; deltaCol += 1) {
-                    if (deltaRow !== 0 || deltaCol !== 0) {
-                        add(row + deltaRow, col + deltaCol);
-                    }
-                }
-            }
-
-            if (piece.color === "white" && row === 7 && col === 4) {
-                castleIfClear(7, true, state.castlingRights.whiteKingSide);
-                castleIfClear(7, false, state.castlingRights.whiteQueenSide);
-            } else if (piece.color === "black" && row === 0 && col === 4) {
-                castleIfClear(0, true, state.castlingRights.blackKingSide);
-                castleIfClear(0, false, state.castlingRights.blackQueenSide);
-            }
-
+            addKingMoves(state, row, col, piece, add, castleIfClear);
             break;
         }
 
@@ -312,49 +402,7 @@ const getRawMoves = (state: ChessState, row: number, col: number): ChessMove[] =
         }
 
         case "P": {
-            const direction = piece.color === "white" ? -1 : 1;
-            const startRow = piece.color === "white" ? 6 : 1;
-            const promotionRow = piece.color === "white" ? 0 : 7;
-
-            if (onBoard(row + direction, col) && !board[row + direction][col]) {
-                if (row + direction === promotionRow) {
-                    for (const promotion of PROMOTION_PIECES) {
-                        add(row + direction, col, promotion);
-                    }
-                } else {
-                    add(row + direction, col);
-                }
-
-                if (row === startRow && !board[row + direction * 2][col]) {
-                    add(row + direction * 2, col);
-                }
-            }
-
-            for (const deltaCol of [-1, 1]) {
-                const nextRow = row + direction;
-                const nextCol = col + deltaCol;
-
-                if (!onBoard(nextRow, nextCol)) {
-                    continue;
-                }
-
-                const target = board[nextRow][nextCol];
-
-                if (target && target.color === enemy) {
-                    if (nextRow === promotionRow) {
-                        for (const promotion of PROMOTION_PIECES) {
-                            add(nextRow, nextCol, promotion);
-                        }
-                    } else {
-                        add(nextRow, nextCol);
-                    }
-                }
-
-                if (state.enPassantTarget && state.enPassantTarget.row === nextRow && state.enPassantTarget.col === nextCol) {
-                    add(nextRow, nextCol);
-                }
-            }
-
+            addPawnMoves(state, row, col, piece, enemy, add);
             break;
         }
 
@@ -365,6 +413,10 @@ const getRawMoves = (state: ChessState, row: number, col: number): ChessMove[] =
 
         case "R": {
             slide(STRAIGHTS);
+            break;
+        }
+        // Every piece type is covered above; a default keeps the switch total.
+        default: {
             break;
         }
     }
@@ -401,7 +453,7 @@ const moveOnBoard = (state: ChessState, move: ChessMove): { board: (ChessPiece |
 
     // En passant: the captured pawn is beside the moving pawn's origin, not on
     // the destination square, so it has to be cleared explicitly.
-    if (piece.type === "P" && state.enPassantTarget && move.to.row === state.enPassantTarget.row && move.to.col === state.enPassantTarget.col) {
+    if (piece.type === "P" && move.to.row === state.enPassantTarget?.row && move.to.col === state.enPassantTarget.col) {
         captured = board[move.from.row][move.to.col];
         board[move.from.row][move.to.col] = null;
         special = "en_passant";
@@ -414,7 +466,7 @@ const moveOnBoard = (state: ChessState, move: ChessMove): { board: (ChessPiece |
 export const getValidMoves = (state: ChessState, row: number, col: number): ChessMove[] => {
     const piece = state.board[row][col];
 
-    if (!piece || piece.color !== state.currentTurn) {
+    if (piece?.color !== state.currentTurn) {
         return [];
     }
 
@@ -433,6 +485,40 @@ const hasAnyLegalMove = (state: ChessState): boolean => {
     return false;
 };
 
+/** Castling rights after a move: the king losing both, and either corner square being touched. */
+const rightsAfter = (current: CastlingRights, piece: ChessPiece, move: ChessMove): CastlingRights => {
+    const rights = { ...current };
+
+    if (piece.type === "K") {
+        if (piece.color === "white") {
+            rights.whiteKingSide = false;
+            rights.whiteQueenSide = false;
+        } else {
+            rights.blackKingSide = false;
+            rights.blackQueenSide = false;
+        }
+    }
+
+    // A rook leaving *or* being captured on its home square ends that side's
+    // castling right; both are keyed off the corner squares.
+    const corners: [number, number, keyof CastlingRights][] = [
+        [7, 0, "whiteQueenSide"],
+        [7, 7, "whiteKingSide"],
+        [0, 0, "blackQueenSide"],
+        [0, 7, "blackKingSide"],
+    ];
+
+    for (const { col, row } of [move.from, move.to]) {
+        for (const [cornerRow, cornerCol, right] of corners) {
+            if (row === cornerRow && col === cornerCol) {
+                rights[right] = false;
+            }
+        }
+    }
+
+    return rights;
+};
+
 /** The position after `move`, with check / checkmate / stalemate / draw already resolved for the side to move. */
 export const applyMove = (state: ChessState, move: ChessMove): ChessState => {
     const piece = state.board[move.from.row][move.from.col];
@@ -442,37 +528,7 @@ export const applyMove = (state: ChessState, move: ChessMove): ChessState => {
     }
 
     const { board, captured } = moveOnBoard(state, move);
-    const castlingRights = { ...state.castlingRights };
-
-    if (piece.type === "K") {
-        if (piece.color === "white") {
-            castlingRights.whiteKingSide = false;
-            castlingRights.whiteQueenSide = false;
-        } else {
-            castlingRights.blackKingSide = false;
-            castlingRights.blackQueenSide = false;
-        }
-    }
-
-    // A rook leaving *or* being captured on its home square ends that side's
-    // castling right; both are keyed off the corner squares.
-    for (const { col, row } of [move.from, move.to]) {
-        if (row === 7 && col === 0) {
-            castlingRights.whiteQueenSide = false;
-        }
-
-        if (row === 7 && col === 7) {
-            castlingRights.whiteKingSide = false;
-        }
-
-        if (row === 0 && col === 0) {
-            castlingRights.blackQueenSide = false;
-        }
-
-        if (row === 0 && col === 7) {
-            castlingRights.blackKingSide = false;
-        }
-    }
+    const castlingRights = rightsAfter(state.castlingRights, piece, move);
 
     const halfMoveClock = piece.type === "P" || captured ? 0 : state.halfMoveClock + 1;
 
@@ -538,7 +594,8 @@ export const getMoveNotation = (state: ChessState, move: ChessMove): string => {
     }
 
     const from = squareToName(move.from);
-    const isEnPassant = piece.type === "P" && state.enPassantTarget?.row === move.to.row && state.enPassantTarget?.col === move.to.col;
+    const target = state.enPassantTarget;
+    const isEnPassant = piece.type === "P" && target !== null && target.row === move.to.row && target.col === move.to.col;
     const isCapture = Boolean(state.board[move.to.row][move.to.col]) || isEnPassant;
 
     let notation = piece.type === "P" ? "" : piece.type;
@@ -559,7 +616,10 @@ export const getMoveNotation = (state: ChessState, move: ChessMove): string => {
 
     const after = applyMove(state, move);
 
-    return notation + (after.isCheckmate ? "#" : after.isCheck ? "+" : "");
+    const suffix = after.isCheckmate ? "#" : "";
+    const check = suffix || (after.isCheck ? "+" : "");
+
+    return notation + check;
 };
 
 export const serializeState = (state: ChessState): string => JSON.stringify(state);

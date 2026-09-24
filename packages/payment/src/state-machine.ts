@@ -53,7 +53,13 @@ const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<Subscri
     canceled: {},
     past_due: { activate: "active", cancel: "canceled", pause: "paused", renew: "active" },
     paused: { cancel: "canceled", resume: "active" },
-    trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due" },
+    // `pause` is NOT optional here, even though no adapter's webhook mapping ever writes `trialing`
+    // (`subscription-event.ts` routes it to `subscription.active`): the reconcile sweep does, straight
+    // from `getSubscriptionStatus`, and Stripe's `pause_collection` at trial end then arrives as
+    // `subscription.paused` on a `trialing` row. Rejecting it as illegal 200-acks the event and leaves
+    // the row `trialing` — which is in `ACTIVE_STATES`, so the customer keeps every entitlement without
+    // paying. `renew` mirrors `past_due`: a trial that bills and rolls into a paid period is `active`.
+    trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
 };
 
 /**

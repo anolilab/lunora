@@ -71,7 +71,7 @@ final class OptimisticOfflineTest {
      * — its monitor is REENTRANT, so a callback running inside the critical section neither hangs
      * nor deadlocks, which is why the violation was invisible for as long as it was. The re-entrant
      * call is the shape that hard-deadlocks the sibling ports whose lock is not reentrant, kept
-     * here so all seven suites drive the same scenario.
+     * here so all eight suites drive the same scenario.
      */
     private static void assertUnlocked(Client client, List<String> violations, String name) {
         if (Thread.holdsLock(client.lock)) {
@@ -85,7 +85,7 @@ final class OptimisticOfflineTest {
     /**
      * No callback a consumer supplies runs while the client holds its lock.
      *
-     * <p>{@code sdks/README.md} states this for all seven ports: not the optimistic update, not a
+     * <p>{@code sdks/README.md} states this for all eight ports: not the optimistic update, not a
      * queue entry's precondition, not {@code onSettled}, not a subscription handler. The transform
      * runs and the precondition is evaluated outside the critical section; the lock is taken only
      * to install the result — in ONE section with the offline decision and the enqueue, so the
@@ -1393,9 +1393,22 @@ final class OptimisticOfflineTest {
     @SuppressWarnings("unchecked")
     private static void offlineFlushBatchesMultipleWrites() throws IOException {
         covers("offline_flush_batches_multiple_writes");
+        covers("offline_flush_unreadable_slot_is_retried");
 
         Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
         List<Object> slots = list(testCase.get("slots"));
+        int unreadable = 0;
+
+        // A slot the fixture no longer describes is a case that asserts nothing.
+        for (Object raw : slots) {
+            Map<String, Object> slot = map(raw);
+
+            if ("unreadable-error".equals(slot.get("outcome")) && slot.containsKey("rawError")) {
+                unreadable++;
+            }
+        }
+
+        check(unreadable == 1, "batchReplay must carry one unreadable slot");
         List<String> urls = new ArrayList<>();
         List<Object> calls = new ArrayList<>();
         List<Long> confirmed = new ArrayList<>();
@@ -1422,6 +1435,19 @@ final class OptimisticOfflineTest {
                                     answers.append(",\"body\":{\"commitCursor\":")
                                             .append(count(slot.get("commitCursor")))
                                             .append(",\"result\":null}}");
+
+                                    continue;
+                                }
+
+                                if ("unreadable-error".equals(slot.get("outcome"))) {
+                                    // An `error` key holding a NON-object: no envelope to read
+                                    // a verdict out of, and no per-slot HTTP status to fall back
+                                    // on. Written from the fixture's own value, so a port cannot
+                                    // pass by answering itself a shape the spec does not
+                                    // describe.
+                                    answers.append(",\"body\":{\"error\":")
+                                            .append(Json.write(slot.get("rawError")))
+                                            .append("}}");
 
                                     continue;
                                 }

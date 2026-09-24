@@ -161,16 +161,18 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
  * branch — the fix for a shipped export/import data-loss bug — was never once
  * executed by it.
  */
-const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" }) as never;
+const optionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" };
+};
 
 /**
  * An `optional(inner.nullable())` column — the case where a stored NULL is a
  * VALUE the column holds rather than an absent field. `.nullable()` is the one
  * thing that clears `notNull`, and it clears it on the INNER validator.
  */
-const nullableOptionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
+const nullableOptionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" };
+};
 
 const schema: SchemaLike = {
     tables: {
@@ -1206,7 +1208,12 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         expect(insert?.params[1]).toBe(1);
     });
 
-    it("replace() mints clock() and ignores a forged document _creationTime", async () => {
+    it("replace() preserves the stored _creationTime and ignores a forged one", async () => {
+        // `_creationTime` is when the row was INSERTED, and every default order
+        // and keyset cursor is built on it — so a rewrite must not re-stamp it,
+        // or the row jumps to the end of every ordered read and a paginating
+        // client sees it twice or never. `patch` preserves it; the two write
+        // verbs cannot disagree about a system field.
         expect.assertions(3);
 
         // resolveTableName + the OCC snapshot both read; return this row for every SELECT.
@@ -1219,9 +1226,24 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
         expect(update).toBeDefined();
-        // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
-        expect(update?.params[0]).toBe(CLOCK);
+        // The SET clause binds `_creationTime = ?` first, so the stored 42 is the leading param — never the forged 5, never a fresh clock().
+        expect(update?.params[0]).toBe(42);
         expect(update?.params).not.toContain(5);
+    });
+
+    it("replace() WITH allowExplicitId honors the document _creationTime (import/CDC replay)", async () => {
+        expect.assertions(2);
+
+        const snapshotRow = { _creationTime: 42, archived: 0, body: "x", id: "row1", priority: 1, slug: "s" };
+        const { calls, exec } = recordingExecWithParams([snapshotRow]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, undefined, { allowExplicitId: true });
+
+        const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
+
+        expect(update).toBeDefined();
+        expect(update?.params[0]).toBe(5);
     });
 });
 
@@ -1277,6 +1299,158 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
 
         expect(next?.tables).toStrictEqual(["notes"]);
         expect(next?.cursor).toBeGreaterThan(head);
+    });
+
+    /**
+     * Rewind the changelog the way a D1 Time Travel restore does — the rows AND
+     * the `sqlite_sequence` bookkeeping that holds the high-watermark, because a
+     * restore reverts the whole database rather than a table in it. `toSeq` is
+     * the watermark at the point restored to.
+     */
+    const restoreLogTo = async (toSeq: number): Promise<void> => {
+        await harness.exec.run(`DELETE FROM "__cdc_log" WHERE "seq" > ?`, [toSeq]);
+        await harness.exec.run(`UPDATE sqlite_sequence SET seq = ? WHERE name = '__cdc_log'`, [toSeq]);
+    };
+
+    it("refuses a cursor above the high-watermark rather than reporting caught-up", async () => {
+        expect.assertions(3);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+        await writer.insert("notes", { archived: false, body: "c", priority: 1, slug: "c" });
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(3);
+
+        await restoreLogTo(0);
+
+        // Post-restore writes climb back through seqs the consumer has already
+        // passed. Served an empty page, it would call itself caught up and skip
+        // both of them permanently.
+        await writer.insert("notes", { archived: false, body: "d", priority: 1, slug: "d" });
+        await writer.insert("notes", { archived: false, body: "e", priority: 1, slug: "e" });
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toThrow(/rolled back/iu);
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    /**
+     * The residual gap the watermark guard does NOT close, pinned so it is not
+     * mistaken for one that is.
+     *
+     * The guard fires on `sinceSeq > watermark`, and a rewound log re-issues the
+     * seqs it lost. So the proof expires: once post-restore writes have climbed
+     * the AUTOINCREMENT back past a consumer's cursor, that cursor is in range
+     * again and the consumer is served — a page of the NEW timeline, whose
+     * earlier entries are already behind its cursor and unreachable for good.
+     *
+     * Closing it needs a witness that outlives the seq space — an epoch paired
+     * with the cursor, the way the shard plane's subscription frames carry one.
+     * This path has no such channel, and neither does the shard plane's twin of
+     * it: `runShardCdcSync` returns `{ changes, cursor }` and stamps its epoch
+     * only on the refusal. Whether to add one is a wire decision; until it is
+     * made, this is the shape of what gets through.
+     */
+    it("serves a rewound timeline once post-restore writes climb back over the cursor", async () => {
+        expect.assertions(4);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Timeline A: five committed writes, all drained by the consumer.
+        for (const slug of ["a", "b", "c", "d", "e"]) {
+            // eslint-disable-next-line no-await-in-loop -- the seqs have to be allocated in order; that ordering is the subject
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(5);
+
+        // Restore to the moment only two writes existed. Timeline A's seqs 3..5
+        // are gone, and so is the watermark that named them.
+        await restoreLogTo(2);
+
+        // Timeline B keeps taking writes while the consumer is between polls,
+        // re-issuing seqs 3..5 for different rows and carrying on past them.
+        for (const slug of ["f", "g", "h", "i", "j", "k"]) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const watermark = await harness.exec.all(`SELECT seq FROM sqlite_sequence WHERE name = '__cdc_log'`, []);
+
+        expect(Number(watermark[0]?.["seq"])).toBe(8);
+
+        // 5 <= 8, so the rollback guard does not fire and the page is served.
+        const page = await readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect);
+
+        expect(page.changes.map((change) => change.doc?.["slug"])).toStrictEqual(["i", "j", "k"]);
+
+        // "f", "g", "h" were committed on the timeline the consumer is now
+        // reading, at seqs its cursor is already past. Nothing will deliver them.
+        const retained = await harness.exec.all(`SELECT doc FROM "__cdc_log" ORDER BY seq`, []);
+
+        expect(retained.map((row) => JSON.parse(String(row["doc"]))["slug"])).toStrictEqual(["a", "b", "f", "g", "h", "i", "j", "k"]);
+    });
+
+    it("treats a changelog that was never written as a watermark of zero", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Provision the log without writing to it. SQLite creates the
+        // `sqlite_sequence` TABLE with the first AUTOINCREMENT table but the ROW
+        // only on the first insert, so this is the shape where the watermark has
+        // to be inferred rather than read.
+        await writer.cdcChangedTables?.(0);
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect)).resolves.toStrictEqual({ changes: [], cursor: 0 });
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 5 }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    it("serves a consumer sitting exactly at the high-watermark", async () => {
+        expect.assertions(1);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        // The boundary the refusal must NOT claim: a caught-up consumer holds the
+        // watermark itself, and `>` rather than `>=` is what keeps it served.
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 1 });
+    });
+
+    it("does not accuse a caught-up consumer after retention swept the log empty", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+
+        // A sweep DELETEs rows; it does not rewind the timeline. `MAX(seq)` is
+        // NULL here, which is exactly why the watermark is read from
+        // `sqlite_sequence` — reading the rows would refuse every healthy
+        // consumer of a quiet, fully swept log.
+        await harness.exec.run(`DELETE FROM "__cdc_log"`, []);
+
+        const head = await harness.exec.all(`SELECT MAX(seq) AS seq FROM "__cdc_log"`, []);
+
+        expect(head[0]?.["seq"]).toBeNull();
+
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 2 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 2 });
     });
 
     it("round-trips a bigint / bytes post-image through the changelog", async () => {
@@ -1376,6 +1550,120 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         // an integer — is never prefixed on either.
         expect(columnsOf(plain)).toBe(`"table", "seq"`);
         expect(plain).not.toMatch(/\(191\)/u);
+    });
+});
+
+/**
+ * Declaring a UNIQUE index over a global table that already holds duplicates is
+ * a migration that cannot succeed. `CREATE UNIQUE INDEX` raises a bare
+ * `UNIQUE constraint failed: <table>.<column>` from inside `ensureMigrated`,
+ * which every read and write on the `.global()` store awaits — and the table
+ * loop bails at the first throw, so one unmigratable index takes the whole
+ * global plane down and leaves every table declared after it unprovisioned.
+ * That has to arrive as a diagnostic naming the table and the remedy.
+ */
+describe("global table UNIQUE index over existing duplicates", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const plain: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string") }, shardMode: { kind: "global" } } },
+    } as never;
+
+    const withUniqueIndex: SchemaLike = {
+        tables: {
+            notes: { indexes: [{ fields: ["slug"], name: "by_slug", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+        },
+    } as never;
+
+    const withUniqueColumn: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string", { unique: true }) }, shardMode: { kind: "global" } } },
+    } as never;
+
+    /** Provision the index-free shape and write two rows sharing a slug. */
+    const seedDuplicates = async (): Promise<void> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "dup" });
+        await writer.insert("notes", { slug: "dup" });
+    };
+
+    /** Force the provisioning pass for `next` and return whatever it threw. */
+    const provision = async (next: SchemaLike): Promise<unknown> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: next });
+
+        try {
+            await writer.findMany("notes", {});
+        } catch (error) {
+            return error;
+        }
+
+        return undefined;
+    };
+
+    it("refuses a declared unique index whose column list already has duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueIndex);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_by_slug.*duplicates/isu);
+    });
+
+    it("refuses a `.unique()` column whose values already have duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueColumn);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_unique_slug.*duplicates/isu);
+    });
+
+    it("still creates the index when the values are duplicate-free", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "a" });
+        await writer.insert("notes", { slug: "b" });
+
+        await expect(provision(withUniqueIndex)).resolves.toBeUndefined();
+        await expect(harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`, [])).resolves.toHaveLength(1);
+    });
+
+    it("leaves an unrelated DDL failure as its own error rather than relabelling it", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        // The index name collides with an existing TABLE, so `CREATE UNIQUE INDEX`
+        // fails for a reason that has nothing to do with the rows — on a table
+        // that DOES hold duplicates, which is the case a probe run unconditionally
+        // would have mislabelled. The dialect does not call this a unique
+        // violation, so the probe never runs and the engine's own error stands.
+        await harness.exec.run(`CREATE TABLE "notes_by_other" ("x" TEXT)`, []);
+
+        const collidingName: SchemaLike = {
+            tables: {
+                notes: { indexes: [{ fields: ["slug"], name: "by_other", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+
+        const error = await provision(collidingName);
+
+        expect(error).not.toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/already (a table|another table or index) named/iu);
     });
 });
 

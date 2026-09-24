@@ -12,7 +12,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { AbortDeadline } from "../../../shared/abort-deadline";
 import { abortDeadline } from "../../../shared/abort-deadline";
-import { readCapped } from "./read-capped";
+import { readCapped } from "../../../shared/read-capped";
 
 /**
  * The only thing the exec contract needs from a handle: a way to send a

@@ -19,6 +19,7 @@ export type {
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
@@ -50,6 +51,11 @@ export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-clou
 export type { ExportRow, ImportShardResult } from "@lunora/shard-engine";
 export type { DataMigrationLike, MigrationRunResult } from "@lunora/shard-engine";
 export type { KeyRange } from "@lunora/shard-engine";
+// Named in the emitted shard's `executeSubscription` / `executeStream` /
+// `resolveShape` / `readGlobalShapeRows` / `buildCtx` signatures, so adding a
+// member to it is a compile error in every generated app rather than six inline
+// copies that silently disagree.
+export type { SubscriptionIdentity } from "@lunora/shard-engine";
 export type { TransactionHeadroomTracker } from "@lunora/shard-engine";
 export type { DatabaseWriterLike, SchemaLike, SqlExec, ValidatorLike, WriteHook } from "@lunora/shard-engine";
 export type {
@@ -67,6 +73,7 @@ export type { SystemReaderStorageLike } from "@lunora/shard-engine";
 export type { SchedulerLike } from "@lunora/shard-engine";
 export type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 export type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
+export type { RelatedPage } from "@lunora/shard-engine";
 export type { MutationDelta } from "@lunora/shard-engine";
 export type { SearchBackfillProgress } from "@lunora/shard-engine";
 export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "@lunora/shard-engine";

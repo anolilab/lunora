@@ -123,6 +123,72 @@ describe("dodopayments adapter", () => {
         expect(result.state).toBe("captured");
     });
 
+    it("sums the payment's succeeded refunds instead of reporting zero refunded (regression)", async () => {
+        expect.assertions(4);
+
+        const client = makeClient();
+
+        // Dodo's `Payment` carries its refunds inline. Reporting zero is what reconcile writes: after a
+        // missed `refund.succeeded` the ledger says a refunded payment is unrefunded, and the next
+        // `refundPayment({ sessionId })` — which Dodo can only take in full — moves the whole captured
+        // amount a second time. Only `succeeded` entries count; `pending` may still fail.
+        (client as { payments: { retrieve: unknown } }).payments = {
+            retrieve: async (id: string) => {
+                return {
+                    currency: "USD",
+                    payment_id: id,
+                    refunds: [
+                        { amount: 4000, currency: "USD", refund_id: "ref_ok", status: "succeeded" },
+                        { amount: 1000, currency: "USD", refund_id: "ref_no", status: "failed" },
+                        { amount: 500, currency: "USD", refund_id: "ref_wait", status: "pending" },
+                    ],
+                    status: "succeeded",
+                    total_amount: 10_000,
+                };
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("pay_1");
+
+        expect(session.refundedAmount.minorUnits).toBe(4000n);
+        expect(session.capturedAmount.minorUnits).toBe(10_000n);
+        // Dodo's `IntentStatus` stays `succeeded` after a refund, so the refunded total is the only
+        // thing that can move the state off `captured` here.
+        expect(session.state).toBe("partially_refunded");
+
+        (client as { payments: { retrieve: unknown } }).payments = {
+            retrieve: async (id: string) => {
+                return {
+                    currency: "USD",
+                    payment_id: id,
+                    refunds: [{ amount: 10_000, currency: "USD", refund_id: "ref_all", status: "succeeded" }],
+                    status: "succeeded",
+                    total_amount: 10_000,
+                };
+            },
+        };
+
+        await expect(
+            createDodoPaymentsAdapter({ client, webhookSecret: SECRET })
+                .getPaymentStatus("pay_1")
+                .then((full) => full.state),
+        ).resolves.toBe("refunded");
+    });
+
+    it("reports an unrefunded payment as captured with a zero refunded total", async () => {
+        expect.assertions(2);
+
+        // The base stub carries no `refunds` array at all — the shape a payment that was never
+        // refunded arrives in.
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("pay_1");
+
+        expect(session.state).toBe("captured");
+        expect(session.refundedAmount.minorUnits).toBe(0n);
+    });
+
     it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
         expect.assertions(4);
 

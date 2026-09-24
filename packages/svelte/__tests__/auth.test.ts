@@ -25,6 +25,14 @@ const createAuthFakeClient = () => {
         };
     });
 
+    // The shared identity store also watches the connection so it can retry a
+    // resolve that failed while offline; the double has to offer it.
+    const onConnectionStatus = vi.fn<(listener: (status: string) => void) => Unsubscribe>((listener) => {
+        listener("idle");
+
+        return () => {};
+    });
+
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => currentUser);
 
     const setCurrentUser = (user: User | null) => {
@@ -32,13 +40,17 @@ const createAuthFakeClient = () => {
     };
 
     const client = {
+        // The identity store declares itself on attach; this double has no
+        // gates to arm, so the method only has to exist.
+        expectIdentityResolution: () => undefined,
         getAuthToken,
         getCurrentUser,
         onAuthTokenChange,
+        onConnectionStatus,
         setAuthToken,
     } as unknown as LunoraClient;
 
-    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken, setCurrentUser };
+    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken, setCurrentUser };
 };
 
 const flushAsync = async (): Promise<void> => {
@@ -125,15 +137,22 @@ describe("auth store (Svelte)", () => {
 });
 
 describe("authGate store (Svelte)", () => {
-    it("is neither loading nor authenticated before a token is set (signed out)", () => {
+    it("loads with no token held, then settles signed out once the server answers", async () => {
         const fake = createAuthFakeClient();
         const { isAuthenticated, isLoading } = authGate(fake.client);
 
         const stopA = isAuthenticated.subscribe(() => {});
         const stopL = isLoading.subscribe(() => {});
 
+        // A cookie session holds no bearer token, so an absent token says
+        // nothing about who is signed in. The gate loads until the server does.
+        expect(get(isLoading)).toBe(true);
         expect(get(isAuthenticated)).toBe(false);
+
+        await flushAsync();
+
         expect(get(isLoading)).toBe(false);
+        expect(get(isAuthenticated)).toBe(false);
 
         stopA();
         stopL();

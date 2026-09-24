@@ -20,6 +20,12 @@ import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPA
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
 
+/** W3C `sampled` bit — the value OTLP's per-span `flags` field carries when the trace was kept by the head decision. */
+const SAMPLED_TRACE_FLAG = 1;
+
+/** Trace flags with `sampled` clear — a trace the head decision dropped, exported anyway by the tail bias. */
+const UNSAMPLED_TRACE_FLAG = 0;
+
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     const attributes = [encodeAttribute(LUNORA_ATTR.functionPath, event.functionPath), encodeAttribute(LUNORA_ATTR.ok, event.ok)];
@@ -171,6 +177,11 @@ const otlpSpanBody = (event: SpanEvent): unknown => {
             event.attributes,
         ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
+        // W3C trace flags, mirroring the trace's settled verdict. Without it a
+        // collector reading `flags` sees 0 (UNSAMPLED) on every `ctx.trace`,
+        // `ctx.fetch` and db span we ship, including the ones it is meant to
+        // keep. Absent verdict reads as keep, like every other tier.
+        flags: event.sampled === false ? UNSAMPLED_TRACE_FLAG : SAMPLED_TRACE_FLAG,
         // Defaults to SPAN_KIND_INTERNAL — right for the vast majority of
         // `ctx.trace` spans — but honours an explicit kind so a call OUT to another
         // service can be CLIENT and a queue hop PRODUCER/CONSUMER. That is what a
@@ -235,7 +246,13 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
     // `deltatocumulative` processor and Prometheus remote-write paths treat as
     // invalid and may drop. Omitting it lets the collector infer the interval
     // from the previous export, which is what it does for a stream of deltas.
-    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
+    // The measurement's OTel **exemplar**: the trace id the shard stamped when
+    // the measurement ran inside a dispatch. This is the entire point of
+    // carrying `MetricEvent.traceId` — without it on the wire, a spike on a
+    // chart cannot be navigated to a trace that produced it. `spanId` is
+    // deliberately absent: the shard stamps the trace, not a particular span.
+    const exemplars = event.traceId === undefined ? undefined : [{ asDouble: event.value, timeUnixNano, traceId: event.traceId }];
+    const dataPoint = { asDouble: event.value, attributes, ...(exemplars === undefined ? {} : { exemplars }), timeUnixNano };
 
     if (event.kind === "gauge") {
         return { gauge: { dataPoints: [dataPoint] }, name: event.name };
@@ -250,6 +267,7 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
                         attributes,
                         bucketCounts: ["1"],
                         count: "1",
+                        ...(exemplars === undefined ? {} : { exemplars }),
                         explicitBounds: [],
                         max: event.value,
                         min: event.value,

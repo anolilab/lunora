@@ -83,6 +83,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ```ts
 interface QueryReadScope {
     footprint: ReadFootprint;
+    markIpRead: () => void;
     tracker: DependencyTracker;
 }
 ```
@@ -108,6 +109,10 @@ const ROOT_SHARD_NAME = "__root__";
 ```
 
 ### `RankIndexDefinitionLike` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `RelatedPage` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -158,6 +163,20 @@ interface RunShardBulkRowResult {
 interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
+}
+```
+
+### `RunShardFindRelatedArgs` (interface)
+
+```ts
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
+    table: string;
 }
 ```
 
@@ -217,6 +236,7 @@ interface RunShardRankPageArgs {
 ```ts
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;
@@ -290,6 +310,7 @@ abstract class ShardDO {
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;
     protected static readonly GLOBAL_SHAPE_RESYNC_MS = 3e4;
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
+    protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
     protected static readonly MAX_WHISPER_BYTES = 4096;
     protected static readonly WHISPER_RATE_BURST = 50;
     protected static readonly WHISPER_RATE_PER_SEC = 25;
@@ -297,6 +318,7 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
@@ -306,7 +328,7 @@ abstract class ShardDO {
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
-    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor"): ReadonlyArray<string>;
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
     protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;
@@ -317,11 +339,19 @@ abstract class ShardDO {
     protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
+    protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
     protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected getCurrentBaselineSeq(): number | undefined;
+    protected recordStalePatchDropped(event: {
+        fields: string[];
+        id: string;
+        table: string;
+    }): void;
     protected getCurrentTraceparent(): string | undefined;
+    protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): {
         rootSpanId: string;
         traceId: string;
@@ -356,14 +386,17 @@ abstract class ShardDO {
         before: number;
         total: number;
     }>;
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage>;
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult>;
     protected runShardCdcSync(args: RunShardCdcSyncArgs): {
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     };
     protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{
         changes: CdcChange[];
         cursor: number;
+        epoch?: string;
     }>;
     protected currentCdcCursor(): number | undefined;
     protected currentCdcEpoch(): string | undefined;
@@ -407,6 +440,9 @@ abstract class ShardDO {
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
     protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
+    protected scheduleOutbox(): ScheduleOutbox;
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined;
+    protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
     protected ensureShardInit(): Promise<void>;
     protected runShardInit(): Promise<void>;
@@ -428,7 +464,7 @@ abstract class ShardDO {
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
-    protected isQueryFunction(_functionPath: string): boolean;
+    protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
     protected transactionHeadroom(): TransactionHeadroomTracker;
     protected subscriptionHeadroom(): TransactionHeadroomTracker;
@@ -533,6 +569,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `StudioFeaturesResult` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `SubscriptionIdentity` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -826,6 +866,7 @@ interface ReactorRunOutcome {
 ```ts
 interface RunShardCdcSyncArgs {
     limit?: number;
+    sinceEpoch?: string;
     sinceSeq: number;
 }
 ```
@@ -890,6 +931,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;

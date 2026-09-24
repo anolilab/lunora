@@ -8,7 +8,7 @@ export interface ApiTypes {
     billing: {
         apiCallsRemaining: FunctionReference<"action", {}, { allowed: boolean; balance?: number; }>;
         checkout: FunctionReference<"action", { priceId: string }, { url: string; }>;
-        mySubscriptions: FunctionReference<"query", {}, { providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        mySubscriptions: FunctionReference<"query", {}, { cancelAtPeriodEnd: boolean; currentPeriodEnd?: number; currentPeriodStart?: number; priceId: string; priceIds?: string[]; provider: string; providerSubscriptionId: string; quantity: number; referenceId: string; state: string }[]>;
         portal: FunctionReference<"action", {}, { url: string; }>;
         recordApiCall: FunctionReference<"action", {}, { recorded: boolean; }>;
     };

@@ -600,7 +600,7 @@ impl OfflineQueue {
     /// its code, and every port evaluates it outside the queue so it can never run
     /// where the queue is mid-mutation. Rust needs no lock to make that safe —
     /// `&mut self` is the exclusion — but this surface is deliberately identical
-    /// across all seven ports, and a signature that means something different here
+    /// across all eight ports, and a signature that means something different here
     /// is exactly the drift that sameness exists to prevent.
     pub fn drain_conflict(&mut self, stale: &HashSet<String>) -> Vec<Discarded> {
         let conflicted = self.drain(|item| stale.contains(&item.id));

@@ -1,9 +1,9 @@
-import { LunoraError } from "lunorash/server";
 import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Writers are signed in, so limits key on the user; `ctx.ip` is the fallback for
@@ -13,7 +13,7 @@ import { mutation, query, v } from "./_generated/server.js";
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
-interface DraftDoc {
+interface DraftDocument {
     _id: Id<"drafts">;
     authorId: string;
     body: string;
@@ -29,12 +29,12 @@ interface DraftDoc {
  * draft in the table and filtering in JS both leaks work and grows with the
  * whole app rather than with one user's drafts.
  */
-export const listMine = query.query(async ({ ctx }): Promise<DraftDoc[]> => {
+export const listMine = query.query(async ({ ctx }): Promise<DraftDocument[]> => {
     if (!ctx.auth.userId) {
         return [];
     }
 
-    const userId = ctx.auth.userId;
+    const { userId } = ctx.auth;
 
     return ctx.db
         .query("drafts")
@@ -64,14 +64,14 @@ export const save = mutation
             throw new LunoraError("UNAUTHORIZED", "sign in to save a draft");
         }
 
-        const userId = ctx.auth.userId;
+        const { userId } = ctx.auth;
 
         if (id) {
             const existing = await ctx.db.get(id);
 
             // Same response for "gone" and "someone else's", so the endpoint
             // can't be used to probe which draft ids exist.
-            if (!existing || existing.authorId !== userId) {
+            if (existing?.authorId !== userId) {
                 throw new LunoraError("NOT_FOUND", "draft not found");
             }
 

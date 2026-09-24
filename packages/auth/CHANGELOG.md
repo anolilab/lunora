@@ -1,3 +1,195 @@
+## @lunora/auth [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.151...@lunora/auth@1.0.0-alpha.152) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
+## @lunora/auth [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.150...@lunora/auth@1.0.0-alpha.151) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+
+## @lunora/auth [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.149...@lunora/auth@1.0.0-alpha.150) (2026-09-23)
+
+### Bug Fixes
+
+* **auth:** qualify the account.issuer column probe ([#798](https://github.com/anolilab/lunora/issues/798)) ([631e727](https://github.com/anolilab/lunora/commit/631e72793268499d0713f9abc9439833aa7e0d09))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.136
+
+## @lunora/auth [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.148...@lunora/auth@1.0.0-alpha.149) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.135
+
+## @lunora/auth [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.147...@lunora/auth@1.0.0-alpha.148) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+
+## @lunora/auth [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.146...@lunora/auth@1.0.0-alpha.147) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.133
+
+## @lunora/auth [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.145...@lunora/auth@1.0.0-alpha.146) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/auth [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.144...@lunora/auth@1.0.0-alpha.145) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/auth [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.143...@lunora/auth@1.0.0-alpha.144) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
+## @lunora/auth [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.142...@lunora/auth@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/auth [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.141...@lunora/auth@1.0.0-alpha.142) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** `AuthDoOptions.basePath`, `DoAuthWiringOptions.basePath` and
+`PluginFlags.apiKey` are removed. `sinceSeq` reads now return oldest-first.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the SAML assertion consumer service
+
+`/sso/saml2/sp/acs/:providerId` is where a SAML sign-in completes —
+`processSAMLResponse` validates the assertion, resolves the user and calls
+`setSessionCookie` — but it carries no `/callback/` segment and matched no
+other branch, so it classified as `undefined`. The one endpoint that issues
+every SAML session left no audit row at all, the same hole as the SSO dispatch
+next to it.
+
+Also regenerates the six `registry/auth-ui-*` copies of `core/config.ts` and
+`core/flow-gate.ts`, which `scripts/sync-auth-ui-registry.mjs` mirrors verbatim
+from `packages/auth-ui/src` and `lint:registry:sync` guards. Dropping the inert
+`apiKey` flow flag changed both files; the registry copies had gone stale.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the two SAML logout endpoints
+
+Neither ends in `/sign-out`, so both went unrecorded while the SAML sign-in next
+to them is now recorded — a trail that shows a session opening and never closing
+cannot tell "still signed in" from "we stopped watching".
+
+Both terminate the local session before redirecting, so both are `sign-out`
+rather than an initiated event:
+
+- `/sso/saml2/logout/:providerId` is SP-initiated. It deletes the SAML session
+  keys, calls `deleteSession` on the current session token and
+  `deleteSessionCookie`, then redirects to the IdP's logout URL.
+- `/sso/saml2/sp/slo/:providerId` is the SP's single-logout receiver, serving
+  the IdP-initiated direction and the response leg of an SP-initiated one.
+  `handleLogoutRequest` and `handleLogoutResponse` both call `deleteSession`
+  and `deleteSessionCookie`.
+
+The test pins `/sso/providers` and `/sso/saml2/sp/metadata` as still unaudited,
+so neither substring can widen into a provider-config read.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **auth:** close six defects on the auth surface ([#747](https://github.com/anolilab/lunora/issues/747)) ([974a1a4](https://github.com/anolilab/lunora/commit/974a1a4072ad63ffbd07d53d5899c2a83b9ddf49))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/auth [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.140...@lunora/auth@1.0.0-alpha.141) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/auth [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.139...@lunora/auth@1.0.0-alpha.140) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/auth [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.138...@lunora/auth@1.0.0-alpha.139) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/auth [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.137...@lunora/auth@1.0.0-alpha.138) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/auth [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.136...@lunora/auth@1.0.0-alpha.137) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.123
+
+## @lunora/auth [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.135...@lunora/auth@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+
+## @lunora/auth [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.134...@lunora/auth@1.0.0-alpha.135) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/auth [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.133...@lunora/auth@1.0.0-alpha.134) (2026-09-11)
 
 

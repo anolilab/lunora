@@ -926,7 +926,7 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         }
 
         // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
-        protected override isQueryFunction(functionPath: string): boolean {
+        protected override isCacheableQuery(functionPath: string): boolean {
             return REGISTRY[functionPath] === "query";
         }
     }

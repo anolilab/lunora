@@ -334,13 +334,14 @@ export interface FunctionIR {
     kind: "action" | "mutation" | "query" | "stream";
 
     /**
-     * Set on connection-lifecycle hooks (`onConnect`/`onDisconnect`): the socket
-     * side the hook fires on. Such a function is also an internal mutation (so it
-     * lands in `LUNORA_FUNCTIONS` for path dispatch); emit additionally collects
-     * it into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this side. Absent on
-     * ordinary functions.
+     * Set on lifecycle hooks (`onConnect`/`onDisconnect`/`onShardInit`/
+     * `onQueryChange`/`onWhisper`): the moment the hook fires on. Such a function
+     * is also an internal registration (so it lands in `LUNORA_FUNCTIONS` for path
+     * dispatch) — a mutation for every moment except `whisper`, which is a query;
+     * emit additionally collects it into the `LUNORA_LIFECYCLE_HOOKS` manifest
+     * keyed by this moment. Absent on ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.
@@ -463,6 +464,18 @@ export interface MutatorIR {
     exportName: string;
     /** Path relative to `<projectRoot>/lunora/` without extension — always `"mutators"`. */
     filePath: string;
+
+    /** 1-based line of the `defineMutator(...)` call, for diagnostics and advisor findings. */
+    line: number;
+
+    /**
+     * The ownership column the declaration scopes the write to
+     * (`defineMutator({ owner: "userId" })`), or `undefined` when it declares
+     * none — which is also what the `mutator_without_owner_scope` lint reports,
+     * since an unowned mutator is a public write endpoint. Only a string-literal
+     * `owner` is lifted; a computed one reads as `undefined` rather than guessed.
+     */
+    owner?: string;
 
     /**
      * Serialized TS source for the authoritative `server` impl's return type,
@@ -1349,6 +1362,24 @@ export interface OwnerFieldWriteIR {
     line: number;
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
+
+    /**
+     * The enclosing `defineMutator` declared this very column as its `owner`, AND
+     * the value written resolves to that same `args[owner]`.
+     *
+     * `applyOwnerScope` requires a verified identity, rejects a client-supplied
+     * value that disagrees with it, and overwrites the column with the verified
+     * one before `server` runs — so on this exact shape `args[owner]` IS the
+     * server identity, and it is what the docs prescribe. Recorded rather than
+     * dropped at discovery: the write did happen, and the feeder is otherwise the
+     * only place that knows. `owner_field_from_args_not_auth` is what declines to
+     * report it.
+     *
+     * Deliberately NOT set when only the column NAME matches: `owner: "userId"`
+     * launders `args.userId` and nothing else, so `{ userId: args.targetUserId }`
+     * is a real IDOR and stays reportable.
+     */
+    ownerScoped?: true;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not

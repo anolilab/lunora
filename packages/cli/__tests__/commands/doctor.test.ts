@@ -5,8 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorData } from "../../src/commands/doctor/handler";
+import { DOCTOR_CODES, execute, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorOptions } from "../../src/commands/doctor/index";
 import type { Logger } from "../../src/util/logger";
+import { setCommandLogger } from "../../src/util/logger";
+import { runExecute } from "../helpers/execute";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
 const captureStdout = async (body: () => Promise<void>): Promise<string> => {
@@ -621,43 +625,46 @@ describe("runDoctor", () => {
     });
 
     describe("--format json", () => {
-        it("puts one JSON document on stdout and the human report on stderr", async () => {
+        // Through `execute`, the only path that writes the envelope: the document
+        // is `defineHandler`'s, and `runDoctorCommand` is the library entry point.
+        it("puts one JSON document on stdout and the human report off it", async () => {
             expect.assertions(5);
 
             seed(workdir, PLACEHOLDER_WRANGLER);
 
             const { lines, logger } = makeLogger();
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger });
-            });
+            setCommandLogger(logger);
 
-            const parsed = JSON.parse(stdout) as { code: number; findings: { code: string; level: string }[]; ok: boolean; summary: Record<string, number> };
+            try {
+                const { code, document } = await runExecute<DoctorOptions, DoctorData>(execute, {
+                    commandName: "doctor",
+                    cwd: workdir,
+                    options: { format: "json" },
+                });
 
-            expect(parsed.ok).toBe(false);
-            expect(parsed.code).toBe(1);
-            expect(parsed.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
-            expect(parsed.summary.fail).toBe(1);
-            // The report is still rendered, and off stdout so it stays pipeable.
-            // It goes to the logger THIS test injected: json mode only diverts to
-            // stderr when the command is logging through the process streams, so
-            // a caller's own sink survives the format switch.
-            expect(lines.join("\n")).toContain("lunora doctor — project preflight");
+                expect(code).toBe(1);
+                // No `ok`: the envelope's `code` is the verdict, and two fields
+                // answering that is how they end up disagreeing.
+                expect(document?.code).toBe(1);
+                expect(document?.data?.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+                expect(document?.data?.summary.fail).toBe(1);
+                // The report is still rendered, and off stdout so it stays pipeable.
+                expect(lines.join("\n")).toContain("lunora doctor — project preflight");
+            } finally {
+                setCommandLogger(undefined);
+            }
         });
 
-        it("counts every level in the summary and keeps pass findings in the document", async () => {
+        it("counts every level in the summary and keeps pass findings in the payload", async () => {
             expect.assertions(2);
 
             seed(workdir, CLEAN_WRANGLER);
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
-            });
+            const result = await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
 
-            const parsed = JSON.parse(stdout) as { findings: { level: string }[]; summary: Record<"fail" | "info" | "pass" | "warn", number> };
-
-            expect(parsed.summary.pass).toBeGreaterThan(0);
-            expect(parsed.findings.filter((finding) => finding.level === "pass")).toHaveLength(parsed.summary.pass);
+            expect(result.summary.pass).toBeGreaterThan(0);
+            expect(result.findings.filter((finding) => finding.level === "pass")).toHaveLength(result.summary.pass);
         });
 
         it("renders the human report on the caller's logger in pretty mode", async () => {
@@ -673,23 +680,6 @@ describe("runDoctor", () => {
 
             expect(stdout).toBe("");
             expect(lines.some((line) => line.includes("lunora doctor — project preflight"))).toBe(true);
-        });
-
-        it("rejects an unknown --format the same way the other commands do", async () => {
-            expect.assertions(3);
-
-            seed(workdir, CLEAN_WRANGLER);
-
-            const { lines, logger } = makeLogger();
-
-            const stdout = await captureStdout(async () => {
-                const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
-
-                expect(result.code).toBe(1);
-            });
-
-            expect(stdout).toBe("");
-            expect(lines.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
         });
     });
 

@@ -331,7 +331,7 @@ const limiter = new RateLimiter({
 });
 
 export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async ({ ctx }) => {
-    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId });
+    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId ?? "anonymous" });
 
     if (!status.ok) {
         throw new Error("slow down");

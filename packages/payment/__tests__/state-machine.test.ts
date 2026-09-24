@@ -75,6 +75,18 @@ describe("subscription state machine", () => {
         expect(nextSubscriptionState("paused", "resume")).toBe("active");
     });
 
+    it("pauses a trial instead of rejecting the pause as illegal (regression)", () => {
+        expect.assertions(2);
+
+        // No adapter's webhook mapping writes `trialing` (subscription-event.ts routes it to
+        // `subscription.active`), but the reconcile sweep does, straight from `getSubscriptionStatus`.
+        // Stripe's trial-end `pause_collection` then lands on a `trialing` row, and rejecting it
+        // 200-acks the event and leaves the row in ACTIVE_STATES — entitled, unpaid, indefinitely.
+        expect(nextSubscriptionState("trialing", "pause")).toBe("paused");
+        // A trial that bills and rolls into a paid period, mirroring the `past_due` row.
+        expect(nextSubscriptionState("trialing", "renew")).toBe("active");
+    });
+
     it("treats canceled as terminal", () => {
         expect.assertions(2);
 

@@ -42,7 +42,7 @@ measured problem, not a suspected one:
 ```bash
 lunora insights                      # against the local dev worker
 lunora insights --shard channel:demo # scope to one shard
-lunora insights --limit 25 --json    # machine-readable, more rows
+lunora insights --limit 25 --format json  # machine-readable, more rows
 lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
 ```
 
@@ -95,6 +95,40 @@ const mine = await ctx.db
 
 Index columns are ordered: put equality columns first, then the range/sort
 column. Fix every sibling query on the table the same way.
+
+## Problem Class: Relation Traversal Cost
+
+**Symptom:** a query calling `ctx.db.related` is slow, or one page of it reads
+far more rows than it returns.
+
+A traversal is not one read. It is one batched `findMany` **per edge, per hop**,
+and the frontier grows multiplicatively — which is why every option is bounded,
+and why the bounds **refuse rather than clamp**:
+
+| Option        | Default | Cap      | What the cap is protecting                                                   |
+| ------------- | ------- | -------- | ---------------------------------------------------------------------------- |
+| `depth`       | `1`     | `4`      | Past 4 hops a real schema is bounded by request time, not by `limit`.        |
+| `limit`       | `50`    | `200`    | Nodes returned in one page.                                                  |
+| cursor offset | `0`     | `10 000` | The offset is re-walk work, not a skip: each hop reads `N + limit + 1` rows. |
+
+A caller asking for `depth: 9` gets a `BAD_REQUEST`, not a silent depth 4 — so a
+traversal that throws is a mis-sized request, not a bug to route around.
+
+**Fixes, in order of preference:**
+
+1. **Narrow with `edges`.** Name only the `"<table>.<column>"` edges the feature
+   needs. Following every declared foreign key is the usual reason a walk is
+   wide — one unrelated `v.id(...)` column can double the frontier per hop.
+2. **Narrow with `direction`.** `"in"` or `"out"` instead of the default
+   `"both"` halves the edges expanded at each hop.
+3. **Drop `depth` before raising `limit`.** Each hop multiplies; a page is
+   linear.
+4. **Index the foreign keys.** Every inward hop is a `WHERE fk IN (…)` read, so
+   an unindexed FK makes each hop a scan. `@lunora/advisor` flags it as
+   `unindexed-foreign-key`.
+5. **Stop deep-paging.** An offset past 10 000 is refused outright. That is the
+   signal the traversal is the wrong tool for the job — narrow the walk instead
+   of paging through it.
 
 ## Problem Class: Write Conflicts (OCC)
 
@@ -170,6 +204,8 @@ d1-to-hyperdrive` to move an existing dataset).
 - [ ] Ran `lunora insights` (if the worker has traffic) for the measured signal.
 - [ ] Checked the Studio Advisors tab / `@lunora/advisor` findings.
 - [ ] Read amplification: replaced `.filter()` with an indexed `.withIndex()`.
+- [ ] Relation traversals: narrowed with `edges` / `direction` before `depth`;
+      foreign keys indexed.
 - [ ] Write conflicts: narrowed writes and/or partitioned with `.shardBy(key)`.
 - [ ] Subscription cost: scoped query args so live queries depend on few rows.
 - [ ] Cross-region: applied `.global()` only to read-mostly tables.

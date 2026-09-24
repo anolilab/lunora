@@ -42,8 +42,12 @@ describe("emitShard — untracked ctx.runQuery", () => {
 
         // Load-bearing for RLS: without an explicit `identity`, `buildCtx` reads
         // the shared per-request fields, and a deferred subscription refresh
-        // would run the sub-query as whichever user last touched them.
-        expect(shard()).toContain("identity: { identity, userId }");
+        // would run the sub-query as whichever user last touched them. `ip` rides
+        // the same channel for the same reason — the refresh runs inside the
+        // writing dispatch, so the shared field is the WRITER's. The already
+        // resolved `caller` is forwarded rather than rebuilt member by member, so
+        // the sub-context cannot drift from the context it was spawned from.
+        expect(shard()).toContain("identity: caller");
     });
 
     it("leaves a tracked runQuery, and runMutation/runAction, sharing the caller's ctx", () => {

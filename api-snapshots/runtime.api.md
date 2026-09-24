@@ -2103,6 +2103,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;
@@ -2743,6 +2744,7 @@ type AuthTimestamp = null | number | string;
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
     defaultShardKey: DefaultShardKey;
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -3110,7 +3112,9 @@ interface SchedulerContext {
 interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     cursor: number;
+    epoch?: string;
     error?: {
+        code: string;
         message: string;
         timedOut: boolean;
     };

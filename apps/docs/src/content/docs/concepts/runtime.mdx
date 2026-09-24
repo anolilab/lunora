@@ -25,8 +25,8 @@ scaffolded config enables the compatibility flag:
 ```jsonc
 // wrangler.jsonc
 {
-    "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
 }
 ```
 
@@ -75,7 +75,7 @@ same either way. What you control is what goes into it.
 
 ```bash
 lunora analyze
-lunora analyze --json    # for a CI artifact
+lunora analyze --format json    # for a CI artifact
 ```
 
 This runs a wrangler dry-deploy and reports the bundle size, the heaviest

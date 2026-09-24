@@ -393,7 +393,11 @@ class TestFlushIntegration(unittest.TestCase):
 
     def test_two_or_more_writes_coalesce_into_one_batch_round_trip(self):
         covers("offline_flush_batches_multiple_writes")
+        covers("offline_flush_unreadable_slot_is_retried")
         case = FIXTURES["batchReplay"]
+        # A slot the fixture no longer describes is a case that asserts nothing.
+        unreadable = [slot for slot in case["slots"] if slot.get("outcome") == "unreadable-error" and "rawError" in slot]
+        self.assertEqual(len(unreadable), 1, "batchReplay must carry one unreadable slot")
         urls = []
         calls = []
 
@@ -405,6 +409,12 @@ class TestFlushIntegration(unittest.TestCase):
             for slot in case["slots"]:
                 if slot["outcome"] == "ok":
                     results.append({"body": {"commitCursor": slot["commitCursor"], "result": None}, "id": slot["id"]})
+                elif slot["outcome"] == "unreadable-error":
+                    # An `error` key holding a NON-object: no envelope to read a
+                    # verdict out of, and no per-slot HTTP status to fall back
+                    # on. Verbatim from the fixture, so a port cannot pass by
+                    # sending itself a shape the spec does not describe.
+                    results.append({"body": {"error": slot["rawError"]}, "id": slot["id"]})
                 else:
                     results.append({"body": {"error": {"code": slot["code"], "message": "slot failed"}}, "id": slot["id"]})
 

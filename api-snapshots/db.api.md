@@ -644,6 +644,7 @@ interface ShapeSource {
 
 ```ts
 interface WriteProvenance extends Record<string, unknown> {
+    baselineSeq?: number;
     identity: string | null;
     shardKey?: string;
 }

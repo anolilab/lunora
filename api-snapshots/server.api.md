@@ -264,6 +264,7 @@ interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     readonly system: SystemDatabaseReader;
 }
 ```
@@ -1003,7 +1004,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1795,6 +1796,72 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 }
 ```
 
+### `RegisteredWhisperAuthorizer` (type)
+
+```ts
+type RegisteredWhisperAuthorizer = RegisteredFunction<Record<string, never>, boolean, "query"> & {
+    readonly lifecycle: "whisper";
+};
+```
+
+### `RelatedDirection` (type)
+
+```ts
+type RelatedDirection = "both" | "in" | "out";
+```
+
+### `RelatedNode` (interface)
+
+```ts
+interface RelatedNode<T = Record<string, unknown>> {
+    depth: number;
+    document: T;
+    path: ReadonlyArray<string>;
+    pathIds: ReadonlyArray<string>;
+    score: number;
+    table: string;
+}
+```
+
+### `RelatedOptions` (interface)
+
+```ts
+interface RelatedOptions {
+    cursor?: null | string;
+    depth?: number;
+    direction?: RelatedDirection;
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+}
+```
+
+### `RelatedPage` (interface)
+
+```ts
+interface RelatedPage<T = Record<string, unknown>> {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode<T>[];
+}
+```
+
+### `RelatedStart` (type)
+
+```ts
+type RelatedStart = (Record<string, unknown> & {
+    _id: string;
+}) | RelatedStartReference;
+```
+
+### `RelatedStartReference` (interface)
+
+```ts
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+```
+
 ### `RelationBuilder` (interface)
 
 ```ts
@@ -2273,6 +2340,7 @@ type SystemTableName = "_scheduled_functions" | "_storage";
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     commitOrdered: () => TableBuilder<Shape>;
+    dropStalePatches: () => TableBuilder<Shape>;
     externallyManaged: () => TableBuilder<Shape>;
     geoIndex: (name: string, options: {
         field: keyof Shape & string;
@@ -2315,6 +2383,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     commitOrderedMode?: boolean;
+    dropStalePatchesMode?: boolean;
     externalSource?: ExternalSourceDefinition;
     geoIndexes: ReadonlyArray<GeoIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
@@ -2762,6 +2831,25 @@ interface WhereInput {
 }
 ```
 
+### `WhisperAuthorizeHandler` (type)
+
+```ts
+type WhisperAuthorizeHandler = (context: QueryCtx, event: WhisperEvent) => boolean | Promise<boolean>;
+```
+
+### `WhisperEvent` (interface)
+
+```ts
+interface WhisperEvent {
+    readonly action: "send" | "subscribe";
+    readonly connectionId: string;
+    readonly context?: Record<string, unknown>;
+    readonly shardKey: string;
+    readonly topic: string;
+    readonly userId: string | null;
+}
+```
+
 ### `WorkflowCreateOptions` (interface)
 
 ```ts
@@ -2870,6 +2958,12 @@ const asBucketStorage: (raw: unknown) => unknown;
 
 ```ts
 const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
+```
+
+### `beginDeferredDeletes` (const)
+
+```ts
+const beginDeferredDeletes: (context: unknown) => ((committed: boolean) => void);
 ```
 
 ### `beginDeferredSchedules` (const)
@@ -3151,6 +3245,12 @@ const installPlugins: <T extends Record<string, TableDefinition>, const Plugins 
 const isDeny: (where: WhereInput) => boolean;
 ```
 
+### `isPerDispatchMiddleware` (const)
+
+```ts
+const isPerDispatchMiddleware: (middleware: unknown) => boolean;
+```
+
 ### `isSafeHeaderValue` (const)
 
 ```ts
@@ -3195,6 +3295,12 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
 ```
 
+### `onWhisper` (const)
+
+```ts
+const onWhisper: (handler: WhisperAuthorizeHandler) => RegisteredWhisperAuthorizer;
+```
+
 ### `presenceExtension` (const)
 
 ```ts
@@ -3233,6 +3339,12 @@ const serveStorageObject: (context: ContextWithStorage, key: string, request: Re
 const storageRules: <Context extends StorageContextIn = StorageContextIn>(rules: ReadonlyArray<StorageRule<Context>>, options?: StorageRulesOptions) => Middleware<Context, Context>;
 ```
 
+### `tagPerDispatchMiddleware` (const)
+
+```ts
+const tagPerDispatchMiddleware: <M extends object>(middleware: M) => M;
+```
+
 ### `toWhereInput` (const)
 
 ```ts
@@ -3252,7 +3364,7 @@ const withDeferredDeletes: (storage: unknown) => unknown;
 ### `withDeferredSchedules` (const)
 
 ```ts
-const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S) => S;
+const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox) => S;
 ```
 
 ## `@lunora/server/data-model`
@@ -4816,6 +4928,30 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RelatedDirection` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedNode` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedPage` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStart` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelatedStartReference` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RelationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5092,6 +5228,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `WhisperEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `WorkflowCreateOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5328,6 +5468,8 @@ interface DatabaseWriterLike {
     }>;
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage$1>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
+    related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
+    relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
     wipeShard?: (options?: {
@@ -5618,6 +5760,15 @@ interface MaskDatabase {
     }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: unknown) => Promise<ShardRankPageResultLike>;
+    related?: (start: Record<string, unknown>, options?: {
+        relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+    }) => Promise<{
+        continueCursor: null | string;
+        isDone: boolean;
+        nodes: {
+            document: Record<string, unknown>;
+        }[];
+    }>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 ```
@@ -5746,6 +5897,60 @@ interface RankPageRowLike {
 }
 ```
 
+### `RelatedArgs` (interface)
+
+```ts
+interface RelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+}
+```
+
+### `RelatedPageLike` (interface)
+
+```ts
+interface RelatedPageLike {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: {
+        depth: number;
+        document: Record<string, unknown>;
+        path: ReadonlyArray<string>;
+        pathIds: ReadonlyArray<string>;
+        score: number;
+        table: string;
+    }[];
+}
+```
+
+### `RelatedStartLike` (type)
+
+```ts
+type RelatedStartLike = (Record<string, unknown> & {
+    _id: string;
+}) | {
+    id: string;
+    table: string;
+};
+```
+
+### `RelationEdgeLike` (interface)
+
+```ts
+interface RelationEdgeLike {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+```
+
 ### `RelationWhere` (type)
 
 ```ts
@@ -5862,6 +6067,21 @@ interface SchedulableWorkflowReference {
     readonly binding?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
+}
+```
+
+### `ScheduleOutbox` (interface)
+
+```ts
+interface ScheduleOutbox {
+    forget: (id: string) => void;
+    record: (id: string, envelope: {
+        args: unknown;
+        options: Record<string, unknown> | undefined;
+        target: unknown;
+        when: number;
+    }) => void;
+    wake: () => void;
 }
 ```
 

@@ -40,7 +40,8 @@
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
-import type { ArgsOf, FunctionReference, ReturnOf, RpcResponseBody } from "./types";
+import { errorEnvelopeOf } from "./replay";
+import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
 /**
  * The wire endpoint every Lunora Worker serves. Matches `createWorker`'s RPC
@@ -180,10 +181,16 @@ const callBinding = async (
         );
     }
 
-    const envelope = parsed as RpcResponseBody;
+    const payload = parsed as { error?: unknown; result?: unknown };
+    // The BODY was narrowed above and the `error` SLOT inside it was not, so a
+    // proxy's `{"error": null}` page threw `TypeError: Cannot read properties of
+    // null` and `{"error": "bad gateway"}` an `Error` with no `.code`. Only an
+    // OBJECT is an envelope (`protocol/README.md` §4.2); anything else falls
+    // through to the status below, exactly as a body with no `error` key does.
+    const envelope = errorEnvelopeOf(payload);
 
-    if ("error" in envelope) {
-        throw reconstructError(envelope.error);
+    if (envelope !== undefined) {
+        throw reconstructError(envelope);
     }
 
     if (!response.ok) {
@@ -192,7 +199,7 @@ const callBinding = async (
         });
     }
 
-    return decodeWire(envelope.result);
+    return decodeWire(payload.result);
 };
 
 /**

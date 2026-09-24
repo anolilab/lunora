@@ -972,9 +972,14 @@ private fun batchEntryCapMatchesProtocol() {
  */
 private fun offlineFlushBatchesMultipleWrites() {
     covers("offline_flush_batches_multiple_writes")
+    covers("offline_flush_unreadable_slot_is_retried")
 
     val case = scenario("offlineQueue", "batchReplay")
     val slots = case["slots"] as List<*>
+    // A slot the fixture no longer describes is a case that asserts nothing.
+    val unreadable = slots.count { (it as Map<*, *>)["outcome"] == "unreadable-error" && it.containsKey("rawError") }
+
+    check(unreadable == 1, "batchReplay must carry one unreadable slot")
     val urls = mutableListOf<String>()
     val calls = mutableListOf<Map<*, *>>()
     val confirmed = mutableListOf<Long?>()
@@ -988,10 +993,17 @@ private fun offlineFlushBatchesMultipleWrites() {
             val answers = slots.joinToString(",") { raw ->
                 val slot = raw as Map<*, *>
 
-                if (slot["outcome"] == "ok") {
-                    "{\"id\":${count(slot["id"])},\"body\":{\"commitCursor\":${count(slot["commitCursor"])},\"result\":null}}"
-                } else {
-                    "{\"id\":${count(slot["id"])},\"body\":{\"error\":{\"code\":\"${slot["code"]}\",\"message\":\"slot failed\"}}}"
+                when (slot["outcome"]) {
+                    "ok" ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"commitCursor\":${count(slot["commitCursor"])},\"result\":null}}"
+                    // An `error` key holding a NON-object: no envelope to read a
+                    // verdict out of, and no per-slot HTTP status to fall back on.
+                    // Written from the fixture's own value, so a port cannot pass
+                    // by answering itself a shape the spec does not describe.
+                    "unreadable-error" ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"error\":${Json.write(slot["rawError"])}}}"
+                    else ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"error\":{\"code\":\"${slot["code"]}\",\"message\":\"slot failed\"}}}"
                 }
             }
 

@@ -6,7 +6,7 @@ import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
 import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 import { createNodeWorkflowStore } from "../src/node-workflow-store";
@@ -438,6 +438,295 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         } finally {
             rmSync(directory, { force: true, recursive: true });
         }
+    });
+
+    it("retries a failing step up to its config limit and memoizes only the attempt that succeeded", async () => {
+        expect.hasAssertions();
+
+        const attempts: number[] = [];
+        const flaky = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { backoff: "constant", delay: 1, limit: 3 } }, async (stepContext) => {
+                    attempts.push(stepContext.attempt);
+
+                    if (stepContext.attempt < 3) {
+                        throw new Error(`attempt ${String(stepContext.attempt)} failed`);
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { flaky } });
+        const instance = await host.bindings.flaky.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("complete");
+        expect(status.output).toBe("charged");
+        // `attempt` is the 1-based counter Cloudflare passes, not a fresh 1 each time.
+        expect(attempts).toStrictEqual([1, 2, 3]);
+    });
+
+    it("gives up after the last attempt and errors the run", async () => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const doomed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("doomed", { retries: { delay: 1, limit: 2 } }, async () => {
+                    runs += 1;
+
+                    throw new Error("always fails");
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { doomed } });
+        const instance = await host.bindings.doomed.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(runs).toBe(2);
+        expect(status.error?.message).toBe("always fails");
+    });
+
+    it("runs rollbacks in reverse declaration order when a later step fails", async () => {
+        expect.hasAssertions();
+
+        const unwound: { output: unknown; stepName: string }[] = [];
+        const saga = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    {
+                        rollback: async (rollbackContext) => {
+                            unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                        },
+                    },
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { saga } });
+        const instance = await host.bindings.saga.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // The failing step compensates first, with no output — it never produced
+        // one — then the completed steps unwind newest-first with theirs.
+        expect(unwound).toStrictEqual([
+            { output: undefined, stepName: "ship" },
+            { output: "charge-1", stepName: "charge" },
+            { output: "reservation-1", stepName: "reserve" },
+        ]);
+    });
+
+    it("compensates a step that completed before a suspension", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const resumed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push(rollbackContext.stepName);
+                    },
+                });
+                await ctx.step.sleep("wait", 5);
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { resumed } });
+        const instance = await host.bindings.resumed.create({});
+
+        const suspended = await instance.status();
+
+        expect(suspended.status).toBe("waiting");
+        expect(unwound).toStrictEqual([]);
+
+        await sleep(15);
+        await instance.resume();
+
+        // The failure happens in a second activation, after the engine replayed
+        // the body — the replayed `reserve` re-registers its rollback, which is
+        // the only reason the earlier step is compensable at all.
+        const failed = await instance.status();
+
+        expect(failed.status).toBe("errored");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("does not let a throwing rollback mask the step error or strand the rest of the unwind", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const messy = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async () => {
+                        unwound.push("reserve");
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async () => {
+                        throw new Error("compensation exploded");
+                    },
+                });
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { messy } });
+        const instance = await host.bindings.messy.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toBe("carrier down");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("unwinds concurrent steps in declaration order, not completion order", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const record = (name: string) => {
+            return {
+                rollback: async (): Promise<void> => {
+                    unwound.push(name);
+                },
+            };
+        };
+        // `ctx.parallel` and a hand-rolled `Promise.all` of `ctx.runStep` both
+        // reach the one shared adapter this way, so the compensation list sees
+        // the steps in COMPLETION order while the saga contract is declaration
+        // order reversed.
+        const raced = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await Promise.all([
+                    ctx.step.do(
+                        "slow",
+                        async () => {
+                            await sleep(20);
+
+                            return "slow-1";
+                        },
+                        record("slow"),
+                    ),
+                    ctx.step.do("fast", async () => "fast-1", record("fast")),
+                ]);
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    record("ship"),
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { raced } });
+        const instance = await host.bindings.raced.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // "fast" finished first but was declared second, so it must compensate
+        // before "slow" — reversing completion order would give ["slow", "fast"].
+        expect(unwound).toStrictEqual(["ship", "fast", "slow"]);
+    });
+
+    // `Infinity` and `NaN` both survive `Math.trunc` and `Math.max`, so an
+    // unguarded `limit` leaves `attempt >= limit` forever false. The bodies here
+    // succeed on their first attempt on purpose: a regression then reports a
+    // COMPLETE run these assertions reject, rather than spinning the attempt
+    // loop until the suite is killed.
+    it.each([
+        ["Infinity", Number.POSITIVE_INFINITY],
+        ["NaN", Number.NaN],
+    ])("rejects a %s retry limit instead of looping forever", async (_label, limit) => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const endless = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { limit } } as never, async () => {
+                    runs += 1;
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { endless } });
+        const instance = await host.bindings.endless.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toMatch(/retries\.limit must be a finite number/);
+        // Rejected at the adapter boundary, before the callback can run at all.
+        expect(runs).toBe(0);
+    });
+
+    it("caps a backoff that would overflow Node's timer ceiling", async () => {
+        expect.hasAssertions();
+
+        const waits: number[] = [];
+        const realSetTimeout = globalThis.setTimeout;
+
+        // Every timer in the activation fires immediately, so the run finishes
+        // in test time while the delay the adapter ASKED for is still observable.
+        vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+            waits.push(ms);
+
+            return realSetTimeout(callback, 0);
+        }) as never);
+
+        let runs = 0;
+        // "1 month" is 2_592_000_000 ms, past the 2_147_483_647 Node honours —
+        // above that a `setTimeout` fires on the next tick, so an unclamped
+        // backoff is no backoff at all.
+        const slowBackoff = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { delay: "1 month", limit: 2 } }, async () => {
+                    runs += 1;
+
+                    if (runs === 1) {
+                        throw new Error("transient");
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { slowBackoff } });
+        const instance = await host.bindings.slowBackoff.create({});
+        const status = await instance.status();
+
+        vi.restoreAllMocks();
+
+        expect(status.status).toBe("complete");
+        expect(runs).toBe(2);
+        expect(waits).toContain(2_147_483_647);
+        expect(waits).not.toContain(2_592_000_000);
     });
 
     it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {

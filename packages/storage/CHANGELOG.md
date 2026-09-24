@@ -1,3 +1,81 @@
+## @lunora/storage [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.74...@lunora/storage@1.0.0-alpha.75) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/storage [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.73...@lunora/storage@1.0.0-alpha.74) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/storage [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.72...@lunora/storage@1.0.0-alpha.73) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/storage [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.71...@lunora/storage@1.0.0-alpha.72) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/storage [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.70...@lunora/storage@1.0.0-alpha.71) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/storage [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.69...@lunora/storage@1.0.0-alpha.70) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** `list()` throws on a `limit` that is not a positive integer (`0` was previously
+clamped up to a one-row page, a fractional limit floored), and `upload()`/`store()` accept
+`ArrayBufferView` and `string` bodies.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **storage:** close four silently-bypassed guards ([#740](https://github.com/anolilab/lunora/issues/740)) ([3b9f5b1](https://github.com/anolilab/lunora/commit/3b9f5b1ed61db7b6552786b5ac60c240f0f61e67))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/storage [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.68...@lunora/storage@1.0.0-alpha.69) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/storage [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.67...@lunora/storage@1.0.0-alpha.68) (2026-09-12)
+
+### Bug Fixes
+
+* **server,codegen:** keep deferred deletes off a rolled-back span ([#718](https://github.com/anolilab/lunora/issues/718)) ([9cea51e](https://github.com/anolilab/lunora/commit/9cea51e088d4bf7a08d3b027d04ef2d6c569ee77))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/storage [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.66...@lunora/storage@1.0.0-alpha.67) (2026-09-12)
+
 ## @lunora/storage [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.65...@lunora/storage@1.0.0-alpha.66) (2026-09-11)
 
 ## @lunora/storage [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.64...@lunora/storage@1.0.0-alpha.65) (2026-09-11)

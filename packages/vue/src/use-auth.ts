@@ -1,4 +1,5 @@
 import type { User } from "@lunora/client";
+import type { AuthStatus } from "@lunora/client/auth";
 import { getIdentityStore } from "@lunora/client/auth";
 import type { DeepReadonly, Ref } from "vue";
 import { onScopeDispose, readonly, ref } from "vue";
@@ -8,6 +9,13 @@ import { useLunora } from "./lunora-provider";
 
 interface UseAuthResult {
     setToken: (token: string | null) => void;
+
+    /**
+     * The resolved auth state. Branch on this, not on `user === null` — see the
+     * contract in `@lunora/client/auth`; `user` is `null` both when signed out
+     * and when a held credential's identity could not be resolved.
+     */
+    status: DeepReadonly<Ref<AuthStatus>>;
     token: DeepReadonly<Ref<string | null>>;
     user: DeepReadonly<Ref<User | null>>;
 }
@@ -37,6 +45,7 @@ const useAuth = (): UseAuthResult => {
     const tokenRef = ref<string | null>(client.getAuthToken());
 
     const userRef = ref<User | null>(store.getUser());
+    const statusRef = ref<AuthStatus>(store.getStatus());
 
     const onTokenChange = (): void => {
         tokenRef.value = client.getAuthToken();
@@ -44,6 +53,7 @@ const useAuth = (): UseAuthResult => {
 
     const onUserChange = (): void => {
         userRef.value = store.getUser();
+        statusRef.value = store.getStatus();
     };
 
     const setToken = (next: string | null): void => {
@@ -51,7 +61,7 @@ const useAuth = (): UseAuthResult => {
     };
 
     if (!isBrowser()) {
-        return { setToken, token: readonly(tokenRef), user: readonly(userRef) };
+        return { setToken, status: readonly(statusRef), token: readonly(tokenRef), user: readonly(userRef) };
     }
 
     const unsubToken = client.onAuthTokenChange(onTokenChange);
@@ -62,7 +72,7 @@ const useAuth = (): UseAuthResult => {
         unsubUser();
     });
 
-    return { setToken, token: readonly(tokenRef), user: readonly(userRef) };
+    return { setToken, status: readonly(statusRef), token: readonly(tokenRef), user: readonly(userRef) };
 };
 
 export type { UseAuthResult };

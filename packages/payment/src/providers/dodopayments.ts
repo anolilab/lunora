@@ -150,6 +150,34 @@ const subscriptionFromDodo = (input: unknown): Subscription => {
     };
 };
 
+/**
+ * Refunded-to-date on a Dodo `Payment`, summed from the `refunds` list it carries.
+ *
+ * Only `succeeded` entries count: `RefundStatus` is succeeded | failed | pending | review, and the
+ * other three moved no money — a `pending` one may still fail. `amount` is nullable on
+ * `RefundListItem`, so an entry without one contributes nothing rather than throwing.
+ */
+const refundedMinorOf = (payment: Record<string, unknown>): bigint => {
+    const { refunds } = payment;
+
+    if (!Array.isArray(refunds)) {
+        return 0n;
+    }
+
+    let total = 0n;
+
+    for (const entry of refunds) {
+        const refund = asRecord(entry);
+        const amount = readNumber(refund, "amount");
+
+        if (readString(refund, "status") === "succeeded" && amount !== undefined) {
+            total += BigInt(Math.round(amount));
+        }
+    }
+
+    return total;
+};
+
 const paymentFromDodo = (input: unknown): PaymentSession => {
     const payment = asRecord(input);
     const now = Date.now();
@@ -157,16 +185,34 @@ const paymentFromDodo = (input: unknown): PaymentSession => {
     // Round before BigInt: Dodo documents integer minor units, but a stray fractional amount would
     // throw a RangeError out of the parse path (a webhook 400 → provider retry loop). Match Autumn.
     const amount = money(BigInt(Math.round(readNumber(payment, "total_amount") ?? 0)), currency);
-    const state = PAYMENT_STATE_BY_DODO_STATUS[readString(payment, "status") ?? ""] ?? "initiated";
+    const captured = PAYMENT_STATE_BY_DODO_STATUS[readString(payment, "status") ?? ""] ?? "initiated";
+    const capturedAmount = captured === "captured" ? amount : zeroMoney(currency);
+
+    // Dodo's `Payment` carries its refunds inline, so read them rather than reporting zero. Reporting
+    // zero is what reconcile writes: after a missed `refund.succeeded` the ledger says a refunded
+    // payment is unrefunded, and the next `refundPayment({ sessionId })` — which Dodo can only take in
+    // full — asks it to refund the whole captured amount a second time.
+    const refundedMinor = refundedMinorOf(payment);
+
+    // Dodo's `IntentStatus` stays `succeeded` after a refund (that is what its own `refund_status`
+    // summary field exists for), so the refunded total is the only thing that can move the state off
+    // `captured` here. Without this the row keeps a `captured` state next to a non-zero refunded
+    // total, and `reconcile`'s merge — which only guards a refund state against `captured` truth,
+    // never the reverse — writes that contradiction through.
+    let state = captured;
+
+    if (captured === "captured" && refundedMinor > 0n) {
+        state = refundedMinor >= capturedAmount.minorUnits ? "refunded" : "partially_refunded";
+    }
 
     return {
         amount,
-        capturedAmount: state === "captured" ? amount : zeroMoney(currency),
+        capturedAmount,
         createdAt: now,
         id: readString(payment, "payment_id") ?? "",
         provider: "dodopayments",
         referenceId: referenceFromMetadata(payment) ?? "",
-        refundedAmount: zeroMoney(currency),
+        refundedAmount: money(refundedMinor, currency),
         state,
         updatedAt: now,
     };

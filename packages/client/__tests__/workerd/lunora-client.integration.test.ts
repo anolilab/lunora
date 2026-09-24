@@ -269,6 +269,14 @@ describe("lunoraClient (workerd integration)", () => {
             // Trigger a broadcast from inside the DO. The DO must call
             // `broadcastDelta` from its own context — calling it from outside
             // via a stub method won't see the runtime's WS attachments.
+            //
+            // `table` is the FUNCTION PATH, not a table name, and deliberately
+            // so: `matchesSubscription` compares `delta.table` to whatever the
+            // client registered, and `@lunora/client` has no table name to give
+            // (a function reference carries only its `namespace:fn` id). Broadcast
+            // `{ table: "messages" }` here and this subscription matches nothing —
+            // which is exactly why generated shards route their ctx-db hook to
+            // `recordChangedTable` and get re-execution instead.
             await runInDurableObject(rootStub(), async (instance) => {
                 instance.broadcast({ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" });
             });
@@ -313,6 +321,56 @@ describe("lunoraClient (workerd integration)", () => {
                 const stored = Object.values(attachment.subs).find((sub) => sub.args?.["since"] !== undefined);
 
                 expect(stored?.args).toStrictEqual({ at: new Date(5000), since: 123n });
+            });
+        } finally {
+            client.close();
+        }
+    });
+
+    it("drains a paced reconnect resubscribe against the real server, well inside the stall watchdog (issue #796)", async () => {
+        expect.assertions(3);
+
+        // Seven subscriptions, a window of three: this only completes if the
+        // REAL server's reply frames release the drain's slots. A mock that
+        // answers more readily than workerd would hide exactly that, so the
+        // deadline below (2s) is deliberately far under the 10s per-frame
+        // watchdog — the watchdog alone would need ~20s to get seven out.
+        const client = makeClient();
+        const count = 7;
+
+        try {
+            for (let index = 0; index < count; index += 1) {
+                client.subscribe(ref(`queries:q${String(index)}`), {}, () => undefined);
+            }
+
+            const allAcked = (): boolean => client.debug().subscriptions.filter((sub) => sub.acked).length === count;
+
+            await waitFor(allAcked);
+
+            expect(allAcked()).toBe(true);
+
+            // Drop the socket from the SERVER side, the way a backend restart
+            // does. The reconnect re-sends all seven — three frames at a time.
+            await runInDurableObject(rootStub(), (_instance, state) => {
+                for (const socket of state.getWebSockets()) {
+                    socket.close(1000, "restart");
+                }
+            });
+
+            await waitFor(() => !allAcked());
+            await waitFor(allAcked);
+
+            expect(allAcked()).toBe(true);
+
+            // …and the server really holds all seven again, not just the first
+            // window: an ack the drain mis-reads would leave four unsent.
+            await runInDurableObject(rootStub(), async (_instance, state) => {
+                const live = state
+                    .getWebSockets()
+                    .map((socket) => socket.deserializeAttachment() as { subs?: Record<string, unknown> } | null)
+                    .reduce((total, attachment) => total + Object.keys(attachment?.subs ?? {}).length, 0);
+
+                expect(live).toBeGreaterThanOrEqual(count);
             });
         } finally {
             client.close();

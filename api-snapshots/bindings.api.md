@@ -1118,6 +1118,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 interface CreateContextVectorsOptions {
+    deferAfterCommit?: (work: () => Promise<void>) => Promise<void>;
     namespace?: string;
     shardedIndexNames?: ReadonlyArray<string>;
 }

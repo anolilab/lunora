@@ -1,10 +1,106 @@
 import { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { createLunoraClient, withAuthHeaders, withAuthWebSocket } from "../src/create-lunora-client";
+import { createLunoraClient, withAuthHeaders, withAuthWebSocket, withoutAmbientCookies } from "../src/create-lunora-client";
 
 const makeFetchSpy = () =>
     vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>((_input, _init) => Promise.resolve(new Response(null, { status: 204 })));
+
+// React Native's `fetch` is backed by the platform HTTP stack, which owns a
+// shared persistent cookie jar — the package used to document the opposite. A
+// better-auth sign-in leaves `better-auth.session_token` in that jar, the jar
+// re-attaches it to later requests, and the runtime's CSRF guard then 403s every
+// state-changing RPC because a native request carries no `Origin`.
+describe("withoutAmbientCookies", () => {
+    it("omits the ambient cookie credential on every request", async () => {
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+
+        await withoutAmbientCookies(spy)("https://api.example.com/_lunora/rpc", { method: "POST" });
+
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("omit");
+    });
+
+    it("overrides an inherited `credentials: include` rather than losing to it", async () => {
+        // `@lunora/client` sends `credentials: "include"` on its `get-session`
+        // probe, so the wrapper has to win on the key, not merely supply a default.
+        expect.assertions(2);
+
+        const spy = makeFetchSpy();
+
+        await withoutAmbientCookies(spy)("https://api.example.com/api/auth/get-session", { credentials: "include", method: "GET" });
+
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("omit");
+        expect(spy.mock.calls[0]![1]!.method).toBe("GET");
+    });
+
+    // Under `react-native-web` the jar is the browser's, `Origin` IS sent, and the
+    // CSRF guard never fires — so a cookie session is a legitimate setup that
+    // omitting credentials would silently sign out (`getCurrentUser` deliberately
+    // sends `credentials: "include"`).
+    // An explicit `fetch` is the documented opt-out from everything derived here.
+    // A cookie-forwarding SSR transport passed in deliberately must keep its
+    // credentials — and on Node `document` is absent, so the native gate alone
+    // would not have spared it.
+    it("never wraps a caller-supplied `fetch`, even on a native-looking runtime", async () => {
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+        const client = createLunoraClient({ fetch: spy, url: "https://api.example.com" });
+
+        await client.getCurrentUser().catch(() => undefined);
+
+        // `getCurrentUser`'s own `credentials: "include"` reaches the caller's fetch.
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("include");
+    });
+
+    it("leaves credentials alone in a browser runtime (react-native-web)", async () => {
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+        const originalFetch = globalThis.fetch;
+
+        globalThis.fetch = spy;
+        // A `document` is what tells this bundle it is not on native.
+        Object.defineProperty(globalThis, "document", { configurable: true, value: {}, writable: true });
+
+        try {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            await client.getCurrentUser().catch(() => undefined);
+        } finally {
+            globalThis.fetch = originalFetch;
+            delete (globalThis as { document?: unknown }).document;
+        }
+
+        // `getCurrentUser`'s own `credentials: "include"` survives untouched.
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("include");
+    });
+
+    it("is wired onto the global `fetch` by `createLunoraClient` with no auth-headers factory", async () => {
+        // The bundled Expo apps pass no `getAuthHeaders` — the bearer rides through
+        // `setAuthToken` instead — so gating the wrapper on that factory would leave
+        // the common setup carrying the jar's cookie into every RPC. Exercises the
+        // real default path: no `fetch` option, so the client wraps the global.
+        expect.assertions(1);
+
+        const spy = makeFetchSpy();
+        const original = globalThis.fetch;
+
+        globalThis.fetch = spy;
+
+        try {
+            const client = createLunoraClient({ url: "https://api.example.com" });
+
+            await client.getCurrentUser().catch(() => undefined);
+        } finally {
+            globalThis.fetch = original;
+        }
+
+        expect(spy.mock.calls[0]![1]!.credentials).toBe("omit");
+    });
+});
 
 describe("withAuthHeaders", () => {
     it("merges the auth headers under the caller's own headers", async () => {

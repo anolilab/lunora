@@ -69,7 +69,7 @@ export default defineFlags({ provider: envProvider() });
 ## Evaluate
 
 ```ts
-export const listPosts = query(async (ctx) => {
+export const listPosts = query.query(async ({ ctx }) => {
     if (await ctx.flags.boolean("new-ranking", false)) {
         /* ... */
     }

@@ -1,9 +1,9 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /** Signed-in app, so limits key on the user rather than the IP. */
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
@@ -23,7 +23,7 @@ const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): 
  * typed. Heartbeats already poke every subscriber; the client applies the TTL
  * as it renders, and nothing has to sweep expired rows on an alarm.
  */
-export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Doc<"presence">[]> =>
+export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Document_<"presence">[]> =>
     ctx.db
         .query("presence")
         .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))

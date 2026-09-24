@@ -285,6 +285,7 @@ interface ResolvedProviders {
 interface RoutingPushOptions {
     allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
+    retryBaseDelay?: number;
     webPush?: Provider<unknown, PushPayload>;
 }
 ```

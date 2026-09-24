@@ -23,13 +23,19 @@ type safety: a query's argument and return types are inferred on the server and
 handed to the client through `api`, so a rename or a wrong arg is a compile
 error, not a runtime surprise.
 
-Three files are emitted from `schema.ts`:
+The three files you import from are:
 
 | File           | What it gives you                                                               |
 | -------------- | ------------------------------------------------------------------------------- |
 | `api.ts`       | the typed `api.*` (public) and `internal.*` (server-only) function registries   |
 | `server.ts`    | the project-typed server helpers: `query`/`mutation`/`action`, `v`, typed `ctx` |
 | `dataModel.ts` | the data-model types: `Id<"table">`, `Doc<"table">`, and insert/document shapes |
+
+Codegen emits more than those three. The rest is runtime wiring the worker entry
+consumes rather than code you import by hand: `app.ts`, `shard.ts`,
+`functions.ts`, `crons.ts`, `vectors.ts`, the Drizzle schemas
+(`drizzle.shard.ts` / `drizzle.global.ts`), and the OpenAPI document
+(`openapi.ts` / `openapi.json`).
 
 ## `api.ts`: function references
 

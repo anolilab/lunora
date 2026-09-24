@@ -21,3 +21,22 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 # at /__lunora, so you never paste it by hand in dev. Without it, admin endpoints
 # return 403 and the studio panels stay empty.
 LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
+
+# The block below is only for running the E2E suite against a playground you
+# started yourself (LUNORA_E2E_EXTERNAL=true). The suite writes all of it for a
+# server it starts itself — `tests/e2e/globalSetup.ts` is the source of truth —
+# but the external branch must not clobber your `.dev.vars`, so it is on you.
+#
+# LUNORA_E2E gates the worker's `/test/reset`, `/test/sign`, `/test/schedule`
+# and `/test/job-status` helpers, which every spec calls; without it they 404.
+# LUNORA_ORIGIN_URL is the origin the SchedulerDO dispatches jobs back into, and
+# PUBLIC_STORAGE_BASE_URL is the base the R2 signed URLs are minted against —
+# both must be this dev server. `mail-reset.spec.ts` reads the captured mail
+# over the admin RPC with the exact token below, so LUNORA_ADMIN_TOKEN has to
+# be that value too for that one spec. NEVER set LUNORA_E2E in production.
+# LUNORA_E2E="true"
+# LUNORA_ORIGIN_URL="http://localhost:5173"
+# PUBLIC_STORAGE_BASE_URL="http://localhost:5173"
+# MAIL_FROM="Lunora Dev <noreply@lunora.test>"
+# LUNORA_MAIL_CAPTURE="1"
+# LUNORA_ADMIN_TOKEN="e2e-deterministic-admin-token"

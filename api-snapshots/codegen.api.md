@@ -114,6 +114,7 @@ interface CodegenResult {
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
     workflows: ReadonlyArray<WorkflowIR>;
+    writtenFiles: ReadonlyArray<string>;
 }
 ```
 
@@ -194,7 +195,7 @@ interface DriftChange {
     severity: "breaking" | "safe";
     summary: string;
     table?: string;
-    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedShardMode" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
+    type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
 
@@ -235,6 +236,7 @@ interface EmitAppOptions {
     hasQueue: boolean;
     hasR2sql: boolean;
     hasScheduler: boolean;
+    hasSourcedTables: boolean;
     hasStorage: boolean;
     hasVectors?: boolean;
     hasWorkflow: boolean;
@@ -303,7 +305,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
@@ -404,6 +406,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
@@ -504,6 +507,8 @@ interface MutatorIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    line: number;
+    owner?: string;
     returnType: string;
 }
 ```
@@ -929,10 +934,13 @@ interface TableIR {
 
 ```ts
 interface TableSnapshot {
+    commitOrdered?: boolean;
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
+    memory?: boolean;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
+    ttl?: TtlSnapshot;
 }
 ```
 
@@ -1621,7 +1629,7 @@ const CAPABILITY_ROWS: readonly [
     {
         readonly appMethod: {
             readonly configKey: "browser";
-            readonly doc: "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`).";
+            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
             readonly method: "browser";
         };
         readonly contextProperty: "browser";
@@ -2176,6 +2184,7 @@ interface OwnerFieldWriteIR {
     file: string;
     line: number;
     method: string;
+    ownerScoped?: true;
     visibility?: "internal" | "public";
 }
 ```
@@ -2410,6 +2419,15 @@ interface StorageUploadIR {
 
 ```ts
 interface TtlIR {
+    after?: number;
+    field: string;
+}
+```
+
+### `TtlSnapshot` (interface)
+
+```ts
+interface TtlSnapshot {
     after?: number;
     field: string;
 }

@@ -278,13 +278,16 @@ interface PlatformCapabilities {
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;
+        edgeRequestMetadata?: Capability;
         globalTables?: Capability;
+        hostTraceFusion?: Capability;
         httpCache?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
         images?: Capability;
         keyValueStore?: Capability;
         localSql?: Capability;
+        logArchive?: Capability;
         mail?: Capability;
         memoryTables?: Capability;
         objectStorage?: Capability;
@@ -292,6 +295,7 @@ interface PlatformCapabilities {
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         queues?: Capability;
+        relationGraph?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;
@@ -598,7 +602,9 @@ type ShardRegionHint = RegionHint;
 
 ```ts
 interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```

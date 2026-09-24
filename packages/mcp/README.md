@@ -51,8 +51,8 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 | `lunora_list_tables`          | List the deployment's `.global()` tables with their row counts.                                                                                               |
 | `lunora_get_function_schema`  | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
 | `lunora_run_query`            | Run a query and return its result. Read-only.                                                                                                                 |
-| `lunora_run_mutation`         | Run a mutation and return its result. Writes data — use with care.                                                                                            |
-| `lunora_run_action`           | Run an action and return its result. May call external services.                                                                                              |
+| `lunora_run_mutation`         | Run a mutation. Writes data. Two-step: propose, then confirm with the returned `actionDigest`.                                                                |
+| `lunora_run_action`           | Run an action. May call external services. Two-step: propose, then confirm with the returned `actionDigest`.                                                  |
 | `lunora_get_logs`             | Read the deployment's recent log entries (newest first). Requires an admin token.                                                                             |
 | `lunora_get_issues`           | List errors grouped into Issues by fingerprint, with counts and triage status. Requires an admin token.                                                       |
 | `lunora_get_advisories`       | List the deployment's schema/query advisories. Requires an admin token.                                                                                       |
@@ -68,7 +68,79 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 2. lunora_get_function_schema     → retrieve the argument descriptors for a specific path
 3. lunora_run_query / lunora_run_mutation / lunora_run_action
                                   → call the function with a well-formed arguments object
+                                    (the two write tools take a second, confirming call)
 ```
+
+### Write confirmation (the two-step handshake)
+
+`LUNORA_MCP_ALLOW_WRITES` decides whether this server may write at **all**. It
+never said anything about whether a _particular_ write was reviewed, so past that
+gate `lunora_run_mutation` and `lunora_run_action` each take two calls.
+
+The first call **executes nothing**. It returns the proposed action and a digest:
+
+```jsonc
+{
+    "status": "action_required",
+    "actionDigest": "1789129912052.0ZR2…",
+    "expiresAt": "2026-09-11T14:41:52.052Z",
+    "proposedAction": {
+        "tool": "lunora_run_mutation",
+        "kind": "mutation",
+        "functionPath": "messages:send",
+        "args": { "roomId": "r1", "text": "hi" },
+    },
+    "nextStep": "Show proposedAction to a human. To execute, call …",
+}
+```
+
+Render `proposedAction` for a human, then call the same tool again — before
+`expiresAt` — with the identical `functionPath` / `args` / `shardKey` /
+`idempotencyKey`, plus `confirmed: true` and that `actionDigest`. Only then does
+the write happen.
+
+The digest is `<expiresAt>.<signature>`, where the signature is an HMAC over a
+canonical (sorted-key) encoding of the tool name, function path, arguments, shard
+key, idempotency key **and that deadline**, keyed by the deployment's own
+identity. So:
+
+- **Argument key order is irrelevant** — re-serializing `args` does not invalidate a confirmation.
+- **Any real edit invalidates it.** A different target, argument, or shard key produces a different digest, and the confirmation is refused with nothing written. That is the guarantee: what executes is exactly what was reviewed.
+- **It expires after 10 minutes.** The deadline travels in the clear (the verifying instance has to read it) but is signed alongside the proposal, so moving it breaks the signature. An expired digest is refused, not silently re-proposed — call again without `confirmed` for a fresh one.
+- **No server state is involved.** The HTTP handler serves statelessly (a fresh server per request), so a confirmation is revalidated by recomputation on whichever instance receives it, not looked up in a store.
+
+`idempotencyKey` is optional and is folded into the digest. A client that timed
+out can resubmit the confirmation it already holds, for as long as that digest is
+inside its window, without asking for a second review; and a deliberately-repeated
+identical write under a **new** key gets its own review instead of riding the
+first one. It does **not** deduplicate the write: this server keeps no state
+between requests and never forwards the key to your function, so a resubmitted
+confirmed call executes again. Make the function itself idempotent if the write
+must happen at most once.
+
+#### What the handshake does not do
+
+It binds **intent, not human presence**, and the difference matters when you
+decide whether to enable writes at all.
+
+A verified digest proves the call about to run is exactly the call that was
+proposed, on this deployment, inside its window. It does **not** prove a human
+saw it, and no server-side check can: an MCP server has no channel to a person —
+no session, no end-user identity, no UI — and MCP deliberately puts the
+human-in-the-loop at the **host**. The client is what renders a tool call for
+approval. A client that asks nobody can take the digest it was just handed, send
+it straight back with `confirmed: true`, and the write runs.
+
+That is why writes are off by default and refused at dispatch as well as omitted
+from `ListTools`: enabling `LUNORA_MCP_ALLOW_WRITES` is **your** statement that
+the client on the other end does the asking. Treat the handshake as a client-UI
+affordance and an audit record of what was proposed, not as a gate against the
+model.
+
+Two more scope limits, stated rather than implied:
+
+- **The digest is deployment-wide, not principal-bound.** Its key is the domain separator, the deployment URL and the admin bearer — nothing identifying a user. On an OAuth-fronted server (`createAuthedMcpFetchHandler`) every principal shares that bearer, so within the 10-minute window any principal holding write scope can confirm another's identical proposal. Binding it to a person would mean folding the verified `sub` claim into the signing key, which this package does not do today.
+- **It survives an admin-bearer rotation only as long as the bearer does.** Rotating `LUNORA_ADMIN_TOKEN`, or moving the deployment URL, invalidates every outstanding digest — which is the intended behaviour, not a bug to work around.
 
 ### Observability tools (privileged)
 

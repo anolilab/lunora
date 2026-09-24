@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION } from "../src/cli";
+import { EXIT_CODE } from "../src/util/exit-code";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -102,12 +103,13 @@ describe("lunora CLI entry", () => {
         expect(`${lines.join("")}${stdout}`).toContain(VERSION);
     });
 
-    it("unknown command exits non-zero with a friendly message", async () => {
+    it("unknown command exits with the usage code and a friendly message", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: ["zzz-not-real"] });
 
-        expect(code).toBe(1);
+        // A name the CLI does not have is bad usage (2), not a failed run (1).
+        expect(code).toBe(2);
         // runCli upgrades cerebro's bare "not found" into a friendly message.
         expect(stderr).toContain("Unknown command");
     });
@@ -117,7 +119,7 @@ describe("lunora CLI entry", () => {
 
         const code = await runCli({ argv: ["deployy"] });
 
-        expect(code).toBe(1);
+        expect(code).toBe(2);
         expect(stderr).toContain('Did you mean "deploy"?');
     });
 
@@ -153,7 +155,7 @@ describe("lunora CLI entry", () => {
 
             const code = await runCli({ argv: ["registry", "frobnicate"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(stderr).toContain("unknown subcommand");
         });
 
@@ -164,7 +166,7 @@ describe("lunora CLI entry", () => {
             // `presence` is still added via `registry add`.
             const code = await runCli({ argv: ["add", "presence"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -256,7 +258,7 @@ describe("lunora CLI entry", () => {
                 cwd: workdir,
             });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, "argv_no_template"))).toBe(false);
         });
     });

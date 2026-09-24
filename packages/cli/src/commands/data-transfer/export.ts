@@ -11,13 +11,23 @@ import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { StreamingFetchLike } from "./shared";
 import { EXPORT_ENDPOINT_PATH } from "./shared";
 
 interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
+
+    /**
+     * Output format: `pretty` (default) or `json`. `json` reports the run as a
+     * single document and therefore requires a file destination — with `--out -`
+     * (or none) stdout already carries the NDJSON stream.
+     */
+    format?: OutputFormat;
     logger: Logger;
     /** Output file path; `undefined`/`-` streams to stdout. */
     out?: string;
@@ -31,9 +41,18 @@ interface ExportCommandOptions {
     url?: string;
 }
 
-interface ExportCommandResult {
+/** The `--format json` payload: what was dumped, from which tables, and where to. */
+interface ExportCommandData {
     bytes: number;
-    code: number;
+    /** The file the dump landed in. */
+    out: string;
+    rows: number;
+    /** The table allowlist, omitted when the export covered every table. */
+    tables?: string[];
+}
+
+interface ExportCommandResult extends CommandResult<ExportCommandData> {
+    bytes: number;
     /** Number of NDJSON lines streamed (0 on error). */
     rows: number;
 }
@@ -204,16 +223,49 @@ const commitStagedExport = async (sink: NodeJS.WritableStream, file: { path: str
     }
 };
 
+/** The one refusal `resolveExportOutput` and the envelope must agree on, verbatim. */
+const EXPORT_JSON_NEEDS_FILE = "export --format json needs a file destination (--out <file>) — with --out - the NDJSON stream already owns stdout.";
+
 /**
- * Stream an export. The worker emits NDJSON; we count newlines as we go and
- * pipe straight to the output sink, so a 10M-row export doesn't materialise
- * the body in memory.
+ * Resolve where the dump lands, before anything is fetched. Returns the file
+ * destination (`destination: undefined` means stdout), or `undefined` — having
+ * logged the reason — when the requested combination cannot produce one.
  */
-const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
+const resolveExportOutput = (options: ExportCommandOptions): { destination: string | undefined } | undefined => {
+    const destination = options.out === undefined || options.out === "-" ? undefined : options.out;
+
+    // The dump itself is the payload, and with no file destination it IS stdout.
+    // A result document there would be spliced into the NDJSON, so this is
+    // refused rather than interleaved.
+    if (options.format === "json" && destination === undefined) {
+        options.logger.error(EXPORT_JSON_NEEDS_FILE);
+
+        return undefined;
+    }
+
+    return { destination };
+};
+
+/** Where the dump is fetched from, and with what. */
+interface ExportRequest {
+    fetchImpl: StreamingFetchLike;
+    requestUrl: string;
+    tables: string[] | undefined;
+    token: string;
+}
+
+/**
+ * Resolve the worker this export reads from and the bearer it reads with —
+ * every precondition that has to hold before a byte is fetched. Logs the reason
+ * and returns a {@link Refusal} carrying its exit code when one does not: the
+ * reasons land in different buckets (a flag combination is usage, a missing
+ * bearer is auth). The sibling `import` resolves its request the same way.
+ */
+const resolveExportRequest = (options: ExportCommandOptions): ExportRequest | Refusal => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { refused: EXIT_CODE.USAGE };
     }
 
     // Resolve the target FIRST: the `.dev.vars` fallback is gated on the request's
@@ -222,7 +274,9 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return { bytes: 0, code: 1, rows: 0 };
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
@@ -230,17 +284,42 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     if (!token) {
         options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { refused: EXIT_CODE.AUTH };
     }
-
-    const requestUrl = `${baseUrl}${EXPORT_ENDPOINT_PATH}`;
-    const tables = resolveTables(options.tables);
 
     const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
     }
+
+    return { fetchImpl, requestUrl: `${baseUrl}${EXPORT_ENDPOINT_PATH}`, tables: resolveTables(options.tables), token };
+};
+
+/**
+ * Stream an export. The worker emits NDJSON; we count newlines as we go and
+ * pipe straight to the output sink, so a 10M-row export doesn't materialise
+ * the body in memory.
+ */
+const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
+    const resolvedOutput = resolveExportOutput(options);
+
+    if (resolvedOutput === undefined) {
+        // `--format json` without the `--out <file>` it needs: the invocation
+        // asks for two things on one stdout, which is a usage error. The reason
+        // travels with it, or a machine consumer sees exit 2 and no cause.
+        return { bytes: 0, code: EXIT_CODE.USAGE, error: EXPORT_JSON_NEEDS_FILE, rows: 0 };
+    }
+
+    const { destination } = resolvedOutput;
+    const request = resolveExportRequest(options);
+
+    if (isRefusal(request)) {
+        // `resolveExportRequest` logged the reason; its code says which kind.
+        return { bytes: 0, code: request.refused, error: "export: could not resolve the worker URL and admin token", rows: 0 };
+    }
+
+    const { fetchImpl, requestUrl, tables, token } = request;
 
     options.logger.info(`POST ${requestUrl} -> export${tables ? ` (tables: ${tables.join(",")})` : ""}`);
 
@@ -252,16 +331,17 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 
     if (!response.ok) {
         const errorText = await response.text();
+        const message = `export failed: HTTP ${String(response.status)}: ${errorText}`;
 
-        options.logger.error(`export failed: HTTP ${String(response.status)}: ${errorText}`);
+        options.logger.error(message);
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { bytes: 0, code: exitCodeForStatus(response.status), error: message, rows: 0 };
     }
 
     if (!response.body) {
         options.logger.error("export response carried no body");
 
-        return { bytes: 0, code: 1, rows: 0 };
+        return { bytes: 0, code: 1, error: "export response carried no body", rows: 0 };
     }
 
     // Open the output sink: stdout when `out` is `undefined` / `-`, otherwise
@@ -272,8 +352,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     // straight at `--out` truncated whatever was there the moment the request
     // opened, and the mid-stream failure path then unlinked it: refreshing
     // yesterday's dump over itself and losing the connection left neither copy.
-    const out = options.out === undefined || options.out === "-" ? undefined : options.out;
-    const file = out === undefined ? undefined : { path: out, stage: `${out}.${randomUUID()}.partial` };
+    const file = destination === undefined ? undefined : { path: destination, stage: `${destination}.${randomUUID()}.partial` };
     // `mode: 0o600` on the stage: `createWriteStream` defaults to 0o666 before
     // the umask, so under the common `umask 022` the staged file is world-readable
     // for the length of the dump — and a dump is every row of every table. The
@@ -311,8 +390,10 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         options.logger.success(`wrote ${String(rows)} rows to ${file.path} (${String(bytes)} bytes)`);
     }
 
-    return { bytes, code: 0, rows };
+    // `--format json` is only reachable with a file destination (see
+    // `resolveExportOutput`), so `destination` is present whenever the document is.
+    return { bytes, code: 0, data: destination === undefined ? undefined : { bytes, out: destination, rows, tables }, rows };
 };
 
-export type { ExportCommandOptions, ExportCommandResult };
+export type { ExportCommandData, ExportCommandOptions, ExportCommandResult };
 export { runExportCommand };

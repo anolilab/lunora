@@ -108,6 +108,18 @@ interface RunShardImportArgs {
  */
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+
+    /**
+     * `delete` only: remove the row PHYSICALLY even on a `.softDelete()` table,
+     * instead of stamping the marker column.
+     *
+     * Internal — {@link parseWriteRowArgs} does not read it off the wire, so the
+     * single-row `writeRow` op cannot set it. The bulk delete arm builds its args
+     * in-process and is the only caller that does: its bounded scan re-reads the
+     * physical table each batch, so a delete that leaves the row in place never
+     * shrinks the match set and the drain cannot converge.
+     */
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;
@@ -204,6 +216,26 @@ interface RunShardRankBeforeArgs {
     partitionKey: string;
     rowId: string;
     sortValues: unknown[];
+    table: string;
+}
+
+/**
+ * Arguments accepted by the `__lunora_admin__:findRelated` admin RPC — a
+ * read-only `ctx.db.related(...)` traversal from `{ table, id }`, exposed so an
+ * AI agent (`@lunora/mcp`'s `lunora_find_related`) can follow the schema's
+ * foreign keys without the app having to write a query for it.
+ *
+ * Every optional field is the same option `related` takes; nothing here widens
+ * the surface, and the writer refuses an out-of-range `depth`/`limit` or an
+ * unknown edge name itself, so this parser only enforces SHAPE.
+ */
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
     table: string;
 }
 
@@ -532,7 +564,14 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkRowArgs
     //
     // Same shape as `parseBulkPatchArgs` refusing an empty `doc` two functions
     // below, rather than treating it as a no-op.
-    if ((filters === undefined || filters.length === 0) && (search === undefined || search === "")) {
+    //
+    // `search` is tested TRIMMED because the reader normalises it the same way
+    // (`options.search?.trim() ?? ""`): a blank-but-not-empty term compiles to no
+    // search conjunct at all, so it would walk past a raw `=== ""` guard and run
+    // the predicate-free scan — a full `clearTable` recorded under the
+    // `deleteRows` audit verb. A guard that tests the raw value while the reader
+    // normalises it is not a guard.
+    if ((filters === undefined || filters.length === 0) && (search === undefined || search.trim() === "")) {
         throw new LunoraError("BAD_REQUEST", "deleteRows: a predicate (`filters` or `search`) is required — use `clearTable` to empty the table");
     }
 
@@ -1000,6 +1039,93 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
 };
 
+/**
+ * Narrow `findRelated`'s optional `edges` allowlist, 400ing on anything that is
+ * not an array of strings.
+ *
+ * A non-array used to fall back to "every edge" and a non-string ENTRY used to
+ * be filtered out, both silently — so `edges: "orders.customerId"` (the string a
+ * model reaches for first) walked the whole graph instead of one relation.
+ * @returns the validated edge names, or `undefined` when the caller named none
+ */
+const parseFindRelatedEdges = (raw: unknown): string[] | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((entry): entry is string => typeof entry === "string")) {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `edges` must be an array of edge-name strings");
+    }
+
+    return raw;
+};
+
+/**
+ * Validate the `__lunora_admin__:findRelated` payload. `table` and `id` are
+ * required; each traversal option is either absent or the right SHAPE, and a
+ * wrong one is a 400 rather than a silent fallback to its default.
+ *
+ * Rejecting matters more here than in the other read parsers because every
+ * default this op has is the WIDEST setting, so dropping a malformed narrowing
+ * option runs a bigger traversal than the caller asked for:
+ *
+ * - `direction: "sideways"` fell back to `"both"` — both directions instead of one.
+ * - `edges: "orders.customerId"` (a string, not an array) fell back to EVERY edge.
+ * - `limit: "1"` and `depth: "1"` fell back to the defaults.
+ *
+ * The caller is an AI agent composing JSON (`@lunora/mcp`'s
+ * `lunora_find_related`), which is exactly the caller most likely to send
+ * `"1"` for a number, and the traversal reads through the ADMIN writer with RLS
+ * and column masks bypassed. Silently widening its blast radius on malformed
+ * input is the wrong direction to fail. Non-string `edges` entries are rejected
+ * for the same reason rather than filtered away: a caller that asked for three
+ * edges and named two of them wrongly gets told, not quietly given one.
+ *
+ * Ranges are still the writer's to enforce — an out-of-range `depth`/`limit` or
+ * an unknown edge name fails there with the message that names the cap, rather
+ * than one invented here.
+ */
+const parseFindRelatedArgs = (args: Record<string, unknown>): RunShardFindRelatedArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+
+    if (table.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `table` is required");
+    }
+
+    if (id.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `id` is required");
+    }
+
+    const { cursor, depth, direction, edges, limit } = args;
+
+    if (cursor !== undefined && cursor !== null && typeof cursor !== "string") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `cursor` must be a string");
+    }
+
+    if (depth !== undefined && typeof depth !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `depth` must be a number");
+    }
+
+    if (direction !== undefined && direction !== "both" && direction !== "in" && direction !== "out") {
+        throw new LunoraError("BAD_REQUEST", 'findRelated: `direction` must be one of "in", "out" or "both"');
+    }
+
+    if (limit !== undefined && typeof limit !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `limit` must be a number");
+    }
+
+    return {
+        cursor: typeof cursor === "string" ? cursor : undefined,
+        depth,
+        direction,
+        edges: parseFindRelatedEdges(edges),
+        id,
+        limit,
+        table,
+    };
+};
+
 /** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
 const badRequest = (message: string): never => {
     throw new LunoraError("BAD_REQUEST", message);
@@ -1104,6 +1230,24 @@ const decodeIndexHitKey = (key: string): IndexHit | undefined => {
 /** Arguments accepted by the `__lunora_admin__:cdcSync` admin RPC. */
 interface RunShardCdcSyncArgs {
     limit?: number;
+
+    /**
+     * The CDC epoch this consumer last saw on a served page, echoed back so the
+     * shard can prove the cursor beside it still indexes the same timeline.
+     *
+     * Optional, and that is the contract rather than an oversight: absent means
+     * the consumer carries no epoch (it predates the field, or has never been
+     * served a page), and the read falls back to the high-watermark proof alone
+     * — exactly the guarantee it had before.
+     *
+     * Same spelling and same meaning as the `sinceEpoch` the subscribe/resume
+     * path already takes (`ShardDO.evaluateResume`), with one deliberate
+     * difference on ABSENCE: a resume treats a missing epoch as
+     * unprovable and falls back to a full snapshot, which costs a snapshot.
+     * Here the equivalent fallback is a refusal, and refusing every connector
+     * that has not been updated is not a cost this may impose.
+     */
+    sinceEpoch?: string;
     sinceSeq: number;
 }
 
@@ -1174,7 +1318,10 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
 /**
  * Validate the `__lunora_admin__:cdcSync` payload. `sinceSeq` is the caller's
  * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
- * page cap. Both are coerced to finite non-negative integers.
+ * page cap. Both are coerced to finite non-negative integers. `sinceEpoch` is
+ * the optional timeline token the caller echoes back; anything that is not a
+ * non-empty string reads as absent, so a malformed value degrades to the
+ * pre-epoch behaviour instead of refusing the caller on a parse artefact.
  */
 const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
     const toCount = (value: unknown): number | undefined => {
@@ -1183,7 +1330,13 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
         return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
     };
 
-    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
+    const { sinceEpoch } = args;
+
+    return {
+        limit: toCount(args["limit"]),
+        ...(typeof sinceEpoch === "string" && sinceEpoch.length > 0 ? { sinceEpoch } : {}),
+        sinceSeq: toCount(args["sinceSeq"]) ?? 0,
+    };
 };
 
 /**
@@ -1214,6 +1367,50 @@ const parseIdentityHeader = (raw: string | null): Record<string, unknown> | unde
  * malformed value disables the watermark path for that call rather than
  * throwing — the call then rides the legacy idempotency dedup.
  */
+
+/**
+ * Parse the `x-lunora-base-seq` header into a CDC baseline cursor, or
+ * `undefined` when absent / non-numeric / negative.
+ *
+ * Deliberately NOT {@link parseClientSeqHeader}: a client mutation sequence
+ * starts at 1, so that parser floors at `> 0` — but `0` is a valid **baseline**.
+ * It means "this client had seen nothing", which is what `readCdcCursor` reports
+ * for an empty changelog and what a brand-new subscription carries. Flooring it
+ * to `undefined` makes `.dropStalePatches()` apply the write unchanged, which is
+ * the opposite verdict: a caller that had seen nothing should have its patch
+ * judged against everything that has happened since, not waved through.
+ */
+const parseBaselineSeqHeader = (raw: string | null): number | undefined => {
+    if (!raw) {
+        return undefined;
+    }
+
+    const seq = Number(raw);
+
+    return Number.isInteger(seq) && seq >= 0 ? seq : undefined;
+};
+
+/**
+ * Parse the runtime's `x-lunora-sample-errors` tail-bias toggle, or `undefined`
+ * when the header is absent.
+ *
+ * Absent and `"0"` are deliberately different answers, which is why this returns
+ * a tri-state rather than the `!== "0"` boolean the export gate wants. Absent
+ * means NO verdict was propagated — an alarm, a subscription re-run, a
+ * non-Lunora caller — and the shard forwards that absence to an outbound
+ * container so it stays on its own configuration. Collapsing absent to `true`
+ * here would instead TELL the container "the tail bias is on", overriding a
+ * container that was deliberately configured otherwise. The export gate applies
+ * its own `?? true` where keep-by-default is the right reading.
+ */
+const parseSampleErrorsHeader = (raw: string | null): boolean | undefined => {
+    if (raw === null) {
+        return undefined;
+    }
+
+    return raw !== "0";
+};
+
 const parseClientSeqHeader = (raw: string | null): number | undefined => {
     if (!raw) {
         return undefined;
@@ -1333,6 +1530,7 @@ export {
     isIssueStatus,
     parseApplyCdcArgs,
     parseAssigneeArgument,
+    parseBaselineSeqHeader,
     parseBulkDeleteArgs,
     parseBulkPatchArgs,
     parseCdcSyncArgs,
@@ -1340,6 +1538,7 @@ export {
     parseClientSeqHeader,
     parseCreateWorkflowInstanceArgs,
     parseEmit,
+    parseFindRelatedArgs,
     parseGetWorkflowInstanceStatusArgs,
     parseIdentityHeader,
     parseIssueHash,
@@ -1353,6 +1552,7 @@ export {
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
+    parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
     parseSeverityArgument,
@@ -1377,6 +1577,7 @@ export type {
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,

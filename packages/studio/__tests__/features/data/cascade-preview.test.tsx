@@ -207,25 +207,27 @@ describe("buildCascadeMap", () => {
 });
 
 describe("advisorSchemaFromColumns", () => {
-    it("turns v.id ref columns into relations with no declared onDelete", () => {
-        expect.assertions(3);
+    it("carries each ref column's declared onDelete onto its relation", () => {
+        expect.assertions(4);
 
         const schema = advisorSchemaFromColumns({
             comments: [
                 { name: "_id", optional: false, pk: true, type: "id" },
-                { name: "postId", optional: false, ref: "posts", type: "id" },
+                { name: "postId", onDelete: "cascade", optional: false, ref: "posts", type: "id" },
+                { name: "editorId", onDelete: "restrict", optional: false, ref: "users", type: "id" },
+                // No declared action — must stay undefined, not inherit a sibling's.
+                { name: "reviewerId", optional: false, ref: "users", type: "id" },
                 { name: "text", optional: false, type: "string" },
             ],
             posts: [{ name: "title", optional: false, type: "string" }],
         });
 
-        const comments = schema.tables.find((table) => table.name === "comments");
+        const relations = new Map((schema.tables.find((table) => table.name === "comments")?.relations ?? []).map((r) => [r.field, r]));
 
-        expect(comments?.relations).toHaveLength(1);
-        expect(comments?.relations[0]).toMatchObject({ field: "postId", kind: "one", references: "posts", table: "comments" });
-        // Never invented: the admin wire carries no `onDelete`, and claiming a
-        // cascade the studio cannot see would be a lie in a destructive dialog.
-        expect(comments?.relations[0]?.onDelete).toBeUndefined();
+        expect(relations.get("postId")).toMatchObject({ kind: "one", onDelete: "cascade", references: "posts", table: "comments" });
+        expect(relations.get("editorId")?.onDelete).toBe("restrict");
+        expect(relations.get("reviewerId")?.onDelete).toBeUndefined();
+        expect(relations.size).toBe(3);
     });
 });
 
@@ -471,5 +473,70 @@ describe("cascade impact counting", () => {
         });
 
         expect(map.get("posts")).toHaveLength(1);
+    });
+});
+
+// ── The dialog through the REAL derivation ───────────────────────────────────
+
+/**
+ * The badge the dialog renders is only honest if `onDelete` survives the whole
+ * path the studio actually takes: `describeTables` column metadata → the schema
+ * derivation → the cascade map → the badge. The hand-built `AdvisorSchema`
+ * fixtures at the top of this file skip the first two steps, which is why the
+ * dialog shipped labelling every real cascade "no delete action declared" with
+ * those tests green.
+ */
+describe("cascadePreviewDialog through advisorSchemaFromColumns", () => {
+    const renderFromColumns = (onDelete: "cascade" | "restrict" | "set null" | undefined): void => {
+        renderDialog({
+            readPage: makeReadPage(40),
+            rowId: "u1",
+            schema: advisorSchemaFromColumns({
+                posts: [
+                    { name: "_id", optional: false, pk: true, type: "id" },
+                    { name: "authorId", onDelete, optional: false, ref: "users", type: "id" },
+                ],
+                users: [{ name: "_id", optional: false, pk: true, type: "id" }],
+            }),
+            table: "users",
+        });
+    };
+
+    it("labels a declared cascade as a cascade", async () => {
+        expect.assertions(2);
+
+        renderFromColumns("cascade");
+        await waitForLoaded();
+
+        expect(screen.getByTestId("cascade-cascade-posts")).toBeDefined();
+        expect(screen.queryByTestId("cascade-undeclared-posts")).toBeNull();
+    });
+
+    it("labels a declared restrict as a blocker", async () => {
+        expect.assertions(2);
+
+        renderFromColumns("restrict");
+        await waitForLoaded();
+
+        expect(screen.getByTestId("cascade-restrict-posts")).toBeDefined();
+        expect(screen.getByTestId("cascade-blocker-warning")).toBeDefined();
+    });
+
+    it("omits a set-null edge — those rows are not deleted", async () => {
+        expect.assertions(1);
+
+        renderFromColumns("set null");
+        await waitForLoaded();
+
+        expect(screen.queryByTestId("cascade-row-posts")).toBeNull();
+    });
+
+    it("still says nothing is declared when the schema declares nothing", async () => {
+        expect.assertions(1);
+
+        renderFromColumns(undefined);
+        await waitForLoaded();
+
+        expect(screen.getByTestId("cascade-undeclared-posts")).toBeDefined();
     });
 });

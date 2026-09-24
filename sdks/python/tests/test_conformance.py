@@ -191,14 +191,18 @@ class TestWsFrameBuilders(unittest.TestCase):
 class TestWsFrameConsumer(unittest.TestCase):
     def test_server_frames(self):
         covers("server_frame_consumer")
+        covers("complete_frame_cancels_without_dropping_the_subscription")
+        cancellations = 0
 
         for case in load("ws-frames.json")["serverFrames"]:
             with self.subTest(case=case["name"]):
                 client = LunoraClient("https://app.example")
-                client._send = lambda _frame: None  # avoid needing a socket
+                sent: list = []
+                client.attach_socket(sent.append)
                 seen: list = []
                 errors: list = []
                 client.subscribe("messages:list", {"channel": "general"}, seen.append, errors.append)
+                sent.clear()
 
                 descriptor = client.handle_frame(case["frame"])
                 expect = case["expect"]
@@ -218,6 +222,19 @@ class TestWsFrameConsumer(unittest.TestCase):
                     self.assertEqual(descriptor["message"], expect["message"])
                     self.assertEqual(len(errors), 1)
                     self.assertEqual(errors[0].code, expect["code"])
+                if expect.get("resendsAfterReconnect"):
+                    cancellations += 1
+                    # Cancelled AND kept. Dropping the registration takes it out
+                    # of the set ``resend_subscriptions`` walks, which froze the
+                    # query across every future reconnect with nothing reported.
+                    self.assertEqual([error.code for error in errors], [expect["code"]])
+                    self.assertEqual([error.message for error in errors], [expect["message"]])
+                    client.resend_subscriptions()
+                    self.assertEqual([frame["id"] for frame in sent if frame["type"] == "subscribe"], [expect["id"]])
+
+        # A conditional assertion that never runs is worse than none: without this,
+        # renaming the fixture key would leave every suite green.
+        self.assertEqual(cancellations, 1, "serverFrames must carry one cancelling case")
 
     def test_a_subscription_streams_its_frame_values_in_order(self):
         covers("subscription_stream_yields_frame_values_in_order")

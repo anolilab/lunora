@@ -1,9 +1,9 @@
 import { webPushId } from "@lunora/notify";
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { ActionCtx, Id, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * This demo has no sign-in, so a deployed instance is reachable by anyone and
@@ -15,7 +15,7 @@ const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: { ip?: string }): string => ctx.ip ?? "anon" };
 
-interface AnnouncementDoc {
+interface AnnouncementDocument {
     _id: Id<"announcements">;
     body: string;
     sentAt: number;
@@ -67,10 +67,10 @@ export const announce = mutation
     .mutation(async ({ args: { body, title }, ctx }): Promise<Id<"announcements">> => ctx.db.insert("announcements", { body, sentAt: Date.now(), title }));
 
 /** List announcements, newest first. Subscribers receive deltas as `announce` writes. */
-export const listAnnouncements = query.query(async ({ ctx }): Promise<AnnouncementDoc[]> => {
+export const listAnnouncements = query.query(async ({ ctx }): Promise<AnnouncementDocument[]> => {
     const rows = await ctx.db.query("announcements").withIndex("by_sent").collect();
 
-    return [...rows].sort((a, b) => b.sentAt - a.sentAt);
+    return rows.toSorted((a, b) => b.sentAt - a.sentAt);
 });
 
 /**
@@ -95,7 +95,12 @@ export const broadcast = action
         // secrets (the web-push `keys`, the FCM token). Handing `ctx.notify.send` a
         // bare `endpoint` URL routed the message to FCM — the push router treats
         // any non-`{`-prefixed string as an opaque FCM registration token.
-        const [first] = await ctx.push.list();
+        // `.at(0)` rather than destructuring: this example sets
+        // `noUncheckedIndexedAccess: false`, so `const [first] = …` is typed as if
+        // the element always exists and the emptiness check below reads as dead.
+        // `at` is declared `T | undefined`, so the type matches the runtime.
+        const subscriptions = await ctx.push.list();
+        const first = subscriptions.at(0);
 
         if (first !== undefined) {
             await ctx.push.send(first.id, { body, title });

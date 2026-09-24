@@ -1019,8 +1019,24 @@ public final class Client {
                 }
             }
             case "complete" -> {
+                // NON-DESTRUCTIVE, and that is the whole point: removing the entry takes it out
+                // of the map resendSubscriptions walks, so the query froze for the life of the
+                // process across every future reconnect, with nothing reported. Fan a
+                // cancellation to the listener and leave the registration in place; the next
+                // reconnect resubscribes it.
+                Consumer<SubscriptionError> cancelled;
+
                 synchronized (lock) {
-                    subscriptions.remove(id);
+                    Subscription entry = subscriptions.get(id);
+
+                    cancelled = entry == null ? null : entry.onError;
+                }
+
+                if (cancelled != null) {
+                    cancelled.accept(
+                            new SubscriptionError(
+                                    "SUBSCRIPTION_CANCELLED",
+                                    "subscription was cancelled by the server"));
                 }
             }
             case "pokeStart" -> {

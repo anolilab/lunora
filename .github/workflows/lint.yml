@@ -28,6 +28,7 @@
             "generated_files": "${{ steps.changes.outputs.generated_files }}"
             "node_capabilities_docs": "${{ steps.changes.outputs.node_capabilities_docs }}"
             "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
+            "registry_items": "${{ steps.changes.outputs.registry_items }}"
             "registry_sync": "${{ steps.changes.outputs.registry_sync }}"
             "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
         "steps":
@@ -332,6 +333,50 @@
             - "name": "Scan for secrets"
               "run": "pnpm exec vis secrets"
 
+    # `registry/` ships copy-in code that `lunora registry add` writes into a user's
+    # project VERBATIM, and it is not a vis project: `scripts/check-generated-files.mjs`
+    # reads `examples/` only, and `test:affected` marks nothing affected for a
+    # registry-only PR. Until this job existed, `tsc -p registry/tsconfig.json` was the
+    # directory's entire CI coverage — an item could ship an ERROR-level advisory
+    # (an act-as-any-user IDOR, say) and no gate would notice.
+    #
+    # Runs the whole registry-item suite, not just its advisor sweep: every other
+    # gate in that file (manifest shape, wrangler-required binding fields, declared
+    # deps, uncoded authorization throws) had the same blind spot.
+    "registry-items":
+        "name": "Lint (registry items)"
+        "if": "needs.files-changed.outputs.registry_items == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The suite imports @lunora/cli and @lunora/codegen from their dist/,
+            # and the scaffolded projects resolve @lunora/* the same way, so the
+            # packages have to be built before it runs.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            - "name": "Lint (registry items)"
+              "run": "pnpm run lint:registry:items"
+
     # The auth-ui-* registry items are generated from @lunora/auth-ui by
     # scripts/sync-auth-ui-registry.mjs. Its own job, on its own `registry_sync` filter:
     # as a step inside `prettier` it was skipped on any PR without a frontend-lintable
@@ -555,6 +600,7 @@
                 "prettier",
                 "package-json-sort",
                 "secrets",
+                "registry-items",
                 "registry-sync",
                 "node-capabilities-docs",
                 "batch-cap",

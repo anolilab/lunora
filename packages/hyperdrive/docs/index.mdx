@@ -260,15 +260,22 @@ export default defineSchema({
 export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
 ```
 
-You provide the driver once, when constructing the shard DO: one resolver for every
-sourced binding (build the `SqlClient` exactly as above). Lunora memoizes it per
-binding and polls each tenant's slice on the alarm:
+You provide the driver once, on the app builder: one resolver for every sourced
+binding (build the `SqlClient` exactly as above). Lunora memoizes it per binding and
+polls each tenant's slice on the alarm. It is **required** — without it every tick
+records `no sourceClient resolved for binding "…"` and the table stays empty.
 
 ```ts
-createShardDO({
-    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
-});
+// worker.ts
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .build();
 ```
+
+`.sourceClient()` appears on the builder only when your schema declares a
+`.source(...)` table. Composing the shard DO by hand instead, pass the same resolver
+as `createShardDO({ sourceClient })`.
 
 Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sourced
 `.shardBy()` table omits `tenantBy` (the runtime fail-safe), and the

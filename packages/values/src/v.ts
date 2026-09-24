@@ -784,6 +784,17 @@ const nullValidator = (): ColumnValidator<null, null> =>
 const bytes = (): ColumnValidator<ArrayBuffer, ArrayBuffer> =>
     asColumn(
         createValidator<ArrayBuffer>("bytes", (value, context) => {
+            // A view (`Uint8Array`, `DataView`, …) normalises to its OWN bytes.
+            // The wire codec round-trips a view as a view, so one reaches a
+            // `v.bytes()` argument or column whenever a caller passes one; the
+            // SQL layer binds either form as a BLOB. Copying through
+            // `byteOffset`/`byteLength` is the load-bearing half: a subarray
+            // views a window of a larger buffer, and handing back `value.buffer`
+            // would store bytes the caller never passed.
+            if (ArrayBuffer.isView(value)) {
+                return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+            }
+
             if (!(value instanceof ArrayBuffer)) {
                 fail(context, "ArrayBuffer", value);
             }

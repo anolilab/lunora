@@ -1,5 +1,7 @@
 import { assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@lunora/scheduler";
 
+import { encodeArgsOrThrow } from "../../../shared/wire-codec";
+
 /**
  * `ctx.scheduler.runAfter(0, …)` — documented as "the deterministic equivalent
  * of an `afterCommit` hook" — held until the mutation's transaction has actually
@@ -19,6 +21,23 @@ import { assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@
  * {@link beginDeferredSchedules}) a `runAfter`/`runAt` call records the call and
  * returns, and the window's settle either dispatches the buffered calls — in
  * declaration order, after the commit — or drops them.
+ *
+ * ## Why buffering alone is not enough
+ *
+ * Everything between the COMMIT and the scheduler's acknowledgement is outside
+ * the transaction, and a failure there leaves writes that are durable and a job
+ * that exists nowhere: the scheduler unreachable, the DO evicted mid-settle, the
+ * isolate killed. That is not merely an error the caller sees — the mutation's
+ * replay-dedup row commits INSIDE the span, so the client's retry short-circuits
+ * on it and is told the mutation succeeded. The job is lost with nothing
+ * reported.
+ *
+ * So a buffered call also takes out durable custody ({@link ScheduleOutbox}) as
+ * it is buffered — inside the transaction, next to the writes — and releases it
+ * only once the scheduler has the job. What survives a settle is precisely the
+ * set of jobs that were promised and not enqueued, and the host retries them
+ * until they land. The id is decided before the call, so a retry of a job that
+ * did land is refused as a duplicate rather than double-scheduled.
  *
  * ## The job id
  *
@@ -62,8 +81,55 @@ import { assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@
  * enclosing window) or hands them to the window that will commit on its behalf.
  */
 
-/** A buffered `runAfter`/`runAt`, ready to be replayed against the real scheduler. */
-type PendingSchedule = () => Promise<unknown>;
+/**
+ * A buffered `runAfter`/`runAt`, ready to be replayed against the real scheduler.
+ *
+ * The `id` rides along because the window owes the outbox a `forget(id)` on both
+ * exits — the job landed, or the window it belonged to was dropped — and the
+ * closure alone cannot say which entry it is.
+ */
+interface PendingSchedule {
+    id: string;
+    run: () => Promise<unknown>;
+}
+
+/**
+ * Durable custody for a buffered schedule, between the COMMIT and the moment the
+ * scheduler accepts the job.
+ *
+ * A structural mirror of `@lunora/shard-engine`'s `ScheduleOutbox`, for the same
+ * reason {@link SchedulerLike} below mirrors rather than imports: this type
+ * appears in `withDeferredSchedules`'s exported signature, and naming a
+ * `@lunora/shard-engine` type there pulls that package into the declaration
+ * bundle of everything that re-exports this one. `@lunora/do` supplies the real
+ * implementation and the shapes match structurally.
+ *
+ * The two halves land on opposite sides of the COMMIT on purpose. `record` runs
+ * while the handler is still inside its transaction, so the entry is durable
+ * exactly when the writes are and rolls back with them; `forget` runs after the
+ * dispatch settles. What survives is precisely the set of jobs that were promised
+ * and not enqueued.
+ *
+ * Optional throughout: a ctx with no outbox (a unit harness, a host with no
+ * store) keeps the previous best-effort behaviour rather than failing to build.
+ */
+interface ScheduleOutbox {
+    /** Release custody — the scheduler has the job, or the window that owned it was dropped. */
+    forget: (id: string) => void;
+
+    /**
+     * Take custody of one buffered call. Runs INSIDE the transaction, so a throw
+     * here rolls the mutation back — which is the right answer, and the only
+     * moment at which failing is free.
+     *
+     * `when` is always the ABSOLUTE instant, even for a `runAfter`: a delay
+     * replayed after an hour in custody would fire an hour late, and the retry has
+     * to reproduce the fire time the caller asked for, not the wait.
+     */
+    record: (id: string, envelope: { args: unknown; options: Record<string, unknown> | undefined; target: unknown; when: number }) => void;
+    /** Ask the host to wake its retry loop — called when a dispatch left entries behind. */
+    wake: () => void;
+}
 
 /** One open deferral window: one transaction's buffered calls. */
 interface ScheduleWindow {
@@ -80,6 +146,8 @@ interface ScheduleQueue {
      * through — an action schedules immediately, as documented.
      */
     innermost: ScheduleWindow | undefined;
+    /** Durable custody for this facade's buffered calls; absent on a harness with no store. */
+    outbox: ScheduleOutbox | undefined;
 }
 
 /**
@@ -88,6 +156,24 @@ interface ScheduleQueue {
  * and a queue stamped onto it would show up in anything that walks the context.
  */
 const queues = new WeakMap<object, ScheduleQueue>();
+
+/**
+ * Name a schedule target for an error message — a bare `"ns:fn"` string, a
+ * function reference's path, or a workflow/agent binding. Mirrors
+ * `@lunora/scheduler`'s own `targetLabel`, which cannot be imported: it is
+ * module-private there, and the point of naming the target is that the message is
+ * useful, not that the two spellings are shared.
+ */
+const scheduleTargetLabel = (target: unknown): string => {
+    if (typeof target === "string") {
+        return target;
+    }
+
+    const reference = (target ?? {}) as { __lunoraRef?: unknown; binding?: unknown };
+    const named = reference.__lunoraRef ?? reference.binding;
+
+    return typeof named === "string" ? named : "<unknown>";
+};
 
 /** The nearest window up the chain that has not settled yet, if any. */
 const enclosingWindow = (from: ScheduleWindow | undefined): ScheduleWindow | undefined => {
@@ -142,9 +228,9 @@ interface SchedulerLike {
  * — could not be type-checked against the contract this docblock describes.
  * @param scheduler the `ctx.scheduler` implementation to wrap
  */
-export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S): S => {
+export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox): S => {
     const inner = scheduler as unknown as Record<string, unknown>;
-    const queue: ScheduleQueue = { innermost: undefined };
+    const queue: ScheduleQueue = { innermost: undefined, outbox };
 
     const call = (method: "runAfter" | "runAt", when: number, target: unknown, args: unknown, options: unknown): Promise<string> =>
         (inner[method] as (when: number, target: unknown, args: unknown, options: unknown) => Promise<string>).call(inner, when, target, args, options);
@@ -169,9 +255,28 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S): S 
         // stored under, and an id already taken still reaches the DO's refusal.
         const id = resolveScheduleId(options?.id);
 
+        // Durable custody, taken HERE — while the handler is still inside its
+        // transaction. That placement is the whole point: the entry commits with
+        // the writes, rolls back with them, and is what the shard retries from when
+        // the dispatch below never happens (the scheduler unreachable, the isolate
+        // gone). Deferring the record to the settle would put it back outside the
+        // transaction, next to the failure it exists to survive.
+        //
+        // The encode runs here for the same reason. `@lunora/scheduler` encodes
+        // `args` on its way to the DO and refuses a value the codec cannot carry;
+        // doing it at settle time made that refusal land AFTER the commit, on a
+        // mutation that had already succeeded. Encoded here it rolls the mutation
+        // back, which is the answer a caller can act on.
+        queue.outbox?.record(id, {
+            args: encodeArgsOrThrow(`ctx.scheduler.${method}`, scheduleTargetLabel(target), args),
+            options,
+            target,
+            when: method === "runAfter" ? Date.now() + when : when,
+        });
+
         // Buffered against the window that is innermost RIGHT NOW, so it is
         // dropped only if THAT transaction rolls back.
-        open.pending.push(async () => call(method, when, target, args, { ...options, id }));
+        open.pending.push({ id, run: async () => call(method, when, target, args, { ...options, id }) });
 
         return Promise.resolve(id);
     };
@@ -228,6 +333,12 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S): S 
  * order, and what failed is reported once at the end — as itself when one job
  * failed, so its code and status survive, and as an `AggregateError` when several
  * did.
+ *
+ * A failure still throws, and that is deliberate: a caller error the scheduler
+ * refuses (`DUPLICATE_SCHEDULE_ID`, `INVALID_INPUT`) must reach the developer who
+ * caused it. What changed is that the throw is no longer the only thing standing
+ * between the job and oblivion — the outbox entry survives it, so the answer to
+ * "the caller swallowed that error" is a retry rather than a lost job.
  * The caller's own post-commit work must still run: a settle that throws does not
  * excuse skipping the deferred-delete flush behind it.
  * @param context the dispatch context whose `scheduler` carries the queue
@@ -260,7 +371,20 @@ export const beginDeferredSchedules = (context: DeferredScheduleContext): ((comm
 
         const draining = opened.pending.splice(0);
 
-        if (!committed || draining.length === 0) {
+        if (draining.length === 0) {
+            return;
+        }
+
+        if (!committed) {
+            // Dropped, so the outbox must let go too — otherwise the retry loop
+            // resurrects exactly the jobs this window decided not to run. Not
+            // merely belt-and-braces: a `ctx.runMutation` nested inside a mutation
+            // has no savepoint, so its own throw settles it `false` while the
+            // ENCLOSING span still commits, and its entries would survive.
+            for (const { id } of draining) {
+                queue.outbox?.forget(id);
+            }
+
             return;
         }
 
@@ -276,10 +400,15 @@ export const beginDeferredSchedules = (context: DeferredScheduleContext): ((comm
 
         const failures: unknown[] = [];
 
-        for (const dispatch of draining) {
+        for (const { id, run } of draining) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- declaration order is the contract: `runAfter(0, a)` then `runAfter(0, b)` must enqueue a before b
-                await dispatch();
+                await run();
+
+                // Accepted, so custody ends. Anything still in the outbox after
+                // this loop is a job the caller was told it had and the scheduler
+                // does not — which is exactly what the retry loop is for.
+                queue.outbox?.forget(id);
             } catch (error) {
                 failures.push(error);
             }
@@ -288,6 +417,10 @@ export const beginDeferredSchedules = (context: DeferredScheduleContext): ((comm
         const [first, ...rest] = failures;
 
         if (first !== undefined) {
+            // Entries survived this drain, so the host's retry loop has work. Asked
+            // for before the throw, which is the only other exit from here.
+            queue.outbox?.wake();
+
             // A lone failure is rethrown AS ITSELF: the SchedulerDO's refusals are
             // coded (`DUPLICATE_SCHEDULE_ID`, `INVALID_INPUT`) and that code decides
             // the status and whether the message survives redaction, all of which an

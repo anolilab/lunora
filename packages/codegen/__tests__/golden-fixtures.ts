@@ -46,11 +46,18 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * `simple` is the broad one (most tables, most add-ons); its golden sits under
  * `expected/` because nothing compiles it.
  *
- * `delta-sync` keeps its golden where a real project keeps it — `lunora/_generated`
- * — because it IS compiled: emitted code says `import schema from "../schema.js"`,
- * which only resolves from inside the app tree it was written for. Discovery
- * skips `_generated/`, so the committed output never feeds back into the run
- * that regenerates it.
+ * `delta-sync` and `hyperdrive-shape` keep their goldens where a real project
+ * keeps them — `lunora/_generated` — because they ARE compiled: emitted code says
+ * `import schema from "../schema.js"`, which only resolves from inside the app
+ * tree it was written for. Discovery skips `_generated/`, so the committed output
+ * never feeds back into the run that regenerates it.
+ *
+ * `hyperdrive-shape` is `delta-sync` with the `.global()` table moved to the
+ * Hyperdrive backend. The two backends emit different code in exactly the places
+ * the shape overrides live, and only the D1 spelling was ever compiled — which is
+ * how `readGlobalChangedTables` came to hand the narrower Hyperdrive thunk an
+ * inline object literal carrying a `bookmark` it does not declare, emitting a
+ * `shard.ts` that fails `tsc` for every Hyperdrive-global app with a shape.
  *
  * It exists because feature coverage here is per-emission-gate, not per-line:
  * the local-first sync overrides (`resolveShape`, `readGlobalShapeRows`,
@@ -67,6 +74,7 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
 const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string]> = [
     ["simple", "expected/_generated"],
     ["delta-sync", "lunora/_generated"],
+    ["hyperdrive-shape", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */

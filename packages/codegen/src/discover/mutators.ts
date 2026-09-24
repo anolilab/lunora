@@ -145,6 +145,24 @@ const returnTypeFromMutator = (literal: ObjectLiteralExpression | undefined): st
     return unwrapHandlerReturn(initializer);
 };
 
+/**
+ * The ownership column a `defineMutator({ owner: "…" })` declares, or `undefined`
+ * when it declares none (or names it with something other than a string literal —
+ * a computed value cannot be resolved here, and guessing would both suppress a
+ * real `owner_field_from_args_not_auth` finding and fake a clean owner scope).
+ */
+const ownerFromMutator = (literal: ObjectLiteralExpression | undefined): string | undefined => {
+    const property = literal?.getProperty("owner");
+
+    if (!property || !Node.isPropertyAssignment(property)) {
+        return undefined;
+    }
+
+    const initializer = property.getInitializer();
+
+    return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
+};
+
 /** Collect exported `defineMutator` declarations from one source file. */
 const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
     const mutators: MutatorIR[] = [];
@@ -179,6 +197,8 @@ const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
             args: argsFromMutator(literal),
             exportName: nameNode.getText(),
             filePath: "mutators",
+            line: call.getStartLineNumber(),
+            owner: ownerFromMutator(literal),
             returnType: returnTypeFromMutator(literal),
         });
     }

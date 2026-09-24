@@ -5,7 +5,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { DeployCommandResult } from "../deploy/handler";
@@ -38,7 +38,7 @@ interface BuildCommandOptions {
      */
     emitBindings?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
@@ -71,6 +71,19 @@ interface BuildCommandResult extends DeployCommandResult {
 }
 
 /**
+ * The `--format json` payload. The weight of what was produced is what a CI
+ * consumer runs this command for, so `build` reports it rather than delegating
+ * to deploy's payload, which has no field to carry it.
+ */
+interface BuildCommandData {
+    bundle?: BundleSize;
+    deployment?: DeployCommandResult["deployment"];
+    /** Where the bundle was written. */
+    outDir: string;
+    validation: DeployCommandResult["validation"];
+}
+
+/**
  * `defaultSpawner` with every child's stdout folded into stderr.
  *
  * `build` takes over its own `--format json` document (below), which means the
@@ -91,28 +104,12 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
  */
 const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
     const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
-    const jsonMode = isJsonFormat(options.format);
+    const jsonMode = options.format === "json";
 
-    // `build` owns its `--format json` document instead of delegating to
-    // deploy's: the bundle measurement below is what a CI consumer runs this
-    // command for, and the deploy result has no field to carry it. Everything
-    // human therefore goes to stderr from here on.
-    const logger = loggerForFormat(options.format, options.logger);
-    const emit = (result: BuildCommandResult): BuildCommandResult => {
-        if (jsonMode) {
-            printJson(result);
-        }
-
-        return result;
-    };
-
-    const formatError = validateOutputFormat("build", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
-    }
+    // `build` owns its `--format json` payload instead of delegating to deploy's:
+    // the bundle measurement below is what a CI consumer runs this command for,
+    // and the deploy result has no field to carry it.
+    const { logger } = options;
 
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift,
@@ -138,7 +135,7 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
     });
 
     if (result.code !== 0) {
-        return emit(result);
+        return result;
     }
 
     logger.success(`build complete — bundle written to ${outDirectory}`);
@@ -156,26 +153,30 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         );
     }
 
-    return emit({ ...result, bundle });
+    return { ...result, bundle };
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,
-        format: options.format,
+        format,
         logger,
         outDir: options.outDir,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { bundle: result.bundle, deployment: result.deployment, outDir: options.outDir ?? DEFAULT_OUT_DIR, validation: result.validation },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { BuildCommandOptions, BuildCommandResult };
+export type { BuildCommandData, BuildCommandOptions, BuildCommandResult };
 export { runBuildCommand };

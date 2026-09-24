@@ -13,14 +13,40 @@ import { adminRef, callOptions } from "../../lib/internal";
 const RUN_AS = adminRef(ADMIN_FUNCTIONS.runAs);
 
 /**
- * Outcome of a probe run: an allowed result, a denied verdict, or `invalid` —
- * the probe refused to dispatch because the inputs cannot answer the question.
+ * The error codes that ARE a verdict on the probed identity's access: an RLS
+ * policy refusing the row (`FORBIDDEN`, what `rls(...)` throws on a denied
+ * read/write), a secure-by-default table with no resolved policy
+ * (`RLS_REQUIRED`), and a missing/unverified identity (`UNAUTHORIZED`).
+ *
+ * Everything else the dispatch can throw — a validation failure, an unknown
+ * function path, an application error inside the handler, the admin gate itself
+ * rejecting — says nothing about the rule under test, so it must not be painted
+ * as a denial. A probe that cannot tell "the server refused you" from "your
+ * query was malformed" is not a verification tool.
+ */
+const DENIAL_CODES: ReadonlySet<string> = new Set(["FORBIDDEN", "RLS_REQUIRED", "UNAUTHORIZED"]);
+
+/** The machine `code` the client copies off the server's error envelope, when it carried one. */
+const errorCode = (error: unknown): string | undefined => {
+    const candidate = (error as { code?: unknown } | null | undefined)?.code;
+
+    return typeof candidate === "string" ? candidate : undefined;
+};
+
+/**
+ * Outcome of a probe run: an allowed result, a denied verdict, `errored` — the
+ * dispatch failed for a reason that is not an access verdict — or `invalid`,
+ * where the probe refused to dispatch because the inputs cannot answer the
+ * question.
+ *
  * `invalid` exists because `denied` is a verdict about the RULE, and the
  * server's own argument validation (a blank `userId` is a `BAD_REQUEST` raised
  * before anything is dispatched) would otherwise arrive down the same catch-all
- * and be painted as a confident denial of a call that never ran.
+ * and be painted as a confident denial of a call that never ran. `errored` is
+ * the same argument applied to everything the dispatch itself can throw.
  */
-type ProbeOutcome = { kind: "allowed"; value: unknown } | { kind: "denied"; message: string } | { kind: "invalid"; message: string };
+type ProbeOutcome =
+    { kind: "allowed"; value: unknown } | { kind: "denied"; message: string } | { kind: "errored"; message: string } | { kind: "invalid"; message: string };
 
 interface RunAsProbeArgs {
     /** Parsed JSON args passed to the probed function. */
@@ -35,10 +61,12 @@ interface RunAsProbeArgs {
 
 /**
  * Dispatch a function under a forged identity via the admin-gated `runAs` RPC and
- * classify the outcome as allowed or denied. This is the single shared probe
- * primitive (the function runner inlines the same `RUN_AS` dispatch); a thrown
- * error — the way RLS surfaces a denial — becomes a `denied` outcome rather than
- * propagating, so the playground renders allow/deny uniformly.
+ * classify the outcome. This is the single shared probe primitive (the function
+ * runner inlines the same `RUN_AS` dispatch); a thrown error is caught rather
+ * than propagating, so the playground renders every outcome uniformly — but only
+ * an auth/RLS {@link DENIAL_CODES} code becomes the destructive `denied` verdict.
+ * Anything else is `errored`: the probe ran and failed, which is not the same
+ * claim as "this identity may not do this".
  *
  * A blank `userId` is refused here rather than sent: `runAs` forges an identity,
  * and the server rejects a blank one with a `BAD_REQUEST` before dispatching
@@ -61,7 +89,10 @@ const useRunAsProbe = (): ((probe: RunAsProbeArgs) => Promise<ProbeOutcome>) => 
 
             return { kind: "allowed", value };
         } catch (error) {
-            return { kind: "denied", message: error instanceof Error ? error.message : String(error) };
+            const message = error instanceof Error ? error.message : String(error);
+            const code = errorCode(error);
+
+            return code !== undefined && DENIAL_CODES.has(code) ? { kind: "denied", message } : { kind: "errored", message };
         }
     };
 };

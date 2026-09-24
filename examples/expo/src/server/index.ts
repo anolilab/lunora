@@ -29,18 +29,15 @@ let authReady: null | Promise<ReturnType<typeof buildAuth>> = null;
  * a permanent error.
  */
 const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
-    if (!authReady) {
-        authReady = (async (): Promise<ReturnType<typeof buildAuth>> => {
-            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
+    authReady ??= (async (): Promise<ReturnType<typeof buildAuth>> => {
+        await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB }));
 
-            return buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
-        })().catch((error: unknown) => {
-            authReady = null;
+        return buildAuth({ AUTH_SECRET: env.AUTH_SECRET, AUTH_URL: env.AUTH_URL, DB: env.DB });
+    })().catch((error: unknown) => {
+        authReady = null;
 
-            throw error;
-        });
-    }
-
+        throw error;
+    });
     return authReady;
 };
 
@@ -52,15 +49,15 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session as a **bearer** token — React Native has
- * no cookie jar, so the client sends the session in the `Authorization` header
+ * `resolveIdentity` reads the session as a **bearer** token: the client sends the
+ * session in the `Authorization` header
  * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
  * headers on a WS handshake). We fold that `?token=` into an `Authorization`
  * header — only on a request carrying `Upgrade: websocket`, so a URL-borne
  * credential never authenticates a plain HTTP call — so better-auth's `bearer`
- * plugin resolves both via `getSession`. A
- * bearer avoids the `Cookie` header the runtime's CSRF guard rejects on an
- * `Origin`-less native request.
+ * plugin resolves both via `getSession`. A cookie credential cannot work here:
+ * the CSRF guard rejects a cookie-bearing state-changing request with no trusted
+ * `Origin`, and a native request sends none.
  *
  * `ensureMigrated` creates the better-auth tables once, on the first request —
  * fine for a demo; for production prefer `compileMigrationsSql` +
@@ -76,34 +73,31 @@ export default {
             return authResponse;
         }
 
-        if (!worker) {
-            worker = createWorker({
-                openApiSpec,
-                resolveIdentity: async (identityRequest) => {
-                    // HTTP RPC carries `Authorization: Bearer <token>`; the WS
-                    // upgrade can't set headers, so the client sends the same token
-                    // as `?token=`. Fold it into the header the `bearer` plugin reads
-                    // — but ONLY on the upgrade. Accepting a query-string credential
-                    // on ordinary HTTP requests too would make every URL a bearer
-                    // token: session tokens would land in access logs, `Referer`
-                    // headers and shared links, and the request would be
-                    // authenticated by a value a cross-origin link can set.
-                    const headers = new Headers(identityRequest.headers);
-                    const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
-                    const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
+        worker ??= createWorker({
+            openApiSpec,
+            resolveIdentity: async (identityRequest) => {
+                // HTTP RPC carries `Authorization: Bearer <token>`; the WS
+                // upgrade can't set headers, so the client sends the same token
+                // as `?token=`. Fold it into the header the `bearer` plugin reads
+                // — but ONLY on the upgrade. Accepting a query-string credential
+                // on ordinary HTTP requests too would make every URL a bearer
+                // token: session tokens would land in access logs, `Referer`
+                // headers and shared links, and the request would be
+                // authenticated by a value a cross-origin link can set.
+                const headers = new Headers(identityRequest.headers);
+                const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+                const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
 
-                    if (wsToken !== null && !headers.has("authorization")) {
-                        headers.set("authorization", `Bearer ${wsToken}`);
-                    }
+                if (wsToken !== null && !headers.has("authorization")) {
+                    headers.set("authorization", `Bearer ${wsToken}`);
+                }
 
-                    const session = await auth.api.getSession({ headers });
+                const session = await auth.api.getSession({ headers });
 
-                    return session?.user?.id ? { userId: session.user.id } : null;
-                },
-                shardDO: env.SHARD,
-            });
-        }
-
+                return session?.user.id ? { userId: session.user.id } : null;
+            },
+            shardDO: env.SHARD,
+        });
         return worker.fetch(request, env, ctx);
     },
 };

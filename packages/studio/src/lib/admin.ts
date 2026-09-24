@@ -458,6 +458,15 @@ export interface ColumnMeta {
      * column — one of those must not be offered a control that writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to —
+     * what the writer actually does to this row when the referenced parent is
+     * deleted. Absent when the column is not an FK, or when the schema declared
+     * no action for it. Paired with {@link ColumnMeta.ref}, which names the
+     * parent table.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */
@@ -1607,6 +1616,19 @@ export interface TablePage {
     /** Foreign-key columns (column → target table) for `v.id("target")` fields, so the UI can link those cells. */
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+
+    /**
+     * The table's PHYSICAL column names (`id`, `_creationTime`, `__doc__` for a
+     * canonical shard table), mirroring `@lunora/do`'s `TablePage.sqlColumns`.
+     *
+     * `columns` is the DISPLAY list, with every `__doc__` field lifted to a
+     * top-level column — names no SQL statement can reference. A surface that
+     * feeds columns to something SQL-shaped wants this list, not that one.
+     *
+     * Optional on the client mirror because a shard running an older `@lunora/do`
+     * omits it; a caller must treat its absence as "unknown", never as "none".
+     */
+    sqlColumns?: string[];
 
     /**
      * Total rows matching the predicate. Absent when the read passed

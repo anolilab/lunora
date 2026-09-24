@@ -12,10 +12,33 @@ export interface AgentFunctionReference {
 }
 
 /**
+ * Per-call options an {@link AgentRunFunction} forwards to the dispatcher —
+ * a structural subset of `@lunora/dispatch`'s `RunFunctionOptions`, declared
+ * locally so this module stays free of that import.
+ * @experimental
+ */
+export interface AgentRunOptions {
+    /**
+     * Abort the dispatch after this many ms, overriding the runner's 30s
+     * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
+     *
+     * Load-bearing for any tool whose target legitimately runs longer than
+     * that. A dispatch timeout answers 503, which is NOT a deterministic
+     * dispatch failure, so the tool's `step.do` rethrows and the host retries
+     * the step — dispatching the same call again while the FIRST one is still
+     * running. For a side-effecting target (a container command, a billed page
+     * render) that is a second execution, not a second attempt. Set this at
+     * least as wide as the target's own budget, and give the target an inner
+     * deadline strictly under it so the target aborts itself first.
+     */
+    timeoutMs?: number;
+}
+
+/**
  * `ctx.run`-shaped dispatcher the loop uses to call Lunora functions.
  * @experimental
  */
-export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>) => Promise<unknown>;
+export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>, options?: AgentRunOptions) => Promise<unknown>;
 
 /**
  * Structural subset of the Cloudflare Workflows durable-step API the loop needs.
@@ -974,16 +997,20 @@ export interface AgentDefinition extends AgentConfig {
 /**
  * What `agentEnsureThread` reports back to the loop.
  *
- * A discriminated union rather than a bag of optional booleans: the four
- * outcomes are mutually exclusive, and the data each carries only exists for its
- * own case. `queued` has a position, `replaced` has the instance it took the
- * thread from, and the other two have nothing — encoding that as five
- * independent optional fields made every reader re-derive which combination was
- * legal.
+ * A discriminated union rather than a bag of optional booleans: the outcomes are
+ * mutually exclusive, and the data each carries only exists for its own case.
+ * `queued` has a position, `replaced` has the instance it took the thread from,
+ * and the rest have nothing — encoding that as independent optional fields made
+ * every reader re-derive which combination was legal.
+ *
+ * `completed` is the odd one: the thread was NOT (re)opened. This run already
+ * reported its outcome and is replaying because only the reply was lost, so it
+ * takes no ownership and revives nothing — it runs its body out of the step
+ * journal to re-dispatch the effects that never landed.
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).

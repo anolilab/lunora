@@ -119,6 +119,9 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
         },
         connectionStatus: (): ConnectionStatus => status,
         currentIdentity: (): string | null => authSubject ?? authToken,
+        // The identity store declares itself on attach; the fake has nothing
+        // to gate, so this only has to exist.
+        expectIdentityResolution: (): void => undefined,
         getAuthToken: () => authToken,
         getCurrentUser: () => Promise.resolve(currentUser),
         mutation: (function_: FunctionReference, args: unknown, options: unknown) => {

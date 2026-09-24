@@ -4,6 +4,8 @@
  * / result types are shared across the four command orchestrators.
  */
 import type { Logger } from "../../util/logger";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
+import type { CatalogItem } from "./catalog";
 
 /** A single file the item scaffolds into the project. */
 interface RegistryFile {
@@ -80,10 +82,10 @@ interface AddCommandOptions {
     diff?: boolean;
     /** Print the plan and stop without writing anything. */
     dryRun?: boolean;
+    /** Output format: `pretty` (default) or `json` — a JSON snapshot of the plan/list. */
+    format?: OutputFormat;
     /** Local registry root (offline / tests). Expects per-item subdirs, each with a `registry.json`. */
     from?: string;
-    /** Emit a JSON snapshot of the plan/result. */
-    json?: boolean;
     /** `--list`: enumerate available items instead of adding. */
     list?: boolean;
     logger: Logger;
@@ -109,10 +111,31 @@ interface AddCommandOptions {
     yes?: boolean;
 }
 
-interface AddCommandResult {
+/**
+ * One item in the `--format json` plan snapshot. Carries the concrete binding
+ * VALUES, not just the key paths, so a plan consumer can audit the mutation
+ * before it is applied.
+ */
+interface RegistryPlanItem {
+    bindings: { path: string; value: unknown }[];
+    deps: string[];
+    devDependencies: string[];
+    entrypointReexports: { comment?: string; module: string }[];
+    envVars: { name: string; secret?: boolean; value?: string }[];
+    files: { merge: RegistryFile["merge"]; to: string }[];
+    name: string;
+    requires: ReadonlyArray<string>;
+    title?: string;
+}
+
+/** The `--format json` payload: the catalog (`list`) or the resolved plan (`add`). */
+interface RegistryCommandData {
+    items: ReadonlyArray<CatalogItem | RegistryPlanItem>;
+}
+
+interface AddCommandResult extends CommandResult<RegistryCommandData> {
     /** Bindings written to wrangler.jsonc. */
     bindings: ReadonlyArray<string>;
-    code: number;
     /** Deps added to package.json. */
     deps: ReadonlyArray<string>;
     /** Files skipped because they already existed. */
@@ -129,8 +152,14 @@ interface ResolvedItem {
 
 /** Outcome of reconciling a single file. */
 type ReconcileOutcome = { kind: "skipped" | "written"; path: string };
-/** Per-run reconcile modifiers. */
-type ReconcileOptions = { diff?: boolean; overwrite?: boolean };
+
+/**
+ * Per-run reconcile modifiers. `pinnedVersions` is the plan's resolved
+ * dependency-name → concrete-version map (see `resolvePinnedDepVersions`), so
+ * `workspace:*` ranges land in package.json as the exact published version the
+ * CLI's release channel currently points at rather than a floating dist-tag.
+ */
+type ReconcileOptions = { diff?: boolean; overwrite?: boolean; pinnedVersions?: ReadonlyMap<string, string> };
 
 /** An empty (no-op) command result; spread to set a non-zero `code`. */
 const emptyResult = (): AddCommandResult => {
@@ -187,9 +216,11 @@ export type {
     ReconcileOptions,
     ReconcileOutcome,
     RegistryBinding,
+    RegistryCommandData,
     RegistryEnvVariable,
     RegistryFile,
     RegistryManifest,
+    RegistryPlanItem,
     ResolvedItem,
 };
 export { emptyResult, setBindingField };

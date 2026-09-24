@@ -54,6 +54,9 @@ describe(createExecutorOutboxSink, () => {
         expect(outbox).toHaveLength(1);
         expect(committed[0]).toStrictEqual({
             args: { text: "m1" },
+            // Persisted with the transaction, so the replay hands the composing
+            // cursor back instead of sampling a newer one.
+            baselineSeq: undefined,
             clientId: "c1",
             functionPath: "messages:send",
             idempotencyKey: "c1:1",
@@ -61,6 +64,18 @@ describe(createExecutorOutboxSink, () => {
             mutationId: 1,
             shardKey: "room-7",
         });
+    });
+
+    // The baseline is the one field a replay cannot re-derive: by the time it
+    // runs, the client has advanced to a newer cursor, which is exactly the state
+    // a `.dropStalePatches()` table must judge the write against.
+    it("persists the write's CDC baseline alongside it", async () => {
+        const { committed, executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        await sink.enqueue({ ...outboxMutation(1), baselineSeq: 10 });
+
+        expect(committed[0]).toMatchObject({ baselineSeq: 10 });
     });
 
     it("rejects with OFFLINE_QUEUE_OVERFLOW at capacity instead of evicting", async () => {
@@ -89,6 +104,21 @@ describe(createExecutorOutboxSink, () => {
         await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));
 
         expect(seen).toStrictEqual([OUTBOX_MUTATION_FN_NAME]);
+    });
+
+    it("reports pending writes so the client keeps a live mutation behind them", async () => {
+        const { executor } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        // Nothing durable yet — a fresh write may go out live.
+        expect(sink.pending?.()).toBe(false);
+
+        await sink.enqueue(outboxMutation(1));
+
+        // A write is persisted and unreplayed: the client must queue behind it
+        // rather than send past it (which would invert FIFO if this one is
+        // deferred on an identity that isn't re-confirmed yet).
+        expect(sink.pending?.()).toBe(true);
     });
 });
 

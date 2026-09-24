@@ -177,6 +177,18 @@ describe("expandUnreachableType", () => {
         );
     });
 
+    it("expands a non-exported type from another module, which has no `import(…)` qualifier", () => {
+        expect.assertions(2);
+
+        const hidden = { "/app/types.ts": `interface Hidden { id: string }\nexport declare function make(): Hidden;` };
+        const shown = { "/app/types.ts": `export interface Shown { id: string }\nexport declare function make(): Shown;` };
+
+        expect(expand(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, hidden)).toBe("{ id: string }");
+        // The exported control keeps the checker's own qualifier rather than
+        // expanding — the fix is narrow to declarations a module keeps to itself.
+        expect(expand(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, shown)).toBe('import("./types").Shown');
+    });
+
     it("expands an anonymous object that embeds an unreachable local interface", () => {
         expect.assertions(1);
 
@@ -215,6 +227,31 @@ describe("referencesUnreachableLocalType", () => {
         // Not imported at the handler, so the printed text is self-contained and
         // resolves from `_generated/` unchanged.
         expect(unreachable(`declare const subject: import("./types").Post;`, { "/app/types.ts": `export interface Post { id: string }` })).toBe(false);
+    });
+
+    it("is true for a type another module does NOT export — there is no `import(…)` qualifier for the checker to print", () => {
+        expect.assertions(1);
+
+        // The `import("…").X` form is spelled as an export access, so a module
+        // that keeps a declaration to itself has no such spelling and the checker
+        // falls back to the bare name. Treating "not imported here" as "already
+        // self-contained" put that bare name into `api.ts` AND `functions.ts` as a
+        // TS2304 while `lunora codegen` exited 0.
+        expect(
+            unreachable(`import { make } from "./types";\ndeclare const subject: ReturnType<typeof make>;`, {
+                "/app/types.ts": `interface Hidden { id: string }\nexport declare function make(): Hidden;`,
+            }),
+        ).toBe(true);
+    });
+
+    it("is false for a member of an ambient `declare module` block, which is exported without the keyword", () => {
+        expect.assertions(1);
+
+        expect(
+            unreachable(`declare const subject: import("virtual:thing").Thing;`, {
+                "/app/ambient.d.ts": `declare module "virtual:thing" { interface Thing { id: string } }`,
+            }),
+        ).toBe(false);
     });
 
     it("is true for a type the handler IMPORTS — the checker prints it bare, which does not resolve", () => {

@@ -1,10 +1,11 @@
+import "./styles.css";
+
 import { LunoraProvider } from "@lunora/react";
 import { LunoraClient } from "lunorash/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
-import "./styles.css";
 
 // `@cloudflare/vite-plugin` serves the Worker on the same origin as Vite,
 // so default to `location.origin` rather than a separate workerd port.

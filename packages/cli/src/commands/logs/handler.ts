@@ -3,14 +3,13 @@ import { readLinkedProject, resolveDeployDriver } from "@lunora/config";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { runDurableLogsCommand } from "./durable";
 import type { LogsOptions } from "./index";
-
-/** Output formats `wrangler tail` understands. */
-const LOG_FORMATS = new Set(["json", "pretty"]);
 
 interface LogsCommandOptions {
     cwd?: string;
@@ -18,7 +17,7 @@ interface LogsCommandOptions {
     /** Cloudflare environment name (forwarded as `--env`). */
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     logger: Logger;
     /** Substring filter on log messages (forwarded as `--search`). */
     search?: string;
@@ -39,6 +38,13 @@ interface LogsCommandOptions {
 
 interface LogsCommandResult {
     code: number;
+
+    /**
+     * `logs` streams: `--format json` selects wrangler tail's own JSON log lines
+     * on stdout, and `--durable` prints the archived rows there. Either way the
+     * stream owns stdout, so the CLI must not append a result document to it.
+     */
+    delegated?: boolean;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
     error?: string;
@@ -49,17 +55,11 @@ interface LogsCommandResult {
  *
  * Unlike `deploy`, this neither runs codegen nor validates wrangler bindings —
  * it only forwards a tail request, and `wrangler` itself reports a clear error
- * if the Worker isn't deployed or the config can't be resolved. The one local
- * guard is `--format`, where a typo is cheap to catch before spawning.
+ * if the Worker isn't deployed or the config can't be resolved. `--format` is
+ * already parsed by `defineHandler`, so it arrives here as a settled choice.
  */
 const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-
-    if (options.format !== undefined && !LOG_FORMATS.has(options.format)) {
-        options.logger.error(`logs: unknown --format "${options.format}" — expected pretty | json`);
-
-        return { code: 1, descriptor: undefined, error: "invalid format" };
-    }
 
     // Default the environment from the `.lunora/project.json` link when the
     // caller didn't pass `--env`, so a linked checkout tails the right env.
@@ -67,9 +67,11 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     const driver = resolveDeployDriver(options.target);
 
     if (driver.toolchain === undefined) {
-        options.logger.error(`logs: deploy target "${driver.id}" has no command-line toolchain`);
+        const message = `logs: deploy target "${driver.id}" has no command-line toolchain`;
 
-        return { code: 1, descriptor: undefined, error: "no toolchain" };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message };
     }
 
     const tailCommand = driver.toolchain.tail({
@@ -95,17 +97,20 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
 
     return {
         code: result.code,
+        delegated: true,
         descriptor,
     };
 };
 
 /** `lunora logs [worker]` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) => {
+const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(async ({ argument, cwd, format, logger, options }) => {
     // `--durable` switches from tailing a live Worker to reading the persisted
     // `ctx.log` archive (pipelineLogSink → R2) back via R2 SQL — a different data
     // path with its own credentials, so it forks here before touching wrangler.
     if (options.durable === true) {
-        return runDurableLogsCommand({
+        // The archived rows are the output, printed to stdout as text or NDJSON —
+        // this run's stdout is a stream, never a result document.
+        const durable = await runDurableLogsCommand({
             cursor: options.cursor,
             functionPrefix: options.functionPrefix,
             level: options.level,
@@ -121,12 +126,19 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
             until: options.until,
             userId: options.userId,
         });
+
+        // `delegated` means "a child already wrote the document", which is only
+        // true once the durable stream produced rows. Its early refusals (missing
+        // config, bad option) write nothing, so claiming delegation there made
+        // `--format json` suppress the envelope and leave stdout empty — the one
+        // outcome the envelope exists to prevent.
+        return { ...durable, ...(durable.rows === undefined ? {} : { delegated: true }) };
     }
 
     return runLogsCommand({
         cwd,
         env: options.env,
-        format: options.format,
+        format,
         logger,
         search: options.search,
         status: options.status,

@@ -21,6 +21,7 @@ const unitTestFiles = [
     "__tests__/features/data/back-relations.test.ts",
     "__tests__/features/data/column-window.test.ts",
     "__tests__/features/data/global-row-format.test.ts",
+    "__tests__/features/data/sql-export-replay.test.ts",
     "__tests__/features/data/highlight-segments.test.ts",
     "__tests__/features/database/schema-diff-model.test.ts",
     "__tests__/features/functions/function-signature.test.ts",

@@ -1942,4 +1942,33 @@ describe("a failing run-completion dispatch", () => {
         expect(error.message).toBe("the model provider is down");
         expect((error.cause as Error).message).toBe("completeRun dispatch failed");
     });
+
+    it("leaves a succeeded run's own outcome standing when only the reply is lost", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+        const completions: unknown[] = [];
+        // The shard COMMITS the completion and the reply never arrives — a
+        // dispatch timeout is a retryable 503 even when the mutation landed.
+        const run: AgentRunFunction = async (reference, args) => {
+            const result = await runtime.run(reference, args);
+
+            if (reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.completeRun) {
+                completions.push(args?.["status"]);
+
+                throw new Error("503 dispatch timeout");
+            }
+
+            return result;
+        };
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("done")]), run }))).rejects.toThrow("503 dispatch timeout");
+
+        // Re-completing from the run-level catch would overwrite the outcome the
+        // run REACHED with the failure of reporting it: the thread would read
+        // `error: 503 dispatch timeout` for a run that answered and delivered
+        // its reply. The replay re-dispatches the same `idle` and converges.
+        expect(completions).toStrictEqual(["idle"]);
+        expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+        expect(runtime.threads.get("thread-1")?.error).toBeUndefined();
+    });
 });

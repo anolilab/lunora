@@ -40,6 +40,20 @@ describe("discoverBrowserUrlAccesses", () => {
         expect(found[0]).toMatchObject({ exportName: "grab", file: "shot", line: 1, method: "screenshot" });
     });
 
+    it("flags a destructured `args` url — the form the browser registry item ships", () => {
+        expect.assertions(2);
+
+        write(
+            "destructured.ts",
+            `export const grab = action.input({ url: v.string() }).action(async ({ args: { url }, ctx }) => ctx.browser.screenshot(assertAllowedTarget(url)));`,
+        );
+
+        const found = discoverBrowserUrlAccesses(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ exportName: "grab", file: "destructured", method: "screenshot" });
+    });
+
     it("flags each of pdf/content/scrape with an args-derived url", () => {
         expect.assertions(1);
 

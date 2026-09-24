@@ -3,8 +3,8 @@ import type { R2BucketLike } from "@lunora/storage";
 import { verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 
-import { authOptions } from "../../lunora/auth.js";
 import { defineApp } from "../../lunora/_generated/app.js";
+import { authOptions } from "../../lunora/auth.js";
 
 interface Env {
     AUTH_SECRET: string;
@@ -57,19 +57,21 @@ const app = defineApp<Env & { PUBLIC_STORAGE_BASE_URL: string }>()
         publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
-    .extend(() => ({
-        /**
-         * Shard keys come from the client, so the worker decides who may address
-         * which shard. Channels are open to every signed-in member, so any
-         * authenticated caller may address any channel — and an anonymous one may
-         * address none. Without this the runtime rejects client-named shards
-         * outright (403), which is the safe default.
-         */
-        authorizeShard: ({ identity }) => Boolean(identity?.userId),
-    }))
+    .extend(() => {
+        return {
+            /**
+             * Shard keys come from the client, so the worker decides who may address
+             * which shard. Channels are open to every signed-in member, so any
+             * authenticated caller may address any channel — and an anonymous one may
+             * address none. Without this the runtime rejects client-named shards
+             * outright (403), which is the safe default.
+             */
+            authorizeShard: ({ identity }) => Boolean(identity?.userId),
+        };
+    })
     .build();
 
-export const ShardDO = app.ShardDO;
+export const { ShardDO } = app;
 
 /**
  * Serve the signed object URLs that `ctx.storage.generateUploadUrl` /

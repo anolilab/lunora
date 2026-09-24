@@ -115,8 +115,8 @@ my-app/
 │   ├── messages.ts        # query / mutation / action
 │   └── _generated/        # codegen output (don't edit)
 ├── src/
-│   ├── server/index.ts    # createWorker + ShardDO subclass
-│   └── client/main.tsx    # LunoraProvider + your React app
+│   ├── server.ts          # defineApp() worker entry + ShardDO export
+│   └── main.tsx           # LunoraProvider + your React app
 ├── wrangler.jsonc         # DO + D1 + R2 bindings
 └── vite.config.ts         # lunora() Vite plugin
 ```
@@ -160,8 +160,10 @@ bun run lunora deploy
 
 </Tabs>
 
-This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
-Worker. Everything lives on your account, reachable through your own
+This runs codegen, validates `wrangler.jsonc`, and calls `wrangler deploy` to
+publish the Worker. Data migrations run only with `--migrate` (plus
+`--migrate-yes` in production); the D1 schema SQL `lunora migrate generate` emits
+is never applied for you. Everything lives on your account, reachable through your own
 `*.workers.dev` hostname or a custom domain.
 
 <Callout type="info">

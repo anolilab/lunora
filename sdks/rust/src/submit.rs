@@ -572,6 +572,19 @@ impl Client {
                 continue;
             };
 
+            if slot.get("error").is_some_and(|value| !value.is_object()) {
+                // An `error` key holding a string, a null, an array or a number
+                // is no envelope (§4.2), and a slot carries no HTTP status of
+                // its own to classify it by — so nothing readable came back
+                // about this entry, which is exactly the position of a slot the
+                // server never returned. §4.3 retries that one. Falling through
+                // to the commit branch below settled a durable write COMMITTED
+                // with a null result and un-persisted it.
+                requeue.push(entry);
+
+                continue;
+            }
+
             if let Some(envelope) = slot.get("error").filter(|value| value.is_object()) {
                 let error = batch_slot_error(envelope, "request failed");
 

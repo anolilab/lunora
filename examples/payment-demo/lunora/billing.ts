@@ -1,8 +1,8 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { ActionCtx } from "./_generated/server.js";
 import { action, internalAction, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 // A real app keys checkout on the signed-in user (`ctx.auth.userId`); this demo
 // has no auth, so it uses a fixed reference and an allow-all authorizer (wired in
@@ -43,8 +43,25 @@ export const checkout = action
         return { url: result.url };
     });
 
+/**
+ * What the demo's billing panel reads. A projection, not the raw row: `collect()`
+ * hands back every column the table declares, so returning the rows directly
+ * ships the whole stored document to the browser while the declared type names
+ * three fields.
+ *
+ * Kept in step with `packages/payment/src/schema.ts` by hand — see the registry
+ * item's copy of this query for why a `query` cannot use `ctx.payments`.
+ */
 interface SubscriptionRow {
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    currentPeriodStart?: number;
+    priceId: string;
+    /** Entitlements test membership HERE, not against `priceId` — a subscription bills a list of items. */
+    priceIds?: string[];
+    provider: string;
     providerSubscriptionId: string;
+    quantity: number;
     referenceId: string;
     state: string;
 }
@@ -72,11 +89,34 @@ export const portal = action
     .use(rateLimit(limiter, "checkout", byCaller))
     .action(async ({ ctx }): Promise<{ url: string }> => ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"));
 
-/** Reactive read of the webhook-synced subscriptions for the demo reference. */
+/**
+ * Reactive read of the webhook-synced subscriptions for the demo reference.
+ *
+ * The `by_reference` index gets its `.eq()` predicate, so the scan is bounded to
+ * this reference's rows. Without it `withIndex("by_reference")` collects EVERY
+ * subscription row in the shard and filters in JS — a full-table read that grows
+ * with the customer base, on a path every page subscribes to.
+ */
 export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
-    const rows = await ctx.db.query("subscriptions").withIndex("by_reference").collect();
+    const rows = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_reference", (q) => q.eq("referenceId", DEMO_REFERENCE))
+        .collect();
 
-    return rows.filter((subscription) => subscription.referenceId === DEMO_REFERENCE);
+    return rows.map((row) => {
+        return {
+            cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+            currentPeriodEnd: row.currentPeriodEnd,
+            currentPeriodStart: row.currentPeriodStart,
+            priceId: row.priceId,
+            priceIds: row.priceIds,
+            provider: row.provider,
+            providerSubscriptionId: row.providerSubscriptionId,
+            quantity: row.quantity,
+            referenceId: row.referenceId,
+            state: row.state,
+        };
+    });
 });
 
 /**
@@ -100,7 +140,14 @@ export const processWebhook = internalAction
             method: "POST",
         });
         const response = await ctx.payments.handleWebhook(request);
-        const result = (await response.json()) as { applied?: boolean };
+        // Narrowed rather than asserted: the platform types `Response.json()` as
+        // `Promise<unknown>`, and an `as { applied?: boolean }` here is a claim
+        // about a body that crossed an RPC hop. `in` narrows without asserting,
+        // which also keeps `no-unnecessary-type-assertion` from "fixing" the
+        // assertion away and leaving `result` untyped — its autofix did exactly
+        // that, and `tsc` then failed with TS18046.
+        const payload: unknown = await response.json();
+        const applied = typeof payload === "object" && payload !== null && "applied" in payload && payload.applied === true;
 
-        return { applied: result.applied ?? false, status: response.status };
+        return { applied, status: response.status };
     });

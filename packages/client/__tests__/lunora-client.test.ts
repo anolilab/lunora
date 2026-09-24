@@ -2017,10 +2017,13 @@ describe("lunoraClient", () => {
                 client.setAuthToken("user-b-token");
             };
 
-            // Reconnect and flush.
+            // Reconnect and flush. Bounded rather than `runAllTimersAsync`: the
+            // rotation to identity B is a genuine identity change, so the client
+            // now closes the socket B inherited from A and reconnects — and a
+            // reconnect loop against a mock that never opens has no last timer.
             await vi.advanceTimersByTimeAsync(20);
             latestSocket().open();
-            await vi.runAllTimersAsync();
+            await vi.advanceTimersByTimeAsync(200);
 
             // Both writes replayed — in ONE batch, under identity A's auth header
             // (never user-b, even though the token rotated mid-flight).
@@ -2271,6 +2274,86 @@ describe("lunoraClient", () => {
             await client.mutation(fnRef("c:get"), {}, { optimistic: () => 9 });
 
             expect(received).toEqual([0, 9]);
+        });
+
+        it("a per-call optimistic does not reach a query registered under a different reference", async () => {
+            expect.assertions(2);
+
+            // The targeting rule, pinned: `optimistic` patches the subscription
+            // registered under the WRITE's own (ref, args, shard) and nothing else.
+            // The shape apps actually have — a `messages:send` mutation and a
+            // `messages:list` query — shares neither, so there is nothing to patch.
+            // `optimisticUpdate` (below) is the option for that shape.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            await client.mutation(
+                fnRef("messages:send"),
+                { channelId: "c1", text: "hi" },
+                { optimistic: (current) => [...((current as unknown[]) ?? []), { _id: "tmp" }] },
+            );
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+
+            // Same reference, different args: also no match — the args are part of
+            // the key, so a list-wide patch can't ride a per-row write either.
+            await client.mutation(fnRef("messages:list"), { channelId: "c2" }, { optimistic: () => ["wrong channel"] });
+
+            expect(received).toEqual([[{ _id: "m1" }]]);
+        });
+
+        it("optimisticUpdate patches the list query a send mutation targets (the documented shape)", async () => {
+            expect.assertions(2);
+
+            // Distinct refs AND distinct args, which is what every doc and example
+            // shows: `messages:send({ channelId, text })` appending to the
+            // `messages:list({ channelId })` a component is watching.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "FORBIDDEN", message: "nope" } }, { status: 403 }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), { channelId: "c1" }, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: [{ _id: "m1" }], id: subId, type: "delta" });
+
+            const draft = { _id: "tmp", text: "hi" };
+
+            await expect(
+                client.mutation(
+                    fnRef("messages:send"),
+                    { channelId: "c1", text: "hi" },
+                    {
+                        optimisticUpdate: (store, args) => {
+                            const current = store.getQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }) as
+                                undefined | unknown[];
+
+                            store.setQuery(fnRef("messages:list"), { channelId: (args as { channelId: string }).channelId }, [...(current ?? []), draft]);
+                        },
+                    },
+                ),
+            ).rejects.toMatchObject({ message: "nope" });
+
+            // Painted on the list immediately, then rolled back when the server said no.
+            expect(received).toEqual([[{ _id: "m1" }], [{ _id: "m1" }, draft], [{ _id: "m1" }]]);
         });
 
         it("stacked optimistic mutations: an older failure rebases the newer pending write onto the base", async () => {
@@ -3136,6 +3219,28 @@ describe("lunoraClient", () => {
 
             expect(requestUrl).toBe("https://app.example/_lunora/admin/functions");
             expect(init.method).toBe("GET");
+        });
+
+        it("reports an admin non-2xx whose error slot is not an object as a transport failure", async () => {
+            expect.assertions(4);
+
+            // §4.2: only an OBJECT `error` slot is an envelope. The admin path
+            // narrowed the BODY and then indexed the slot unchecked, so a
+            // proxy's `{"error": null}` page raised a `TypeError` — and
+            // `{"error": "..."}` an `Error` with no `code` — past every handler
+            // an admin caller wrote.
+            for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+                const client = new LunoraClient({
+                    fetch: async () => jsonResponse({ error: slot }, { status: 502 }),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                });
+
+                // eslint-disable-next-line no-await-in-loop -- one client per slot shape; the shapes are the table
+                await expect(client.listFunctions()).rejects.toMatchObject({ code: "INTERNAL" });
+
+                client.close();
+            }
         });
 
         it("listFunctions defaults to an empty array when functions are absent", async () => {
@@ -4100,7 +4205,7 @@ describe("lunoraClient", () => {
             await expect(client.getCurrentUser()).resolves.toBeNull();
         });
 
-        it("returns null when the fetch rejects", async () => {
+        it("rejects when the fetch rejects — unreachable is not signed out", async () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
@@ -4111,7 +4216,9 @@ describe("lunoraClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await expect(client.getCurrentUser()).resolves.toBeNull();
+            // Folding this into `null` made it indistinguishable from "the server
+            // says you have no session" — see `auth-gate-contract.test.ts`.
+            await expect(client.getCurrentUser()).rejects.toThrow("offline");
         });
 
         it("honours a custom authBasePath", async () => {
@@ -4934,7 +5041,7 @@ describe("lunoraClient", () => {
 
     describe("lunoraClient — the read cache is stamped with the delivering socket's identity", () => {
         it("does not write the previous user's rows under the new user's identity after a switch", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const cache = createInMemoryQueryCache();
             const puts: CachedQuery[] = [];
@@ -4968,20 +5075,25 @@ describe("lunoraClient", () => {
 
             const subId = firstSub(socket).id as string;
 
-            // The user switches. Nothing closes user A's socket — the WS credential
-            // is pinned in the upgrade URL and only `setWsToken` bounces it.
+            // The user switches. A's socket is retired — `close()` flips
+            // `readyState` synchronously but its EVENT lands a turn later, so
+            // the connection still points at it for the rest of this one.
             client.setAuthToken("token-b", "user-b");
 
             expect(client.currentIdentity()).not.toBe(identityA);
+            expect(socket.readyState).toBe(3);
 
-            // ...and it keeps delivering user A's rows.
+            // A frame A's socket had already put on the wire lands in that gap.
             socket.receive({ cursor: 1, data: ["a-row"], id: subId, type: "data" });
 
             // `close()` flushes the debounced cache writes.
             client.close();
             await flushMicrotasks();
 
-            expect(puts.map((entry) => entry.identity)).toStrictEqual([identityA]);
+            // Refused outright, so it is neither stamped `subj:user-b` (which
+            // would hydrate A's row into B's next session) nor written under
+            // A's stamp — a retired socket's frame is not a read of anyone's.
+            expect(puts).toStrictEqual([]);
         });
     });
 

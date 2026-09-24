@@ -1,3 +1,97 @@
+## @lunora/workflow [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.58...@lunora/workflow@1.0.0-alpha.59) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+
+## @lunora/workflow [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.57...@lunora/workflow@1.0.0-alpha.58) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** carry the host's fetch into the loop, and make a handoff replay-safe ([#789](https://github.com/anolilab/lunora/issues/789)) ([4079fe8](https://github.com/anolilab/lunora/commit/4079fe805db5e868617c51896a483edb321b2c80))
+
+## @lunora/workflow [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.56...@lunora/workflow@1.0.0-alpha.57) (2026-09-22)
+
+### Bug Fixes
+
+* **agent:** dispatch the loop's calls without an order-numbered dedup id ([#770](https://github.com/anolilab/lunora/issues/770)) ([589e3db](https://github.com/anolilab/lunora/commit/589e3db835c2d196790595438a5efd88863e4fe3))
+
+## @lunora/workflow [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.55...@lunora/workflow@1.0.0-alpha.56) (2026-09-21)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** `RunFunctionOptions` gains `dedupId` and `createRunStep`'s deps
+gain `instanceId`. A caller-supplied `dedupId` wins over the pin — the escape
+hatch for a non-deterministic body, and for a bare `ctx.run` inside a raw
+`ctx.step.do(...)` callback, which the positional pin cannot see is being
+retried. The docs state that gap rather than implying exactly-once, along with
+the 24-hour dedup retention window and the weaker guarantee actions get.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **workflow:** pin replay-dedup ids on ctx.run ([#757](https://github.com/anolilab/lunora/issues/757)) ([5eaf098](https://github.com/anolilab/lunora/commit/5eaf098a1e2dab805e98a3f97ecfc577140e80ca))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/workflow [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.54...@lunora/workflow@1.0.0-alpha.55) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/workflow [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.53...@lunora/workflow@1.0.0-alpha.54) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/workflow [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.52...@lunora/workflow@1.0.0-alpha.53) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/workflow [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.51...@lunora/workflow@1.0.0-alpha.52) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.46
+* **@lunora/server:** upgraded to 1.0.0-alpha.122
+
+## @lunora/workflow [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.50...@lunora/workflow@1.0.0-alpha.51) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/workflow [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.49...@lunora/workflow@1.0.0-alpha.50) (2026-09-11)
 
 

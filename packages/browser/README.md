@@ -109,7 +109,7 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.
 
-DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address, before the browser launches and again on every redirect hop. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both.
+DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address, before the browser launches and again on every redirect hop. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both. An empty `allowedHosts: []` is a configured allowlist with no members and refuses every navigation — omit the option to run without one.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/browser)**.
 

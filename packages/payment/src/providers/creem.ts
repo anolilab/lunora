@@ -188,6 +188,21 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         case "refund.created": {
+            // `RefundEntity.status` is pending | requiresAction | succeeded | failed | canceled, and
+            // Creem documents `pending`/`requiresAction` as non-terminal processing states — so this
+            // event alone does not mean money moved. Booking one leaves the ledger claiming a refund
+            // the customer never received, and the facade's over-refund guard then rejects every later
+            // attempt to issue it for real.
+            //
+            // Creem ships no `refund.updated`/`refund.succeeded` event, so a refund that settles AFTER
+            // this event is not observable from here — and `checkoutToSession` cannot recover it
+            // either (Creem's order/checkout carry no refunded total), so reconcile will not heal it.
+            // A ledger that lags is still the lesser error: over-stating it is unrecoverable, because
+            // it locks out the refund that would have corrected it.
+            if (readString(object, "status") !== "succeeded") {
+                return { ...base, type: "unhandled" };
+            }
+
             // Creem's refund object is flat: the amount lives in `refund_amount`/`refund_currency`
             // (not `amount`), and it references the original payment via a nested `transaction`
             // (fallback `subscription`), not an `order`. Read those first, keeping the legacy fields

@@ -109,6 +109,67 @@ const RETRY_BASE_DELAY_MS = 30_000;
 // re-armed this far in the future so a later alarm drains it as slots free.
 // Small enough to feel responsive, large enough to avoid a busy alarm loop.
 const POOL_BACKPRESSURE_DELAY_MS = 1000;
+
+/**
+ * How many due records one {@link SchedulerDO.alarm} drain keeps in flight at
+ * once.
+ *
+ * This is not an arbitrary tuning knob, and raising it buys nothing.
+ * {@link SchedulerDO.dispatch} is an outbound `fetch`, and a Workers/Durable
+ * Object invocation may have at most **six connections simultaneously waiting
+ * for response headers** — a seventh simply queues behind them. So six is the
+ * platform's own concurrency, expressed here rather than discovered at runtime.
+ *
+ * It matters because the runtime's `/_lunora/scheduler/dispatch` receiver
+ * answers only AFTER the dispatched function has finished running: a dispatch's
+ * latency is the whole job's latency, not a kick's. Draining one record at a
+ * time therefore serialised every scheduled job in the app behind whichever one
+ * was running, and made a workpool's `maxConcurrency` unreachable — only one job
+ * was ever in flight, so the pool's semaphore never saw a second holder.
+ *
+ * The 15-minute alarm wall clock bounds the drain as a whole (one alarm
+ * invocation), so this divides the wall time a given backlog needs by up to six;
+ * it does not remove the ceiling. A backlog that still cannot finish inside it
+ * is bounded work, not lost work: an unreached record keeps BOTH its `id:`
+ * header and its `t:` index entry, so the next alarm fires it normally.
+ */
+const MAX_CONCURRENT_DISPATCHES = 6;
+
+/**
+ * How long a claimed-but-unsettled record stays reserved before another
+ * instance may fire it again, in milliseconds.
+ *
+ * {@link SchedulerDO.drainRecordGuarded} claims a due record BEFORE
+ * {@link SchedulerDO.dispatch}'s outbound fetch. The claim used to delete the
+ * record's `t:` index entry outright, which left an `id:` header with no index
+ * whenever the instance was evicted mid-dispatch —
+ * {@link SchedulerDO.reindexOrphanedRecords} then re-armed it and the successor
+ * fired the job again ON SIGHT, while the first attempt could still be running
+ * at the origin. The claim instead re-arms the record HERE, so it is never
+ * unindexed, is never an orphan, and is not re-fired until this horizon passes.
+ *
+ * **The number is the platform's, not a tuning guess.** The only dispatch a
+ * successor could collide with is one this scheduler itself started, and that
+ * dispatch is an `await` inside an `alarm()` invocation — which Cloudflare caps
+ * at fifteen minutes of wall time. When the cap is reached the invocation is
+ * torn down and its pending fetch with it, so no claim this DO minted can still
+ * be live fifteen minutes after it was minted. A shorter lease would re-open
+ * exactly the concurrent double-run this closes, for jobs whose duration falls
+ * in the gap; a longer one would buy nothing and only delay recovery.
+ *
+ * **What it costs at the other edge.** A job whose instance genuinely died —
+ * nothing running anywhere — now waits out the lease instead of re-firing on
+ * the successor's next boot. That is the price of being unable to tell "still
+ * running elsewhere" from "lost" without a signal from the receiver: the job is
+ * delayed, never dropped, and the delay is bounded by this constant.
+ *
+ * **What it does NOT bound.** If the receiver keeps executing after the DO's
+ * side of the fetch is gone (a handler that outlives its request), no lease
+ * length can see that. An action long enough to reach past this horizon must
+ * still be idempotent — the ceiling `packages/scheduler/docs/index.mdx`
+ * documents.
+ */
+const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
 // that still fits in TIME_PAD digits (999_999_999_999_999 = 1e15 - 1). Capping
 // here — rather than at the 8.64e15 ECMAScript `Date` max — guarantees EVERY
@@ -393,6 +454,32 @@ class SchedulerDO {
      */
     private reindexed = false;
 
+    /**
+     * Tail of the serialized `pool:<name>` critical section — see
+     * the pool lock (`withPoolLock`). Per-instance, which is the right scope: the pool rows
+     * live in this Durable Object's own storage and only this instance writes
+     * them.
+     */
+    private poolLock: Promise<unknown> = Promise.resolve();
+
+    /**
+     * Record id → the `t:` index key its in-flight claim currently holds, for
+     * every dispatch this instance has open. See `drainRecordGuarded()`.
+     *
+     * A lease moves a record's index entry without rewriting its `scheduledFor`,
+     * so while a claim is held the live key is NOT the one derivable from the
+     * record. Anything that has to remove such a record — `removeRecord()`, on
+     * the `/cancel` path — would otherwise delete a key that no longer exists
+     * and strand the real one.
+     *
+     * In-memory and per-instance on purpose: it answers "is THIS instance
+     * dispatching that record right now", which is exactly when the divergence
+     * can be observed by another request. A lease left behind by an instance that
+     * died has no live dispatch to protect and is reconciled from storage
+     * instead — `alarm()` drops it as a dangling entry once the header is gone.
+     */
+    private readonly activeLeases = new Map<string, string>();
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -458,14 +545,21 @@ class SchedulerDO {
         return jsonResponse({ error: { code: "NOT_FOUND" } }, 404);
     }
 
-    /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
+    /** Called by the Workers runtime when the alarm previously set by `rescheduleAlarm()` fires. */
     public async alarm(): Promise<void> {
         // BEFORE the due slice is read, so a job recovered here fires in this
         // very pass rather than waiting for the next one.
         await this.reindexOrphanedRecords();
 
         const now = Date.now();
-        const due: ScheduleRecord[] = [];
+        // Each entry carries the index key the record was SELECTED under, not one
+        // derived from the record. A leased record is indexed at its lease
+        // horizon while its `scheduledFor` still names its real due time, so the
+        // two disagree for the whole of a claim — and a claim that deletes a
+        // recomputed key deletes nothing and leaves the record indexed twice.
+        // See {@link drainRecordGuarded}.
+        const due: { claimKey: string; record: ScheduleRecord }[] = [];
+        const selected = new Set<string>();
 
         // Pull only the prefix slice that's due. `~` sorts after all digits
         // in ASCII so it bounds the time-padded id portion. If the runtime
@@ -476,15 +570,24 @@ class SchedulerDO {
             prefix: "t:",
         });
 
-        /* eslint-disable no-await-in-loop -- sequential by design: a Durable Object's storage is single-threaded local state, and the claim-before-dispatch protocol below requires each job's index write to complete in order so an alarm re-fire can't double-dispatch. */
+        /* eslint-disable no-await-in-loop -- sequential by design: reading the due slice's headers is local Durable Object storage, and a dangling-index delete must land before the next read. */
         for (const [indexKey, recordId] of indexEntries.entries()) {
             const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
 
             if (Number.isFinite(dueAt) && dueAt <= now) {
                 const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${recordId}`);
 
-                if (record) {
-                    due.push(record);
+                if (record && selected.has(recordId)) {
+                    // A record carrying TWO due index entries. One record is one
+                    // job: draining both would hand two lanes the same record and
+                    // dispatch it twice, which is the very thing the lease exists
+                    // to prevent. Nothing should produce this — but a swallowed
+                    // post-settle delete can (see `drainRecordGuarded`'s tail), so
+                    // the extra row is reconciled away here rather than dispatched.
+                    await this.state.storage.delete(indexKey);
+                } else if (record) {
+                    selected.add(recordId);
+                    due.push({ claimKey: indexKey, record });
                 } else {
                     // Dangling index entry: this `t:` row points at an `id:`
                     // header that no longer exists (e.g. a partial-failure path
@@ -498,28 +601,24 @@ class SchedulerDO {
                 }
             }
         }
+        /* eslint-enable no-await-in-loop */
 
         // Per-pool concurrency is gated by the durable `pool:<name>` row, which
-        // reservePoolSlot() reads FRESH from storage for every record. We
-        // deliberately do NOT cache pool state across the drain: dispatch()
-        // awaits an outbound fetch, during which the DO input gate is open and a
-        // concurrent /complete can decrement the pool row. A stale cached copy
-        // written back afterwards would resurrect the completed job's slot and
-        // leak pool capacity forever (there is no lease timeout to reclaim it).
+        // reservePoolSlot() reads FRESH from storage for every record, under the
+        // pool lock. We deliberately do NOT cache pool state across the drain:
+        // dispatch() awaits an outbound fetch, during which the DO input gate is
+        // open and a concurrent /complete can decrement the pool row. A stale
+        // cached copy written back afterwards would resurrect the completed
+        // job's slot and leak pool capacity forever (a POOL SLOT has no expiry to
+        // reclaim it — unlike the dispatch claim, see DISPATCH_LEASE_MS).
         try {
-            for (const record of due) {
-                // Per-record isolation: a storage throw for one record must NOT
-                // abort the whole pass (it would skip the other due records AND
-                // the rescheduleAlarm() in the finally, losing the clock).
-                await this.drainRecordGuarded(record);
-            }
+            await this.drainDue(due);
         } finally {
             // Always re-arm the clock, even if a record threw above — otherwise a
             // single failing record could leave the DO with no future alarm and
             // strand every still-pending job.
             await this.rescheduleAlarm();
         }
-        /* eslint-enable no-await-in-loop */
 
         // Jobs fired (and were removed or moved to retry), so push the new list
         // to live subscribers — this is the moment a studio wants to see.
@@ -614,11 +713,17 @@ class SchedulerDO {
             // Success is an explicit 2xx only. A 404 (receiver route missing),
             // any other 4xx, or a 5xx is NOT treated as done — the caller
             // (alarm()) keeps the record and routes it through recordRetry()
-            // rather than deleting it. Idempotent dispatch keyed by record id
-            // makes a re-fire safe: the receiver spends `id` as the shard's
-            // replay-dedup `mutationId` for a function target and as the
-            // WORKFLOW INSTANCE id for a `workflow` target, so neither runs
-            // twice.
+            // rather than deleting it. A re-fire is deduplicated by the record
+            // id: the receiver spends it as the shard's replay-dedup
+            // `mutationId` for a function target and as the WORKFLOW INSTANCE id
+            // for a `workflow` target. Retry-after-failure is the easy case —
+            // this attempt is over before the next begins, so the dedup row (or
+            // the existing instance) is already there. The hard case is a
+            // re-fire that OVERLAPS a live attempt, which only an eviction can
+            // produce and which DISPATCH_LEASE_MS exists to prevent: a mutation
+            // survives it (its dedup read holds the shard's single-writer gate)
+            // and so does a workflow, but an action does not — see
+            // `reindexOrphanedRecords`.
             return response.ok;
         } catch {
             return false;
@@ -649,30 +754,144 @@ class SchedulerDO {
     }
 
     /**
+     * Drain the due slice with up to {@link MAX_CONCURRENT_DISPATCHES} records in
+     * flight at once, so a slow job delays only its own lane instead of every
+     * other due job in the app (see the constant for why the drain used to
+     * serialise whole jobs, not just their kicks).
+     *
+     * Lanes pull from the head of the slice, so records still ENTER dispatch in
+     * the slice's order — the same `t:<paddedTime>:<id>` order the sequential
+     * drain used. What is no longer implied is that they FINISH in that order,
+     * which was never a guarantee worth relying on anyway: two jobs due at the
+     * same instant already ran in storage-key (id) order rather than arrival
+     * order, a saturated pooled job is pushed {@link POOL_BACKPRESSURE_DELAY_MS}
+     * into the future ahead of its queue-mates, and a failed job re-enters at the
+     * end of a backoff. Nothing in the public surface documents an ordering
+     * guarantee; jobs that must be ordered must chain themselves.
+     *
+     * {@link drainRecordGuarded} swallows every throw, so no lane can reject and
+     * abandon its siblings.
+     */
+    private async drainDue(due: { claimKey: string; record: ScheduleRecord }[]): Promise<void> {
+        const queue = [...due];
+        const lanes: Promise<void>[] = [];
+        // Fixed BEFORE the loop: each lane's body runs synchronously up to its
+        // first await, so it has already shifted a record off `queue` by the
+        // time the next iteration's condition is evaluated. Reading
+        // `queue.length` there would race the lanes and open too few of them.
+        const width = Math.min(MAX_CONCURRENT_DISPATCHES, queue.length);
+
+        for (let lane = 0; lane < width; lane += 1) {
+            lanes.push(
+                (async () => {
+                    for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
+                        // eslint-disable-next-line no-await-in-loop -- one lane drains its records in sequence; the lanes themselves are what run concurrently
+                        await this.drainRecordGuarded(entry.record, entry.claimKey);
+                    }
+                })(),
+            );
+        }
+
+        await Promise.all(lanes);
+    }
+
+    /**
+     * Run `critical` with exclusive access to the `pool:<name>` rows.
+     *
+     * Every pool mutation is a read-modify-write (`loadPool` → mutate →
+     * `savePool`), and the two halves are separated by an `await`. That was safe
+     * while the drain ran one record at a time — the Durable Object input gate
+     * keeps a foreign event (a concurrent `/complete`) out while a storage
+     * operation is in flight, and nothing else in this instance could interleave.
+     * Concurrent lanes break exactly that assumption: lane A and lane B can both
+     * issue their `get` before either `put` lands, both observe `inFlight: 0`,
+     * and the second `put` then erases the first lane's reservation — the pool
+     * oversubscribes and one holder's id is lost, so its slot is never released.
+     *
+     * The lock is a promise chain rather than anything cleverer because the
+     * critical section is two local storage ops with no I/O in it. It is held
+     * across NO outbound fetch: `dispatch()` runs outside it, which is the whole
+     * point of draining concurrently.
+     *
+     * The chain is rebuilt from a swallowed copy so one rejecting section can
+     * never wedge every later one.
+     */
+    private async withPoolLock<T>(critical: () => Promise<T>): Promise<T> {
+        const run = this.poolLock.then(critical, critical);
+
+        this.poolLock = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return run;
+    }
+
+    /**
      * Claim + drain one due record with per-record fault isolation, so a storage
      * throw can never abort the whole alarm pass (which would skip the remaining
      * due records and the `rescheduleAlarm()` that re-arms the clock).
      *
-     * Claims the job by deleting its time-index entry BEFORE dispatch (an alarm
-     * re-fire then won't pick it up again), runs {@link drainRecord}, and on a
-     * thrown storage op re-asserts the claim so the job stays re-fireable.
+     * The claim is a LEASE, not a deletion. The record's `t:` entry is moved
+     * from its due time to `now + DISPATCH_LEASE_MS` before
+     * {@link SchedulerDO.dispatch} is called, so this alarm pass (and the next)
+     * will not pick it up again, while the record is never left WITHOUT an index
+     * entry. That distinction is the whole point: deleting the entry outright
+     * made an instance evicted mid-dispatch leave an `id:` header with no index,
+     * which {@link SchedulerDO.reindexOrphanedRecords} re-armed and the
+     * successor fired AGAIN on sight — concurrently with an attempt that could
+     * still be running at the origin. A leased record is not an orphan, so the
+     * successor leaves it alone until the lease lapses; see
+     * {@link DISPATCH_LEASE_MS} for why that horizon is fifteen minutes and what
+     * it does and does not bound.
+     *
+     * The lease is released as soon as this instance knows the attempt settled —
+     * dispatched, re-armed for retry, backpressured, or dead-lettered — so the
+     * horizon only ever governs the one case nobody is left to report: a lost
+     * instance.
      *
      * A throw reaching here always means the job was NOT dispatched:
      * {@link drainRecord} swallows its own post-dispatch cleanup errors and
      * returns instead of throwing once a kick succeeds, so every escaping throw
-     * comes from the pre-dispatch or failed-dispatch paths. We therefore re-assert
-     * the time-index claim so a later alarm re-attempts it (at-least-once): the
-     * claim delete may have removed it and recordRetry()/requeuePooled() may not
-     * have re-armed it before throwing, and re-inserting the same key is
-     * idempotent, so a surviving claim is simply rewritten to its prior value.
+     * comes from the pre-dispatch or failed-dispatch paths. Nothing is in flight,
+     * so the lease is dropped and the due-time claim re-asserted — keeping the
+     * job re-fireable on the very next alarm (at-least-once) rather than letting
+     * a transient storage blip cost it a whole lease.
      *
      * With one exception, checked first: a record that already has a durable
      * `dead:` row is TERMINAL, and re-claiming it would re-dispatch a job the
      * dead-letter says is finished. See the comment on that branch.
+     *
+     * `claimKey` is the index key `alarm()` SELECTED this record under, passed
+     * down rather than recomputed. That is load-bearing, not tidiness: a lease
+     * moves the record's index entry and deliberately does NOT rewrite its
+     * `scheduledFor` (that field is the job's real due time, which `/list`,
+     * `/get`, `/dead` and the studio all show, and which `parkDead` preserves).
+     * So from the moment a lease is taken the live key and the key derivable
+     * from the record disagree — and a claim that recomputed it would delete a
+     * key that no longer exists while adding a second one, leaving the record
+     * indexed twice and dispatched twice. That is the same double-run the lease
+     * exists to close, re-entering through the expiry path.
      */
-    private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
+    private async drainRecordGuarded(record: ScheduleRecord, claimKey: string): Promise<void> {
+        // Derived once: the horizon must be the same value in the key written
+        // below and in every key deleted afterwards, and `Date.now()` advances
+        // across the awaits in between.
+        const leaseKey = SchedulerDO.indexKey(Date.now() + DISPATCH_LEASE_MS, record.id);
+
         try {
-            await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
+            // Delete-then-put, in that order. The inverse would leave BOTH keys
+            // if the delete failed, and a record indexed twice is dispatched
+            // twice — the exact defect this lease exists to close. This order's
+            // failure mode is the benign one: a record with no index at all,
+            // which nothing has dispatched yet and which the catch below (or, if
+            // that fails too, `reindexOrphanedRecords`) re-arms.
+            await this.state.storage.delete(claimKey);
+            await this.state.storage.put(leaseKey, record.id);
+            // Only now is `leaseKey` the record's live index key. `removeRecord`
+            // reads this so a `/cancel` landing mid-dispatch deletes the key that
+            // EXISTS rather than one derived from `scheduledFor`.
+            this.activeLeases.set(record.id, leaseKey);
             await this.drainRecord(record);
         } catch {
             try {
@@ -683,19 +902,54 @@ class SchedulerDO {
                 // non-idempotent job, which at-least-once does not license. Finish
                 // the park's cleanup instead; the delete is idempotent, so a later
                 // pass retries it if this one throws too.
+                //
+                // The lease goes FIRST, as its own op rather than folded into the
+                // batch below: a park whose row-clear fails must not be left
+                // holding an index entry that would fire the terminal job again at
+                // the horizon. Dropping the lease leaves exactly the pre-lease
+                // residue — an `id:`/`retry:` row with no index, inert until a
+                // later pass clears it.
                 if ((await this.state.storage.get(`${DEAD_PREFIX}${record.id}`)) !== undefined) {
+                    await this.state.storage.delete(leaseKey);
                     await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
                     return;
                 }
 
-                await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+                // Nothing was dispatched, so there is no in-flight attempt for the
+                // lease to protect: re-assert the due-time claim and drop it, which
+                // restores exactly the pre-lease recovery timing (the next alarm).
+                await this.state.storage.put(claimKey, record.id);
+                await this.state.storage.delete(leaseKey);
             } catch {
-                // The infra is failing hard enough that even the re-claim put
-                // throws. Swallow so the remaining due records still drain and
-                // rescheduleAlarm() still runs; the surviving `id:`/`retry:`
-                // rows keep the job recoverable on a later pass.
+                // The infra is failing hard enough that even the recovery throws.
+                // Swallow so the remaining due records still drain and
+                // rescheduleAlarm() still runs. Whichever of the two keys survived
+                // keeps the job recoverable — at worst it re-fires at the lease
+                // horizon instead of immediately.
             }
+
+            return;
+        } finally {
+            // Cleared before the release below rather than after it, which leaves
+            // one storage op during which a `/cancel` cannot see the lease. That
+            // window is benign by construction: the attempt has already settled,
+            // so either the header is gone (a successful dispatch — `handleCancel`
+            // finds nothing to remove) or the record has been rewritten at its own
+            // retry/backpressure key, which `removeRecord` then derives correctly
+            // from the record it just read.
+            this.activeLeases.delete(record.id);
+        }
+
+        try {
+            await this.state.storage.delete(leaseKey);
+        } catch {
+            // The attempt settled but its lease outlived it. After a successful
+            // dispatch the `id:` header is already gone, so the surviving entry
+            // is a dangling index row `alarm()` deletes on sight rather than
+            // firing. After a retry/backpressure re-arm the header DOES survive,
+            // so the record is briefly indexed twice — `alarm()` reconciles that
+            // by dropping the extra due entry rather than draining both.
         }
     }
 
@@ -728,20 +982,24 @@ class SchedulerDO {
         }
 
         const ok = await this.dispatch(record);
+        const poolName = record.pool;
 
-        if (!ok && record.pool !== undefined) {
+        if (!ok && poolName !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
             // Re-load the pool row FRESH from storage rather than reusing a copy
             // held from before the dispatch() fetch await: a concurrent
-            // /complete may have decremented the row during that await, and
-            // releasing against a stale copy would clobber that decrement and
-            // oversubscribe the pool. Release by id so a later (spurious)
-            // /complete for the same job can't double-free either.
-            const pool = await this.loadPool(record.pool);
-            const released = SchedulerDO.releaseSlot(pool, record.id);
+            // /complete — or a sibling lane's reservation — may have rewritten
+            // the row during that await, and releasing against a stale copy
+            // would clobber it and oversubscribe the pool. Release by id so a
+            // later (spurious) /complete for the same job can't double-free
+            // either, and under the pool lock so the read-modify-write is atomic
+            // against every other writer in this instance.
+            await this.withPoolLock(async () => {
+                const pool = await this.loadPool(poolName);
 
-            await this.savePool(record.pool, released);
+                await this.savePool(poolName, SchedulerDO.releaseSlot(pool, record.id));
+            });
         }
 
         if (ok) {
@@ -776,41 +1034,56 @@ class SchedulerDO {
      * always return `true` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
-     * across the drain. Each reservation durably `savePool()`s before the next
-     * record runs, so a same-pass reservation is still visible to the next
-     * record's fresh read (the budget carries forward); and because dispatch()
-     * awaits an outbound fetch between records, a concurrent /complete that
-     * decrements the row mid-drain IS reflected here instead of being clobbered
-     * by a stale in-memory copy (which would leak a slot permanently).
+     * across the drain — and the read-modify-write runs under
+     * the pool lock (`withPoolLock`). Both halves are load-bearing. Freshness is what
+     * keeps a concurrent `/complete` landing during a dispatch from being
+     * clobbered by a stale in-memory copy (which would leak a slot permanently: a
+     * POOL SLOT has no expiry, unlike the dispatch claim's). The lock is what
+     * keeps two drain lanes from both reading the same pre-reservation row and
+     * both believing a slot was free — without it the pool oversubscribes past
+     * `maxConcurrency` and one holder's id is dropped from `inFlightIds`, so its
+     * slot is never released.
      */
     private async reservePoolSlot(record: ScheduleRecord): Promise<boolean> {
-        if (record.pool === undefined) {
+        const poolName = record.pool;
+
+        if (poolName === undefined) {
             return true;
         }
 
-        const pool = await this.loadPool(record.pool);
+        const reserved = await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
 
-        if (pool.inFlight >= pool.maxConcurrency) {
+            if (pool.inFlight >= pool.maxConcurrency) {
+                return false;
+            }
+
+            // Reserve a slot durably BEFORE dispatching so neither a concurrent
+            // alarm nor a sibling lane in this same pass can oversubscribe the
+            // pool. Track the holding job id so the eventual release (success →
+            // /complete, failed kick → drainRecord) is idempotent per job and
+            // can't over-release.
+            const ids: string[] = pool.inFlightIds ?? [];
+
+            if (!ids.includes(record.id)) {
+                ids.push(record.id);
+            }
+
+            pool.inFlightIds = ids;
+            pool.inFlight = ids.length;
+            await this.savePool(poolName, pool);
+
+            return true;
+        });
+
+        if (!reserved) {
+            // Backpressure, not failure: re-arm outside the lock — it writes only
+            // this record's own rows, so holding the pool lock for it would stall
+            // every other lane's reservation for nothing.
             await this.requeuePooled(record);
-
-            return false;
         }
 
-        // Reserve a slot durably BEFORE dispatching so neither a concurrent
-        // alarm nor this same pass can oversubscribe the pool. Track the holding
-        // job id so the eventual release (success → /complete, failed kick →
-        // drainRecord) is idempotent per job and can't over-release.
-        const ids: string[] = pool.inFlightIds ?? [];
-
-        if (!ids.includes(record.id)) {
-            ids.push(record.id);
-        }
-
-        pool.inFlightIds = ids;
-        pool.inFlight = ids.length;
-        await this.savePool(record.pool, pool);
-
-        return true;
+        return reserved;
     }
 
     /**
@@ -1066,15 +1339,23 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "pool is required");
         }
 
-        const pool = await this.loadPool(poolName);
+        // Under the pool lock: this read-modify-write races the concurrent drain
+        // lanes, which reserve and release the same row while their dispatches
+        // are in flight (the input gate is open across an outbound fetch, so a
+        // `/complete` genuinely does land mid-drain). See `withPoolLock`.
+        const next = await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
 
-        // Release by job id so an at-least-once /complete (the runtime may
-        // re-deliver the completion callback) is idempotent and can't free a
-        // slot belonging to a different in-flight job. Without an id we fall
-        // back to a best-effort decrement (legacy clients / runtimes).
-        const next = jobId === undefined ? SchedulerDO.releaseFirstSlot(pool) : SchedulerDO.releaseSlot(pool, jobId);
+            // Release by job id so an at-least-once /complete (the runtime may
+            // re-deliver the completion callback) is idempotent and can't free a
+            // slot belonging to a different in-flight job. Without an id we fall
+            // back to a best-effort decrement (legacy clients / runtimes).
+            const released = jobId === undefined ? SchedulerDO.releaseFirstSlot(pool) : SchedulerDO.releaseSlot(pool, jobId);
 
-        await this.savePool(poolName, next);
+            await this.savePool(poolName, released);
+
+            return released;
+        });
 
         // A freed slot means a queued job can now run; pull the alarm forward so
         // the drain happens promptly instead of waiting for the backpressure tick.
@@ -1335,7 +1616,8 @@ class SchedulerDO {
         // it dispatches and reserves a slot. So cancel never needs to release a
         // pool slot: a queued job holds none, and a dispatched one is no longer
         // reachable by id. (A dispatched-but-never-completed job's slot is freed
-        // only by /complete; the lack of a lease timeout is a known limitation.)
+        // only by /complete; a pool slot has no expiry — unlike the dispatch
+        // claim, see DISPATCH_LEASE_MS — and that is a known limitation.)
         await this.rescheduleAlarm();
         await this.broadcastChange();
 
@@ -1441,7 +1723,23 @@ class SchedulerDO {
     private async removeRecord(record: ScheduleRecord): Promise<void> {
         // Single batched delete: the header, time-index entry, and any pending
         // retry row in one storage round-trip instead of three.
-        await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`]);
+        //
+        // TWO index keys when the record is claimed by an in-flight dispatch on
+        // this instance. A lease moves the entry to its horizon but leaves
+        // `scheduledFor` alone, so the derivable key and the live key diverge for
+        // the length of the claim — and `/cancel` can land in exactly that window
+        // (the header is cleared only once the kick returns, so the cancel does
+        // take effect). Deleting only the derivable one would leave the lease
+        // entry behind, holding the alarm at the horizon. The keys are equal
+        // whenever nothing is leased, and deleting an absent key is a no-op.
+        const keys = [`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`];
+        const leaseKey = this.activeLeases.get(record.id);
+
+        if (leaseKey !== undefined) {
+            keys.push(leaseKey);
+        }
+
+        await this.state.storage.delete(keys);
     }
 
     /**
@@ -1459,23 +1757,42 @@ class SchedulerDO {
     }
 
     /**
-     * Re-index every pending job whose time-index entry is gone.
+     * Re-index every pending job whose time-index entry is gone, and fire it now.
      *
-     * {@link SchedulerDO.drainRecordGuarded} claims a job by DELETING its `t:`
-     * entry, awaited (so durable) BEFORE {@link SchedulerDO.dispatch}'s outbound
-     * fetch. If the Durable Object is evicted or crashes during that fetch, the
-     * `id:` header (and any `retry:` row) survives with no `t:` entry — and
-     * nothing puts one back: {@link SchedulerDO.rescheduleAlarm} derives the
-     * clock from `t:` alone, and `alarm()`'s inline reconciliation only handles
-     * the INVERSE orphan (a `t:` entry whose header is gone). The job then sits
-     * in `/list` and `/status.backlog` forever, never fires, never reaches
-     * `/dead`. The at-least-once contract `drainRecordGuarded` documents covers
-     * a thrown storage op, not a lost instance.
+     * A record with an `id:` header but no `t:` entry is invisible to every
+     * clock in this class: {@link SchedulerDO.rescheduleAlarm} derives the alarm
+     * from `t:` alone, and `alarm()`'s inline reconciliation only handles the
+     * INVERSE orphan (a `t:` entry whose header is gone). Left alone such a job
+     * sits in `/list` and `/status.backlog` forever — never fires, never reaches
+     * `/dead`.
      *
-     * Re-firing is safe: the dispatch carries the record id, which the receiver
-     * spends as `x-lunora-mutation-id` for a function target and as the workflow
-     * INSTANCE id for a `workflow` target, so a job that DID reach the origin
-     * before the crash is not run twice either way.
+     * **This is no longer how a lost dispatch looks.**
+     * {@link SchedulerDO.drainRecordGuarded} used to claim a record by deleting
+     * its `t:` entry outright, so an instance evicted mid-dispatch minted an
+     * orphan on every claimed record and this method re-fired each of them ON
+     * SIGHT — concurrently with attempts that could still have been running at
+     * the origin. The claim is a lease now (see {@link DISPATCH_LEASE_MS}): a
+     * claimed record keeps a `t:` entry at the lease horizon, so it is not an
+     * orphan, is not recovered here, and is re-fired by the ordinary alarm drain
+     * only once the lease lapses.
+     *
+     * What still reaches this method is the residue of a storage failure — a
+     * claim released with no lease written, or a pre-lease record written by an
+     * older build — where nothing was dispatched and firing immediately is
+     * exactly right.
+     *
+     * The dispatch is deduplicated by the record id, which the receiver spends
+     * as `x-lunora-mutation-id` for a function target and as the workflow
+     * INSTANCE id for a `workflow` target. A mutation's dedup read runs inside
+     * the shard's single-writer gate, so a mutation is exactly-once even under a
+     * genuinely concurrent re-fire; a workflow re-attaches to the running
+     * instance rather than starting a second one. An ACTION is weaker:
+     * `@lunora/do` deliberately does NOT take the gate for a non-mutation —
+     * gating one would let any caller freeze a whole shard for the length of an
+     * action's outbound I/O — and its dedup row is written only after the
+     * handler returns, so two dispatches genuinely overlapping in time can both
+     * miss the cache. The lease exists to keep them from overlapping; an action
+     * that can outlive it must still be idempotent.
      *
      * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
      * per-header `get`, so the cost is one pass over each prefix.
@@ -1509,26 +1826,61 @@ class SchedulerDO {
             // eslint-disable-next-line no-await-in-loop -- same
             await this.armAlarmIfEarlier(record.scheduledFor);
         }
+
+        // A drain that was cut off never reached its `rescheduleAlarm()`, so the
+        // instance that comes back can hold pending `t:` rows and NO clock at
+        // all — nothing scheduled to fire any of them. That used to be masked
+        // here: a claim deleted its index entry, so every claimed record arrived
+        // as an orphan and the loop above re-armed on its way past. A leased
+        // record is not an orphan, so the loop never sees it and the horizon
+        // would never come due. Re-derive the clock from `t:` instead — and only
+        // when there is none, so an armed alarm is never pushed later.
+        if ((await this.state.storage.getAlarm()) === null) {
+            const earliest = await this.earliestPendingTime();
+
+            // Deliberately NOT `rescheduleAlarm()`: that clears the alarm when
+            // nothing is pending, and an instance whose store is empty has no
+            // alarm to clear. This path only ever ADDS a missing clock.
+            if (earliest !== undefined && Number.isFinite(earliest)) {
+                await this.state.storage.setAlarm(earliest);
+            }
+        }
     }
 
-    private async rescheduleAlarm(): Promise<void> {
+    /**
+     * The time component of the earliest pending `t:` entry, or `undefined` when
+     * there is no pending entry at all. Reads exactly one row — the index's
+     * lexical order is its numeric order. A present-but-unreadable key yields
+     * `NaN`, which callers must distinguish from "nothing pending": the two
+     * answers mean opposite things for the alarm.
+     */
+    private async earliestPendingTime(): Promise<number | undefined> {
         const entries = await this.state.storage.list<string>({ limit: 1, prefix: "t:" });
         const first = entries.entries().next();
 
         if (first.done) {
+            return undefined;
+        }
+
+        const [indexKey] = first.value;
+
+        return Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
+    }
+
+    private async rescheduleAlarm(): Promise<void> {
+        const earliest = await this.earliestPendingTime();
+
+        if (earliest === undefined) {
             await this.state.storage.deleteAlarm();
 
             return;
         }
 
-        const [indexKey] = first.value;
-        const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
-
-        if (Number.isFinite(dueAt)) {
-            await this.state.storage.setAlarm(dueAt);
+        if (Number.isFinite(earliest)) {
+            await this.state.storage.setAlarm(earliest);
         }
     }
 }
 
-export { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
+export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };

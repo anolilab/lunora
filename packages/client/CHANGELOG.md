@@ -1,3 +1,397 @@
+## @lunora/client [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.126...@lunora/client@1.0.0-alpha.127) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.137
+
+## @lunora/client [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.125...@lunora/client@1.0.0-alpha.126) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/do:** upgraded to 1.0.0-alpha.157
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.136
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.78
+
+## @lunora/client [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.124...@lunora/client@1.0.0-alpha.125) (2026-09-23)
+
+### Bug Fixes
+
+* **client:** pace the reconnect resubscribe burst ([#802](https://github.com/anolilab/lunora/issues/802)) ([e99aa76](https://github.com/anolilab/lunora/commit/e99aa76f191c03ac5b8c23abaeab8e32fb3079ff)), closes [#796](https://github.com/anolilab/lunora/issues/796)
+
+## @lunora/client [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.123...@lunora/client@1.0.0-alpha.124) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.156
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.135
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.77
+
+## @lunora/client [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.122...@lunora/client@1.0.0-alpha.123) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.155
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.134
+
+## @lunora/client [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.121...@lunora/client@1.0.0-alpha.122) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient` gains `expectIdentityResolution()`, and a client
+that resolves an identity caches no reads and replays no queued writes until a
+`/get-session` actually answers — previously only while one was in flight.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### security
+
+* **client:** close the identity gates outside the session probe ([#787](https://github.com/anolilab/lunora/issues/787)) ([e176653](https://github.com/anolilab/lunora/commit/e1766531497eeb9d097259ff3c315f924ebd0cca))
+
+## @lunora/client [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.120...@lunora/client@1.0.0-alpha.121) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+* **sdks:** keep a cancelled subscription, and retry an unreadable batch slot ([#783](https://github.com/anolilab/lunora/issues/783)) ([4253052](https://github.com/anolilab/lunora/commit/42530522ca4e0437d488ce31b11778089226a81d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.154
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.133
+
+## @lunora/client [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.119...@lunora/client@1.0.0-alpha.120) (2026-09-23)
+
+### Bug Fixes
+
+* **client:** classify a non-object error slot as transport ([#780](https://github.com/anolilab/lunora/issues/780)) ([f48c841](https://github.com/anolilab/lunora/commit/f48c841493e9b1773303ffb20b1181e1adf39f03))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.153
+
+## @lunora/client [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.118...@lunora/client@1.0.0-alpha.119) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.152
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+
+## @lunora/client [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.117...@lunora/client@1.0.0-alpha.118) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.151
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.131
+
+## @lunora/client [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.116...@lunora/client@1.0.0-alpha.117) (2026-09-22)
+
+### Bug Fixes
+
+* **client:** drop the phantom subscription table override, and gate the auth docs on status ([#773](https://github.com/anolilab/lunora/issues/773)) ([d720130](https://github.com/anolilab/lunora/commit/d720130b33db4fbe31c5161c546fb291dcd952f4))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.150
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.130
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+
+## @lunora/client [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.115...@lunora/client@1.0.0-alpha.116) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.129
+
+## @lunora/client [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.114...@lunora/client@1.0.0-alpha.115) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `AuthStatus` starts at `"loading"` rather than
+`"unauthenticated"` and the first resolve always performs one `/get-session`
+round trip; a client with no identity resolved caches no reads while that
+request is outstanding.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(client): break the probe-drain re-flush loop
+
+`releaseSessionProbe` re-flushed every offline queue whenever a `/get-session`
+round trip settled and anything was still queued. `drainOfflineQueue` answers a
+hold caused by a sticky subject awaiting re-confirmation by probing
+`getCurrentUser()` itself, so the two fed each other: drain probes, the probe's
+`finally` re-flushes, the flush drains, the drain probes again. Hundreds of
+round trips with not a millisecond of clock passing, until the heap gave out —
+`__tests__/offline-queue-liveness.test.ts` and
+`__tests__/offline-queue-ordering.test.ts` both ran out of memory, and the
+backoff the first of those pins (at most 15 probes across five minutes) was gone
+with them.
+
+The re-flush exists for one hold only: a write the unresolved-identity gate is
+holding because the fingerprint is `null` and a resolve may be about to name a
+subject. That hold has no other exit — nothing else fires when a probe answers
+"no session" or fails to answer at all. The sticky-subject hold is a different
+case with a retry policy of its own (`noteHeldRetryDelay`, 1s doubling to a 60s
+ceiling), and it requires an established subject, so its fingerprint is always
+`subj:<id>`.
+
+Testing the fingerprint for `null` therefore selects exactly the hold the probe
+owns, and makes the cycle unreachable rather than merely unlikely: the drain
+branch that starts a probe cannot be entered by a flush this guard admits.
+
+Both liveness files pass again, including under a 400 MB heap cap, and the
+identity gates are untouched — the held-then-flushed case still drains with no
+reconnect, and the cross-user replay, read-cache and socket gates still refuse a
+`null` fingerprint while a resolve is in flight.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(react): pin the auth gates to the resolved contract
+
+Three cases still asserted that a client holding no bearer token is signed out
+without asking the server — `Unauthenticated` on the first synchronous render,
+and `getCurrentUser` never called at all. That is the behaviour the identity
+store no longer has, and deliberately: a cookie session carries no token here,
+so "no token" answers nothing about who is signed in, and treating it as an
+answer is what left the identity fingerprint null for every user of every cookie
+app.
+
+Rewritten against what the gates actually promise now:
+
+- With no token the loading gate holds until the server answers, then settles to
+  `Unauthenticated` — reached by asking rather than by assuming.
+- `useAuth` issues exactly one identity resolve with no token held, and settles
+  the user anon on a "no session" answer.
+- The sign-in transition seeds its user after that first resolve has settled, so
+  it still exercises unauthenticated → loading → authenticated instead of being
+  answered by the initial probe.
+
+Each of the first two fails if the store's first resolve short-circuits on a null
+token again, which is the regression they exist to catch.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(client): pin the remaining adapter gates to the resolved contract
+
+The same stale assertion the React gates carried — that holding no bearer token
+is itself the answer "signed out" — also sat in the Svelte, Angular, Solid and
+Solid 2 suites. All five adapters read one identity store, so all five changed
+together when its first resolve stopped short-circuiting on a null token.
+
+- Svelte and Angular asserted `isLoading === false` synchronously with no token
+  held. They now assert the gate loads first and settles signed out only once
+  the server has answered.
+- Both Solid suites seeded a user and then expected the signed-out gate, which
+  only held while the resolve was skipped. They now seed nothing, so the "no
+  session" answer is what puts the gate there.
+
+Vue needed no change; its equivalent case already awaited the resolve.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### security
+
+* **client:** resolve cookie sessions so identity gates arm ([#767](https://github.com/anolilab/lunora/issues/767)) ([2c39a0c](https://github.com/anolilab/lunora/commit/2c39a0c2b507dee721474b72ad3ca4d88ff48f6e))
+
+## @lunora/client [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.113...@lunora/client@1.0.0-alpha.114) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.149
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.128
+
+## @lunora/client [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.112...@lunora/client@1.0.0-alpha.113) (2026-09-21)
+
+### Features
+
+* **client:** poll live queries over HTTP when the socket will not open ([#760](https://github.com/anolilab/lunora/issues/760)) ([69c1469](https://github.com/anolilab/lunora/commit/69c1469e2e0aee906556f7743e84b42057d628d0))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.148
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+
+## @lunora/client [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.111...@lunora/client@1.0.0-alpha.112) (2026-09-19)
+
+### Features
+
+* **server:** authorize whisper topics with an onWhisper hook ([#755](https://github.com/anolilab/lunora/issues/755)) ([e72c1b6](https://github.com/anolilab/lunora/commit/e72c1b60d6cc82f14c8c0b892c6f92a0e3aba93c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.147
+
+## @lunora/client [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.110...@lunora/client@1.0.0-alpha.111) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.146
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.126
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
+## @lunora/client [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.109...@lunora/client@1.0.0-alpha.110) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.145
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.125
+
+## @lunora/client [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.108...@lunora/client@1.0.0-alpha.109) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.124
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+
+## @lunora/client [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.107...@lunora/client@1.0.0-alpha.108) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+
+## @lunora/client [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.106...@lunora/client@1.0.0-alpha.107) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/do:** upgraded to 1.0.0-alpha.142
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+
+## @lunora/client [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.105...@lunora/client@1.0.0-alpha.106) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.121
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
+## @lunora/client [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.104...@lunora/client@1.0.0-alpha.105) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+
+## @lunora/client [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.103...@lunora/client@1.0.0-alpha.104) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** queue a live write behind a held one ([#722](https://github.com/anolilab/lunora/issues/722)) ([e65db87](https://github.com/anolilab/lunora/commit/e65db8761c61e582fd3d271e4232c9fb5ce83776))
+* **client:** retry an offline queue held for identity ([#731](https://github.com/anolilab/lunora/issues/731)) ([2d3bb2a](https://github.com/anolilab/lunora/commit/2d3bb2acd3c9caa378087332411bb97f3318d375))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
+## @lunora/client [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.102...@lunora/client@1.0.0-alpha.103) (2026-09-12)
+
+### Tests
+
+* fail suites that can register zero cases ([#712](https://github.com/anolilab/lunora/issues/712)) ([eca1eaa](https://github.com/anolilab/lunora/commit/eca1eaad82fb9bb9c3aead43af135a9a488bb268))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.65
+
+## @lunora/client [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.101...@lunora/client@1.0.0-alpha.102) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** align the cookie-seed case with the identity contract ([#737](https://github.com/anolilab/lunora/issues/737)) ([021baa8](https://github.com/anolilab/lunora/commit/021baa80816790ae921e5cc4b23f77639585df1b))
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
+## @lunora/client [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.100...@lunora/client@1.0.0-alpha.101) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `OutboxMutation` gains an optional `onRejected`. A sink that
+ignores it behaves exactly as before; one that owns replay should invoke it on a
+permanent rejection or optimistic values outlive rejected writes.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **client:** re-seed the read cache after a remount ([#720](https://github.com/anolilab/lunora/issues/720)) ([a7a0a53](https://github.com/anolilab/lunora/commit/a7a0a53945bc787d175b7ca627d9542698bfa78c))
+* **client:** roll back an outbox write's optimistic patch ([#717](https://github.com/anolilab/lunora/issues/717)) ([c8c2fe5](https://github.com/anolilab/lunora/commit/c8c2fe55f9833f15532b9f843c6f47d9549606ce))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.136
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+
+## @lunora/client [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.99...@lunora/client@1.0.0-alpha.100) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/client [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.98...@lunora/client@1.0.0-alpha.99) (2026-09-11)
 
 

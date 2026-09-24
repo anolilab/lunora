@@ -5,32 +5,35 @@
 #   - exit 0  -> build is skipped (cancelled)
 #   - exit !0 -> build proceeds
 #
-# This step runs BEFORE Netlify provisions Node/Corepack/pnpm (dependency
-# install happens after the ignore gate), so a `pnpm exec ...` command here
-# always fails with "pnpm: command not found" -> Netlify's inverted semantics
-# read that failure as "proceed", so the gate has never actually skipped a
-# build; the docs site has rebuilt on every push regardless of whether
-# anything affecting it changed. We invoke the `vis` binary directly by its
-# node_modules/.bin path instead of going through pnpm: the pnpm-generated
-# shim at that path only needs `node` on PATH (already true at this point) and
-# never shells out to pnpm itself. Netlify's packagePath for this site is
-# apps/docs, so `../../node_modules/.bin/vis` reaches the workspace-root
-# install from here.
+# We always build. `exit 1` is the documented way to opt out of skipping
+# altogether, and it is deliberate rather than an oversight:
 #
-# `vis ci ignore` is graph-aware: it skips the deploy when nothing affecting the
-# docs site changed, and still rebuilds when an upstream `@lunora/*` package the
-# docs pull content from changed (which a plain `git diff -- apps/docs` would
-# miss). It auto-detects Netlify's CACHED_COMMIT_REF as the git base and falls
-# back to HEAD~1, and uses inverted Vercel/Netlify exit semantics by default.
+# A skipped deploy is not reported as "skipped". Netlify records only two
+# finished deploy states, success and error, and a cancelled deploy is an
+# error: the Deploy Preview posts the `deploy/netlify` commit status as
+# state=failure and the three GitHub App check runs (Header rules, Pages
+# changed, Redirect rules) as conclusion=failure titled "Deploy failed" — the
+# same signal a genuine docs build failure produces, with no error text to tell
+# them apart. Nothing in this file, and no other repository-side setting, can
+# turn that into a neutral or successful report. So a graph-aware skip cost
+# four red checks on every pull request outside the docs graph (see #806), and
+# a real docs breakage would have been indistinguishable from them.
 #
-# The `[ -x ... ] && ... || exit 1` guard fails safe: on a cold build with no
-# cached node_modules, the vis binary won't exist yet at this path, so we exit
-# non-zero and the build proceeds rather than silently skipping a possibly
-# needed deploy. Any other failure (a broken/partial cached install, vis
-# itself erroring) falls through the same `|| exit 1`, so every path other
-# than an explicit "not affected" verdict from vis converges on "build".
+# This also removes a second problem. The previous gate probed for a binary
+# under `node_modules/`, which only exists once Netlify restores a warm build
+# cache — the ignore step runs before dependencies are installed. A cold cache
+# therefore failed the probe and built, a warm cache skipped and went red, so
+# one commit could report either way depending on cache state. `exit 1` has no
+# such dependency: every deploy, warm or cold, preview or production, builds.
+#
+# The cost is one docs build per pull request. Restoring the optimisation needs
+# Netlify to report a skipped deploy as neutral; revisit if that lands.
+#
+# Deleting this key is not the same as always building: with no ignore command
+# Netlify falls back to diffing the site's base directory and skips when it is
+# unchanged, which is the same red-check outcome with a worse verdict.
 #
 # Build command, publish dir, and base directory remain configured in the
-# Netlify UI; this file only adds the ignore gate.
+# Netlify UI; this file only pins the ignore step.
 [build]
-  ignore = "[ -x ../../node_modules/.bin/vis ] && ../../node_modules/.bin/vis ci ignore lunora-docs-app || exit 1"
+  ignore = "exit 1"

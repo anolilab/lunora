@@ -105,7 +105,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     }
     ```
 
-2. Give the copied `mailer()` a queue binding. `createMailerFromEnv` takes no `queue`, so swap it for `createMailer` in `lunora/mail/mail.ts`:
+2. Give the copied `mailer()` a queue binding. `createMailerFromEnv` takes no `queue`, so swap it for `createMailer` in `lunora/mail/index.ts`:
 
     ```ts
     import { createMailer } from "@lunora/mail";

@@ -4,6 +4,7 @@ import { join, relative } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { tuiConfirm } from "../../util/tui-prompts";
 import type { ResetOptions } from "./index";
@@ -41,7 +42,7 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
         if (!isTty && options.confirm === undefined) {
             options.logger.error(`reset: stdin is not a TTY — re-run with --yes to confirm deleting ${what}`);
 
-            return { code: 1, removed: [] };
+            return { code: EXIT_CODE.USAGE, removed: [] };
         }
 
         const confirmer = options.confirm ?? tuiConfirm;
@@ -50,7 +51,7 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
         if (!confirmed) {
             options.logger.info("reset: aborted");
 
-            return { code: 1, removed: [] };
+            return { code: EXIT_CODE.CANCELLED, removed: [] };
         }
     }
 

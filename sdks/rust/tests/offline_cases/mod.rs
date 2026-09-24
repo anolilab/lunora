@@ -862,6 +862,15 @@ pub fn batch_entry_cap_matches_protocol() {
 pub fn offline_flush_batches_multiple_writes() {
     let case = queue_case("batchReplay");
     let slots = case["slots"].clone();
+    // A slot the fixture no longer describes is a case that asserts nothing.
+    let unreadable = slots
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["outcome"] == json!("unreadable-error") && slot.get("rawError").is_some())
+        .count();
+
+    assert_eq!(unreadable, 1, "batchReplay must carry one unreadable slot");
     let seen = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&seen);
     let store = MemoryStore::default();
@@ -876,12 +885,14 @@ pub fn offline_flush_batches_multiple_writes() {
                 .as_array()
                 .expect("slots")
                 .iter()
-                .map(|slot| {
-                    if slot["outcome"].as_str() == Some("ok") {
-                        json!({ "id": slot["id"], "body": { "commitCursor": slot["commitCursor"], "result": Value::Null } })
-                    } else {
-                        json!({ "id": slot["id"], "body": { "error": { "code": slot["code"], "message": "slot failed" } } })
-                    }
+                .map(|slot| match slot["outcome"].as_str() {
+                    Some("ok") => json!({ "id": slot["id"], "body": { "commitCursor": slot["commitCursor"], "result": Value::Null } }),
+                    // An `error` key holding a NON-object: no envelope to read a
+                    // verdict out of, and no per-slot HTTP status to fall back
+                    // on. Verbatim from the fixture, so a port cannot pass by
+                    // answering itself a shape the spec does not describe.
+                    Some("unreadable-error") => json!({ "id": slot["id"], "body": { "error": slot["rawError"] } }),
+                    _ => json!({ "id": slot["id"], "body": { "error": { "code": slot["code"], "message": "slot failed" } } }),
                 })
                 .collect();
 

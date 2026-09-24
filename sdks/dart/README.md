@@ -51,9 +51,11 @@ carrying each subscription's resume cursor.
 
 ### A live query is a `Stream`
 
-The row that is the reason this port exists. `watch` subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing the widget disposes
-the subscription and there is no `dispose()` override to forget:
+The row that is the reason this port exists. Each listener opens its own
+subscription, which starts when it listens and is torn down when it cancels, so
+disposing the widget disposes exactly its own subscription and there is no
+`dispose()` override to forget — at the price of one server subscription, and one
+re-execution per write, for every listener:
 
 ```dart
 StreamBuilder<Object?>(

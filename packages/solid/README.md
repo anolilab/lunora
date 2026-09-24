@@ -104,7 +104,7 @@ render(
 | `createSubscription`                                | `useSubscription`     | Raw subscription signal — unbounded live stream.                                  |
 | `createPaginatedQuery`                              | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` signals. |
 | `createInfiniteQuery`                               | `useInfiniteQuery`    | Infinite-scroll variant of `createPaginatedQuery`.                                |
-| `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user` signals + `setToken`).                       |
+| `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user`, `status` signals + `setToken`).             |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | —                     | Auth-gate components rendering `children` per identity state.                     |
 | `createPresence`                                    | `usePresence`         | Collaborative-awareness — heartbeat + live present-members signal.                |
 | `createFlag`                                        | `useFlag`             | Live OpenFeature flag accessor — returns `default` until the server answers.      |

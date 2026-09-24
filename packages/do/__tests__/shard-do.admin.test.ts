@@ -15,6 +15,7 @@ import type {
     QueueMetadata,
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
+    RelatedPage,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -41,6 +42,7 @@ import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
+    RunShardFindRelatedArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
@@ -418,7 +420,9 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
-            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], total: 2 },
+            // `sqlColumns` is the physical list, reported alongside the
+            // display list so a SQL surface knows which names it may write.
+            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], sqlColumns: ["__id__", "text"], total: 2 },
         });
     });
 
@@ -3163,6 +3167,22 @@ const todosRankByDone: RankIndexDefinitionLike = {
 
 const todosSchema: SchemaLike = {
     tables: {
+        /**
+         * A `.softDelete()` sibling of `todos`, so the bulk ops are exercised on
+         * BOTH delete modes from one harness. Its absence is why the bulk-delete
+         * non-convergence below shipped: every bulk test ran against a table whose
+         * writer-routed delete physically removes the row, so the tombstone branch
+         * — where a scan re-matches the rows it just wrote — was never reached.
+         */
+        notes: {
+            indexes: [],
+            shape: {
+                deletedAt: { kind: "number" },
+                projectId: { kind: "string" },
+                title: { kind: "string" },
+            },
+            softDeleteMode: { field: "deletedAt" },
+        },
         todos: {
             aggregateIndexes: [todosByProject],
             indexes: [],
@@ -3214,7 +3234,10 @@ class BulkOpsShard extends ShardDO {
         });
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "", args.table);
+            // Codegen's exact forwarding — the harness has to carry it or the bulk
+            // arm's `hard: true` is invisible here, which is how the non-converging
+            // soft-delete drain shipped.
+            await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
         } else if (args.op === "patch") {
             await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
         } else {
@@ -3296,6 +3319,21 @@ describe("shardDO admin bulk delete", () => {
                 `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
             )[0]?.["c"] ?? 0,
         );
+
+    /** Physical rows in `notes` — tombstones included, because a soft delete keeps the row. */
+    const notesPhysical = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "notes"`)[0]?.["c"] ?? 0);
+
+    /** Rows of `notes` carrying a soft-delete marker — what a soft delete would leave behind. */
+    const notesTombstoned = (): number =>
+        Number(database.raw(`SELECT COUNT(*) AS c FROM "notes" WHERE json_extract("__doc__", '$.deletedAt') IS NOT NULL`)[0]?.["c"] ?? 0);
+
+    /** Seed `count` notes in the given project on the `.softDelete()` table. */
+    const seedNotes = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
+        for (let index = 0; index < count; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert("notes", { projectId: project, title: `n${index.toString()}` }); // gitleaks:allow -- a test fixture's shard key, not a credential
+        }
+    };
 
     /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
@@ -3455,6 +3493,25 @@ describe("shardDO admin bulk delete", () => {
         const remaining = await createShardContextDatabase({ schema: todosSchema, sql: database.sql }).findMany("todos", {});
 
         expect(remaining.page).toHaveLength(3);
+    });
+
+    it("refuses a whitespace-only search, which the reader trims back to no predicate", async () => {
+        expect.assertions(2);
+
+        // The reader normalises `search` with `.trim()`, so a blank-but-not-empty
+        // term compiles to NO search conjunct — a predicate-free scan that empties
+        // the table while the audit log records it as `deleteRows`. The guard has
+        // to normalise the same way the reader does, or the two disagree and the
+        // one that wins is the destructive one.
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { search: "   ", table: "todos" }));
+
+        expect(response.status).toBe(400);
+        expect(rowCount()).toBe(3);
     });
 
     it("maps an unknown table to a 404", async () => {
@@ -3678,12 +3735,20 @@ describe("shardDO admin bulk delete", () => {
             functionPath: string,
             args: Record<string, unknown>,
             openCursor?: string,
-        ): Promise<{ outcome: string; written: number }> => {
+        ): Promise<{ batches: number; outcome: string; written: number }> => {
+            // Round-trips actually issued. A drain that stops asking because it ran
+            // out of batches reports `cap-hit`, but one that keeps re-matching rows
+            // it already wrote reports the SAME outcome as honest work — the batch
+            // count is what separates "converged" from "spun".
+            let batches = 0;
+
             const drained = await drainBulkOp({
                 args,
                 maxBatches: 50,
                 openCursor,
                 query: async (batchArgs) => {
+                    batches += 1;
+
                     const response = await shard.fetch(bulkRequest(functionPath, batchArgs));
 
                     if (!response.ok) {
@@ -3696,7 +3761,7 @@ describe("shardDO admin bulk delete", () => {
                 },
             });
 
-            return { outcome: drained.outcome, written: drained.written };
+            return { batches, outcome: drained.outcome, written: drained.written };
         };
 
         it("patches every matching row when the patch leaves them matching", async () => {
@@ -3746,6 +3811,63 @@ describe("shardDO admin bulk delete", () => {
             expect(written).toBe(12);
             expect(rowCount()).toBe(3);
         });
+
+        /**
+         * The `.softDelete()` half of the same seam. "Clear table" is a PHYSICAL
+         * removal — see the note on the delete arm in `handleBulkRowOp` — so the
+         * drain converges: each batch's writes take their rows out of the match set,
+         * which is the invariant the whole cursorless delete path is built on.
+         *
+         * Left soft, the scan re-matched the tombstones it had just stamped on every
+         * subsequent batch, each `apply` no-opped, `count` kept incrementing and
+         * `hasMore` never dropped — so the drain ran to its batch ceiling, reported
+         * far more rows than the table ever held, and left everything past the first
+         * page live.
+         */
+        it("drains a clear of a .softDelete() table in bounded batches, removing the rows", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 7);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" });
+
+            expect(outcome).toBe("completed");
+            // 7 rows at 3 per call: three full batches and no more. A non-converging
+            // drain spends all 50.
+            expect(batches).toBe(3);
+            expect(written).toBe(7);
+            expect(notesPhysical()).toBe(0);
+            expect(notesTombstoned()).toBe(0);
+        });
+
+        it("drains a predicated delete on a .softDelete() table, leaving non-matching rows untouched", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 5);
+            await seedNotes(seed, "p2", 2);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.deleteRows, {
+                filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                limit: 2,
+                table: "notes",
+            });
+
+            expect(outcome).toBe("completed");
+            // 5 matching rows at 2 per call: three batches (the third returns 1).
+            expect(batches).toBe(3);
+            expect(written).toBe(5);
+            // p2's two rows survive, and nothing is left tombstoned.
+            expect(notesPhysical()).toBe(2);
+            expect(notesTombstoned()).toBe(0);
+        });
     });
 
     it("withholds a cursor from an unordered scan, so no caller can resume from a meaningless boundary", async () => {
@@ -3772,6 +3894,35 @@ describe("shardDO admin bulk delete", () => {
         const body = await ordered.json<{ result: { cursor?: string } }>();
 
         expect(body.result.cursor).toBeDefined();
+    });
+
+    /**
+     * One call, no drain: the reported `count` must be rows the table actually
+     * lost. A soft delete made this count tombstone stamps — and on a re-run, the
+     * same rows again — so the audit record ("deleted: N") and the operator's
+     * banner both described work that had not happened.
+     */
+    it("reports a clear of a .softDelete() table as rows actually removed", async () => {
+        expect.assertions(4);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedNotes(seed, "p1", 5);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
+
+        expect(body.result).toStrictEqual({ count: 3, hasMore: true });
+        // The three it counted are the three the table lost.
+        expect(notesPhysical()).toBe(2);
+
+        const second = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+
+        await expect(second.json<{ result: { count: number; hasMore: boolean } }>()).resolves.toStrictEqual({
+            result: { count: 2, hasMore: false },
+        });
+        expect(notesPhysical()).toBe(0);
     });
 });
 
@@ -3927,5 +4078,172 @@ describe("shardDO admin schema-history reads", () => {
 
         expect(response.status).not.toBe(200);
         await expect(response.text()).resolves.not.toContain("[object Object]");
+    });
+});
+
+/**
+ * The schema-derived relation graph behind `__lunora_admin__:findRelated`:
+ * `messages.authorId → users`, so the traversal has one edge to walk in both
+ * directions.
+ */
+const relationGraphSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [{ fields: ["authorId"], name: "by_author" }],
+            shape: { authorId: { _meta: { tableName: "users" }, kind: "id" }, body: { kind: "string" } },
+        },
+        users: { indexes: [], shape: { name: { kind: "string" } } },
+    },
+};
+
+/** Mirrors the codegen-generated subclass's `runShardFindRelated` override. */
+class RelatedShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+        const writer = createShardContextDatabase({ schema: relationGraphSchema, sql: this.sql as SqlExec });
+
+        return writer.related!(
+            { id: args.id, table: args.table },
+            { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+        );
+    }
+}
+
+describe("shardDO admin findRelated", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, relationGraphSchema);
+
+        const seed = createShardContextDatabase({ schema: relationGraphSchema, sql: database.sql });
+
+        await seed.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m1", authorId: "u1", body: "hello" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", authorId: "u1", body: "again" }, { allowExplicitId: true });
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const findRelatedRequest = (args: Record<string, unknown>, token = ADMIN_TOKEN): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.findRelated }),
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("walks the schema's foreign keys out of a row", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ direction: "in", id: "u1", table: "users" }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { depth: number; document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => [node.document._id, node.depth])).toStrictEqual([
+            ["m1", 1],
+            ["m2", 1],
+        ]);
+    });
+
+    it("forwards the traversal's own refusal for an out-of-range depth", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ depth: 99, id: "u1", table: "users" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("refuses a payload with no table", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("is admin-gated like every other admin op", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }, "wrong-token"));
+
+        expect(response.status).toBe(403);
+    });
+
+    /**
+     * Every default this op has is its WIDEST setting, so a malformed narrowing
+     * option that was silently dropped ran a BIGGER traversal than the caller
+     * asked for — `direction: "sideways"` became both directions,
+     * `edges: "messages.authorId"` became every edge, `limit: "1"` became the
+     * default page. The caller here is an AI agent composing JSON against an
+     * admin writer with RLS and column masks bypassed, so a wrong shape is a 400.
+     */
+    it.each([
+        ["direction", { direction: "sideways", id: "u1", table: "users" }],
+        ["edges as a bare string", { edges: "messages.authorId", id: "u1", table: "users" }],
+        ["a non-string edge entry", { edges: ["messages.authorId", 7], id: "u1", table: "users" }],
+        ["limit as a string", { id: "u1", limit: "1", table: "users" }],
+        ["depth as a string", { depth: "1", id: "u1", table: "users" }],
+        ["a non-string cursor", { cursor: 7, id: "u1", table: "users" }],
+    ])("refuses a malformed %s rather than widening the traversal", async (_label, args) => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest(args));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("still accepts the options it always accepted", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        // `cursor: null` is the wire's "first page", not a malformed cursor.
+        const response = await shard.fetch(
+            findRelatedRequest({ cursor: null, depth: 1, direction: "in", edges: ["messages.authorId"], id: "u1", limit: 1, table: "users" }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => node.document._id)).toStrictEqual(["m1"]);
+    });
+
+    it("base ShardDO rejects findRelated as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
     });
 });

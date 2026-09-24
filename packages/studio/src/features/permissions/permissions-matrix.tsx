@@ -21,9 +21,20 @@ const operationLabel = (t: TFunction, operation: RlsOperation): string =>
 
 /** One table × operation cell: the procedure covering it, if any. */
 interface CellState {
+    /** Registry key of the covering procedure — what the probe must dispatch; `undefined` ⇒ no policy. */
+    path?: string;
     /** Procedure whose `.use(rls(...))` chain declared the covering policy; `undefined` ⇒ no policy. */
     procedure?: string;
 }
+
+/**
+ * The key the function registry is actually dispatched on: `<file>:<function>`
+ * (e.g. `documents:list`). Policy metadata reports the two halves separately, and
+ * the bare export name is NOT a path — sending it resolves to no function at all.
+ * A policy with no `file` falls back to the bare name rather than emitting a
+ * leading colon.
+ */
+const functionPathOf = (policy: RlsPolicyMetadata): string => (policy.file === "" ? policy.procedure : `${policy.file}:${policy.procedure}`);
 
 /** Per-table coverage: the four operation cells, masked columns, and an "uncovered" advisory flag. */
 interface TableRowState {
@@ -82,7 +93,7 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
     };
 
     for (const policy of policies) {
-        ensure(policy.table).cells[policy.on] = { procedure: policy.procedure };
+        ensure(policy.table).cells[policy.on] = { path: functionPathOf(policy), procedure: policy.procedure };
     }
 
     // Deduped through the row's own Set rather than a parallel map keyed by the
@@ -101,12 +112,12 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
 interface PermissionsMatrixProps {
     /**
      * Invoked when an operator clicks a covered cell's "Probe this" affordance,
-     * prefilled with the cell's table + operation + the covering procedure so the
-     * playground can seed the right function. Only covered cells render the link
-     * (an uncovered cell has no procedure to probe). Omitted ⇒ no probe links
-     * (the matrix is read-only).
+     * prefilled with the cell's table + operation + the covering procedure's
+     * REGISTRY PATH (`<file>:<function>`) so the playground can seed the right
+     * function. Only covered cells render the link (an uncovered cell has no
+     * procedure to probe). Omitted ⇒ no probe links (the matrix is read-only).
      */
-    readonly onProbe?: (table: string, operation: RlsOperation, procedure: string) => void;
+    readonly onProbe?: (table: string, operation: RlsOperation, functionPath: string) => void;
 }
 
 /**
@@ -210,7 +221,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                                                             className="h-auto justify-start p-0 text-[11px]"
                                                             data-testid={`pm-probe-${row.table}-${operation}`}
                                                             onClick={() => {
-                                                                onProbe(row.table, operation, cell.procedure ?? "");
+                                                                onProbe(row.table, operation, cell.path ?? "");
                                                             }}
                                                             size="xs"
                                                             type="button"

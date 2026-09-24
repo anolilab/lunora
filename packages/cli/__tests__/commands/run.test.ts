@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FetchLike } from "../../src/commands/run/handler";
 import { runRpcCommand } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -161,7 +162,7 @@ describe("lunora run", () => {
             logger: silentLogger(),
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
         expect(bodyRead).toBe(true);
         expect(result.body).toBe("<html><body>502 Bad Gateway</body></html>");
     });
@@ -189,7 +190,7 @@ describe("lunora run", () => {
             logger: { ...silentLogger(), error: (message) => errors.push(message) },
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("failed to parse --args");
     });
 
@@ -206,7 +207,7 @@ describe("lunora run", () => {
             logger: { ...silentLogger(), error: (message) => errors.push(message) },
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(called()).toBe(false);
     });
 
@@ -227,7 +228,7 @@ describe("lunora run", () => {
             url: "http://localhost:9999",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(called()).toBe(false);
         expect(errors.join("\n")).toContain("--claims requires --as");
     });
@@ -311,7 +312,7 @@ describe("lunora run --as", () => {
             url: "https://app.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.AUTH);
         expect(calls).toHaveLength(0);
     });
 
@@ -351,7 +352,7 @@ describe("lunora run --as", () => {
             url: "http://staging.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
     });
 

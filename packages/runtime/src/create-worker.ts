@@ -20,6 +20,7 @@ import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
@@ -62,6 +63,7 @@ import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { trustedClientIp } from "./trusted-client-ip";
@@ -96,6 +98,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
  */
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
+    [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -1347,7 +1350,9 @@ interface WorkerOptions {
      * as a whole on the worker and on every shard/container it fans out to (no
      * half traces). The head decision is propagated to shards via the
      * `traceparent` sampled flag, so they drop the matching `ctx.trace` spans
-     * coherently.
+     * coherently. Both dispatch paths settle it once and propagate it the same
+     * way: a single `/_lunora/rpc` call, and a `/_lunora/rpc-batch` whose entries
+     * all ride the batch's one verdict.
      *
      * With `alwaysSampleErrors` (default `true`), a trace that produced an error
      * span is kept whole regardless of the head decision — the tail bias, so
@@ -1734,17 +1739,6 @@ const STATUS_PATH = "/_lunora/status";
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
-// Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
-// native `scheduled()` trigger would. Cloudflare silently drops `triggers.crons`
-// for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
-// platform fans cron ticks out to its tenants by POSTing here.
-const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
-
-// Admin-gated HTTP entrypoint that processes a forwarded queue batch. Namespaced
-// WfP Workers can't be queue consumers, so a platform-owned consumer forwards
-// batches here, where the app's `queueHandler` runs.
-const QUEUE_DISPATCH_PATH = "/_lunora/queue";
-
 /**
  * The reserved cross-shard relation reader's function-path prefix. Inlined as a
  * literal rather than imported so the runtime carries no `@lunora/do` dependency.
@@ -2037,6 +2031,12 @@ const resolveForwardContext = async (
     // so a forged value can only reorder a caller's own mutator stream.
     const clientId = request.headers.get("x-lunora-client-id");
     const clientSeq = request.headers.get("x-lunora-client-seq");
+    // The caller's CDC baseline — the changelog cursor its view of the data was at
+    // when it composed this write. Forwarded verbatim, and safe to: a
+    // `.dropStalePatches()` table only ever uses it to DISCARD the caller's own
+    // write, so the worst a forged value buys is losing your own edit (or, at the
+    // other extreme, the behaviour every table already has without the flag).
+    const baseSeq = request.headers.get("x-lunora-base-seq");
 
     if (authorization) {
         headers["authorization"] = authorization;
@@ -2060,6 +2060,10 @@ const resolveForwardContext = async (
 
     if (clientSeq) {
         headers["x-lunora-client-seq"] = clientSeq;
+    }
+
+    if (baseSeq) {
+        headers["x-lunora-base-seq"] = baseSeq;
     }
 
     // Forward the caller's IP, but only where one can be believed: ON Cloudflare
@@ -2979,8 +2983,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      *
      * Server-initiated dispatch does not call this — see
      * {@link WorkerOptions.authorizeShard} for why.
+     *
+     * `isAdmin` marks a request that already presented an admin credential. It
+     * skips the TENANT policy — `authorizeShard` and the no-callback
+     * default-deny — for the reason {@link WorkerOptions.authorizeShard}
+     * documents: an admin request carries an admin bearer, not an end-user
+     * session, so it resolves to a `null` identity that the recommended gate
+     * (`identity?.userId !== undefined`) cannot distinguish from an anonymous
+     * end user and denies. The reserved-name refusal below is NOT skipped: an
+     * admin credential does not make `foo::relay::0` a well-formed shard key.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false): Promise<void> => {
         // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
         // names, and a DO reads its own name to learn its role. A client-supplied
         // key carrying either infix therefore addresses a DO that believes it is
@@ -2990,6 +3003,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `authorizeShard`: the name is malformed whatever the policy says.
         if (shardKey.includes(RELAY_NAME_INFIX) || shardKey.includes(REPLICA_NAME_INFIX)) {
             throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+        }
+
+        if (isAdmin) {
+            return;
         }
 
         if (options.authorizeShard) {
@@ -3428,7 +3445,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Cloudflare serialises as JSON into durable storage — so a decoded
             // `bigint` fails creation outright and a decoded `Date` silently arrives
             // as a string. The wire form IS JSON-safe, so it travels intact and
-            // `createRunContext` decodes it where the handler reads `params`.
+            // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
+            // handler reads `params`.
             await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
@@ -4089,7 +4107,21 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
         const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
-        await assertShardAuthorized(identity, shardKey);
+        // The same admin exemption the RPC path applies to `__lunora_admin__:*`
+        // (see `authorizeRpcEnvelope`), and the one
+        // {@link WorkerOptions.authorizeShard} documents. Without it every app
+        // deploying the recommended gate 403s the studio's live panels: the
+        // upgrade presents an admin credential, not a session, so `identity` is
+        // `null` and the gate denies. The predicate is the one
+        // `scheduledAdminRoutes.checkWsAdmin` already uses — a browser cannot set
+        // `Authorization` on an upgrade, so the studio's short-lived sub-token
+        // rides `?token=`. Nothing is widened past the worker: the DO re-derives
+        // the credential per socket at upgrade AND on every write flush, so an
+        // admin subscription dies with a rotated token, and the only other
+        // admin-prefixed socket surface (`stream`) is refused outright there.
+        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()));
+
+        await assertShardAuthorized(identity, shardKey, adminUpgrade);
 
         // Clone the upgrade request, attaching only the resolved identity headers.
         // The original headers — crucially `Upgrade: websocket` — are preserved so
@@ -4434,7 +4466,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         });
 
         if (ignoredUpstream) {
-            noticeDroppedTrace();
+            noticeDroppedTrace(request);
         }
 
         // `x-lunora-sample-errors` carries the tail-bias toggle alongside the
@@ -4442,7 +4474,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // kept whole on both the worker and the shard.
         const outgoingHeaders: Record<string, string> = {
             ...forwardedHeaders,
-            "x-lunora-sample-errors": decision.keepErrors ? "1" : "0",
+            [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
         };
 
         injectTraceContext(trace, outgoingHeaders);
@@ -4724,9 +4756,60 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             ),
         );
 
-        const { observability } = options;
+        const { observability, sampling } = options;
         const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
         const requestMeta = requestTelemetryMeta(request);
+
+        // ONE trace for the whole batch, opened exactly as `dispatchSingleShard`
+        // opens one for a single call: the head verdict is settled here and then
+        // propagated, so the batch is kept or dropped whole rather than having
+        // each sub-batch re-decide. Without this the export gate below never
+        // fired (no settled decision to hand it) and the shard minted a fresh,
+        // unrelated trace for every sub-request it received.
+        const { decision, ignoredUpstream, trace } = beginDispatchTrace(request, {
+            ...(sampling === undefined ? {} : { sampling }),
+            trustInbound: isTrustedUpstream(request),
+        });
+
+        if (ignoredUpstream) {
+            noticeDroppedTrace(request);
+        }
+
+        // The verdict every `emitRpcEvent` below is gated on. `trace.sampled` is
+        // the propagated bit (honoring a trusted upstream's sampled-out `00`),
+        // not the raw head verdict, so the gate cannot disagree with the
+        // `traceparent` the shard received.
+        const verdict = { isTraced: trace.sampled, keepErrors: decision.keepErrors };
+
+        // One sub-request's header bag: the caller's forwarded context, the
+        // tail-bias toggle, and a `traceparent` naming a span id MINTED PER
+        // SHARD — never one shared by the whole fan-out.
+        //
+        // Each shard runs its own dispatch and adopts the id it is handed as
+        // that dispatch's root (`resolveTraceAnchor` takes the inbound
+        // `parentSpanId`), then stamps it onto its `lunora.dispatch` wide event,
+        // its `ctx.log` records and the parent of every `ctx.trace` child. Hand
+        // two shards the same id and their unrelated work arrives at the
+        // collector under one `(traceId, spanId)` — the same rule the per-entry
+        // ids below follow, one level up and across processes.
+        const subRequestHeaders = (shardSpanId: string): Record<string, string> => {
+            const headers: Record<string, string> = {
+                ...forwardedHeaders,
+                "content-type": "application/json",
+                [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
+            };
+
+            injectTraceContext({ ...trace, spanId: shardSpanId }, headers);
+
+            return headers;
+        };
+
+        // Trace fields for one entry's event: its own span, beneath the span its
+        // OWN shard was told to use. That groups a batch by the hop that
+        // actually carried each entry, and keeps every id on the wire distinct.
+        const entryTraceFields = (shardSpanId: string): Pick<ObservabilityEvent, "parentSpanId" | "spanId" | "traceFlags" | "traceId"> => {
+            return { parentSpanId: shardSpanId, spanId: otlpRandomHex(8), traceFlags: trace.traceFlags, traceId: trace.traceId };
+        };
 
         const results: unknown[] = [];
         // Each shard is a distinct source whose `x-d1-bookmark` values are not
@@ -4758,7 +4841,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             eventFor: (entry: BatchEntry) => ObservabilityEvent,
         ): void => {
             for (const entry of entries) {
-                emitRpcEvent(observability, eventFor(entry), sinkContext);
+                emitRpcEvent(observability, eventFor(entry), sinkContext, undefined, verdict);
                 results.push(slotError(entry, status, code, message));
             }
         };
@@ -4769,6 +4852,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const emitEntryEvents = (
             entries: BatchEntry[],
             shardKey: string,
+            shardSpanId: string,
             durationMs: number,
             statusById: Map<unknown, number>,
             fallbackStatus: number,
@@ -4783,11 +4867,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         durationMs,
                         functionPath: entry.functionPath,
                         ...requestMeta,
+                        ...entryTraceFields(shardSpanId),
                         ok,
                         shardKey,
                         ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
                     },
                     sinkContext,
+                    // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
+                    // settled `decision` is passed — see `dispatchSingleShard`.
+                    undefined,
+                    verdict,
                 );
             }
         };
@@ -4796,11 +4885,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // watermarks); entries WITHIN a shard stay ordered by the DO's sequential loop.
         await Promise.all(
             [...groups.entries()].map(async ([shardKey, entries]) => {
-                const headers = new Headers(forwardedHeaders);
-
-                headers.set("content-type", "application/json");
-
-                const subRequest = new Request("https://shard.internal/rpc-batch", { body: JSON.stringify({ calls: entries }), headers, method: "POST" });
+                // This sub-request's own span, distinct per shard — see
+                // `subRequestHeaders`.
+                const shardSpanId = otlpRandomHex(8);
+                const subRequest = new Request("https://shard.internal/rpc-batch", {
+                    body: JSON.stringify({ calls: entries }),
+                    headers: new Headers(subRequestHeaders(shardSpanId)),
+                    method: "POST",
+                });
                 const subStartedAt = Date.now();
                 let response: Response;
 
@@ -4821,6 +4913,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         return {
                             ...buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }),
                             ...requestMeta,
+                            ...entryTraceFields(shardSpanId),
                         };
                     });
 
@@ -4849,6 +4942,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                             error: { code: "SHARD_ERROR", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
+                            ...entryTraceFields(shardSpanId),
                             ok: false,
                             shardKey,
                         };
@@ -4861,7 +4955,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 const statusById = new Map(entryResults.map((entry) => [entry.id, entry.status ?? response.status]));
                 const seenIds = new Set(entryResults.map((entry) => entry.id));
 
-                emitEntryEvents(entries, shardKey, durationMs, statusById, response.status);
+                emitEntryEvents(entries, shardKey, shardSpanId, durationMs, statusById, response.status);
                 results.push(...entryResults);
 
                 // Any entry the shard omitted (short/partial response) gets an
@@ -5124,66 +5218,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    /**
-     * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
-     * Workers-for-Platforms workaround for dropped `triggers.crons` (a platform
-     * fans ticks out to its namespaced tenants). Admin-gated; the body carries
-     * the cron expression to run as `{ "cron": "0 9 * * *" }`, and dispatch goes through the SAME
-     * `handleScheduled` path the native trigger uses (user crons + code crons +
-     * scheduled backup), so behaviour is identical to a real firing.
-     */
-    const handleScheduledTick = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
-        assertAdminAuthorized(request);
-
-        if (request.method !== "POST") {
-            throw new LunoraError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const body = (await request.json().catch(() => undefined)) as { cron?: unknown } | undefined;
-        const cron = typeof body?.cron === "string" ? body.cron : "";
-
-        if (cron === "") {
-            throw new LunoraError("scheduled tick requires a `cron` expression", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        await handleScheduled({ cron, noRetry: () => {}, scheduledTime: Date.now() }, env, context);
-
-        return Response.json({ cron, ok: true });
-    };
-
-    /**
-     * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
-     * for queue consumers). Admin-gated; the body is
-     * `{ "queue": "name", "messages": [{ "id": "...", "body": ... }] }`. Returns
-     * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
-     */
-    const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
-        assertAdminAuthorized(request);
-
-        if (request.method !== "POST") {
-            throw new LunoraError("queue dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!options.queueHandler) {
-            throw new LunoraError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const body = (await request.json().catch(() => undefined)) as { messages?: unknown; queue?: unknown } | undefined;
-        const queue = typeof body?.queue === "string" ? body.queue : "";
-        const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
-        const messages = rawMessages
-            .filter(
-                (message): message is { body: unknown; id: string } =>
-                    typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string",
-            )
-            .map((message) => {
-                return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
-            });
-
-        const result = await options.queueHandler({ messages, queue }, env, context);
-
-        return Response.json({ retry: result?.retry ?? [] });
-    };
+    // The reserved WfP fan-out entrypoints (`/_lunora/scheduled`,
+    // `/_lunora/queue`). Kept out of the internal route table below because both
+    // need the execution `context` — the cron tick for user-cron `waitUntil`,
+    // the queue batch to hand to the app's handler — which the table-shaped
+    // routes don't receive.
+    const tenantFanoutRoutes = buildTenantFanoutRoutes({
+        assertAdmin: assertAdminAuthorized,
+        dispatchScheduled: handleScheduled,
+        queueHandler: options.queueHandler,
+    });
 
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
@@ -5446,8 +5490,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const contentLength = Number(request.headers.get("content-length") ?? "");
         // Routes that declare their own larger body budget (the KV value PUT,
-        // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV value,
-        // and the storage object upload, which moves real files) must not be
+        // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV value;
+        // the storage object upload, which moves real files; and the queue
+        // fan-out, which takes a full 100 × 128 KiB forwarded batch) must not be
         // pre-rejected by the shared 1 MiB cap — else the per-route cap is dead
         // code for any client that sends a `Content-Length`. Pick the route's cap
         // so the header check matches the reader's cap.
@@ -5493,15 +5538,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         }
 
-        // The cron-tick entrypoint needs the execution `context` (for user-cron
-        // `waitUntil`), which the table-shaped routes don't receive — dispatch it
-        // here while `context` is in scope.
-        if (url.pathname === SCHEDULED_TICK_PATH) {
-            return handleScheduledTick(request, env, context);
-        }
+        // The WfP fan-out entrypoints need the execution `context`, which the
+        // table-shaped routes below don't receive — dispatch them here while
+        // `context` is in scope.
+        const fanoutRoute = tenantFanoutRoutes[url.pathname];
 
-        if (url.pathname === QUEUE_DISPATCH_PATH) {
-            return handleQueueDispatch(request, env, context);
+        if (fanoutRoute) {
+            return fanoutRoute(request, env, context);
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts

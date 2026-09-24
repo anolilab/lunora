@@ -16,17 +16,25 @@ re-use the local browser cache.
 
 ## What this suite covers
 
-| File                     | What it proves                                                                                                 |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`           | Sign-up / sign-in / sign-out / weak-password rejection via `@lunora/auth`                                      |
-| `auth-rls.spec.ts`       | Two users, RLS-guarded `notes` — one user's rows never reach the other, over live WS subscriptions AND raw RPC |
-| `subscriptions.spec.ts`  | Real-time WS deltas between tabs, offline queue + replay                                                       |
-| `offline-replay.spec.ts` | Several mutations queued offline replay in authored order on reconnect; a second tab converges                 |
-| `sharding.spec.ts`       | `shardBy("channelId")` isolates state across DOs; two clients on the SAME shard converge both ways             |
-| `optimistic.spec.ts`     | `useMutation` shows pending instantly, then either confirms or rolls back                                      |
-| `r2-storage.spec.ts`     | Signed URL PUT/GET round-trip through Miniflare R2, expiry returns 403                                         |
-| `scaffold.spec.ts`       | `lunora init` (BUILT CLI bin, offline `--from templates`) → `lunora codegen` → the scaffold typechecks         |
-| `scheduler.spec.ts`      | A scheduled job's SchedulerDO alarm fires and dispatches it back into the worker within the wall-clock budget  |
+| File                      | What it proves                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `auth.spec.ts`            | Sign-up / sign-in / sign-out / weak-password rejection via `@lunora/auth`                                      |
+| `auth-rls.spec.ts`        | Two users, RLS-guarded `notes` — one user's rows never reach the other, over live WS subscriptions AND raw RPC |
+| `subscriptions.spec.ts`   | Real-time WS deltas between tabs, offline queue + replay                                                       |
+| `offline-replay.spec.ts`  | Several mutations queued offline replay in authored order on reconnect; a second tab converges                 |
+| `sharding.spec.ts`        | `shardBy("channelId")` isolates state across DOs; two clients on the SAME shard converge both ways             |
+| `optimistic.spec.ts`      | `useMutation` shows pending instantly, then either confirms or rolls back                                      |
+| `r2-storage.spec.ts`      | Signed URL PUT/GET round-trip through Miniflare R2, expiry returns 403                                         |
+| `scaffold.spec.ts`        | `lunora init` (BUILT CLI bin, offline `--from templates`) → `lunora codegen` → the scaffold typechecks         |
+| `scheduler.spec.ts`       | A scheduled job's SchedulerDO alarm fires and dispatches it back into the worker within the wall-clock budget  |
+| `auth-ui-screens.spec.ts` | The copy-in `lunora add auth-ui` cards in a real browser: sign-up/in, validation, profile, password, sessions  |
+| `mail-reset.spec.ts`      | better-auth's password reset through `@lunora/mail`: captured mail → reset link → the new password signs in    |
+
+A second config, `playwright.examples.config.ts`, drives `examples/*` in a real
+browser (`pnpm run e2e:examples`). `feedback-board` needs a Cloudflare account
+for its Workers AI binding, so on a tokenless CI runner its dev server is not
+started and its tests report as **skipped** — visibly, in the run's skip count,
+rather than being dropped from the project list.
 
 ## How the harness boots
 
@@ -59,7 +67,12 @@ Boot reliability (each item below was an observed failure mode):
   crashed run, a dev's `pnpm dev`) fails the run with an explicit conflict
   error instead of silently testing against unknown state. Set
   `LUNORA_E2E_EXTERNAL=true` to intentionally target an already-running
-  playground.
+  playground — that server must carry `LUNORA_E2E="true"` in its own
+  `apps/playground/.dev.vars` (the harness only writes that file for a server it
+  started itself), or the `/test/*` routes 404. Setup checks and says so.
+- The origin lives in one place, `origin.ts`. Override it with
+  `LUNORA_E2E_BASE_URL` — the Playwright `baseURL`, the port the harness starts
+  Vite on, and every direct `fetch` in the fixtures and specs all read it.
 
 `globalTeardown.ts` kills the whole process **group** (pnpm → node → vite →
 workerd; SIGTERM, then SIGKILL after 5 s), waits for the real `exit` event,
@@ -93,8 +106,9 @@ pnpm --filter @lunora/e2e exec playwright show-trace test-results/**/trace.zip
   every Firefox test on a Chromium-only machine.
 - **No hard sleeps** except where wall-clock time is itself under test
   (`scheduler.spec.ts` cron timing, `r2-storage.spec.ts` signed-URL expiry).
-- **`/test/reset`** is called before every test so they are
-  order-independent.
+- **`/test/reset`** is called before every test that touches shared D1 state,
+  so they are order-independent. `scaffold.spec.ts` is the exception: it only
+  runs the CLI against a temp directory and never reaches the worker.
 
 ## CI gate
 
@@ -114,10 +128,12 @@ a red suite is a signal to fix, not to mute.
   the workspace packages are symlinked in (their built `dist/`) and the
   scaffold is verified with `lunora codegen` + `tsc --noEmit`. The remote
   registry path is covered by `scripts/clean-machine-smoke.sh`.
-- **`optimistic.spec.ts`'s rollback case is `fixme`'d**: the optimistic row
-  isn't observable when the failing mutation is mocked via Playwright's
-  `route` (the insert + rollback collapse into one paint). The optimistic
-  _render_ path is still covered by the sibling assertion.
+- **`optimistic.spec.ts` does not assert the rollback's intermediate paint**:
+  when the failing mutation is mocked via Playwright's `route`, the insert and
+  the rollback collapse into a single paint, so the optimistic row is never
+  observable. The test asserts the settled state instead; the optimistic
+  _render_ path is covered by the sibling assertion. There is no `skip` or
+  `fixme` anywhere in this suite — see the CI gate note above.
 - There is no Vite-overlay test: `@visulima/vite-overlay` only renders real,
   source-mappable errors, which a synthetic event can't drive — the overlay is
   third-party (with its own tests) and is exercised by real dev usage.

@@ -23,9 +23,6 @@ export interface AuthNamespaceLike {
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
-    /** Base path the auth routes are served under. Defaults to `/api/auth`. */
-    basePath?: string;
-
     /**
      * Shared secret presented on the object's internal session route. `undefined`
      * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
@@ -55,7 +52,14 @@ export interface DoAuthWiring {
      */
     auditReader: AuthAuditReader;
 
-    /** Forwards `/api/auth/*` to the object; `undefined` for anything else. */
+    /**
+     * Forwards `/api/auth/*` to the object; `undefined` for anything else.
+     *
+     * The base path is fixed. It was configurable on both halves of DO-backed auth
+     * and settable on neither: codegen's `AuthDeclaration` has no field for it, so
+     * the emitted `createDoAuthWiring(...)` never passed one and an `AuthDO`
+     * subclass that set its own served nothing.
+     */
     authHandler: (request: Request) => Promise<Response | undefined>;
 
     /**
@@ -82,7 +86,7 @@ export interface DoAuthWiring {
  * @experimental
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
-    const { basePath = DEFAULT_AUTH_BASE_PATH, internalSecret, namespace, objectName = "auth" } = options;
+    const { internalSecret, namespace, objectName = "auth" } = options;
 
     /** The object's stub, or `undefined` when the binding is missing. */
     const stub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {
@@ -138,7 +142,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         authHandler: async (request) => {
             // Only auth routes go to the object; everything else falls through to the
             // Lunora worker exactly as it does in D1 mode.
-            if (!isAuthRoutePath(new URL(request.url).pathname, basePath)) {
+            if (!isAuthRoutePath(new URL(request.url).pathname, DEFAULT_AUTH_BASE_PATH)) {
                 return undefined;
             }
 

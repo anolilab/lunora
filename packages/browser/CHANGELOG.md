@@ -1,3 +1,44 @@
+## @lunora/browser [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.49...@lunora/browser@1.0.0-alpha.50) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/browser [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.48...@lunora/browser@1.0.0-alpha.49) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
+## @lunora/browser [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.47...@lunora/browser@1.0.0-alpha.48) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/browser [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.46...@lunora/browser@1.0.0-alpha.47) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/browser [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.45...@lunora/browser@1.0.0-alpha.46) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/browser [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.44...@lunora/browser@1.0.0-alpha.45) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
 ## @lunora/browser [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/browser@1.0.0-alpha.43...@lunora/browser@1.0.0-alpha.44) (2026-09-07)
 
 

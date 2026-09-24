@@ -26,6 +26,7 @@ const normalizeBatchCall = (raw: unknown, index: number, defaultShard: string): 
 
     const call = raw as {
         args?: unknown;
+        baselineSeq?: unknown;
         clientId?: unknown;
         clientSeq?: unknown;
         functionPath?: unknown;
@@ -57,6 +58,9 @@ const normalizeBatchCall = (raw: unknown, index: number, defaultShard: string): 
     return {
         entry: {
             args: call.args === undefined ? {} : (call.args as Record<string, unknown>),
+            // Narrowed like `clientSeq`: a non-number is dropped rather than
+            // rejected, so a client on an older wire version still batches.
+            baselineSeq: typeof call.baselineSeq === "number" ? call.baselineSeq : undefined,
             clientId: typeof call.clientId === "string" ? call.clientId : undefined,
             clientSeq: typeof call.clientSeq === "number" ? call.clientSeq : undefined,
             functionPath: call.functionPath,

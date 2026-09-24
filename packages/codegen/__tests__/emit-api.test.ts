@@ -612,8 +612,8 @@ describe("emitApi", () => {
         const rendered = emitApi({
             functions: [],
             mutators: [
-                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "{ ok: boolean }" },
-                { args: {}, exportName: "clear", filePath: "mutators", returnType: "void" },
+                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "{ ok: boolean }" },
+                { args: {}, exportName: "clear", filePath: "mutators", line: 2, returnType: "void" },
             ],
         });
 
@@ -631,7 +631,7 @@ describe("emitApi", () => {
         // member is invalid TS, so the discovered function is authoritative.
         const rendered = emitApi({
             functions: [{ args: {}, exportName: "setText", filePath: "mutators", kind: "query", returnType: "string" }],
-            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "void" }],
+            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "void" }],
         });
 
         expect(rendered).toContain('setText: FunctionReference<"query", {}, string>;');

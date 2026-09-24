@@ -293,12 +293,22 @@ class AppBuilder<Env extends object> {
             // migrator). For production run the migrate command ahead of deploy.
             // The migration instance takes the RAW binding: better-auth migrates
             // only through Kysely and rejects the adapter the request instance uses.
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives `ensureMigrated`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving `/api/auth/*` against tables the
+            // migrator has not created yet. See `emit-app.ts` in @lunora/codegen for
+            // the full reasoning.
+            //
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
-            // Assigned after the schema exists, never before. Assigning first is
-            // what let a concurrent request see a non-null `auth` and serve
-            // `/api/auth/*` against tables the migrator had not created yet —
-            // `no such table: rateLimit`, from the isolate that was mid-migration.
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
+            auth = requestAuth;
         };
 
         // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this

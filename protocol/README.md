@@ -283,9 +283,13 @@ Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
-`INTERNAL` transport error.
+`INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
+envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
+— and takes the same path, rather than being read as one: a client that indexes
+it unchecked raises its own language's error past every handler the caller
+wrote.
 
-Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`.
+Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`.
 
 ### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
 
@@ -357,12 +361,19 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   so nothing reconnects to trigger the next flush, and a client MUST fall back to
   a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
-  committed, and the entry's `mutationId` is what makes that safe.
+  committed, and the entry's `mutationId` is what makes that safe. So is a slot
+  whose `error` key holds no envelope: a slot carries no HTTP status of its own,
+  so there is nothing to classify it by, which leaves the entry in exactly the
+  position of one that never came back.
 - A body with **no** `results` array is a whole-batch outcome, classified by the
   same rule: a transient code retries the whole chunk, and any other coded
   `{ error }` is a verdict on every entry and terminal. A reply carrying no
-  envelope to read at all — a non-JSON body, an edge's HTML page — is classified
-  by HTTP STATUS instead, per the paragraph below.
+  envelope to read at all — a non-JSON body, an edge's HTML page, or an `error`
+  slot that is not an object (§4.2) — is classified by HTTP STATUS instead, per
+  the paragraph below. This is the sharpest edge the §4.2 rule has: a codeless
+  failure here settles every write in the chunk, so reading a proxy's
+  `{"error": "bad gateway"}` as an envelope discards durable writes that the
+  same reply, classified by its 502, keeps.
 - A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
   more than one entry MUST be split and retried rather than settled. A client
   also holds the request body under the 1 MiB cap up front, splitting before it
@@ -409,10 +420,24 @@ are ignored by the client parser.
 | `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
 | `whisper`                                   | `{ type, topic, data? }`                                                            |
 
-`subscribe.query.args` is `encodeWire(args)`. `table` defaults to
-`functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
+`subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
+the server re-executes; `table` addresses the legacy raw-delta fan-out
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+that has no table name to give sends the function path there — `@lunora/client`
+always does, because a function reference carries only its `namespace:fn` id — so
+those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
+`buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
+`subscribe` in any of the eight takes it, and every one of them passes that
+default. So `broadcastDelta` is not addressable from any client in this tree —
+only by a consumer that builds the frame itself. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
+
+`whisper_subscribe` and `whisper` are authorized per topic when the app declares
+an `onWhisper` authorizer; with none declared the topic's only boundary is the
+shard. A denied frame is **dropped silently** — neither has an ack frame, and
+adding an error frame for a denial would let a client probe which topics exist.
 
 `stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
 to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
@@ -499,6 +524,19 @@ Run `pageDeltaFrames` only once you announce the token.
 | `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
 | `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
 | `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
+
+A `complete` naming a live SUBSCRIPTION is a cancellation, NOT a de-registration:
+a client MUST report it to that subscription's error listener (the reference and
+all eight `sdks/*` ports use the code `SUBSCRIPTION_CANCELLED`) and MUST KEEP the
+registration, so the next reconnect resubscribes it under §5.1's resume rules.
+Dropping the state instead takes it out of the set the resubscribe loop walks,
+which freezes the query for the life of the process across every future
+reconnect — and reports nothing, because the listener was dropped with it. Today
+only `stream_*` ids receive this frame, so the two id spaces do not overlap and a
+stream's own completion is unaffected; the rule is what makes a
+user-subclassed shard, or a future server that sends it for a `sub_*` id, safe.
+`serverFrames`'s `complete` case in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins both halves.
 
 ### 5.3 Shape poke protocol (partial replication)
 

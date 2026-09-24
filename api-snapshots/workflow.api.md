@@ -87,6 +87,7 @@ class NonRetryableError extends Error {
 
 ```ts
 interface RunFunctionOptions {
+    dedupId?: string;
     shardKey?: string;
 }
 ```
@@ -397,6 +398,7 @@ type WorkflowRollbackHandlerLike<T = unknown> = (context: WorkflowRollbackContex
 interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly env: Record<string, unknown>;
     readonly event: WorkflowEventLike<Params>;
+    readonly fetchImpl?: typeof fetch;
     readonly log: WorkflowLogger;
     readonly parallel: WorkflowParallelFunction;
     readonly params: Readonly<Params>;
@@ -739,6 +741,7 @@ interface RunContextOptions<Params> {
 ```ts
 interface RunStepDeps {
     env: Record<string, unknown>;
+    instanceId: string;
     log: WorkflowLogger;
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
     run: WorkflowRunFunction;

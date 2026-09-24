@@ -166,9 +166,16 @@ export interface ObservabilitySink {
      * How much detail automatic `ctx.db` instrumentation produces.
      *
      * `"summary"` (**default**) — aggregate counters (`db.calls`, `db.duration_ms`,
-     * per-operation counts) folded onto the dispatch's wide event. No extra spans
+     * per-operation counts) folded onto the dispatch's own root span, and onto the
+     * wide event when the handler opened one through `ctx.span`. No span per query
      * and no extra log records, so the cost is flat no matter how many queries a
      * handler makes.
+     *
+     * A dispatch that ran at least one query records that root span even when the
+     * handler touched neither `ctx.trace` nor `ctx.span` — answering "was this
+     * request database-bound" is what the mode is for, and the common handler
+     * reads `ctx.db` and nothing else. A dispatch that ran none still records
+     * nothing.
      *
      * `"spans"` — one span per database call: the full waterfall, for when you are
      * chasing a specific slow query. Capped per dispatch so a query loop cannot

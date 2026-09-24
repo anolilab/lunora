@@ -1,3 +1,273 @@
+## @lunora/vue [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.161...@lunora/vue@1.0.0-alpha.162) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.127
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.71
+
+## @lunora/vue [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.160...@lunora/vue@1.0.0-alpha.161) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.70
+
+## @lunora/vue [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.159...@lunora/vue@1.0.0-alpha.160) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.125
+
+## @lunora/vue [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.158...@lunora/vue@1.0.0-alpha.159) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.124
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.69
+
+## @lunora/vue [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.157...@lunora/vue@1.0.0-alpha.158) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.123
+
+## @lunora/vue [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.156...@lunora/vue@1.0.0-alpha.157) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient` gains `expectIdentityResolution()`, and a client
+that resolves an identity caches no reads and replays no queued writes until a
+`/get-session` actually answers — previously only while one was in flight.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### security
+
+* **client:** close the identity gates outside the session probe ([#787](https://github.com/anolilab/lunora/issues/787)) ([e176653](https://github.com/anolilab/lunora/commit/e1766531497eeb9d097259ff3c315f924ebd0cca))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.122
+
+## @lunora/vue [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.155...@lunora/vue@1.0.0-alpha.156) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.121
+
+## @lunora/vue [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.154...@lunora/vue@1.0.0-alpha.155) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.120
+
+## @lunora/vue [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.153...@lunora/vue@1.0.0-alpha.154) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.119
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.68
+
+## @lunora/vue [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.152...@lunora/vue@1.0.0-alpha.153) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.67
+
+## @lunora/vue [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.151...@lunora/vue@1.0.0-alpha.152) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **agent:** `AgentThreadRecord["error"]` widens to `null | string` in @lunora/react,
+@lunora/vue, @lunora/solid, @lunora/svelte and @lunora/angular. A cleared error now reads back
+as `null` rather than absent; read the field for truthiness, not presence.
+
+Why the suite was green: all three `ctx.db` doubles in this package deleted a key whose value is
+`undefined` — strictly more permissive than the store. They now reject it with the engine's
+byte-identical message, from one shared helper. Eleven existing tests fail on the unfixed code
+with that hardening alone. The package has no workerd suite, so nothing else would catch it.
+
+Fixing this also makes an ordering hazard reachable that could not fire before.
+`agentCompleteRun`'s empty-queue branch leaves `instanceId` naming the finishing run, and
+`agentEnsureThread` dispatched with no `instanceId` — what `voice-turn.ts` does — marks the
+thread live again without taking ownership. A finished run then still reads as the owner, and
+its at-least-once completion would re-read the queue and wake a run parked behind whoever is
+actually holding the thread: two writers on one `seq` counter. Threads now record
+`completedInstanceId`, and a completion that matches it re-applies its terminal status
+(absolute, so a lost reply still converges) but dequeues nobody. The parked run waits for the
+thread's real holder, bounded by its own DEQUEUE_TIMEOUT.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(agent): pin that the thread error column admits null
+
+Found by sabotage: reverting the column to `v.optional(v.string())` — the state in which the
+declared row type says `string` while the store holds `null` — left all 75 tests green. The
+engine tolerates a stored `null` on any optional column when patching (`runRowValidators`'s
+`tolerateStoredNull`), so nothing on the write path objects; only the generated type is wrong,
+and no assertion read it.
+
+Asserting the column's own parser closes that: `null` in, `null` out.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **agent:** clear a thread's error with null so continued runs stop throwing ([#774](https://github.com/anolilab/lunora/issues/774)) ([172f1c0](https://github.com/anolilab/lunora/commit/172f1c0ac4a1457f0ce94966328f23bc74cccef6))
+
+## @lunora/vue [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.150...@lunora/vue@1.0.0-alpha.151) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.116
+
+## @lunora/vue [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.149...@lunora/vue@1.0.0-alpha.150) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.115
+
+## @lunora/vue [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.148...@lunora/vue@1.0.0-alpha.149) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
+## @lunora/vue [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.147...@lunora/vue@1.0.0-alpha.148) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.66
+
+## @lunora/vue [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.146...@lunora/vue@1.0.0-alpha.147) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.65
+
+## @lunora/vue [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.145...@lunora/vue@1.0.0-alpha.146) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.64
+
+## @lunora/vue [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.144...@lunora/vue@1.0.0-alpha.145) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+
+## @lunora/vue [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.143...@lunora/vue@1.0.0-alpha.144) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.63
+
+## @lunora/vue [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.142...@lunora/vue@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.62
+
+## @lunora/vue [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.141...@lunora/vue@1.0.0-alpha.142) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.61
+
+## @lunora/vue [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.140...@lunora/vue@1.0.0-alpha.141) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.60
+
+## @lunora/vue [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.139...@lunora/vue@1.0.0-alpha.140) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.59
+
+## @lunora/vue [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.138...@lunora/vue@1.0.0-alpha.139) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.58
+
+## @lunora/vue [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.137...@lunora/vue@1.0.0-alpha.138) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+* **vue,svelte,solid,angular:** key reactive args on content ([#721](https://github.com/anolilab/lunora/issues/721)) ([f1e1579](https://github.com/anolilab/lunora/commit/f1e1579cbd9f41789b16a8ad5a8231647f6bd297))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
+## @lunora/vue [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.136...@lunora/vue@1.0.0-alpha.137) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.57
+
+## @lunora/vue [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.135...@lunora/vue@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.56
+
 ## @lunora/vue [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.134...@lunora/vue@1.0.0-alpha.135) (2026-09-11)
 
 

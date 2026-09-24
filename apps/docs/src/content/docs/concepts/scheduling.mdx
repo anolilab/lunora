@@ -101,6 +101,28 @@ export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(
 transaction" hand-off — literally so: the job reaches the scheduler after the
 `COMMIT`, in the order the handler scheduled them.
 
+#### If the job can't reach the scheduler
+
+Everything between the `COMMIT` and the scheduler's acknowledgement happens
+outside the transaction, so it can fail on its own: the `SchedulerDO`
+unreachable, the shard evicted mid-hand-off. The write is durable by then and the
+job is not, and rolling back is no longer on the table.
+
+So the shard takes **durable custody** of each deferred job as the handler
+schedules it — a row written inside the same transaction as the writes, released
+once the scheduler has the job. A hand-off that fails still raises (a caller
+error like a duplicate job id has to reach you), but what it can no longer do is
+lose the job: the entry survives, and the shard re-offers it on a backoff ladder
+until the scheduler accepts it. The retry reuses the id you were handed, so a job
+that did land is recognised rather than scheduled twice, and the `cancel(id)` you
+stored on a row keeps working throughout.
+
+A job the scheduler refuses eight times over is **parked**: it stops being
+retried, is logged at `error` naming its id and target, and is kept for a week so
+you can see what was promised and never enqueued. That is the one case where a
+scheduled job is dropped without the mutation being rolled back — and it is
+reported rather than silent.
+
 ### Inspecting and cancelling
 
 `ctx.scheduler` also exposes `list()`, `get(id)`, and `cancel(id)` for managing

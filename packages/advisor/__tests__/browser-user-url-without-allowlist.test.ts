@@ -14,14 +14,14 @@ const accesses: AdvisorBrowserUrlAccess[] = [
     { exportName: "render", file: "shots", line: 9, method: "pdf" },
 ];
 
-const createBrowser = (keys: string[]): AdvisorConfigCall => {
+const createBrowser = (keys: string[], trueKeys: string[] = []): AdvisorConfigCall => {
     return {
         analyzable: true,
         callee: "createBrowser",
         file: "browser",
         line: 1,
         presentKeys: keys,
-        trueKeys: [],
+        trueKeys,
     };
 };
 
@@ -54,16 +54,32 @@ describe("browser_user_url_without_allowlist", () => {
         expect(findings).toHaveLength(0);
     });
 
-    it("suppresses all findings when a createBrowser pins resolveDns", () => {
+    it("suppresses all findings when a createBrowser pins resolveDns: true", () => {
         expect.assertions(1);
 
+        const findings = browserUserUrlWithoutAllowlist.run({
+            browserUrlAccesses: accesses,
+            configCalls: [createBrowser(["binding", "resolveDns"], ["resolveDns"])],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it("does NOT suppress on `resolveDns: false` — the key is present but the guard is off", () => {
+        expect.assertions(1);
+
+        // Suppressing on the key's mere PRESENCE reported containment the runtime
+        // does not deliver: `resolveDns: false` turns the DoH re-check off,
+        // leaving an arg-derived public URL guarded by the string check alone —
+        // strictly weaker than the unconfigured default, which runs the re-check.
         const findings = browserUserUrlWithoutAllowlist.run({
             browserUrlAccesses: accesses,
             configCalls: [createBrowser(["binding", "resolveDns"])],
             schema: schema(),
         });
 
-        expect(findings).toHaveLength(0);
+        expect(findings).toHaveLength(2);
     });
 
     it("still flags when a createBrowser sets neither allowedHosts nor resolveDns", () => {

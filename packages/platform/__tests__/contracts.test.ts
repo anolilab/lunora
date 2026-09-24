@@ -13,6 +13,29 @@ describe("@lunora/platform contracts", () => {
         expect(CLOUDFLARE_CAPABILITIES.features.websocketHibernation?.level).toBe("native");
     });
 
+    // Every telemetry surface that needs a HOST primitive carries a rating, so a
+    // second host is told rather than left to discover it at runtime. The
+    // engine-level pipeline (`ctx.log` / `ctx.trace` / `ctx.span` /
+    // `ctx.metrics` / traced `ctx.fetch`) deliberately has no key: it is sink
+    // callbacks plus the `fetch` global, portable by construction.
+    it("rates the telemetry surfaces that stand on a host primitive", () => {
+        expect.assertions(6);
+
+        // `request.cf` — the mTLS trust signal and the OTLP placement detector.
+        expect(CLOUDFLARE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("unsupported");
+
+        // The one telemetry surface that reaches past `ShardHost` into a
+        // provider API (`cloudflare:workers`' `tracing.enterSpan`).
+        expect(CLOUDFLARE_CAPABILITIES.features.hostTraceFusion?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.hostTraceFusion?.level).toBe("unsupported");
+
+        // Reading the durable `ctx.log` archive back needs an Iceberg catalog
+        // and an SQL engine over it, not just a bucket.
+        expect(CLOUDFLARE_CAPABILITIES.features.logArchive?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.logArchive?.level).toBe("unsupported");
+    });
+
     // Features Lunora builds itself must not claim platform parity: codegen and
     // Studio read `level` to report what the target actually provides.
     it("reports Lunora-implemented features as emulated, not native", () => {

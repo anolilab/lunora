@@ -16,6 +16,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import { LunoraClient } from "../src/lunora-client";
 import { OfflineQueue } from "../src/offline-queue";
+import { isTransientReplayFailure } from "../src/replay";
 import type { FunctionReference } from "../src/types";
 
 const readFixture = (name: string): unknown => {
@@ -31,6 +32,30 @@ const fnRef = (ref: string): FunctionReference => {
 const jsonResponse = (body: unknown, init: ResponseInit = {}): Response =>
     Response.json(body, { headers: { "content-type": "application/json" }, status: 200, ...init });
 
+/**
+ * Every `it.each` table below is derived from a fixture, and `it.each([])`
+ * registers no tests at all while the file still reports green. So a fixture
+ * whose shape drifts — a renamed discriminant, a section emptied, a `filter`
+ * that stops matching — silently DELETES its cases instead of failing them.
+ * Renaming `"kind": "data"` to `"datum"` in `ws-frames.json` took this suite
+ * from 187 passing to 185 passing, still green, and nothing said so.
+ *
+ * That matters more here than in an ordinary suite: this is the reference
+ * implementation the eight `sdks/*` ports are held to. Every port fails on an
+ * uncovered `required` name in `protocol/conformance-cases.json`; the port that
+ * DEFINES the contract was the one that could quietly stop checking it.
+ *
+ * So no table reaches `it.each` unrouted: an empty one throws during collection,
+ * which fails the file rather than shrinking it.
+ */
+const table = <T extends ReadonlyArray<unknown>>(name: string, rows: ReadonlyArray<T>): ReadonlyArray<T> => {
+    if (rows.length === 0) {
+        throw new Error(`protocol conformance: the "${name}" table is empty — its fixture drifted, and these cases would not have run.`);
+    }
+
+    return rows;
+};
+
 // --- Wire value codec -------------------------------------------------------
 
 describe("wire-codec fixtures", () => {
@@ -39,7 +64,12 @@ describe("wire-codec fixtures", () => {
         rejected: { encoded: unknown; name: string }[];
     };
 
-    it.each(cases.map((testCase) => [testCase.name, testCase] as const))("round-trips %s", (_name, testCase) => {
+    it.each(
+        table(
+            "wire-codec round-trips",
+            cases.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("round-trips %s", (_name, testCase) => {
         expect.hasAssertions();
 
         // encode(decode(encoded)) === encoded proves both the decode of tagged
@@ -58,7 +88,12 @@ describe("wire-codec fixtures", () => {
     // These drive all eight SDK suites, and the reference implementation is the
     // normative one — holding the ports to a rejection list the reference is
     // never checked against is exactly backwards.
-    it.each(rejected.map((testCase) => [testCase.name, testCase.encoded] as const))("rejects %s", (_name, encoded) => {
+    it.each(
+        table(
+            "wire-codec rejections",
+            rejected.map((testCase) => [testCase.name, testCase.encoded] as const),
+        ),
+    )("rejects %s", (_name, encoded) => {
         expect.hasAssertions();
 
         // Only that it throws with a message, not which one: a bad base64 payload
@@ -77,12 +112,22 @@ describe("stable-wire-key fixtures", () => {
         typed: { key: string; name: string; wireArgs: unknown }[];
     };
 
-    it.each(data.cases.map((testCase) => [testCase.name, testCase.args, testCase.key] as const))("keys pure-JSON %s", (_name, args, key) => {
+    it.each(
+        table(
+            "stable-wire-key pure-JSON",
+            data.cases.map((testCase) => [testCase.name, testCase.args, testCase.key] as const),
+        ),
+    )("keys pure-JSON %s", (_name, args, key) => {
         expect.hasAssertions();
         expect(stableWireKey(args)).toBe(key);
     });
 
-    it.each(data.typed.map((testCase) => [testCase.name, testCase.wireArgs, testCase.key] as const))("keys typed %s", (_name, wireArgs, key) => {
+    it.each(
+        table(
+            "stable-wire-key typed",
+            data.typed.map((testCase) => [testCase.name, testCase.wireArgs, testCase.key] as const),
+        ),
+    )("keys typed %s", (_name, wireArgs, key) => {
         expect.hasAssertions();
         expect(stableWireKey(decodeWire(wireArgs))).toBe(key);
     });
@@ -214,16 +259,29 @@ interface RpcErrorCase {
     response: unknown;
 }
 
+interface RpcTransportErrorCase {
+    code: string;
+    name: string;
+    response: unknown;
+    status: number;
+}
+
 interface RpcFixture {
     request: { cases: RpcRequestCase[] };
     responseError: RpcErrorCase[];
     responseOk: { name: string; response: { result: unknown } }[];
+    responseTransportError: RpcTransportErrorCase[];
 }
 
 describe("rpc fixtures", () => {
     const rpc = readFixture("rpc.json") as RpcFixture;
 
-    it.each(rpc.request.cases.map((testCase) => [testCase.name, testCase] as const))("builds request body %s", async (_name, testCase) => {
+    it.each(
+        table(
+            "rpc request bodies",
+            rpc.request.cases.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("builds request body %s", async (_name, testCase) => {
         expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
@@ -237,7 +295,12 @@ describe("rpc fixtures", () => {
         expect(JSON.parse(init.body as string)).toStrictEqual(testCase.body);
     });
 
-    it.each(rpc.responseOk.map((testCase) => [testCase.name, testCase.response] as const))("decodes ok response %s", async (_name, response) => {
+    it.each(
+        table(
+            "rpc ok responses",
+            rpc.responseOk.map((testCase) => [testCase.name, testCase.response] as const),
+        ),
+    )("decodes ok response %s", async (_name, response) => {
         expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(response));
@@ -249,7 +312,12 @@ describe("rpc fixtures", () => {
         expect(encodeWire(value)).toStrictEqual(response.result);
     });
 
-    it.each(rpc.responseError.map((testCase) => [testCase.name, testCase] as const))("raises error response %s", async (_name, testCase) => {
+    it.each(
+        table(
+            "rpc error responses",
+            rpc.responseError.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("raises error response %s", async (_name, testCase) => {
         expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(testCase.response, { status: 400 }));
@@ -261,9 +329,38 @@ describe("rpc fixtures", () => {
         expect(thrown.message).toBe(testCase.message);
     });
 
+    // §4.2: a non-2xx carrying no readable `error` envelope is an INTERNAL
+    // transport error — the server reached no verdict, so a durable write on it
+    // is re-queued. The eight ports are held to this same section of the same
+    // file (`non_2xx_without_error_envelope_fails`); the reference that defines
+    // the contract was the one not checking it.
+    it.each(
+        table(
+            "responseTransportError",
+            rpc.responseTransportError.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("classifies an unreadable error envelope %s", async (_name, testCase) => {
+        expect.hasAssertions();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(testCase.response, { status: testCase.status }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        const thrown = (await client.query(fnRef("docs:get"), {}).catch((error: unknown) => error)) as Error & { code?: string };
+
+        expect(thrown.code).toBe(testCase.code);
+        // The half that decides a queued write's fate: coded but NOT a
+        // verdict, so the outbox keeps the write instead of dropping it.
+        expect(isTransientReplayFailure(thrown)).toBe(true);
+    });
+
     const errorsWithData = rpc.responseError.filter((testCase) => testCase.dataWire !== undefined);
 
-    it.each(errorsWithData.map((testCase) => [testCase.name, testCase] as const))("wire-decodes error data %s", async (_name, testCase) => {
+    it.each(
+        table(
+            "rpc errors carrying data",
+            errorsWithData.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("wire-decodes error data %s", async (_name, testCase) => {
         expect.hasAssertions();
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(testCase.response, { status: 429 }));
@@ -353,7 +450,7 @@ const makeWsClient = (): LunoraClient =>
 interface WsServerCase {
     /** Cached value the frame is applied ON TOP of; absent means the frame replaces wholesale. */
     baseWire?: unknown;
-    expect: { code?: string; kind: string; message?: string; valueWire?: unknown };
+    expect: { code?: string; kind: string; message?: string; resendsAfterReconnect?: boolean; valueWire?: unknown };
     frame: Record<string, unknown>;
     name: string;
 }
@@ -410,7 +507,12 @@ describe("ws-frames fixtures", () => {
 
     const dataFrames = ws.serverFrames.filter((testCase) => testCase.expect.kind === "data");
 
-    it.each(dataFrames.map((testCase) => [testCase.name, testCase] as const))("delivers data frame %s", (_name, testCase) => {
+    it.each(
+        table(
+            "ws data frames",
+            dataFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("delivers data frame %s", (_name, testCase) => {
         expect.hasAssertions();
 
         const client = makeWsClient();
@@ -430,7 +532,12 @@ describe("ws-frames fixtures", () => {
     // SDK that announced `pageDelta` should run these. Each seeds `baseWire`
     // via a `data` frame, then asserts the merged result; together they pin the
     // insert PLACEMENT the server relies on every client sharing (README 5.1.1).
-    it.each(ws.pageDeltaFrames.map((testCase) => [testCase.name, testCase] as const))("merges delta frame %s into the cached value", (_name, testCase) => {
+    it.each(
+        table(
+            "ws page-delta frames",
+            ws.pageDeltaFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("merges delta frame %s into the cached value", (_name, testCase) => {
         expect.hasAssertions();
 
         const client = makeWsClient();
@@ -447,7 +554,12 @@ describe("ws-frames fixtures", () => {
 
     const errorFrames = ws.serverFrames.filter((testCase) => testCase.expect.kind === "error");
 
-    it.each(errorFrames.map((testCase) => [testCase.name, testCase] as const))("delivers error frame %s", (_name, testCase) => {
+    it.each(
+        table(
+            "ws error frames",
+            errorFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("delivers error frame %s", (_name, testCase) => {
         expect.hasAssertions();
 
         const client = makeWsClient();
@@ -462,6 +574,50 @@ describe("ws-frames fixtures", () => {
         expect(errors).toHaveLength(1);
         expect(errors[0]?.code).toBe(testCase.expect.code);
         expect(errors[0]?.message).toBe(testCase.expect.message);
+    });
+
+    const cancellingFrames = ws.serverFrames.filter((testCase) => testCase.expect.resendsAfterReconnect === true);
+
+    // `complete` addressed to a live SUBSCRIPTION cancels it WITHOUT dropping
+    // the registration — the eight ports removed it, and that takes the state
+    // out of the set the reconnect resubscribe loop walks, so the query froze
+    // for the life of the process. The fixture pins both halves; this is the
+    // reference held to the same file rather than to a rule restated beside it.
+    it.each(
+        table(
+            "ws cancelling frames",
+            cancellingFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("cancels but keeps the subscription on frame %s", (_name, testCase) => {
+        expect.hasAssertions();
+
+        // A conditional case that never runs is worse than none: without this,
+        // renaming the fixture key would leave the suite green.
+        expect(cancellingFrames).toHaveLength(1);
+
+        const client = makeWsClient();
+        const errors: { code?: string; message: string }[] = [];
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, () => undefined, {
+            onError: (error) => errors.push(error),
+        });
+        latestSocket().open();
+        latestSocket().receive(testCase.frame);
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.code).toBe(testCase.expect.code);
+        expect(errors[0]?.message).toBe(testCase.expect.message);
+
+        // Still registered: the resubscribe loop runs on `open`, so driving it
+        // again is the reconnect this frame must survive.
+        const socket = latestSocket();
+
+        socket.sent.length = 0;
+        socket.open();
+
+        const resubscribed = socket.sent.map((raw) => JSON.parse(raw) as { id?: string; type?: string }).filter((frame) => frame.type === "subscribe");
+
+        expect(resubscribed.map((frame) => frame.id)).toStrictEqual([testCase.frame["id"]]);
     });
 
     it("delivers a subscription's frame values in order", () => {

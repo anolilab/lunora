@@ -173,7 +173,7 @@ interface AgentStateOptions {
 ```ts
 interface AgentThreadRecord {
     createdAt?: number;
-    error?: string;
+    error?: null | string;
     instanceId?: string;
     messageCount?: number;
     owner?: string;
@@ -275,6 +275,7 @@ interface AuthGateStore {
 ```ts
 interface AuthStore {
     setToken: (token: string | null) => void;
+    status: Readable<AuthStatus>;
     token: Readable<string | null>;
     user: Readable<User | null>;
 }

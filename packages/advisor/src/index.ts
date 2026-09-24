@@ -65,6 +65,7 @@ import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
 import migrationStaleImport from "./lints/static/migration-stale-import";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
+import mutatorWithoutOwnerScope from "./lints/static/mutator-without-owner-scope";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
 import notifyMissingPushConfig from "./lints/static/notify-missing-push-config";
@@ -204,6 +205,7 @@ export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered
 export { default as maskWeakHashStrategyOnPii } from "./lints/static/mask-weak-hash-strategy-on-pii";
 export { default as maskedRelationLeakViaWith } from "./lints/static/masked-relation-leak-via-with";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
+export { default as mutatorWithoutOwnerScope } from "./lints/static/mutator-without-owner-scope";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as normalizeIdUsedAsAuthorization } from "./lints/static/normalize-id-used-as-authorization";
 export { default as notifyMissingPushConfig } from "./lints/static/notify-missing-push-config";
@@ -263,6 +265,7 @@ export { default as classifySensitivity } from "./map/sensitivity";
 export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, Sensitivity, SensitivityLevel } from "./map/types";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMaskStrategy } from "./mask-strategies";
+export type { AdvisorMutatorDeclaration } from "./mutator-declarations";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
@@ -329,6 +332,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     unboundedCollect,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
+    mutatorWithoutOwnerScope,
     nondeterministicQueryMutation,
     hyperdriveOutsideAction,
     r2sqlOutsideAction,

@@ -32,6 +32,18 @@ const makeDb = (): LunoraDatabaseLike => {
             return id;
         },
         patch: async (id, patch) => {
+            // Mirror shard-engine's `assertNoExplicitUndefined`: `ctx.db.patch` rejects a key whose
+            // value is explicitly `undefined` rather than silently dropping (i.e. deleting) it. A
+            // permissive `{ ...row, ...patch }` double is how a store that throws on every second
+            // write of an optional column stayed green here.
+            for (const field of Object.keys(patch)) {
+                if (patch[field] === undefined) {
+                    throw new Error(
+                        `Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`,
+                    );
+                }
+            }
+
             rows.set(id, { ...rows.get(id), ...patch, _id: id });
         },
     };

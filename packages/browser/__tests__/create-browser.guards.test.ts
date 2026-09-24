@@ -330,6 +330,34 @@ describe("createBrowser", () => {
 
             expect(launch.browsers).toHaveLength(1);
         });
+
+        it("an EMPTY allowedHosts allows nothing — it is a configured allowlist, not an absent one", async () => {
+            expect.assertions(2);
+
+            // `[]` used to mean "no allowlist": the guard was `allowedHosts.length > 0`,
+            // so every host was permitted, while the advisor's
+            // `browser_user_url_without_allowlist` suppressed on the key being
+            // PRESENT. The config read as hardened and was not.
+            const launch = fakeLaunch();
+            const browser = createBrowser({ allowedHosts: [], binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://example.com/page")).rejects.toThrow(/allowedHosts is configured but EMPTY/);
+            expect(launch.browsers).toHaveLength(0);
+        });
+
+        it("an EMPTY allowedHosts refuses even a private target the allowPrivateTargets escape hatch would permit", async () => {
+            expect.assertions(2);
+
+            // The allowlist arm is not relaxed by `allowPrivateTargets`, so the
+            // combination that skipped BOTH guards before — empty list (allowlist
+            // off) plus the flag (private-target guard off, redirect interception
+            // never registered) — now refuses outright.
+            const launch = fakeLaunch();
+            const browser = createBrowser({ allowPrivateTargets: true, allowedHosts: [], binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://169.254.169.254/latest/meta-data/")).rejects.toThrow(/allowedHosts is configured but EMPTY/);
+            expect(launch.browsers).toHaveLength(0);
+        });
     });
 
     /* eslint-disable sonarjs/no-hardcoded-ip -- intentional test fixtures: these are DoH-resolved IPs asserting the rebinding guard classifies them; no real connection is made */

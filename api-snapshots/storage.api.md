@@ -149,12 +149,12 @@ interface Storage {
         truncated?: boolean;
     }>;
     resumeMultipartUpload: (key: string, uploadId: string) => R2MultipartUploadLike;
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    store: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;
     }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    upload: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;

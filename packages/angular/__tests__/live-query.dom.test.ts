@@ -175,6 +175,40 @@ describe("liveQuery — reactive args (plan 340)", () => {
         expect(data()).toStrictEqual({ messages: ["fresh"] });
     });
 
+    it("does not re-subscribe when the args source re-emits equal content", () => {
+        // A dependency that feeds the args source without changing what it
+        // produces — `Math.min(limit, 10)` clamps 15 and 20 to the same 10.
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const limit = signal(15);
+
+        const data = liveQuery(
+            listRef,
+            () => {
+                return { channelId: "general", limit: Math.min(limit(), 10) };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector },
+        );
+
+        TestBed.tick();
+
+        expect(fake.subscriptions).toHaveLength(1);
+
+        fake.subscriptions[0]?.push({ messages: ["hi"] });
+
+        expect(data()).toStrictEqual({ messages: ["hi"] });
+
+        limit.set(20);
+        TestBed.tick();
+
+        // The produced args are byte-identical, so the live subscription must be
+        // left alone — no teardown, no re-open, and no blanking of the signal.
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
+        expect(data()).toStrictEqual({ messages: ["hi"] });
+    });
+
     it("a static args value subscribes exactly once and never resubscribes, even as unrelated signals tick", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

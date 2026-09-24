@@ -611,6 +611,12 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `withoutAmbientCookies` (const)
+
+```ts
+const withoutAmbientCookies: (fetchImpl: typeof fetch) => typeof fetch;
+```
+
 ## `@lunora/react-native/auth`
 
 ### `ExpoClientStorage` (type)

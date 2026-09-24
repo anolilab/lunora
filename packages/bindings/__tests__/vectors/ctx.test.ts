@@ -47,6 +47,56 @@ describe("createContextVectors", () => {
         expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: { t: 1 }, namespace: undefined, values: [5] }]);
     });
 
+    it("upsert defers through deferAfterCommit while upsertNow stays inline", async () => {
+        expect.assertions(4);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // A mutation that upserts and then throws must leave NOTHING in
+        // Vectorize — the row it describes is about to be rolled back.
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+
+        expect(index.upsert).not.toHaveBeenCalled();
+
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenCalledTimes(1);
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "b", metadata: undefined, namespace: undefined, values: [2] }]);
+
+        await queued[0]?.();
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
+    });
+
+    it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+            shardedIndexNames: ["docs"],
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // Thrown from inside the deferral this would surface after the commit,
+        // as a log line nobody is holding, instead of failing the handler.
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow("has no shard key");
+
+        expect(queued).toStrictEqual([]);
+    });
+
     it("query maps Vectorize matches to the server match shape", async () => {
         expect.assertions(1);
 
@@ -549,14 +599,14 @@ describe("createVectorSyncHook", () => {
         expect(vectors.upserts).toEqual([]);
     });
 
-    it("compensates with deletes across every affected index then re-throws the original error", async () => {
+    it("leaves a partially applied fan-out in place and re-throws the original error", async () => {
         expect.assertions(3);
 
         const original = new Error("embedder boom");
         const vectors = fakeVectorSearch();
 
         // Second upsert (standalone) rejects after the first inline upsert.
-        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
             vectors.upserts.push([indexName, input]);
 
             if (indexName === "docs-fulltext") {
@@ -572,66 +622,40 @@ describe("createVectorSyncHook", () => {
 
         await expect(hook({ doc: { body: "hi" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
 
-        // Compensation purges this row's id from every index sourced from the table.
-        expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
-        expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
+        // The hook runs AFTER the row committed, so the row survives this failure.
+        // Purging the index that DID apply would trade a partially indexed row for
+        // an unsearchable one; re-running the idempotent write is the recovery.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
-    it("runs compensation only after every in-flight upsert has settled (no stale-vector race)", async () => {
-        // Regression for the compensating-delete race: when one index's upsert
-        // fails, a slow SIBLING upsert must fully settle before compensation
-        // fires. Otherwise the sibling's write can land AFTER its index's
-        // compensating delete, leaving a searchable vector for a rolled-back row.
+    it("leaves the prior vector alone when an UPDATE fan-out fails partway", async () => {
         expect.assertions(3);
 
-        const events: string[] = [];
-        const original = new Error("docs-b upsert boom");
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
 
-        const vectors: VectorSearchLike = {
-            deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName) => {
-                events.push(`delete:${indexName}`);
-            }),
-            getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
-            query: vi.fn<VectorSearchLike["query"]>(async () => {
-                return { count: 0, matches: [] };
-            }),
-            upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName) => {
-                if (indexName === "docs-b") {
-                    throw original;
-                }
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
 
-                // A slow sibling: it must settle before compensation runs.
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
-                events.push(`upsert-done:${indexName}`);
-            }),
-            upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async () => {}),
-        };
+            vectors.upserts.push([indexName, input]);
+        });
 
         const schema: SchemaLike = {
-            tables: {
-                docs: {
-                    vectorIndexes: [
-                        { embed, field: "a", name: "docs-a" },
-                        { embed, field: "b", name: "docs-b" },
-                    ],
-                },
-            },
-            vectorIndexes: {},
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
         };
         const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
 
-        await expect(hook({ doc: { a: "aa", b: "bb" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
+        await expect(hook({ doc: { body: "edited" }, id: "d1", op: "update", table: "docs" })).rejects.toBe(original);
 
-        const slowDone = events.indexOf("upsert-done:docs-a");
-        const firstDelete = events.findIndex((event) => event.startsWith("delete:"));
-
-        // The slow sibling upsert was observed as completed (not still pending
-        // when the hook threw) AND completed strictly before any compensating
-        // delete fired — so no write can survive its own compensation.
-        expect(slowDone).toBeGreaterThanOrEqual(0);
-        expect(slowDone).toBeLessThan(firstDelete);
+        // The edited row is committed. `docs-body` holds the new vector and
+        // `docs-fulltext` still holds the prior one — stale in one index, correct
+        // in the other. Deleting either would make the live row unsearchable there.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
     it("warns once when a metadata index is synced without a namespace", async () => {

@@ -88,7 +88,8 @@ Workers AI is billed per neuron and Lunora `action`s are public RPC, so an ungua
 
 - **Auth** — `requireUser` rejects unauthenticated callers.
 - **Rate** — a per-caller token bucket keyed `ctx.auth.userId ?? ctx.ip ?? "anon"`, so one account (or one anonymous IP) can't drain the quota. The default store is in-memory; run `lunora add ratelimit` for the durable, `ctx.db`-backed store in production.
-- **Size** — the prompt input is length-bounded. A neuron bill scales with tokens, so the input cap is a cost control, not just validation.
+- **Size, in** — the prompt input is length-bounded by `v.string().max(...)`.
+- **Size, out** — the completion is capped by `maxOutputTokens`. This is the half that matters most: a twelve-word prompt can ask for a hundred-thousand-token answer, and output tokens are the expensive ones. The repo's own `ai_unbounded_generation_public` advisor lint flags a public procedure that leaves it off.
 
 Widen those bounds deliberately. Removing them is what turns the item into a bill.
 

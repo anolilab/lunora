@@ -48,6 +48,7 @@ import { defineHandler } from "../../util/command";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
+import { EXIT_CODE } from "../../util/exit-code";
 import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -1365,7 +1366,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (emitted.error !== undefined) {
             logger.error(emitted.error);
 
-            return { code: 1, plan };
+            return { code: EXIT_CODE.USAGE, plan };
         }
 
         // After the studio start, so the two overlap, but before the worker below:

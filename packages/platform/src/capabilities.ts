@@ -29,12 +29,14 @@
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
  * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
  * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
- * `pipelines`, `queues`, `scheduler`, `secrets`, `vectorStore`, `workflows`.
+ * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
+ * `vectorStore`, `workflows`.
  *
- * Every other key here — `httpCache`, `identityProxy`,
- * `localSql`, `memoryTables`, `objectStorageBackups`,
- * `objectStorageCdcArchive`, `serverReactors`, `shardAlarms`, `shardedState`,
- * `shardPlacement`, `shardReadReplicas`, `websocketHibernation` — is
+ * Every other key here — `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
+ * `objectStorageBackups`, `objectStorageCdcArchive`, `serverReactors`,
+ * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
+ * `websocketHibernation` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -47,13 +49,30 @@
  * verification). There is nothing an app declares for codegen to notice, so
  * there is nothing to gate. These stay ratings, permanently.
  *
+ * The three telemetry keys — `edgeRequestMetadata`, `hostTraceFusion`,
+ * `logArchive` — are advisory by nature for a third reason worth naming, since
+ * it is not obvious: each is configured through a `createWorker` argument or an
+ * `ObservabilitySink` field (`trustInboundTraceContext`, `fuseCloudflareTraces`,
+ * `logArchive`), and codegen reads neither. There is no app-side DECLARATION to
+ * gate on, so promoting them would mean inventing one. Where that silence
+ * actually bites — `trustInboundTraceContext: "mtls"` collapsing to never-trust
+ * off Cloudflare — the runtime warns once instead, from the only tier that can
+ * observe it (`createDroppedTraceNotice` in `@lunora/runtime`).
+ *
+ * The rest of the telemetry pipeline — `ctx.log`, `ctx.trace`, `ctx.span`,
+ * `ctx.metrics`, traced `ctx.fetch`, and W3C trace propagation — deliberately
+ * has NO key: it is sink callbacks over the `fetch` global, needs no host
+ * primitive, and a key every target must rate `native` forever is paperwork, not
+ * a control.
+ *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
- * `durableStreams`, `globalTables`, `queues`, `secrets`, `vectorStore`).
+ * `durableStreams`, `globalTables`, `queues`, `relationGraph`, `secrets`,
+ * `vectorStore`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -164,8 +183,54 @@ export interface PlatformCapabilities {
          * or second client resumes the same transcript.
          */
         durableStreams?: Capability;
+
+        /**
+         * Platform-injected PER-REQUEST metadata the runtime reads off the
+         * request object itself rather than a header — Cloudflare's `request.cf`.
+         *
+         * Two telemetry surfaces stand on it, and both degrade SILENTLY without
+         * it, which is why it is rated rather than assumed: the
+         * `trustInboundTraceContext: "mtls"` trust signal reads
+         * `cf.tlsClientAuth.certVerified` (absent ⇒ no caller is ever trusted, so
+         * every inbound `traceparent` is dropped), and the OTLP resource detector
+         * reads the colo/country placement attributes (absent ⇒ the spans carry
+         * no placement resource).
+         *
+         * What makes it a capability and not a header check is unforgeability:
+         * the platform sets it, so a caller cannot write it. A host that merely
+         * stamps a header carries no such proof and should rate this
+         * `unsupported`.
+         *
+         * Advisory by nature: both consumers are `createWorker` options, which
+         * codegen never sees, so there is no app-side declaration to gate on. The
+         * runtime warns once instead when a dropped trace proves the signal is
+         * undeliverable — see `createDroppedTraceNotice` in `@lunora/runtime`.
+         */
+        edgeRequestMetadata?: Capability;
+
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
+
+        /**
+         * Merging Lunora's spans into the HOST's own trace tree, so its native
+         * tracing shows one nested tree instead of two unrelated ones — the
+         * sink's `fuseCloudflareTraces` opt-in, which reaches `cloudflare:workers`'
+         * `tracing.enterSpan`.
+         *
+         * Rated because it is the one telemetry surface that reaches past
+         * `ShardHost` into a provider API. Everything else in the pipeline is
+         * engine-level (a sink callback), so it runs anywhere; this needs the
+         * host to HAVE a trace tree and to expose a way to enter a span in it.
+         *
+         * `unsupported` costs nothing: the feature is already capability-probed
+         * at runtime and no-ops where the import is unavailable. The rating is
+         * what makes that a stated fact rather than something a second host
+         * discovers.
+         *
+         * Advisory by nature: the flag lives on the sink object passed to
+         * `createWorker`/`createShardDO`, which codegen never sees.
+         */
+        hostTraceFusion?: Capability;
 
         /**
          * A shared HTTP cache in front of the app that the runtime can READ AND
@@ -209,6 +274,25 @@ export interface PlatformCapabilities {
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
+
+        /**
+         * Reading back the DURABLE `ctx.log` archive — the `logArchive` worker
+         * option behind the studio Logs panel's Archive feed and `lunora logs
+         * --durable`.
+         *
+         * Distinct from `pipelines` (which writes the records) because the read
+         * side needs two more things the write side does not: an Iceberg catalog
+         * over the object store, and an SQL engine that can query it
+         * (R2 Data Catalog + R2 SQL). A host that can ship log records to cold
+         * storage but cannot query them back should say `unsupported` here.
+         *
+         * Advisory by nature: the archive table is named by a `createWorker`
+         * option or the `LUNORA_LOG_ARCHIVE_TABLE` env var, neither of which
+         * codegen sees. Both fail closed at runtime with a single
+         * `LOG_ARCHIVE_NOT_CONFIGURED`, which the panel renders as an empty
+         * state, so an unsupported host degrades visibly rather than silently.
+         */
+        logArchive?: Capability;
 
         /** Email sending (Resend / SES / etc). */
         mail?: Capability;
@@ -270,6 +354,27 @@ export interface PlatformCapabilities {
         pipelines?: Capability;
         /** Queue-backed workpools. */
         queues?: Capability;
+
+        /**
+         * `ctx.db.related(...)` — breadth-first traversal of the foreign-key
+         * graph the schema's `v.id("target")` columns describe, returning each
+         * reached row with its depth, the edge names walked to reach it, and a
+         * depth-decaying score.
+         *
+         * Rated on its own key rather than folded into `localSql`, because the
+         * two answer different questions: `localSql` says a shard can run SQL,
+         * while this says a host can serve the traversal's read SHAPE — an
+         * id lookup per out-edge and a batched `WHERE fk IN (...)` per in-edge,
+         * repeated per hop within one request. A host whose reads are remote
+         * enough that a multi-hop expansion cannot finish inside a request
+         * should say `unsupported` here even though every individual read works.
+         *
+         * Gate-bearing: codegen sets the `relationGraph` `PlatformSignals` flag
+         * from the schema IR's `v.id` columns, so a host rating it
+         * `unsupported` refuses the app rather than emitting a `related` that
+         * throws (or worse, silently returns nothing) on the first hop.
+         */
+        relationGraph?: Capability;
         /** Cron triggers / scheduled functions. */
         scheduler?: Capability;
         /** Secrets management. */
@@ -355,6 +460,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
+        relationGraph: {
+            level: "emulated",
+            note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
+        },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
@@ -387,6 +496,18 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
         },
         analytics: { level: "native", note: "Analytics Engine" },
+        edgeRequestMetadata: {
+            level: "native",
+            note: 'request.cf — the edge stamps placement (colo, country) and, where an mTLS-enabled hostname is configured, the verified client certificate under tlsClientAuth. Unforgeable because it is not a header: trustInboundTraceContext: "mtls" and the OTLP placement resource detector both read it directly',
+        },
+        hostTraceFusion: {
+            level: "native",
+            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
+        },
+        logArchive: {
+            level: "native",
+            note: "R2 Data Catalog (Iceberg) written by pipelineLogSink and queried back over R2 SQL, which the admin route runs server-side because R2 SQL needs a Cloudflare API token that must never reach the browser",
+        },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
@@ -459,7 +580,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         websocketHibernation: {
             level: "emulated",
-            note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
+            note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
         },
         durableStreams: {
             level: "unsupported",
@@ -493,15 +614,19 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         queues: {
             level: "emulated",
-            note: 'createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd\'s implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. mode: "pull" queues are written but not consumed — nothing here serves the HTTP pull endpoint',
+            note: "createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd's implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. Cloudflare's byte ceilings are enforced on send — 128 KiB per message and 256 KiB per sendBatch, measured over the encoded body — because @lunora/queue leaves both to the platform and this host is the only point where those bytes already exist. mode: \"pull\" queues are written but not consumed — nothing here serves the HTTP pull endpoint",
         },
         workflows: {
             level: "emulated",
-            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so rollbackConfig is ignored and a crash mid-unwind leaves it half-done. terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running; no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
         },
         scheduler: {
             level: "emulated",
             note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        relationGraph: {
+            level: "emulated",
+            note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
         },
         cronTriggers: {
             level: "unsupported",
@@ -521,7 +646,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         objectStorage: {
             level: "emulated",
-            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. No multipart uploads, no presigned URLs",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. The limits R2 would apply are applied here rather than left to the deploy to discover: put verifies a declared sha256 against the bytes received and stores nothing on a mismatch, and refuses customMetadata over R2's summed 2048-byte ceiling. Because R2 has no directories, neither does this bucket's behaviour — a deleted key's empty directory is pruned, so a later object may take that prefix, and delete of a key that is only a prefix is the no-op it is on R2 rather than a raw fs error. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
@@ -533,6 +658,18 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        edgeRequestMetadata: {
+            level: "unsupported",
+            note: 'Nothing injects per-request platform metadata here — a Node request carries only what the caller wrote. Two telemetry surfaces degrade silently as a result: trustInboundTraceContext: "mtls" can never be satisfied, so it collapses to never-trust and every inbound traceparent is dropped (the runtime warns once when that actually happens, since no codegen gate can see a createWorker option), and the OTLP resource detector finds no placement attributes, so spans ship without them',
+        },
+        hostTraceFusion: {
+            level: "unsupported",
+            note: "No host-native trace tree to merge into, and cloudflare:workers is not importable here. Already capability-probed at runtime, so fuseCloudflareTraces is a no-op rather than a throw; onSpan remains the source of truth for the waterfall either way",
+        },
+        logArchive: {
+            level: "unsupported",
+            note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route is still registered here: it answers LOG_ARCHIVE_NOT_CONFIGURED (which the studio renders as a not-configured empty state) only while the logArchive table or the R2 SQL credentials are absent. Configure both and it stops failing closed — it builds an R2 SQL client and queries Cloudflare's API over the network, which is not this host serving the archive",
+        },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
         mail: {
             level: "unsupported",

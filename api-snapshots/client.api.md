@@ -243,7 +243,7 @@ interface ClientToSwMessage {
 ### `ConnectionStatus` (type)
 
 ```ts
-type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
 ### `CronJobInfo` (interface)
@@ -406,6 +406,8 @@ class LunoraClient {
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
+    expectIdentityResolution(): void;
+    currentBaseline(shardKey?: string): number | undefined;
     replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
@@ -818,6 +820,10 @@ interface LunoraClientOptions {
     outbox?: OutboxSink;
     persistence?: false | PersistenceAdapter;
     persistenceVersion?: string;
+    pollingFallback?: {
+        afterFailedAttempts?: number;
+        intervalMs?: number;
+    };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
     url: string;
@@ -839,6 +845,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
+    replayBaseline?: null | number;
     shardKey?: string;
 }
 ```
@@ -904,6 +911,7 @@ class OfflineQueue {
     enqueue<T>(entry: QueuedMutation<T>): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
+    hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
     drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
     requeue(items: QueuedMutation[]): void;
     drainConflict(): QueuedMutation[];
@@ -955,11 +963,13 @@ type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => 
 ```ts
 interface OutboxMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId: string;
     functionPath: string;
     idempotencyKey: string;
     identity: string | null;
     mutationId: number;
+    onRejected?: () => void;
     shardKey?: string;
 }
 ```
@@ -969,6 +979,7 @@ interface OutboxMutation {
 ```ts
 interface OutboxSink {
     enqueue: (mutation: OutboxMutation) => Promise<void>;
+    pending?: () => boolean;
 }
 ```
 
@@ -977,6 +988,7 @@ interface OutboxSink {
 ```ts
 interface PersistedMutation {
     args: Record<string, unknown>;
+    baselineSeq?: number;
     clientId?: string;
     functionPath: string;
     id: string;
@@ -1050,6 +1062,7 @@ interface QueryCacheAdapter {
 ```ts
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
+    readonly baselineSeq?: number;
     clientId?: string;
     readonly functionPath: string;
     id?: string;
@@ -1727,10 +1740,28 @@ const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectRes
 
 ## `@lunora/client/auth`
 
+### `AUTH_STATUSES` (const)
+
+```ts
+const AUTH_STATUSES: readonly [
+    "authenticated",
+    "loading",
+    "unauthenticated",
+    "unreachable"
+];
+```
+
+### `AuthStatus` (type)
+
+```ts
+type AuthStatus = (typeof AUTH_STATUSES)[number];
+```
+
 ### `IdentityStore` (interface)
 
 ```ts
 interface IdentityStore {
+    getStatus: () => AuthStatus;
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
@@ -1740,6 +1771,18 @@ interface IdentityStore {
 
 ```ts
 const getIdentityStore: (client: LunoraClient) => IdentityStore;
+```
+
+### `isAuthenticatedStatus` (const)
+
+```ts
+const isAuthenticatedStatus: (status: AuthStatus) => boolean;
+```
+
+### `isLoadingStatus` (const)
+
+```ts
+const isLoadingStatus: (status: AuthStatus) => boolean;
 ```
 
 ## `@lunora/client/pagination`

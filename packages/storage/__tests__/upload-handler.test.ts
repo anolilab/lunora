@@ -382,6 +382,24 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
+        it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
+            expect.hasAssertions();
+
+            // `??` only fills in a nullish value, so an unset upload-limit env
+            // var coerced with `Number(...)` survives as `NaN` — and
+            // `declaredSize > NaN` is always false, so
+            // every TUS/chunked-REST create passed the only cap this handler
+            // enforces for those protocols.
+            expect(() => createUploadHandler({ maxFileSize: Number.NaN, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(
+                /maxFileSize/,
+            );
+            expect(() => createUploadHandler({ maxFileSize: Number.POSITIVE_INFINITY, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(
+                /maxFileSize/,
+            );
+            // The mirror image: a negative cap rejects every upload.
+            expect(() => createUploadHandler({ maxFileSize: -1, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(/maxFileSize/);
+        });
+
         it("rejects a chunked-REST create whose declared total (X-Total-Size) is over the cap", async () => {
             expect.hasAssertions();
 

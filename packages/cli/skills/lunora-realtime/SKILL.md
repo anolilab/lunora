@@ -110,9 +110,9 @@ _authorization_. They compose.
 
 ## Mutations + Optimistic Updates
 
-`useMutation(reference)` returns `{ mutate, pending }`. Pass an `optimistic`
-callback to paint the next state immediately; if the server rejects the call the
-runtime rolls the cache back automatically.
+`useMutation(reference)` returns `{ mutate, pending }`. Pass an
+`optimisticUpdate` callback to paint the next state immediately; if the server
+rejects the call the runtime rolls the cache back automatically.
 
 ```tsx
 import { useMutation } from "@lunora/react";
@@ -124,8 +124,8 @@ const { mutate: add, pending } = useMutation(api.todos.add);
 await add(
     { text },
     {
-        optimistic: (current) => {
-            const list = (current as Doc<"todos">[] | undefined) ?? [];
+        optimisticUpdate: (store) => {
+            const list = store.getQuery(api.todos.list, {}) ?? [];
             const provisional: Doc<"todos"> = {
                 _id: `optimistic_${Date.now()}` as Id<"todos">,
                 _creationTime: Date.now(),
@@ -133,15 +133,21 @@ await add(
                 done: false,
                 createdAt: Date.now(),
             };
-            return [provisional, ...list];
+            store.setQuery(api.todos.list, {}, [provisional, ...list]);
         },
     },
 );
 ```
 
-- The `optimistic` callback receives the current cached value and returns the
-  provisional one. When the server delta arrives it replaces the optimistic
-  entry; on failure the cache reverts.
+- `optimisticUpdate` names the query it patches, because `todos.add` and
+  `todos.list` are different functions and nothing can infer the link. When the
+  server delta arrives it replaces the optimistic entry; on failure the cache
+  reverts. `store.getAllQueries(fn)` patches every subscribed variant of a query
+  at once.
+- The per-call `optimistic: (current) => next` shortcut exists too, but it only
+  patches a subscription registered under the **mutation's own** reference and
+  args — a counter or a document by id. It is a silent no-op for the
+  `add`-updates-`list` shape above.
 - `pending` is `true` while the call is in flight — disable the submit button
   with it.
 - **Offline queue:** mutations made while disconnected are queued by

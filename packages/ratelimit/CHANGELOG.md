@@ -1,3 +1,129 @@
+## @lunora/ratelimit [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.70...@lunora/ratelimit@1.0.0-alpha.71) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
+## @lunora/ratelimit [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.69...@lunora/ratelimit@1.0.0-alpha.70) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+
+## @lunora/ratelimit [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.68...@lunora/ratelimit@1.0.0-alpha.69) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.135
+
+## @lunora/ratelimit [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.67...@lunora/ratelimit@1.0.0-alpha.68) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+
+## @lunora/ratelimit [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.66...@lunora/ratelimit@1.0.0-alpha.67) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.133
+
+## @lunora/ratelimit [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.65...@lunora/ratelimit@1.0.0-alpha.66) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/ratelimit [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.64...@lunora/ratelimit@1.0.0-alpha.65) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/ratelimit [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.63...@lunora/ratelimit@1.0.0-alpha.64) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
+## @lunora/ratelimit [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.62...@lunora/ratelimit@1.0.0-alpha.63) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+
+## @lunora/ratelimit [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.61...@lunora/ratelimit@1.0.0-alpha.62) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+
+## @lunora/ratelimit [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.60...@lunora/ratelimit@1.0.0-alpha.61) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+
+## @lunora/ratelimit [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.59...@lunora/ratelimit@1.0.0-alpha.60) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/ratelimit [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.58...@lunora/ratelimit@1.0.0-alpha.59) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/ratelimit [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.57...@lunora/ratelimit@1.0.0-alpha.58) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/ratelimit [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.56...@lunora/ratelimit@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+
+## @lunora/ratelimit [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.55...@lunora/ratelimit@1.0.0-alpha.56) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/ratelimit [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.54...@lunora/ratelimit@1.0.0-alpha.55) (2026-09-11)
 
 

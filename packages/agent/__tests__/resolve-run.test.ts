@@ -1,32 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import resolveAgentRun from "../src/resolve-run";
-import type { AgentFunctionReference, AgentRunFunction } from "../src/types";
+import type { AgentFunctionReference } from "../src/types";
 
 const DISPATCH_ENV = { LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_ORIGIN_URL: "https://app.example/" };
 
-/** A sentinel dispatcher so the ownerless branch can be asserted by reference identity. */
-const sentinelRun: AgentRunFunction = async () => "sentinel";
-
 const messagesRef: AgentFunctionReference = { __lunoraRef: "agents:agentMessages" };
 
-describe(resolveAgentRun, () => {
-    afterEach(() => {
-        vi.unstubAllGlobals();
-    });
+/** Stub `fetch` and hand back what the dispatcher put on the wire. */
+const captureDispatch = (): {
+    body: () => { args?: unknown; functionPath?: string; id?: string };
+    headers: () => Record<string, string>;
+    url: () => string;
+} => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody = "{}";
 
-    it("returns the identity-free context dispatcher verbatim for an ownerless run", () => {
-        // No owner → the thread's gate is already open, so the loop must keep the
-        // exact `context.run` it was given (no new dispatcher, no fetch).
-        expect(resolveAgentRun(sentinelRun, undefined, DISPATCH_ENV)).toBe(sentinelRun);
-    });
-
-    it("forwards the owner as x-lunora-userid so owner-gated reads are admitted", async () => {
-        let capturedUrl = "";
-        let capturedHeaders: Record<string, string> = {};
-        let capturedBody = "";
-
-        const fetchSpy = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (url, init) => {
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
             capturedUrl = url;
             capturedHeaders = init.headers as Record<string, string>;
             capturedBody = init.body as string;
@@ -34,25 +27,52 @@ describe(resolveAgentRun, () => {
             // The shard's envelope (`ShardDO.buildDispatchResponse`) — the
             // dispatcher unwraps `result` and `decodeWire`s it.
             return Response.json({ result: [{ content: "hi" }] });
-        });
+        }),
+    );
 
-        vi.stubGlobal("fetch", fetchSpy);
+    return {
+        body: () => JSON.parse(capturedBody) as { args?: unknown; functionPath?: string; id?: string },
+        headers: () => capturedHeaders,
+        url: () => capturedUrl,
+    };
+};
 
-        const run = resolveAgentRun(sentinelRun, "user-a", DISPATCH_ENV);
+describe(resolveAgentRun, () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
 
-        // Owner-scoped → a fresh identity-carrying dispatcher, NOT `context.run`.
-        expect(run).not.toBe(sentinelRun);
+    it("dispatches an ownerless run with no identity and no replay-dedup id", async () => {
+        const captured = captureDispatch();
 
-        const result = await run(messagesRef, { key: "thread-1" });
+        const result = await resolveAgentRun(undefined, DISPATCH_ENV)(messagesRef, { key: "thread-1" });
+
+        expect(captured.url()).toBe("https://app.example/_lunora/scheduler/dispatch");
+        expect(captured.headers()["x-lunora-userid"]).toBeUndefined();
+
+        // No `id`: the loop makes most of its calls from inside memoized
+        // `step.do` callbacks, so any ORDER-numbered dedup id (what the
+        // workflow body's `context.run` would attach) is re-issued to a
+        // different call on the next activation — and the shard, keyed
+        // `(identity, mutationId)` with no function path, answers it with the
+        // first call's cached result. The loop's calls are idempotent on their
+        // own keys instead. See `resolve-run.ts`.
+        expect(captured.body()).toStrictEqual({ args: { key: "thread-1" }, functionPath: "agents:agentMessages" });
+        expect(result).toStrictEqual([{ content: "hi" }]);
+    });
+
+    it("forwards the owner as x-lunora-userid so owner-gated reads are admitted", async () => {
+        const captured = captureDispatch();
+
+        const result = await resolveAgentRun("user-a", DISPATCH_ENV)(messagesRef, { key: "thread-1" });
 
         // The dispatched read reaches the scheduler endpoint and — the point of
         // the fix — is attributed to the verified owner via `x-lunora-userid`, so
         // the owner gate admits it. (The admin-bearer auth header is the
         // dispatcher's own concern, covered by `@lunora/dispatch`'s suite.)
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
-        expect(capturedUrl).toBe("https://app.example/_lunora/scheduler/dispatch");
-        expect(capturedHeaders["x-lunora-userid"]).toBe("user-a");
-        expect(JSON.parse(capturedBody)).toStrictEqual({ args: { key: "thread-1" }, functionPath: "agents:agentMessages" });
+        expect(captured.url()).toBe("https://app.example/_lunora/scheduler/dispatch");
+        expect(captured.headers()["x-lunora-userid"]).toBe("user-a");
+        expect(captured.body()).toStrictEqual({ args: { key: "thread-1" }, functionPath: "agents:agentMessages" });
 
         // The dispatcher resolves the function's RETURN VALUE, not the envelope.
         expect(result).toStrictEqual([{ content: "hi" }]);

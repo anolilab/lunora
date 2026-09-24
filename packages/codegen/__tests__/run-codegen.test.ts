@@ -603,7 +603,7 @@ export const listMessages = query
                 const result = runCodegen({ lint: false, projectRoot: workdir });
 
                 /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
-                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredSchedules");
+                expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredDeletes, beginDeferredSchedules");
                 expect(result.generated.shard).toContain(
                     'assertShapesDeclareReadPolicies(LUNORA_SHAPES, ["messages"], (schema as unknown as { rlsMode?: string }).rlsMode === "required");',
                 );
@@ -2199,6 +2199,32 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
             expect(result.generated.shard).toContain("protected override lifecycleHookPaths(event:");
         });
 
+        it("registers an onWhisper export as an internal QUERY in the whisper manifest", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "whisper.ts"),
+                `import { onWhisper } from "@lunora/server";
+export const authorize = onWhisper(async (ctx, event) => { void ctx; return event.topic.startsWith("room:"); });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toContain('"whisper:authorize":');
+            expect(result.generated.functions).toContain('whisper: ["whisper:authorize"]');
+
+            // A query, NOT a mutation: `handleRpc` transaction-wraps a mutation, so
+            // misclassifying the authorizer would open a write span on every topic
+            // join — and would let an authorization check write.
+            expect(result.generated.api).toContain('authorize: FunctionReference<"query"');
+
+            // Internal: the namespace lands AFTER the `InternalApiTypes` opener, i.e.
+            // in the server-only surface rather than the client-facing `api`.
+            expect(result.generated.api.indexOf("whisper: {")).toBeGreaterThan(result.generated.api.indexOf("InternalApiTypes"));
+        });
+
         it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
             expect.assertions(5);
 
@@ -3745,6 +3771,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('"type": "id"');
         });
 
+        it("carries each foreign key's declared onDelete onto its column", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [
+                            { field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" },
+                            { field: "editorId", kind: "one", name: "editor", onDelete: "restrict", references: "_id", table: "users" },
+                            // No declared action — the column must stay silent rather
+                            // than inherit a sibling's.
+                            { field: "reviewerId", kind: "one", name: "reviewer", references: "_id", table: "users" },
+                        ],
+                        searchIndexes: [],
+                        shape: {
+                            authorId: { kind: "id", tableName: "users" },
+                            editorId: { kind: "id", tableName: "users" },
+                            reviewerId: { kind: "id", tableName: "users" },
+                        },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const columns = JSON.parse(/const LUNORA_TABLE_COLUMNS[^=]+= (?<json>\{.*?\n\});/su.exec(emitShard({ schema }))?.groups?.["json"] ?? "{}") as {
+                posts: { name: string; onDelete?: string }[];
+            };
+            const byName = new Map(columns.posts.map((column) => [column.name, column.onDelete]));
+
+            expect(byName.get("authorId")).toBe("cascade");
+            expect(byName.get("editorId")).toBe("restrict");
+            expect(byName.get("reviewerId")).toBeUndefined();
+        });
+
         it("flags a v.storage() column with isStorage: true", () => {
             expect.assertions(1);
 
@@ -3775,9 +3840,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
-            expect(output).toContain(
-                "Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>",
-            );
+            expect(output).toContain('onDelete?: "cascade" | "restrict" | "set null";');
         });
 
         it("names the members of a string-literal union so the row editor can offer them", () => {
@@ -3945,7 +4008,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // ctx.vectors + the auto-propagation write hook are assembled in buildCtx.
             expect(output).toContain("vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;");
             expect(output).toContain("onWrite = createVectorSyncHook(");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
             expect(output).toContain("vectors,");
         });
 
@@ -3975,7 +4038,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // today: no `namespace`, no `ROOT_SHARD_NAME` import, no shard-key read.
             expect(output).toContain("onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });");
             // The read side (`ctx.vectors`) must stay just as bare as the write side.
-            expect(output).toContain("vectors = createContextVectors(lunora);");
+            expect(output).toContain("vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
             expect(output).not.toContain("currentShardKey");
@@ -4021,10 +4084,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // which ones are tenant-partitioned (a root-instance call against
             // any other listed index stays namespace-less, unaffected).
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is indexed via a standalone defineVectorIndex (Shape B), not inline .vectorize()", () => {
@@ -4062,10 +4125,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 "onWrite = createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors });",
             );
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
-            expect(output).toContain("onWrite,");
+            expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
         });
 
         it("lists only the sharded table's index in shardedIndexNames for a MIXED schema (one sharded, one root-scoped vectorized table)", () => {
@@ -4109,7 +4172,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             expect(output).toContain(
-                'vectors = createContextVectors(lunora, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
             );
         });
 

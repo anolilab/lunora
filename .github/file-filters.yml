@@ -149,6 +149,9 @@ generated_files:
     - "**/project.json"
     - "apps/docs/src/data/packages-metadata.json"
     - "apps/docs/scripts/generate-*.js"
+    # The generated error-code reference itself: a hand edit to the output is drift
+    # too, and its generator's only other input (packages/errors) is listed below.
+    - "apps/docs/src/content/docs/errors.mdx"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"
@@ -221,6 +224,27 @@ benchmarks:
     - "vis.config.ts"
     - ".github/workflows/codspeed.yml"
 
+# The registry-item suite (`packages/cli/__tests__/commands/registry-items.test.ts`),
+# which scaffolds every shipped item into a throwaway project and runs the real
+# codegen + advisor over it, on top of the manifest/binding/dependency sweeps.
+#
+# Its own filter and its own job because `registry/` is not a `vis` project: a
+# registry-only PR marks NOTHING affected, so `test:affected` never reaches
+# packages/cli and every gate in that file — the advisor sweep included — was
+# skipped on exactly the PRs it exists for. The `packages` filter in test.yml
+# already lists `registry/**`, which starts the job but not the affected set.
+#
+# `packages/advisor/**` and `packages/codegen/**` are listed because the findings
+# are theirs: a new ERROR-level lint, or a feeder that starts seeing a shape,
+# changes this gate's verdict without touching registry/ or the CLI.
+registry_items:
+    - "registry/**"
+    - "packages/cli/**"
+    - "packages/advisor/**"
+    - "packages/codegen/**"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
+
 # The auth-ui → registry/auth-ui-* copy-sync check.
 registry_sync:
     - "packages/auth-ui/**"
@@ -285,6 +309,26 @@ sdks:
 templates:
     - "templates/**"
     - "registry/**"
+    - "packages/**"
+    - "shared/**"
+    - "scripts/template-build-smoke.sh"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# The Expo leg of the scaffold matrix, split out because its `pnpm install` pulls
+# the react-native/expo graph and nothing else in the matrix shares it. Narrower
+# than `templates` ON PURPOSE: editing another template (say `templates/next`)
+# cannot break this one, so it should not pay for it.
+#
+# What CAN break it is still all here — the packages it consumes, the inlined
+# `shared/` sources, its own tree, the harness, and the lockfiles that decide
+# what its install resolves. Keep this in step with `templates` for everything
+# except `templates/**` and `registry/**`; a path that belongs in both and is
+# only in `templates` reopens the hole this leg exists to close.
+templates_expo:
+    - "templates/expo/**"
     - "packages/**"
     - "shared/**"
     - "scripts/template-build-smoke.sh"

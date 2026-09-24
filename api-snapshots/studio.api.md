@@ -367,6 +367,9 @@ type DeploymentHealthProbe = (kind: ProbeKind) => Promise<ProbeSnapshot>;
 ```ts
 interface EditableFilter {
     column: string;
+    literal?: [
+        unknown
+    ];
     operator: FilterOperator;
     value: string;
 }
@@ -1155,6 +1158,7 @@ interface TablePage {
     columns: string[];
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+    sqlColumns?: string[];
     total?: number;
 }
 ```
@@ -1485,6 +1489,7 @@ const MESSAGE_IDS: readonly [
     "Connect to Lunora Studio",
     "Connected",
     "Connecting…",
+    "Polling",
     "Enter your admin token to access the studio.",
     "From your worker's LUNORA_ADMIN_TOKEN — your project's .dev.vars in dev, or a deployment secret in production.",
     "Local",
@@ -1690,6 +1695,8 @@ const MESSAGE_IDS: readonly [
     "Run probe",
     "Allowed",
     "Denied",
+    "Errored",
+    "The call failed for a reason that is not an access verdict, so it says nothing about the policy.",
     "Probing…",
     "Set `runAsIdentity` to forge an identity and probe access.",
     "Dev only: runs the selected function as this user over the admin gate so you can test auth and RLS.",
@@ -1975,7 +1982,7 @@ const MESSAGE_IDS: readonly [
     "SQL",
     "{count} selected",
     "Delete {count}",
-    "Delete {count} rows?",
+    "Delete {count} rows and everything that cascades?",
     "Copy",
     "Copied",
     "Cell value",
@@ -2423,7 +2430,7 @@ const MESSAGE_IDS: readonly [
     "Body must be valid JSON.",
     "Captured",
     "Clear log",
-    "Clear {count} messages?",
+    "Clear the whole message log?",
     "Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.",
     "Consumed messages appear here once a push consumer processes a batch in dev. Send one from the Send tab to see it captured.",
     "Declare a queue with defineQueue in lunora/queues.ts to enqueue a test message.",
@@ -2728,6 +2735,14 @@ const MESSAGE_IDS: readonly [
     "Enter a JSON value — for example true, 0, null, or \"done\".",
     "Set on {total} rows",
     "Set column on {total} matching",
+    "Permanently delete {total} matching rows and everything that cascades?",
+    "Permanently delete all matching rows and everything that cascades?",
+    "Delete {total} matching",
+    "Delete matching",
+    "Permanently clear all {total} rows and everything that cascades?",
+    "Permanently clear every row and everything that cascades?",
+    "Clear table ({total})",
+    "Clear table",
     "Shard: root",
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows."

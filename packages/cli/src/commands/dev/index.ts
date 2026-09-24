@@ -17,7 +17,7 @@ const devCommand: Command = {
         ["lunora dev status", "Report the running dev server (URL, PID, uptime, ready/starting)"],
         ["lunora dev status --json", "Same as JSON — poll `.ready` to gate a dependent step in a task graph"],
         ["lunora dev logs", "Print the captured dev-server log (background runs)"],
-        ["lunora dev --json", "Machine-readable JSON log lines (also LUNORA_LOG_JSON=1)"],
+        ["lunora dev --json", "Stream machine-readable JSON log LINES (a stream, not a --format json document)"],
         ["lunora dev --emit-bindings dev-manifest.json", "Write what this worker needs + where it serves, for a task runner"],
         ["lunora dev --no-studio", "Skip the embedded studio server"],
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
@@ -53,7 +53,18 @@ const devCommand: Command = {
             name: "background",
             type: Boolean,
         },
-        { description: "Emit machine-readable JSON log lines (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)", name: "json", type: Boolean },
+        {
+            // Deliberately `--json`, not `--format json`: this selects a streaming
+            // LOG-LINE format for a long-running process, where `--format json`
+            // promises stdout carries exactly one JSON document. `dev status` /
+            // `dev stop` do print one — but they share this command's option
+            // table, and two format flags on one command is worse for a caller
+            // than one flag whose meaning is stated.
+            description:
+                "Machine-readable JSON log lines while the server runs, and a JSON result for `dev status`/`dev stop` (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)",
+            name: "json",
+            type: Boolean,
+        },
         { description: "How many trailing lines `lunora dev logs` prints (default 100, 0 = all)", name: "lines", type: Number },
         // Both halves of each negatable boolean are declared explicitly, the way
         // `codegen`/`deploy` do it. Declaring ONLY the `no-*` name makes cerebro

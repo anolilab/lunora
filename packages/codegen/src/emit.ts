@@ -34,6 +34,7 @@ import type {
     MigrationIR,
     MutatorIR,
     QueueIR,
+    RelationIR,
     RlsMetadataIR,
     SchemaIR,
     ShapeIR,
@@ -2564,15 +2565,25 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  */
 
 /**
- * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect/init
- * function-path arrays the generated ShardDO iterates — the first two on socket
- * open/close, `init` once per instance before any handler runs. Each
- * entry is the same `${namespace}:${fn}` key the function lands under in
- * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
- * registered function. Functions arrive pre-sorted, so the arrays are stable.
+ * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the
+ * connect/disconnect/init/reactor/whisper function-path arrays the generated
+ * ShardDO iterates — the first two on socket open/close, `init` once per instance
+ * before any handler runs, `reactor` after a write flush, `whisper` before a
+ * topic join or broadcast. Each entry is the same `${namespace}:${fn}` key the
+ * function lands under in `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path
+ * like any other registered function. Functions arrive pre-sorted, so the arrays
+ * are stable.
  */
-const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } => {
-    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[] } = { connect: [], disconnect: [], init: [], reactor: [] };
+const renderLifecycleManifest = (
+    functions: ReadonlyArray<FunctionIR>,
+): { connect: string[]; disconnect: string[]; init: string[]; reactor: string[]; whisper: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[]; init: string[]; reactor: string[]; whisper: string[] } = {
+        connect: [],
+        disconnect: [],
+        init: [],
+        reactor: [],
+        whisper: [],
+    };
 
     for (const definition of functions) {
         if (!definition.lifecycle) {
@@ -2681,11 +2692,20 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`. Read at
-     * dispatch to decide whether the function runs system-trusted: \`init\` and
-     * \`reactor\` have no caller identity, so RLS has no user to scope to.
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * \`init\` and \`reactor\` have no caller identity, so RLS has no user to scope
+     * to. \`whisper\` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    /**
+     * Hoisted by the builder when the \`.use()\` chain carries a step with a
+     * per-dispatch effect — \`rateLimit(...)\` consuming budget, a single-use
+     * captcha token being burned. Read by \`isCacheableQuery\`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -2704,17 +2724,25 @@ ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once
- * per Durable Object instance before any handler runs (\`init\`), and after a
- * write flush when a watched read's result changed (\`reactor\`). Each path also
- * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; \`init\` and \`reactor\` have no caller, so they run
- * anonymous — all via system dispatch.
+ * per Durable Object instance before any handler runs (\`init\`), after a
+ * write flush when a watched read's result changed (\`reactor\`), and before a
+ * socket joins or broadcasts to a whisper topic (\`whisper\`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket-scoped moments run under
+ * the socket's verified identity; \`init\` and \`reactor\` have no caller, so they
+ * run anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: {
+    connect: readonly string[];
+    disconnect: readonly string[];
+    init: readonly string[];
+    reactor: readonly string[];
+    whisper: readonly string[];
+} = {
     connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
     disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
     init: [${lifecycleHooks.init.map((path) => JSON.stringify(path)).join(", ")}],
     reactor: [${lifecycleHooks.reactor.map((path) => JSON.stringify(path)).join(", ")}],
+    whisper: [${lifecycleHooks.whisper.map((path) => JSON.stringify(path)).join(", ")}],
 };
 
 /**
@@ -2946,6 +2974,15 @@ interface EmittedColumn {
      * "clear this field" control that then writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to — what
+     * the writer actually does to this row when the referenced parent is deleted.
+     * Absent when the column is not an FK, or when the schema declared no action.
+     * Carried so the studio's delete preview can name the real behaviour instead
+     * of reporting every edge as undeclared.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert: declared `v.optional(...)` or carrying a `.default(...)`. */
     optional: boolean;
     /** Primary key — the runtime-minted `_id` column. */
@@ -3017,12 +3054,21 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
  * One column's emitted metadata. Split out of {@link buildTableColumns} so the
  * per-field decisions read on their own rather than nested two loops deep.
  */
-const buildColumn = (field: string, validator: ValidatorIR): EmittedColumn => {
+const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: ReadonlyMap<string, RelationIR["onDelete"]>): EmittedColumn => {
     const resolved = unwrapOptional(validator);
     const column: EmittedColumn = { name: field, optional: isOptionalOnInsert(validator), type: resolved.kind };
 
     if (resolved.kind === "id" && resolved.tableName !== undefined) {
         column.ref = resolved.tableName;
+
+        // The declared delete behaviour lives on the table's relation, not on the
+        // validator. Without it the studio's delete preview cannot tell a cascade
+        // from a restrict and reports every FK as "no delete action declared".
+        const onDelete = onDeleteByField.get(field);
+
+        if (onDelete !== undefined) {
+            column.onDelete = onDelete;
+        }
     }
 
     if (resolved.kind === "storage") {
@@ -3060,8 +3106,14 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
             ...(table.commitOrdered === true ? [{ name: "_commitSeq", optional: false, type: "number" } satisfies EmittedColumn] : []),
         ];
 
+        // `one` relations are the ones whose FK column lives on THIS table, so
+        // only those map a local field to a declared delete action.
+        const onDeleteByField = new Map<string, RelationIR["onDelete"]>(
+            table.relations.filter((relation) => relation.kind === "one").map((relation) => [relation.field, relation.onDelete]),
+        );
+
         for (const [field, validator] of Object.entries(table.shape)) {
-            columns.push(buildColumn(field, validator));
+            columns.push(buildColumn(field, validator, onDeleteByField));
         }
 
         byTable[table.name] = columns;
@@ -3421,7 +3473,7 @@ const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: "boolean" | "number" 
 
     // eslint-disable-next-line no-secrets/no-secrets -- the emitted ShardDO override method name, not a secret
     const subscriptionOverride = `
-        protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
+        protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
             const key = typeof args.key === "string" ? args.key : "";
 
             // SECURITY: the reactive channel is public (any socket, no auth). Serve
@@ -3737,11 +3789,14 @@ const emitContainerFragments = (
 
     return {
         // Schema `.jurisdiction("…")` pins every container DO this shard reaches
-        // to the data-residency region (`undefined` when undeclared). The trailing
-        // `this.getCurrentTraceparent()` forwards the inbound RPC's W3C trace
-        // context onto outbound container fetches so their spans join the trace.
+        // to the data-residency region (`undefined` when undeclared). The two
+        // trailing arguments forward this dispatch's telemetry verdict onto
+        // outbound container fetches: `getCurrentTraceparent()` so the
+        // container's spans join the trace, and `getCurrentSampleErrors()` so it
+        // exports on the verdict the worker settled rather than on its own
+        // environment. Both are `undefined` outside a propagated dispatch.
         build: `
-            const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent());
+            const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent(), this.getCurrentSampleErrors());
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],
@@ -4238,8 +4293,10 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "MigrationRunResult",
     "QueryReadScope",
     ...(hasQueues ? ["QueuesResult"] : []),
+    "RelatedPage",
     "RunShardApplyCdcArgs",
     "RunShardExportArgs",
+    "RunShardFindRelatedArgs",
     "RunShardImportArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
@@ -4256,6 +4313,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "SqlExec",
     "StorageRulesResult",
     "StudioFeaturesResult",
+    "SubscriptionIdentity",
     "SystemReaderStorageLike",
     "TelemetrySink",
     ...(hasWorkflows ? ["WorkflowsResult"] : []),
@@ -4573,7 +4631,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
     const shapeResolveOverride = hasShapes
         ? `
-        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
+        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
             const shape = LUNORA_SHAPES[name];
 
             if (!shape) {
@@ -4691,8 +4749,8 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, ${shapeReadPolicyImport}beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
-            : `import { asBucketStorage, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
+            ? `import { asBucketStorage, ${shapeReadPolicyImport}beginDeferredDeletes, beginDeferredSchedules, composeShapeReadWhere, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`
+            : `import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -4841,15 +4899,29 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
     // root-instance call against a genuinely root-scoped index stays
     // namespace-less (correct — unchanged), while the same call against a
     // sharded index throws (see `createContextVectors`'s docblock) rather than
-    // silently defaulting to "every tenant". Gated on `hasShardedVectors` so an
-    // unsharded (or no-vectors) schema keeps emitting the bare
-    // `createContextVectors(lunora)` call, byte-identical.
-    const vectorsContextNamespaceOption = hasShardedVectors
-        ? `, { namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: [${schema.vectorIndexes
-              .filter((index) => shardedTableNames.has(index.table))
-              .map((index) => JSON.stringify(index.name))
-              .join(", ")}] }`
-        : "";
+    // silently defaulting to "every tenant". The two namespace keys are gated on
+    // `hasShardedVectors` so an unsharded (or no-vectors) schema carries neither.
+    //
+    // `deferAfterCommit` is emitted unconditionally, sharded or not: it is what
+    // makes `ctx.vectors.upsert` mean what `MutationCtx` documents it to mean —
+    // held until the mutation's transaction COMMITS, so a handler that upserts a
+    // vector and then throws does not leave one behind for a row that was rolled
+    // back. `upsertNow` keeps writing inline, which is the distinction the two
+    // names carry. Same host primitive the auto-sync hook goes through below, so
+    // a manual upsert and the hook it sits next to drain in one ordered queue.
+    const vectorsContextOptions = [
+        "deferAfterCommit: (work) => this.deferAfterCommit(work)",
+        ...(hasShardedVectors
+            ? [
+                  "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey",
+                  `shardedIndexNames: [${schema.vectorIndexes
+                      .filter((index) => shardedTableNames.has(index.table))
+                      .map((index) => JSON.stringify(index.name))
+                      .join(", ")}]`,
+              ]
+            : []),
+    ];
+    const vectorsContextOption = `, { ${vectorsContextOptions.join(", ")} }`;
     const vectorsBuild = hasVectorIndexes
         ? `
             let vectors: VectorSearchLike;
@@ -4858,7 +4930,7 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
             if (config.vectors) {
                 const lunora = createVectors({ indexes: config.vectors(env) });
 ${vectorNamespaceField}
-                vectors = createContextVectors(lunora${vectorsContextNamespaceOption});
+                vectors = createContextVectors(lunora${vectorsContextOption});
                 onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;
@@ -4891,6 +4963,10 @@ ${vectorNamespaceField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
+                // Read at call time, not captured: the baseline belongs to the
+                // dispatch in flight, and a queued mutation admitted after a
+                // sibling's prologue must be judged against ITS caller's cursor.
+                baselineSeq: () => this.getCurrentBaselineSeq(),
                 cdc: config.cdc ?? false,
                 // A dispatch with NO caller identity runs system-trusted: RLS scopes
                 // rows to a user, and these have no user to scope to. This is the tier
@@ -4907,6 +4983,9 @@ ${vectorNamespaceField}
                 // each of its writes allocates its own.
                 inTransaction: () => this.isInTransaction(),
                 onIndexUse: this.getCtxDbIndexUseHook(),
+                onStalePatchDropped: (event) => {
+                    this.recordStalePatchDropped(event);
+                },
                 // Bound to THIS dispatch's reactive-cache read scope (\`handleRpc\`
                 // threads it in), so two concurrent queries never stamp each
                 // other's dep sets. \`executeSubscription\` overrides both with its
@@ -4916,7 +4995,19 @@ ${vectorNamespaceField}
                 // Left \`undefined\` when there is no scope so \`createShardCtxDb\`
                 // keeps its own "degrade a provable slice to a whole-table dep"
                 // fallback rather than reporting into a no-op.
-                onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),${hasVectorIndexes ? "\n                onWrite," : ""}
+                onReadRange: options.onReadRange ?? (options.scope === undefined ? undefined : this.getCtxDbReadRangeHook(options.scope)),${
+                    hasVectorIndexes
+                        ? `
+                // Vectorize is outside this shard's SQLite and cannot roll back, so
+                // the sync is held until the mutation's transaction has COMMITTED
+                // (\`deferAfterCommit\`) instead of running inline. Inline, a write
+                // that later aborted left a vector pointing at a row that does not
+                // exist — which a search then surfaces — and a rolled-back delete
+                // left the row with its vector already purged. Outside a
+                // transaction (an action) nothing is open and it runs at once.
+                onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),`
+                        : ""
+                }
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -5022,12 +5113,19 @@ ${vectorNamespaceField}
     const globalShapeReaderOverride =
         hasShapes && hasGlobalTables
             ? `
-        protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
+        protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: SubscriptionIdentity): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
             const env = this.env as Record<string, unknown>;
             // A shape read performs no writes, so the widened request only needs
             // the inbound bookmark (pin the membership drain to the caller's own
             // prior writes) — no \`onBookmark\` here.
-            const globalRequest = { ...identity, ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            //
+            // The two identity members are named rather than spread, matching the
+            // dispatch-path request built in \`buildCtx\`. A spread would also hand
+            // the global writer \`ip\`, and \`globalShapeReadKey\` — the per-flush
+            // cache in front of this read — keys on identity + userId only. Equal
+            // keys must mean equal rows, so a field the writer can scope by has to
+            // be either in the key or out of the request; it is out.
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity: identity?.identity, userId: identity?.userId };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
@@ -5062,7 +5160,14 @@ ${vectorNamespaceField}
             // never what changed in them, so it costs one small read per poll tick
             // for the whole shard — and a tick whose answer omits a shape's table
             // skips that shape's membership drain entirely.
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and \`readGlobalShapeRows\`: \`bookmark\` is not declared
+            // on the narrower Hyperdrive thunk's \`request\` type, and an inline
+            // literal trips an excess-property error (TS2353) that makes the
+            // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
+            // a \`defineShape\`. The Hyperdrive factory simply never reads it.
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
         }
@@ -5294,7 +5399,7 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
     // configured. The alarm bootstraps ride the same constructor rather than
     // minting a second one.
     //
-    // `isQueryFunction` rides with it, and is equally load-bearing: the base
+    // `isCacheableQuery` rides with it, and is equally load-bearing: the base
     // class has no function registry, so its answer is a conservative `false`
     // and `runCachedQuery` returns early on EVERY call — a wired cache that
     // memoizes nothing. This override is the single point where that goes
@@ -5320,8 +5425,23 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
             });
 ${sourceBootstrap}${ttlBootstrap}        }
 
-        protected override isQueryFunction(functionPath: string): boolean {
-            return LUNORA_FUNCTIONS[functionPath]?.kind === "query";
+        protected override isCacheableQuery(functionPath: string): boolean {
+            // NOT \`kind === "query"\` alone. A cache hit answers without running
+            // \`handleRpc\`, so the \`internal\` refusal at the top of it is skipped —
+            // and an \`internalQuery\` primed by a trusted system dispatch was then
+            // served to an anonymous client that the refusal would have 404'd.
+            //
+            // \`perDispatch\` is the same argument one layer out: the procedure's
+            // own \`.use()\` chain runs INSIDE \`handleRpc\`, so a hit skips it too.
+            // A \`.use(rateLimit(...))\` query was therefore charged once and then
+            // served from the memo to every later request — each of which still
+            // reached this Durable Object and still cost it a dispatch, so only
+            // the accounting was skipped. Metering and memoizing are mutually
+            // exclusive; the author asking for the first is choosing against the
+            // second.
+            const registered = LUNORA_FUNCTIONS[functionPath];
+
+            return registered?.kind === "query" && registered.visibility !== "internal" && registered.perDispatch !== true;
         }
 
         protected override isPaidFunction(functionPath: string): boolean {
@@ -5421,7 +5541,18 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
 const LUNORA_TABLE_COLUMNS: Record<
     string,
-    Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
+    Array<{
+        bucket?: string;
+        enumValues?: string[];
+        isStorage?: boolean;
+        name: string;
+        nullable?: boolean;
+        onDelete?: "cascade" | "restrict" | "set null";
+        optional: boolean;
+        pk?: boolean;
+        ref?: string;
+        type: string;
+    }>
 > = ${JSON.stringify(tableColumns, undefined, 4)};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
@@ -5621,18 +5752,30 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
          * has no savepoints and \`runInTransaction\` rejects a second open, so it
          * rides the enclosing span, which also owns its commit and therefore its
          * scheduler flush.
+         *
+         * Both deferral windows are opened here and settled against the SAME
+         * outcome. The delete window is what keeps a composed mutation's queued
+         * object deletes off the caller's flush when it rolls back: \`ctx\` is
+         * shared, so without a window the keys are indistinguishable from the
+         * action's own and the action's flush destroys objects whose rows the
+         * rollback put back.
          */
         private async runMutationTransaction<T>(ctx: unknown, work: () => Promise<T>): Promise<T> {
             const settleSchedules = beginDeferredSchedules(ctx as { scheduler?: unknown });
+            // Synchronous and non-throwing (it only moves queue entries), so it can
+            // settle first on every path and cannot mask the outcome.
+            const settleDeletes = beginDeferredDeletes(ctx);
 
             if (this.isInTransaction()) {
                 try {
                     const nested = await work();
 
+                    settleDeletes(true);
                     await settleSchedules(true);
 
                     return nested;
                 } catch (error) {
+                    settleDeletes(false);
                     await settleSchedules(false);
 
                     throw error;
@@ -5648,10 +5791,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // to run "after I commit" must go with them. Dropping them is the
                 // whole point of buffering: a persisted job for a write that never
                 // landed fires against state that does not exist.
+                //
+                // The queued object deletes go the same way, and for a sharper
+                // reason: the rows they were to clean up after are still there, and
+                // an R2 delete cannot be undone.
+                settleDeletes(false);
                 await settleSchedules(false);
 
                 throw error;
             }
+
+            // Committed, so this span's queued keys join whatever the flush below
+            // (or an enclosing span's) will drain.
+            settleDeletes(true);
 
             // Committed. Schedules first and AWAITED: \`runAfter(0, ...)\` is
             // documented as the deterministic equivalent of an \`afterCommit\` hook,
@@ -5688,8 +5840,17 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override isMutationFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
         }
+
+        // The scheduler the deferred-schedule outbox retries through. Only the
+        // CONFIGURED one: falling back to \`schedulerStub\` would have an app with no
+        // scheduler retry every entry against a thrower until the attempt ceiling
+        // parked it, and there is nothing to park — an app with no scheduler has no
+        // \`ctx.scheduler\` call that reached the buffer in the first place.
+        protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+            return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
+        }
 ${relationFanout.override}
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -5710,7 +5871,7 @@ ${relationFanout.override}
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -5730,7 +5891,7 @@ ${relationFanout.override}
             };
         }
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
-        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor"): readonly string[] {
+        protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
 ${shardInitOverride}
@@ -5787,9 +5948,18 @@ ${shardInitOverride}
             return LUNORA_TTL_SWEEPS;
         }
 
-        protected override tableColumns(
-            table: string,
-        ): Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        protected override tableColumns(table: string): Array<{
+            bucket?: string;
+            enumValues?: string[];
+            isStorage?: boolean;
+            name: string;
+            nullable?: boolean;
+            onDelete?: "cascade" | "restrict" | "set null";
+            optional: boolean;
+            pk?: boolean;
+            ref?: string;
+            type: string;
+        }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 
@@ -5886,8 +6056,12 @@ ${adminWriterPrelude("headroom ?? this.transactionHeadroom()")}
             // an absent row falling through to the \`.global()\` D1 twin, though that
             // branch is already unreachable here: \`adminWriter\` is built without a
             // \`globalDb\`, so a miss throws \`NOT_FOUND\` either way.
+            // \`hard\` is set only by the BULK delete arm, which needs the row gone
+            // from the physical table for its next batch's scan to make progress.
+            // A single-row \`writeRow\` delete never carries it, so it keeps the
+            // table's declared \`.softDelete()\` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
@@ -5965,6 +6139,24 @@ ${adminWriterPrelude()}
             });
         }
 
+        protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+            this.ensureMigrated();
+
+${adminWriterPrelude()}
+
+            // \`related\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
+            // but the shard writer from \`createShardCtxDb\` always defines it — it
+            // derives the edge set from this app's schema.
+            if (!writer.related) {
+                throw new LunoraError("NOT_IMPLEMENTED", "findRelated is unavailable on the shard writer", { status: 500 });
+            }
+
+            return writer.related(
+                { id: args.id, table: args.table },
+                { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+            );
+        }
+
         protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
             this.ensureMigrated();
 
@@ -6018,15 +6210,27 @@ ${
 `
         : ""
 }
-        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
-            // When the caller threads an explicit identity (subscription seed /
-            // refresh — both run in deferred/interleaved contexts), use it by
-            // value and NEVER read the shared per-request identity field, which a
-            // concurrent RPC may have re-set. Otherwise (the synchronous RPC
-            // dispatch path) fall back to the per-request fields as before.
-            const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
-            const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
+            // The caller context this ctx runs under, resolved ONCE on one
+            // discriminant. When the caller threads an explicit identity
+            // (subscription seed / refresh / stream pull / shape resolve — all
+            // deferred or interleaved), it is used by value and the shared
+            // per-request fields are never read, because a concurrent RPC owns
+            // them: a refresh in particular runs inside the writing dispatch's
+            // \`flushChangedTables\`, BEFORE its \`endDispatch\`, so \`getCurrentIp()\`
+            // there is the MUTATING caller's address. Otherwise (the synchronous
+            // RPC dispatch path) it falls back to those fields as before.
+            //
+            // One expression, not one per field: three parallel ternaries on the
+            // same discriminant is how \`ip\` came to be the only one still reading
+            // the shared field.
+            const caller: SubscriptionIdentity = options.identity ?? {
+                identity: this.getCurrentIdentity(),
+                ip: this.getCurrentIp(),
+                userId: this.getCurrentUserId(),
+            };
+            const { identity, ip, userId } = caller;
 ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the \`ctx.run*\` caller guard; a ctx built for an
@@ -6058,7 +6262,16 @@ ${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
             // stays unwrapped.
             //
             // Wrapped OUTSIDE the read-stamping facade so \`get\`/\`list\` stay stamped.
-            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);
+            //
+            // \`this.scheduleOutbox()\` is what keeps the buffer honest. Everything
+            // between the COMMIT and the scheduler's acknowledgement is outside the
+            // transaction, so a failure there leaves writes that are durable and a
+            // job that exists nowhere — and the mutation's replay-dedup row committed
+            // inside the span, so the client's retry is answered from cache and told
+            // it succeeded. The outbox takes custody of each buffered call inside the
+            // transaction and releases it once the scheduler has the job; what
+            // survives is retried by \`pollScheduleOutbox\` on the shared poll alarm.
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
@@ -6131,10 +6344,13 @@ ${facadeBlock}${paymentsBuild}
 ${notifyBuild}
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
-            // Query/mutation handlers must be deterministic (they may be re-run on
-            // OCC retry / subscription re-eval), so they must read time through
-            // \`ctx.now\` instead of \`Date.now()\` — the \`nondeterministic_query_mutation\`
-            // advisor flags the latter. Actions may still use ambient \`Date.now()\`.
+            // A \`query\` handler is re-run by every live subscription that reads it,
+            // so \`Date.now()\` there flickers between re-evaluations. A \`mutation\`
+            // handler does not replay under ordinary dispatch (an OCC conflict throws
+            // to the caller rather than retrying internally), but one called from a
+            // workflow step or queue consumer runs again when that step replays. Both
+            // read time through \`ctx.now\` — the \`nondeterministic_query_mutation\`
+            // advisor flags \`Date.now()\`. Actions may still use ambient \`Date.now()\`.
             const now = Date.now();
 
             const ctx: Record<string, unknown> = {
@@ -6148,7 +6364,19 @@ ${notifyBuild}
                 // is visible and its spans join this trace. Degrades to the bare
                 // global when no sink is configured.
                 fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
-                ip: this.getCurrentIp(),
+                // A GETTER, not a plain field, so the reactive cache can tell a
+                // handler that reads the caller's address from the majority that
+                // never do. \`ctx.ip\` is per-request state the memo must be keyed
+                // by — otherwise two anonymous callers share one entry and the
+                // second is served the first's address — but keying every entry
+                // by address would shard the cache per client for every query.
+                // Reading it here marks the dispatch's scope; \`runCachedQuery\`
+                // folds the address into the key for this function from then on.
+                get ip() {
+                    options.scope?.markIpRead();
+
+                    return ip;
+                },
                 log,
                 metrics,
                 now,${ormContextField}
@@ -6172,17 +6400,19 @@ ${isActionLine}${actionOnlyBlock}
             // sub-query must not escape this dispatch's resource ceiling),
             // \`scope\` (the reactive-cache capture — an untracked sub-query's reads
             // must still be deps of the entry the OUTER query is memoized as, or
-            // the memo goes stale), and — load-bearing — the identity BY VALUE. Omitting identity would let \`buildCtx\` fall
-            // back to the shared per-request fields, which a concurrent RPC may
-            // have re-set, and an RLS-scoped sub-query would then read as the wrong
-            // user. A tracked call keeps sharing \`ctx\` exactly as before.
+            // the memo goes stale), and — load-bearing — the resolved \`caller\` BY VALUE
+            // (identity, userId AND ip). Omitting it would let \`buildCtx\` fall back
+            // to the shared per-request fields, which a concurrent RPC may have
+            // re-set, and an RLS-scoped sub-query would then read as the wrong user
+            // from the wrong address. A tracked call keeps sharing \`ctx\` exactly as
+            // before.
             ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
                 dispatchRun(
                     "query",
                     reference.__lunoraRef,
                     fnArgs,
                     runOptions?.untracked === true
-                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: { identity, userId }, scope: options.scope })
+                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, scope: options.scope })
                         : ctx,
                     contextKind,
                 );

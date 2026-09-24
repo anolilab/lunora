@@ -1,3 +1,133 @@
+## @lunora/bindings [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.66...@lunora/bindings@1.0.0-alpha.67) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/bindings [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.65...@lunora/bindings@1.0.0-alpha.66) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/bindings [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.64...@lunora/bindings@1.0.0-alpha.65) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardRunner.runInTransaction` takes an optional second
+argument, and `ctx.vectors.upsert` no longer writes before the mutation commits.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** order post-commit write hooks by commit, and defer ctx.vectors.upsert ([#778](https://github.com/anolilab/lunora/issues/778)) ([b8b02ab](https://github.com/anolilab/lunora/commit/b8b02ab27d2d3266708dcff294230db26c811c3a))
+
+## @lunora/bindings [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.63...@lunora/bindings@1.0.0-alpha.64) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+## @lunora/bindings [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.62...@lunora/bindings@1.0.0-alpha.63) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/bindings [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.61...@lunora/bindings@1.0.0-alpha.62) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/bindings [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.60...@lunora/bindings@1.0.0-alpha.61) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/bindings [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.59...@lunora/bindings@1.0.0-alpha.60) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/bindings [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.58...@lunora/bindings@1.0.0-alpha.59) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/bindings [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.57...@lunora/bindings@1.0.0-alpha.58) (2026-09-12)
+
+### Bug Fixes
+
+* **bindings:** scope vector compensation to what was written ([#716](https://github.com/anolilab/lunora/issues/716)) ([ba5a1d5](https://github.com/anolilab/lunora/commit/ba5a1d5f889ea567713b8d47efde7bfbe5db4cc9))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+## @lunora/bindings [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.56...@lunora/bindings@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
 ## @lunora/bindings [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.55...@lunora/bindings@1.0.0-alpha.56) (2026-09-10)
 
 ### Features

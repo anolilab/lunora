@@ -845,11 +845,33 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             const internals = client as unknown as {
                 connections: Map<
                     string,
-                    { connectTimer?: unknown; heartbeatTimer?: unknown; reconnectTimer?: unknown; socket?: { close: () => void }; wsState?: string }
+                    {
+                        connectTimer?: unknown;
+                        heartbeatTimer?: unknown;
+                        polling?: { stop: () => void };
+                        reconnectTimer?: unknown;
+                        resubscribePending?: Map<string, unknown>;
+                        resubscribeQueue?: unknown[];
+                        socket?: { close: () => void };
+                        wsState?: string;
+                    }
                 >;
             };
 
-            internals.connections.set("", { connectTimer, heartbeatTimer, reconnectTimer: undefined, socket: { close: socketClose }, wsState: "open" });
+            internals.connections.set("", {
+                connectTimer,
+                heartbeatTimer,
+                // Teardown stops the polling fallback unconditionally (it is a
+                // required field on a real connection), so the double carries one.
+                polling: { stop: () => {} },
+                reconnectTimer: undefined,
+                // Same reason as `polling`: teardown clears the paced-resubscribe
+                // queue unconditionally, so the double carries both halves of it.
+                resubscribePending: new Map(),
+                resubscribeQueue: [],
+                socket: { close: socketClose },
+                wsState: "open",
+            });
 
             const conn = internals.connections.get("");
 

@@ -142,9 +142,16 @@ module Lunora
   # §4.2 says a non-2xx whose body carries no +error+ envelope surfaces as an
   # INTERNAL transport error. Without it a 502 with body {"message":"..."}
   # returns nil and raises nothing — the caller believes its mutation committed.
+  #
+  # An +error+ slot that is not an OBJECT is not an envelope either — a proxy's
+  # {"error":"bad gateway"} page is the common one — so it falls through to the
+  # same INTERNAL/transient verdict rather than being read as one. Read
+  # unguarded it raised NoMethodError/TypeError past every ApiError handler the
+  # caller has.
   def parse_rpc_response(body, status)
-    if body.key?("error")
-      envelope = body["error"]
+    envelope = body["error"]
+
+    if envelope.is_a?(Hash)
       data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
       # A 5xx is the shard or the edge failing under the call, not a verdict on
       # it, so a queued write replayed under the same idempotency key is still
@@ -624,9 +631,7 @@ module Lunora
       when "data", "delta" then deliver(entry, frame, kind, deferred)
       when "resume", "settled" then sweep(entry, frame, kind, deferred)
       when "error" then deliver_error(frame, kind, deferred)
-      when "complete"
-        @subscriptions.delete(frame["id"])
-        kind
+      when "complete" then cancel_subscription(entry, kind, deferred)
       when "pokeStart"
         # Evict oldest-first at the cap. A Hash preserves insertion order, so
         # the first key is the oldest buffer; one that old is no longer going to
@@ -703,6 +708,23 @@ module Lunora
       id = frame["id"]
 
       [@subscriptions[id]&.fetch(:on_error, nil), @shapes[id]&.fetch(:on_error, nil)].compact.each do |handler|
+        deferred << -> { handler.call(error) }
+      end
+
+      kind
+    end
+
+    # A +complete+ frame cancels the subscription WITHOUT dropping it.
+    #
+    # Deleting the entry took it out of the hash +resend_subscriptions+ walks,
+    # so the query froze for the life of the process across every future
+    # reconnect, with nothing reported. Fan a cancellation to the listener and
+    # leave the registration in place; the next reconnect resubscribes it.
+    def cancel_subscription(entry, kind, deferred)
+      handler = entry&.fetch(:on_error, nil)
+
+      if handler
+        error = SubscriptionError.new("SUBSCRIPTION_CANCELLED", "subscription was cancelled by the server")
         deferred << -> { handler.call(error) }
       end
 
@@ -1102,6 +1124,18 @@ module Lunora
         # The server never returned this slot. It may or may not have committed,
         # so retry it — the +mutationId+ makes that safe.
         if slot.nil?
+          requeue << item
+          next
+        end
+
+        # An +error+ key holding a string, a nil, an array or a number is no
+        # envelope (protocol/README.md 4.2), and a slot carries no HTTP status of
+        # its own to classify it by — so nothing readable came back about this
+        # entry, which is exactly the position of a slot the server never
+        # returned. 4.3 retries that one. Falling through to the commit branch
+        # below settled a durable write COMMITTED with a nil result and
+        # un-persisted it.
+        if slot.key?("error") && !slot["error"].is_a?(Hash)
           requeue << item
           next
         end

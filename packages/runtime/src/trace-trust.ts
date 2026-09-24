@@ -111,6 +111,10 @@ const resolveTraceTrust = (option: TrustInboundTraceContext | undefined): ((requ
     return (Object.hasOwn(SIGNAL_CHECKS, option) ? SIGNAL_CHECKS[option] : undefined) ?? (() => false);
 };
 
+/** Whether a {@link TrustInboundTraceContext} is one of the named signals. */
+const isTraceTrustSignal = (option: TrustInboundTraceContext | undefined): option is TraceTrustSignal =>
+    typeof option === "string" && Object.hasOwn(SIGNAL_CHECKS, option);
+
 /**
  * Build the "you had an upstream trace and we dropped it" notice.
  *
@@ -120,19 +124,38 @@ const resolveTraceTrust = (option: TrustInboundTraceContext | undefined): ((requ
  * actually arrived and was dropped, so it is a hint on the way to a working setup
  * rather than per-request noise.
  *
- * Setting the option explicitly to `false` silences it: that says the decision was
- * made deliberately, whereas leaving it unset says nobody has considered it yet.
+ * Two different silences are covered, and only one is a decision:
+ *
+ * - **The option was never set.** Nobody has considered whether this worker's
+ * callers are trustworthy. Setting it explicitly to `false` silences this.
+ * - **A named signal cannot be satisfied on this host.** Every signal reads
+ * PLATFORM-INJECTED request metadata (`request.cf`), which a non-Cloudflare
+ * host does not provide — so `"mtls"` collapses to "never trust" and the
+ * operator gets the default they explicitly opted out of. There is no
+ * `PlatformCapabilities` gate that can catch this (the option is a
+ * `createWorker` argument, invisible to codegen), so this is the only place it
+ * can be seen at all. A host that DOES inject the metadata never warns: a
+ * caller without a verified certificate is then the option working as asked.
  */
-const createDroppedTraceNotice = (option: TrustInboundTraceContext | undefined): (() => void) => {
-    // An explicit `false` is a decision; `undefined` is an unanswered question.
-    if (option !== undefined) {
+const createDroppedTraceNotice = (option: TrustInboundTraceContext | undefined): ((request: Request) => void) => {
+    const signal = isTraceTrustSignal(option) ? option : undefined;
+
+    // An explicit `false`/`true`/predicate is a decision; `undefined` is an
+    // unanswered question, and a signal has its own (host-support) arm below.
+    if (option !== undefined && signal === undefined) {
         return () => {};
     }
 
     let notified = false;
 
-    return () => {
+    return (request: Request) => {
         if (notified) {
+            return;
+        }
+
+        // The signal's metadata bag is present, so the signal is live and a
+        // caller that failed it is the configured behaviour, not a misconfiguration.
+        if (signal !== undefined && (request as { cf?: unknown }).cf !== undefined) {
             return;
         }
 
@@ -140,11 +163,17 @@ const createDroppedTraceNotice = (option: TrustInboundTraceContext | undefined):
 
         // eslint-disable-next-line no-console -- a one-shot setup hint; the alternative is an invisible broken waterfall.
         console.warn(
-            "[lunora] Ignored an inbound `traceparent`, so this request starts a new trace instead of joining the caller's. " +
-                "That is the safe default: the header is caller-supplied, and trusting it lets any client choose which trace its spans and logs join. " +
-                "If this worker sits behind a gateway, service mesh, or Cloudflare Access that sets `traceparent` itself, set " +
-                '`trustInboundTraceContext: true` on createWorker() (or `"mtls"` to trust only edge-verified client certificates). ' +
-                "Set it to `false` to keep this behaviour and silence this message.",
+            signal === undefined
+                ? "[lunora] Ignored an inbound `traceparent`, so this request starts a new trace instead of joining the caller's. " +
+                      "That is the safe default: the header is caller-supplied, and trusting it lets any client choose which trace its spans and logs join. " +
+                      "If this worker sits behind a gateway, service mesh, or Cloudflare Access that sets `traceparent` itself, set " +
+                      '`trustInboundTraceContext: true` on createWorker() (or `"mtls"` to trust only edge-verified client certificates). ' +
+                      "Set it to `false` to keep this behaviour and silence this message."
+                : `[lunora] \`trustInboundTraceContext: "${signal}"\` cannot be satisfied on this host: the request carries no platform-injected ` +
+                      "`cf` metadata, which is what that signal reads, so every inbound `traceparent` is ignored and this request starts a new trace. " +
+                      "Off Cloudflare, trust the upstream some other way — `trustInboundTraceContext: true` when nothing untrusted can reach this " +
+                      "worker, or a predicate that verifies whatever your own front door sets. Set it to `false` to keep this behaviour and silence " +
+                      "this message.",
         );
     };
 };

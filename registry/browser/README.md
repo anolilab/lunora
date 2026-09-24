@@ -72,9 +72,9 @@ The scaffolded handlers therefore fail closed on three axes:
 2. **Target** — `assertAllowedTarget` accepts only `https:` URLs whose host is in `ALLOWED_RENDER_HOSTS`. That set ships **empty**, so nothing renders until you list the hosts you actually render.
 3. **Rate** — a per-caller token bucket keyed `ctx.auth.userId ?? ctx.ip ?? "anon"`, so one account (or one anonymous IP) can't drain the quota.
 
-### Pin the allowlist on the browser too
+### Pin the allowlist on the browser too — you have to do this part
 
-The check in the copied file is the fail-closed default. The hard guarantee is `allowedHosts` on `createBrowser` — it is enforced on every navigation **and** every subresource request, and it is what satisfies the `browser_user_url_without_allowlist` advisor lint:
+The check in the copied file is the fail-closed default, and it sees the URL exactly once. The hard guarantee is `allowedHosts` on `createBrowser`, which is enforced on every navigation **and** every subresource request, so it survives a 3xx redirect and a page that fetches elsewhere:
 
 ```ts
 import { launch } from "@cloudflare/playwright";
@@ -84,6 +84,8 @@ createShardDO({
     browser: (env) => createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, launch }),
 });
 ```
+
+This item cannot write that for you — it scaffolds files under `lunora/`, not your Worker entry — and the `BROWSER` wrangler binding on its own gives `ctx.browser` no allowlist at all. So until you add the call, `lunora codegen` reports `browser_user_url_without_allowlist` (WARN) against both actions. That warning is the advisor asking for exactly this layer; it is meant to stand until you add it, and nothing in the copied file tries to silence it.
 
 Never set `allowPrivateTargets: true` — that disables the private/internal-address guard that stops a render reaching cloud metadata, internal services, or loopback (`browser_allow_private_targets`, an ERROR-level advisor lint).
 

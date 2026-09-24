@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DeferredDeleteFlushResult } from "../src/deferred-deletes";
-import { flushDeferredDeletes, withDeferredDeletes } from "../src/deferred-deletes";
+import { beginDeferredDeletes, flushDeferredDeletes, withDeferredDeletes } from "../src/deferred-deletes";
 
 /** The shape `asBucketStorage` hands over: a bucket-aware facade with a real `delete`. */
 const makeStorage = () => {
@@ -212,5 +212,118 @@ describe("flushDeferredDeletes", () => {
         // Stands in for a rolled-back mutation: the dispatch throws before reaching
         // the flush, the context is discarded, and the object must survive.
         expect(deleted).toStrictEqual([]);
+    });
+});
+
+describe("beginDeferredDeletes", () => {
+    it("drops the keys queued inside a window that rolled back", async () => {
+        expect.assertions(2);
+
+        const { deleted, root } = makeStorage();
+        const storage = withDeferredDeletes(root) as Facade;
+
+        storage.deleteAfterCommit("dispatch-own.png");
+
+        const settle = beginDeferredDeletes({ storage });
+
+        storage.deleteAfterCommit("rolled-back.png");
+        settle(false);
+
+        const outcome = await flushDeferredDeletes({ storage });
+
+        // The transaction that queued it never committed, so the row it was to
+        // clean up after is still there. Deleting the object anyway is the one
+        // direction that cannot be undone — and it is what the shared per-dispatch
+        // list did, because `ctx.runMutation` hands the caller's ctx to the callee
+        // and the two sets of keys were indistinguishable.
+        expect(deleted).toStrictEqual(["dispatch-own.png"]);
+        expect(outcome.attempted).toBe(1);
+    });
+
+    it("makes the keys flushable when the window commits", async () => {
+        expect.assertions(1);
+
+        const { deleted, root } = makeStorage();
+        const storage = withDeferredDeletes(root) as Facade;
+        const settle = beginDeferredDeletes({ storage });
+
+        storage.deleteAfterCommit("committed.png");
+        settle(true);
+
+        await flushDeferredDeletes({ storage });
+
+        expect(deleted).toStrictEqual(["committed.png"]);
+    });
+
+    it("hands a nested window's keys to the enclosing one rather than to the flush", async () => {
+        expect.assertions(2);
+
+        const { deleted, root } = makeStorage();
+        const storage = withDeferredDeletes(root) as Facade;
+        const outer = beginDeferredDeletes({ storage });
+        const inner = beginDeferredDeletes({ storage });
+
+        storage.deleteAfterCommit("nested.png");
+        inner(true);
+
+        // SQLite-in-DO has no savepoints: the nested dispatch rides the enclosing
+        // span, so its keys are not safe to delete until THAT span commits.
+        await flushDeferredDeletes({ storage });
+
+        expect(deleted).toStrictEqual([]);
+
+        outer(true);
+        await flushDeferredDeletes({ storage });
+
+        expect(deleted).toStrictEqual(["nested.png"]);
+    });
+
+    it("loses a nested window's keys when the enclosing one rolls back", async () => {
+        expect.assertions(1);
+
+        const { deleted, root } = makeStorage();
+        const storage = withDeferredDeletes(root) as Facade;
+        const outer = beginDeferredDeletes({ storage });
+        const inner = beginDeferredDeletes({ storage });
+
+        storage.deleteAfterCommit("nested.png");
+        inner(true);
+        outer(false);
+
+        await flushDeferredDeletes({ storage });
+
+        expect(deleted).toStrictEqual([]);
+    });
+
+    it("keeps a key queued after a sibling window has already rolled back", async () => {
+        expect.assertions(1);
+
+        const { deleted, root } = makeStorage();
+        const storage = withDeferredDeletes(root) as Facade;
+        const first = beginDeferredDeletes({ storage });
+
+        first(false);
+
+        // An action can leave a `ctx.runMutation` un-awaited, so windows settle in
+        // whatever order their transactions resolve. A settled window must not stay
+        // the innermost one — that would swallow every later key into a list nothing
+        // drains.
+        storage.deleteAfterCommit("after.png");
+
+        await flushDeferredDeletes({ storage });
+
+        expect(deleted).toStrictEqual(["after.png"]);
+    });
+
+    it("is an inert settle on a storage facade that was never wrapped", () => {
+        expect.assertions(1);
+
+        // A query ctx's storage is unwrapped, and the dispatch opens the window
+        // unconditionally.
+        const { root } = makeStorage();
+
+        expect(() => {
+            beginDeferredDeletes({ storage: root })(false);
+        }).not.toThrow();
     });
 });

@@ -184,6 +184,7 @@ Storage, AI, containers & payments:
 | `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                             |
 | `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                     |
 | `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                 |
+| `mutator_without_owner_scope`                | `WARN`  | A `defineMutator` with no `owner`; a client-callable write endpoint that ties no write to its caller           |
 | `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                        |
 | `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                       |
 | `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                    |
@@ -228,7 +229,7 @@ for (const finding of findings) {
 
 `runAdvisor(context, options)` returns a flat `Finding[]` in lint-declaration
 order. Each finding has `level`, `name`, `title`, `detail`, `description`,
-`remediation`, `categories`, `source`, and `metadata`. Options:
+`remediation`, `categories`, `facing`, `cacheKey`, and `metadata`. Options:
 
 - `lints`: the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
   `RUNTIME_LINTS` are also exported, as is each lint by name (e.g.
@@ -282,10 +283,20 @@ costs the same as one hitting a single call site.
 
 Severity is the only input — a lint carries no per-lint weight of its own, so
 two rules at the same level cost the same. Those per-procedure scores roll into
-a weighted mean: **public** handlers count double, **internal**
-ones and **queries** count half. Findings that name no procedure (schema shape,
-`wrangler.jsonc` config) land in a **project** bucket weighted against the
-procedure population, so schema debt still moves the grade.
+a weighted mean over two factors:
+
+- **Shape.** **Public** handlers count double, **internal** ones and **queries**
+  count half. Kind wins over visibility, so a public `query` counts half, not
+  double.
+- **Sensitivity.** A procedure whose `classifySensitivity` says `high` then
+  **doubles again** — visibility says who can reach a handler, sensitivity says
+  what it touches. So a public sensitive mutation pulls 4×, while an internal
+  sensitive one — or a sensitive query — pulls 1× instead of the half its shape
+  alone would buy.
+
+Findings that name no procedure (schema shape, `wrangler.jsonc` config) land in
+a **project** bucket weighted against the procedure population, so schema debt
+still moves the grade.
 
 | Verdict   | Meaning                                        |
 | --------- | ---------------------------------------------- |

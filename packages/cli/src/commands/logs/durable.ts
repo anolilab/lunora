@@ -17,6 +17,7 @@ import type { PipelineLogCursor, PipelineLogQuery, PipelineLogRow } from "@lunor
 import { createPipelineLogReader } from "@lunora/runtime";
 
 import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 
 /**
@@ -264,7 +265,7 @@ const runDurableLogsCommand = async (options: DurableLogsCommandOptions): Promis
             `logs --durable: R2 SQL not configured (missing ${missing.join(", ")}). The Pipeline must write to an R2 Data Catalog (Iceberg) table, and you must supply R2_SQL_ACCOUNT_ID / R2_SQL_TOKEN / R2_SQL_BUCKET plus --table — see the observability docs.`,
         );
 
-        return { code: 1, error: "not configured" };
+        return { code: EXIT_CODE.USAGE, error: "not configured" };
     }
 
     let query: PipelineLogQuery;
@@ -274,7 +275,7 @@ const runDurableLogsCommand = async (options: DurableLogsCommandOptions): Promis
     } catch (error: unknown) {
         options.logger.error(error instanceof Error ? error.message : String(error));
 
-        return { code: 1, error: "invalid option" };
+        return { code: EXIT_CODE.USAGE, error: "invalid option" };
     }
 
     // Non-null: the guard above returned when any credential/table was missing.

@@ -15,9 +15,10 @@ import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
  * IP, data exfiltration through the fetched URL), and — without pinned DNS — a
  * public hostname can rebind to an internal address after the guard's check.
  * The containment is an `allowedHosts` allowlist on `createBrowser`, or a
- * pinned `resolveDns`. This lint therefore suppresses all findings when the
- * config-call evidence shows a `createBrowser` hardened with either key; only
- * an unhardened browser reaching an arg-derived URL is flagged.
+ * pinned `resolveDns: true`. This lint therefore suppresses all findings when
+ * the config-call evidence shows a `createBrowser` hardened with either; only an
+ * unhardened browser reaching an arg-derived URL is flagged. `resolveDns: false`
+ * is NOT hardening — it turns the DoH re-check off — so it does not suppress.
  *
  * Runs only when the codegen feeder supplies browser URL-access evidence
  * (`context.browserUrlAccesses`); a runtime caller flags nothing. One finding
@@ -40,9 +41,25 @@ const browserUserUrlWithoutAllowlist: Lint = makeArgumentDerivedSinkLint<Advisor
     remediation:
         "Pin the browser with an `allowedHosts` allowlist (and/or `resolveDns`) on `createBrowser({...})`, and derive the navigation URL from server-trusted state where possible rather than passing `args` straight to `ctx.browser`.",
     // A `createBrowser` hardened with an `allowedHosts` allowlist or a pinned
-    // `resolveDns` contains the SSRF surface — suppress every finding when one is
-    // visible. Only an analyzable (non-spread, static object-literal) config call
-    // counts; an opaque config could set the key elsewhere but can't be relied on.
+    // `resolveDns: true` contains the SSRF surface — suppress every finding when
+    // one is visible. Only an analyzable (non-spread, static object-literal)
+    // config call counts; an opaque config could set the key elsewhere but can't
+    // be relied on.
+    //
+    // `allowedHosts` is judged on PRESENCE and `resolveDns` on its VALUE, and the
+    // asymmetry is deliberate rather than an oversight:
+    //
+    //  - Every `allowedHosts` value contains the surface, `[]` included:
+    //    `@lunora/browser` treats an empty list as a configured allowlist with no
+    //    members and refuses every navigation. (It used to read `[]` as "no
+    //    allowlist" and permit every host, which made this presence test report
+    //    containment that did not exist — the runtime, not this lint, was wrong.)
+    //  - `resolveDns` has a value that switches the guard OFF. `resolveDns: false`
+    //    is the documented way to skip the DoH re-check, and with no allowlist
+    //    alongside it that leaves the navigation guarded by the string check
+    //    alone — strictly less than the unconfigured default, which turns the
+    //    re-check on. So only the literal `true` suppresses; `false`, or a value
+    //    the feeder cannot read as `true`, leaves the finding standing.
     //
     // App-global on purpose, and sound because `ctx.browser` resolves from ONE
     // `browser: (env) => createBrowser(...)` config thunk: every navigation this
@@ -53,8 +70,7 @@ const browserUserUrlWithoutAllowlist: Lint = makeArgumentDerivedSinkLint<Advisor
     // navigations that the allowlist does in fact contain.
     suppressWhen: (context) =>
         (context.configCalls ?? []).some(
-            (call) =>
-                call.callee === "createBrowser" && call.analyzable && (call.presentKeys.includes("allowedHosts") || call.presentKeys.includes("resolveDns")),
+            (call) => call.callee === "createBrowser" && call.analyzable && (call.presentKeys.includes("allowedHosts") || call.trueKeys.includes("resolveDns")),
         ),
     title: "Browser navigates to arg-derived URL with no allowlist",
 });

@@ -3136,7 +3136,7 @@ export const schema = defineSchema({
                 {
                     compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                     compatibility_flags: ["nodejs_compat"],
-                    d1_databases: [{ binding: "DB", database_id: "REPLACE_WITH_D1_ID", database_name: "lunora-example-team-chat" }],
+                    d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-example-team-chat" }],
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
                     main: "src/server/index.ts",
                     migrations: [{ new_sqlite_classes: ["ShardDO"] }],

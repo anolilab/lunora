@@ -11,6 +11,7 @@ import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 
 import { defineApp } from "../../lunora/_generated/app.js";
+import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
 // WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
@@ -33,8 +34,10 @@ interface Env extends Record<string, unknown> {
      * When set to the literal string `"true"`, the worker exposes a small
      * surface of `/test/*` helpers (reset DO state, mint a short-lived signed
      * URL, schedule a job, etc.) used by the `@lunora/e2e` Playwright suite.
-     * The flag is read in `apps/playground/wrangler.jsonc` and injected via
-     * `tests/e2e/globalSetup.ts` — *never* set this in production.
+     * The worker reads it off `.dev.vars`, which `tests/e2e/globalSetup.ts`
+     * writes for the server it starts; `.dev.vars.example` documents it for a
+     * playground you start yourself. It is deliberately absent from
+     * `wrangler.jsonc` — *never* set this in production.
      */
     LUNORA_E2E?: string;
 
@@ -301,7 +304,36 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
     // computed and passed in, so the response shape is unchanged.
     const jobId = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
+    await rememberIssuedJob(env.DB, jobId);
+
     return Response.json({ jobId, scheduledFor });
+};
+
+/**
+ * Where a scheduled job got to: `unknown`, `scheduled`, `failed`, `executed`.
+ *
+ * `executed` is inferred from an absence — the SchedulerDO deletes a job's rows
+ * the moment it succeeds — so it is only sound once the other two readings of
+ * that absence are ruled out: an id this app never issued (see
+ * {@link wasJobIssued}) and a job parked in the dead-letter after exhausting its
+ * retries, whose `id:` header is deleted too.
+ */
+const handleTestJobStatus = async (url: URL, env: Env): Promise<Response> => {
+    const id = url.searchParams.get("id");
+
+    if (!id || !env.SCHEDULER || !(await wasJobIssued(env.DB, id))) {
+        return Response.json({ status: "unknown" });
+    }
+
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
+
+    if (await scheduler.get(id)) {
+        return Response.json({ status: "scheduled" });
+    }
+
+    const parked = await scheduler.dead();
+
+    return Response.json({ status: parked.some((record) => record.id === id) ? "failed" : "executed" });
 };
 
 /**
@@ -336,18 +368,7 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/job-status" && method === "GET") {
-        const id = url.searchParams.get("id");
-
-        if (!id || !env.SCHEDULER) {
-            return Response.json({ status: "unknown" });
-        }
-
-        const scheduler = createScheduler({ namespace: env.SCHEDULER });
-        const record = await scheduler.get(id);
-
-        // The SchedulerDO deletes a job's rows once it completes successfully, so
-        // a previously-scheduled id with no record left has executed.
-        return Response.json({ status: record ? "scheduled" : "executed" });
+        return handleTestJobStatus(url, env);
     }
 
     return new Response("not found", { status: 404 });

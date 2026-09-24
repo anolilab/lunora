@@ -39,13 +39,31 @@ const createAuthFakeClient = (options: { user?: User | null; userResolves?: bool
         };
     });
 
+    // The shared identity store also watches the connection so it can retry a
+    // resolve that failed while offline; the double has to offer it.
+    const onConnectionStatus = vi.fn<(listener: (status: string) => void) => Unsubscribe>((listener) => {
+        listener("idle");
+
+        return () => {};
+    });
+
     // `userResolves: false` models the in-flight window the `AuthLoading` gate
     // exists for: a token is set but `getCurrentUser` has not come back yet.
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => (userResolves ? currentUser : new Promise<never>(() => {})));
 
-    const client = { getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken } as unknown as LunoraClient;
+    // `expectIdentityResolution` is how the identity store declares itself to
+    // the client on attach; this double has no gates to arm, so it only has to
+    // exist.
+    const client = {
+        expectIdentityResolution: () => undefined,
+        getAuthToken,
+        getCurrentUser,
+        onAuthTokenChange,
+        onConnectionStatus,
+        setAuthToken,
+    } as unknown as LunoraClient;
 
-    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, setAuthToken };
+    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, setAuthToken };
 };
 
 /** Let the identity store's `getCurrentUser` promise land, then settle reads. */
@@ -129,8 +147,11 @@ describe("auth gates on Solid 2", () => {
         </>
     );
 
-    it("shows only the signed-out gate before a token arrives", async () => {
-        const fake = createAuthFakeClient({ user: { id: "u_1" } });
+    it("shows only the signed-out gate once the server answers there is no session", async () => {
+        // No seeded user: the server answers "no session". An absent bearer
+        // token is not that answer on its own — a cookie session holds none —
+        // so the gate is reached by asking rather than by assuming.
+        const fake = createAuthFakeClient();
 
         const rendered = render(() => gates(), {
             wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider>,

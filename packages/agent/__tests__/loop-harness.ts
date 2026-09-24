@@ -350,6 +350,25 @@ export const makeIndexQuery = (
 };
 
 /**
+ * Mirror the store's explicit-`undefined` guard (shard-engine `ctx-db.ts`'s
+ * `assertNoExplicitUndefined`), byte-identical message included.
+ *
+ * The real `ctx.db.patch` REJECTS a key whose value is explicitly `undefined`
+ * rather than dropping it: the `{ ...existing, ...patch }` merge would delete the
+ * column instead of leaving it alone. A double that deletes the key is strictly
+ * MORE permissive than the store, and that is how a mutation which throws on
+ * every continued thread stayed green here. Shared so the three `ctx.db` doubles
+ * in this package cannot drift apart again.
+ */
+export const assertNoExplicitUndefined = (patch: Record<string, unknown>): void => {
+    for (const field of Object.keys(patch)) {
+        if (patch[field] === undefined) {
+            throw new Error(`Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`);
+        }
+    }
+};
+
+/**
  * An in-memory `ctx.db`. `withIndex` filters by the declared equalities and — as
  * the real index read does — returns rows in insertion order, which for the
  * `(threadKey, position)` index is position order.
@@ -390,17 +409,13 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
             return id;
         },
         patch: async (id: string, patch: Record<string, unknown>) => {
+            assertNoExplicitUndefined(patch);
+
             for (const tableContent of rows.values()) {
                 const row = tableContent.find((candidate) => candidate["_id"] === id);
 
                 if (row) {
-                    for (const [key, value] of Object.entries(patch)) {
-                        if (value === undefined) {
-                            Reflect.deleteProperty(row, key);
-                        } else {
-                            row[key] = value;
-                        }
-                    }
+                    Object.assign(row, patch);
                 }
             }
         },

@@ -1,5 +1,6 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 import DEFAULT_MAP_PATH from "./constants";
 
 const advisorCommand: Command = {
@@ -25,7 +26,7 @@ const advisorCommand: Command = {
             type: String,
         },
         { description: "Inspect a single procedure by `file#exportName`", name: "entry", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        OUTPUT_FORMAT_OPTION,
         { description: "Exit non-zero when the global score is below this value (0-100)", name: "min-score", type: String },
         { description: `Where to write the map (default ${DEFAULT_MAP_PATH})`, name: "out", type: String },
         // BOTH halves are declared, like `codegen`'s `--strict-advisories` pair.

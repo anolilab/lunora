@@ -172,6 +172,22 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/502/u);
     });
 
+    it("treats a non-object error slot as no envelope at all", async () => {
+        expect.assertions(4);
+
+        // §4.2: only an OBJECT `error` slot is an envelope. This path narrowed
+        // the BODY (above) but not the slot, so a proxy's `{"error": null}` page
+        // raised `TypeError: Cannot read properties of null` and
+        // `{"error": "bad gateway"}` an `Error` with no `code` — the two shapes
+        // the eight ports are now held to on the same fixture.
+        for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+            const service = binding({ error: slot }, { status: 502 });
+
+            // eslint-disable-next-line no-await-in-loop -- one binding per slot shape; the shapes are the table
+            await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toMatchObject({ code: "INTERNAL" });
+        }
+    });
+
     it("passes the binding's own fetch, not the global one", async () => {
         expect.assertions(1);
 

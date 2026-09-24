@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
 import { deriveBucketName } from "../../src/commands/add/storage";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
@@ -119,7 +120,8 @@ describe("runAddFeature", () => {
         });
 
         expect(prompts).toHaveLength(1);
-        expect(result.code).toBe(1);
+        // The prompt was shown and declined — a deliberate abort, not a failure.
+        expect(result.code).toBe(EXIT_CODE.CANCELLED);
         expect(existsSync(join(workdir, "lunora", "mail", "index.ts"))).toBe(false);
     });
 
@@ -132,7 +134,7 @@ describe("runAddFeature", () => {
             const { lines, logger } = makeLogger();
             const result = await runAddFeature({ cwd: empty, feature: "auth", from: registryRoot, logger, yes: true });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(lines.join("\n")).toMatch(/not a Lunora project/);
         } finally {
             rmSync(empty, { force: true, recursive: true });
@@ -145,7 +147,7 @@ describe("runAddFeature", () => {
         const { lines, logger } = makeLogger();
         const result = await runAddFeature({ cwd: workdir, feature: "   ", from: registryRoot, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(lines.join("\n")).toMatch(/requires a feature/);
     });
 

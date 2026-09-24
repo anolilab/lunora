@@ -57,20 +57,20 @@ path). Internally `fetch`:
 
 `shardDO` is the only required option. The rest are opt-in:
 
-| Option                                                     | Purpose                                                                                        |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                     |
-| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s |
-| `resolveIdentity`                                          | `(request, env) => identity \| null`; sets `ctx.auth` on the shard                             |
-| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                             |
-| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)       |
-| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)             |
-| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints     |
-| `security`                                                 | The secure-by-default HTTP edge: headers, CORS, CSRF (see `SecurityOptions`)                   |
-| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                          |
-| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                               |
-| `scheduledTick` / `queueHandler`                           | The tenant fan-out seams — see _Running crons and queues where the host has neither_           |
-| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                             |
+| Option                                                     | Purpose                                                                                                                       |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                                                    |
+| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s                                |
+| `resolveIdentity`                                          | `(request, env) => identity \| null`; sets `ctx.auth` on the shard                                                            |
+| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                                                            |
+| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)                                      |
+| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)                                            |
+| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints                                    |
+| `security`                                                 | The secure-by-default HTTP edge: headers, CORS, CSRF (see `SecurityOptions`)                                                  |
+| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                                                         |
+| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                                                              |
+| `queueHandler`                                             | The queue fan-out seam; `POST /_lunora/scheduled` needs no option — see _Running crons and queues where the host has neither_ |
+| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                                                            |
 
 Cross-shard access is **default-denied**. A request that names a non-default
 shard (`shardKey !== defaultShardKey`, default `__root__`) or a fan-out is
@@ -325,8 +325,8 @@ supplied through `.extend((env) => ({ … }))` — still needs its own
 remove entries they generated, the set they own being recorded in your
 `package.json` under `lunora.crons`. Anything else is left alone and reported as
 kept. To restore a scheduled snapshot, download the NDJSON object and
-feed it to `lunora backup restore <file>` (optionally with `--to <time>` for
-point-in-time replay).
+feed it to `lunora backup restore <file>`; for point-in-time recovery use
+`lunora backup pitr --at <time> --restore`.
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
@@ -392,6 +392,14 @@ without one the endpoint is a `400` rather than a silent success, so a
 misconfigured tenant fails loudly instead of dropping every batch. Messages with
 no string `id` are dropped before the handler sees them — there would be nothing
 to ack or retry them by.
+
+A forwarded batch is capped at **16 MiB** and a larger one is refused with a
+`413` — chunked or not, since the cap is enforced as the bytes arrive rather than
+from `Content-Length`. That is sized for a full Cloudflare Queues batch (100
+messages × 128 KiB) plus the forwarding envelope, so a consumer that respects the
+queue's own limits never meets it. A body that names no `messages` array — an
+empty body included — is a `400` rather than an empty batch, because answering
+`{ "retry": [] }` would tell the consumer to ack messages this worker never read.
 
 Neither endpoint replaces the native triggers where a host has them. On an
 ordinary account-level Worker, `triggers.crons` and a real queue consumer are

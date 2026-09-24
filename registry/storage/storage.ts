@@ -39,13 +39,26 @@
  *                                     (no path: the key is verified from the
  *                                     whole URL pathname).
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
 import { action, mutation, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY — a project fills it in only by
+ * running `wrangler types`. Indexing it before then is a hard `tsc` error
+ * (`TS7053` / `TS2339`), which is why this goes through the generated
+ * `CloudflareBindings` instead: an open index signature of `unknown`, so every
+ * binding still has to be narrowed (and guarded) at its use site below.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /** The R2 bucket binding type `createStorage` expects. */
 type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
@@ -74,7 +87,7 @@ const limiter = new RateLimiter({
 
 /**
  * Read a required string env var/secret or throw a clear, actionable error.
- * (`cloudflare:workers`' `env` values are typed `unknown`, so we narrow here —
+ * (`CloudflareBindings` values are typed `unknown`, so we narrow here —
  * a missing `STORAGE_SIGNING_SECRET` fails loudly instead of producing an opaque
  * HMAC error deep in `@lunora/storage`.)
  *

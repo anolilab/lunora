@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInitCommand } from "../../src/commands/init/handler";
 import { ADAPTERS } from "../../src/commands/init/overlay/adapters";
 import { applyLunoraOverlay } from "../../src/commands/init/overlay/apply";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -402,6 +403,6 @@ describe("lunora init --vite (overlay, end to end)", () => {
             vite: "angular",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 });

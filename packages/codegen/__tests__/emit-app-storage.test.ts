@@ -21,6 +21,7 @@ const baseOptions = {
     hasQueue: false,
     hasR2sql: false,
     hasScheduler: false,
+    hasSourcedTables: false,
     hasStorage: true,
     hasVectors: false,
     hasWorkflow: false,

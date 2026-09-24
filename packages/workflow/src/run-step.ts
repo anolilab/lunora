@@ -9,6 +9,7 @@
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { parseValidatorMap } from "@lunora/values";
 
+import { pinDedupId } from "./dedup-id";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { convertNonRetryableError, raiseNonRetryable } from "./errors";
@@ -41,6 +42,8 @@ const validateStepArgs = (validators: StepArgsValidator, source: Record<string, 
 interface RunStepDeps {
     /** The Worker environment bindings, surfaced on the step context. */
     env: Record<string, unknown>;
+    /** This workflow instance's id — the namespace for the replay-dedup ids the steps' dispatches carry. */
+    instanceId: string;
     /** Structured logger surfaced on the step context. */
     log: WorkflowLogger;
     /** Native `cloudflare:workflows` `NonRetryableError` constructor — injected by `src/do`; absent in Node tests. */
@@ -57,9 +60,22 @@ interface RunStepDeps {
  * result (when `returns` is declared), with any portable `NonRetryableError`
  * converted to the native one and any declared rollback forwarded to Cloudflare.
  */
-const createRunStep =
-    (deps: RunStepDeps): WorkflowRunStepFunction =>
-    async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
+const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
+    /**
+     * Ordinal of the NEXT `ctx.runStep` call in this execution of the body —
+     * the per-step namespace for replay-dedup ids (see `dedup-id.ts` for why
+     * this rather than the native `step.count`). Allocated synchronously below,
+     * before the call awaits anything, so concurrently-awaited steps still take
+     * their positions in source order. Rebuilt on every replay along with the
+     * context, which is what makes a replay re-derive the same ordinals.
+     */
+    let invocations = 0;
+
+    return async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
+        const dedupScope = `${deps.instanceId}#step${String(invocations)}`;
+
+        invocations += 1;
+
         const config = options?.config ?? step.config;
         const stepName = options?.name ?? step.name;
 
@@ -88,7 +104,12 @@ const createRunStep =
                 config: nativeContext.config,
                 env: deps.env,
                 log: deps.log,
-                run: deps.run,
+                // Pinned INSIDE the callback on purpose: Cloudflare retries a
+                // failed step body in place, so the counter has to restart at
+                // `.1` for each attempt. That is what makes attempt 2 re-issue
+                // attempt 1's ids and the shard apply the mutation once instead
+                // of once per attempt — the double-charge this closes.
+                run: pinDedupId(deps.run, dedupScope),
                 step: nativeContext.step,
             };
 
@@ -141,7 +162,13 @@ const createRunStep =
                           error: rollbackContext.error,
                           log: deps.log,
                           output: rollbackContext.output,
-                          run: deps.run,
+                          // A rollback is a SECOND durable replay with its own
+                          // retry budget, so its dispatches need the same pin —
+                          // built per invocation so a retried rollback reproduces
+                          // its ids. Its own scope, never the forward step's: a
+                          // refund sharing the charge's id would dedup against it
+                          // and silently never run.
+                          run: pinDedupId(deps.run, `${dedupScope}rollback`),
                       });
                   },
                   rollbackConfig: step.rollbackConfig,
@@ -150,5 +177,6 @@ const createRunStep =
 
         return config === undefined ? deps.step.do(stepName, callback, rollbackOptions) : deps.step.do(stepName, config, callback, rollbackOptions);
     };
+};
 
 export { createRunStep, validateStepArgs };

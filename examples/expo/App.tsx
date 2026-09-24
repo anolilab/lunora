@@ -12,17 +12,29 @@ import { Chat } from "./src/Chat";
 import { Login } from "./src/Login";
 import { lunoraClient } from "./src/lunora";
 
+const styles = StyleSheet.create({
+    centered: { alignItems: "center", flex: 1, justifyContent: "center" },
+    container: { backgroundColor: "#fff", flex: 1 },
+});
 // One QueryClient for the app. Lunora is push-driven, so live queries never go
 // stale on their own — the WebSocket subscription is the only invalidation.
 const queryClient = new QueryClient();
 
 /** Flip between the sign-in screen and the chat based on the better-auth session. */
-function Root(): ReactElement {
+const Root = (): ReactElement => {
     const { data: session, isPending } = authClient.useSession();
 
     // Bridge the better-auth Expo session into the Lunora client as a bearer
     // token — HTTP `Authorization` (`setAuthToken`) and the WS `?token=`
     // (`setWsToken`) — re-synced whenever the session changes (sign-in/out).
+    //
+    // The user id goes with it as the STABLE subject. Without it the offline
+    // queue keys identity on the token bytes, so a routine session-token refresh
+    // reads as a different user: the queued writes this app exists to survive
+    // offline are discarded with `OFFLINE_IDENTITY_CHANGED`, and the AsyncStorage
+    // read cache is cleared with them. `null` on sign-out, which is what releases
+    // the subject so the next user cannot inherit it.
+    //
     // `expoBearerToken` is async since better-auth 1.7.1, and an async function is
     // not a valid effect cleanup return — so kick off a promise instead. The
     // `cancelled` flag is load-bearing, not ceremony: two session changes in quick
@@ -30,21 +42,24 @@ function Root(): ReactElement {
     // reinstates the previous session's token. React runs this cleanup before the
     // next effect, so a superseded read can no longer apply.
     useEffect(() => {
-        let cancelled = false;
+        // A holder object, not a bare `let`: TypeScript's control-flow analysis
+        // narrows a local boolean to `false` for the whole closure and then reports
+        // the guard below as dead, even though the cleanup flips it.
+        const run = { cancelled: false };
 
         void (async () => {
             const token = await expoBearerToken(authClient);
 
-            if (cancelled) {
+            if (run.cancelled) {
                 return;
             }
 
-            lunoraClient.setAuthToken(token);
+            lunoraClient.setAuthToken(token, session?.user.id ?? null);
             lunoraClient.setWsToken(token ?? undefined);
         })();
 
         return () => {
-            cancelled = true;
+            run.cancelled = true;
         };
     }, [session]);
 
@@ -57,24 +72,19 @@ function Root(): ReactElement {
     }
 
     return session ? <Chat /> : <Login />;
-}
+};
 
-export default function App(): ReactElement {
-    return (
-        <SafeAreaProvider>
-            <QueryClientProvider client={queryClient}>
-                <LunoraProvider client={lunoraClient}>
-                    <SafeAreaView style={styles.container}>
-                        <Root />
-                        <StatusBar style="auto" />
-                    </SafeAreaView>
-                </LunoraProvider>
-            </QueryClientProvider>
-        </SafeAreaProvider>
-    );
-}
+const App = (): ReactElement => (
+    <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+            <LunoraProvider client={lunoraClient}>
+                <SafeAreaView style={styles.container}>
+                    <Root />
+                    <StatusBar style="auto" />
+                </SafeAreaView>
+            </LunoraProvider>
+        </QueryClientProvider>
+    </SafeAreaProvider>
+);
 
-const styles = StyleSheet.create({
-    centered: { alignItems: "center", flex: 1, justifyContent: "center" },
-    container: { backgroundColor: "#fff", flex: 1 },
-});
+export default App;

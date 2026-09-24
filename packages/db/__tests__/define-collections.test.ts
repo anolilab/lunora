@@ -27,6 +27,9 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
         // The list-path row callback advances the checkpoint registry from this
         // (server-confirmed custom-mutator watermark); no custom mutators here → 0.
         confirmedMutationWatermark: () => 0,
+        // No live subscription carries a cursor in these fixtures, which is the
+        // honest "composed with no baseline" answer.
+        currentBaseline: () => undefined,
         currentIdentity: () => null,
         mutation: mutationMock,
         // Mirrors `LunoraClient.replayIdentityVerdict`. Both stamp and current are
@@ -231,8 +234,15 @@ describe(defineCollections, () => {
         // write also carries a stable `mutationId` (the executor's idempotency key)
         // so the server dedupes a committed-but-unacked retry at the transport
         // layer, not only by the app's manual `id`-arg dedup.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- test fixture id from a mocked runtime
-        expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" }, { mutationId: expect.any(String) });
+        // `replayBaseline: null` pins "composed with no baseline" — this fixture's
+        // client carries no subscription cursor. Omitting the option would instead
+        // let the replay sample whatever cursor the client had reached by then.
+        expect(mutation).toHaveBeenCalledWith(
+            messagesSend,
+            { channelId: "c1", id, text: "hi" },
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
+            { mutationId: expect.any(String), replayBaseline: null, shardKey: undefined },
+        );
     });
 
     it("passes a stable idempotency key on the insert replay so a retry dedupes", async () => {

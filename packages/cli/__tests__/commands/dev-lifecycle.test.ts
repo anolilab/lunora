@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 interface RecordingLogger {
@@ -578,7 +579,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             expect(lines.some((line) => line.level === "warn" && line.message.includes("lunora dev logs"))).toBe(true);
             // The child's pid is surfaced in the warning so an agent (or human)
             // knows which process to inspect without a separate `dev status`.
@@ -613,7 +614,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             // The record now points at the detached child, not the parent that
             // is about to return — `dev status`/`stop`/`logs` can still find
             // and signal it instead of reporting "No dev server running".
@@ -662,7 +663,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
 
             const state = readDevServerState(workdir);
 

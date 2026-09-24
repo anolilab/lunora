@@ -189,7 +189,9 @@ describe("exec adapters", () => {
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
             execute: async (_text, parameters) => {
-                params.push(...(parameters ?? []));
+                // `Mysql2Like` types this `unknown` so the real driver is
+                // assignable; a double that reads it narrows first.
+                params.push(...(Array.isArray(parameters) ? (parameters as ReadonlyArray<unknown>) : []));
 
                 return [rows, undefined];
             },
@@ -243,7 +245,11 @@ describe("exec adapters", () => {
         const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
         const exec = buildMysqlExec({
             config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
-            execute: async (text, params = []) => {
+            execute: async (text, rawParams) => {
+                // See above: narrow before reading, since the projection hands
+                // this over as `unknown`.
+                const params: ReadonlyArray<unknown> = Array.isArray(rawParams) ? (rawParams as ReadonlyArray<unknown>) : [];
+
                 calls.push({ params, sql: text });
 
                 return [{ affectedRows: params[0] === "a" ? 1 : 2 }, undefined];

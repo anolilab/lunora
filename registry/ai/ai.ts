@@ -7,9 +7,12 @@
  * `summarize({ text })` is an anonymous, unbounded way for anyone who can reach
  * your API to spend your neuron budget — and a free LLM proxy on your account.
  * So both handlers here fail closed: {@link requireUser} rejects unauthenticated
- * callers, a per-caller token bucket caps the burn rate, and the prompt input is
- * length-bounded (a neuron bill scales with tokens, so the input cap *is* a cost
- * control). Widen the bounds deliberately; don't remove them.
+ * callers, a per-caller token bucket caps the burn rate, and BOTH ends of the
+ * token bill are bounded — the prompt input by `v.string().max(...)` and the
+ * completion by `maxOutputTokens`. Bounding only the input is not a cost
+ * control: a 12-word prompt can ask for a 100,000-token answer, and output
+ * tokens are the expensive half. Widen the bounds deliberately; don't remove
+ * them.
  */
 import { generateText } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
@@ -62,6 +65,10 @@ export const summarize = action
         requireUser(ctx.auth.userId);
 
         const result = await generateText({
+            // The output half of the neuron bill. Without it an anonymous-shaped
+            // prompt can drive an arbitrarily long completion; a 2-3 sentence
+            // summary has no business being longer than this.
+            maxOutputTokens: 300,
             model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
             prompt: `Summarize this text in 2-3 sentences:\n\n${text}`,
         });
@@ -79,6 +86,8 @@ export const analyzeSentiment = action
         requireUser(ctx.auth.userId);
 
         const result = await generateText({
+            // One word is the whole contract; anything past that is billed waste.
+            maxOutputTokens: 10,
             model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
             prompt: `Analyze the sentiment. Respond with one word: positive, negative, or neutral.\n\n${text}`,
         });

@@ -123,10 +123,10 @@ call the better-auth server API — see the scaffolded `lunora/auth/index.ts`.
 
 ### In the UI (React)
 
-`useAuth()` returns exactly `{ setToken, token, user }` — there is no `signIn` /
-`signOut`. Lunora owns the **token**, not the sign-in flow: run the flow with
-the better-auth client (`authClient.signIn.email(...)`), then hand the resulting
-JWT to `setToken`. `setToken(null)` signs out.
+`useAuth()` returns exactly `{ setToken, status, token, user }` — there is no
+`signIn` / `signOut`. Lunora owns the **token**, not the sign-in flow: run the
+flow with the better-auth client (`authClient.signIn.email(...)`), then hand the
+resulting JWT to `setToken`. `setToken(null)` signs out.
 
 ```tsx
 import { Authenticated, Unauthenticated, useAuth } from "@lunora/react";
@@ -162,6 +162,16 @@ function Account() {
 
 `@lunora/react` also exports `AuthLoading` and `useAuthState` for the loading
 window before the session resolves.
+
+**Branch on `status`, never on `user === null`.** `status` is one of
+`"unauthenticated"`, `"loading"`, `"authenticated"` or `"unreachable"`, and the
+same four values back the gates in every adapter (`@lunora/vue`,
+`@lunora/solid`, `@lunora/svelte`, `@lunora/angular`). `"unreachable"` means the
+credential is held but the session endpoint could not be reached — an offline
+reload, or a transient 5xx. It gates as **authenticated**, so the app renders,
+but `user` may still be `null`; a UI that treats that `null` as signed out shows
+a signed-out screen to a signed-in user. The full contract is documented on
+`AuthStatus` in `@lunora/client/auth`.
 
 ## Common Pitfalls
 

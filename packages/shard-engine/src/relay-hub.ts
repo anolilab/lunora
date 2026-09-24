@@ -1166,6 +1166,12 @@ class OwnerRelay extends RelayLink {
      * defined (even if unprojected — see {@link OwnerRelay.tableHasAnyMask}), and
      * fails closed if the claims are enumerated (a wholesale copy the proxy can't
      * differentiate).
+     *
+     * Every per-subscriber input a shape's `where` can read must be varied across
+     * the probes, or the gate answers "uniform" for a shape that is not. `ip` is
+     * one: it reaches `where` as `ctx.ip` through {@link SubscriptionIdentity},
+     * so the two populated probes carry distinct addresses as well as distinct
+     * claims. Adding a field to that interface means adding it here.
      */
     private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
         let base: ResolvedShape | undefined;
@@ -1220,7 +1226,13 @@ class OwnerRelay extends RelayLink {
                 },
             });
 
-            return { identity: claims, userId: `__lunora_probe_${side}__` };
+            // `ip` varies across the probes for the same reason the claims do: it
+            // is a per-subscriber value the shape's `where` can read through
+            // `ctx.ip`, so a shape keyed on it must resolve DIFFERENTLY here and
+            // fall back to the per-socket proxy path. Left undefined, an ip-keyed
+            // shape would read uniform and every socket in the cohort would get
+            // the membership computed for nobody's address.
+            return { identity: claims, ip: `__lunora_probe_${side}__`, userId: `__lunora_probe_${side}__` };
         };
 
         const matches = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")].every((probe) => {

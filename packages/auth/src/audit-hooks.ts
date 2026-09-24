@@ -70,28 +70,60 @@ interface AuditHookContext {
  *
  * Sign-in is split by what the endpoint actually DOES (plan 280 §4):
  *
- * - `/sign-in/social`, `/sign-in/magic-link` only DISPATCH — the first mints a
- * provider redirect URL, the second sends an email. Nobody is authenticated
- * yet, so these are `sign-in-initiated`, not `sign-in`.
- * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`, and every
+ * - `/sign-in/social`, `/sign-in/magic-link` and `@better-auth/sso`'s
+ * `/sign-in/sso` only DISPATCH — the first mints a provider redirect URL, the
+ * second sends an email, the third answers `{ url, redirect: true }` pointing
+ * at the identity provider's authorization endpoint. Nobody is authenticated
+ * yet, so these are `sign-in-initiated`, not `sign-in`. Without the `sso`
+ * branch that path fell through to the `/sign-in/` substring below and every
+ * SSO redirect mint was recorded as a completed, successful `sign-in` with no
+ * actor — in exactly the flow where the "who authenticated" trail matters
+ * most.
+ * - `/callback/:id` (social + generic-oauth), `/magic-link/verify`,
+ * `@better-auth/sso`'s `/sso/saml2/sp/acs/:providerId`, and every
  * `/two-factor/verify-*` (`verify-totp` / `verify-otp` / `verify-backup-code`
  * — all three complete a challenged sign-in the same way) are where a
  * session actually gets issued, so they join credential sign-ins
  * (`/sign-in/email`, `/sign-in/username`, `/sign-in/phone-number`, …) as
  * plain `sign-in`. They were NOT recorded at all before this change.
  *
+ * The SAML assertion consumer service needs its own branch because it is the
+ * one completion that carries no `/callback/` segment: `processSAMLResponse`
+ * validates the assertion, resolves the user and calls `setSessionCookie`, all
+ * under `/sso/saml2/sp/acs/:providerId`. Matching neither that substring nor
+ * any other branch, it classified as `undefined` — the endpoint that issues
+ * every SAML session left no audit row at all.
+ *
+ * SAML sign-OUT has the mirror-image problem, and two endpoints rather than
+ * one. Neither ends in `/sign-out`, and both terminate the local session before
+ * redirecting, so both are `sign-out` rather than an initiated event:
+ *
+ * - `/sso/saml2/logout/:providerId` — SP-initiated. Deletes the SAML session
+ * keys, calls `deleteSession` on the current session token and
+ * `deleteSessionCookie`, then redirects to the IdP's logout URL.
+ * - `/sso/saml2/sp/slo/:providerId` — the SP's single-logout receiver, for the
+ * IdP-initiated direction and for the response leg of an SP-initiated one.
+ * Both `handleLogoutRequest` and `handleLogoutResponse` call `deleteSession`
+ * and `deleteSessionCookie` the same way.
+ *
+ * Recording the SAML sign-in while leaving these silent is worse than either
+ * gap alone: the trail would show a session opening and never closing, so a
+ * reader cannot tell "still signed in" from "we stopped watching".
+ *
  * There is no dedicated `/oauth2/callback/*` branch because the generic
  * `/callback/` check above already covers it, and covering it is CORRECT: an
  * OAuth callback is a completed sign-in whatever path prefix it arrives on. The
  * same substring also catches `@better-auth/sso`'s `/sso/callback/:providerId`,
- * so if `plugins.ts` ever re-exports `sso` (plan 280 §9 Q1) that endpoint is
- * classified rather than silently unrecorded. Checked against the installed
- * `better-auth` and `@better-auth/*` dist for 1.7.1: generic-oauth reuses the
- * core `/callback/:id` endpoint rather than registering its own, and the one
- * dist hit for a literal `/oauth2/callback/` is inside
- * `better-auth/plugins/oauth-popup`, which `plugins.ts` does not re-export —
- * so today the branch fires for the core callback, and stays correct if either
- * of the others becomes reachable. `__tests__/audit.test.ts` pins all three.
+ * which is where an SSO sign-in actually completes — `sso` is re-exported from
+ * `@lunora/auth/plugins/enterprise`, so that path is live, not hypothetical.
+ *
+ * Checked against the installed `better-auth` and `@better-auth/*` dist for
+ * 1.7.3: generic-oauth registers NO endpoints of its own (there is no
+ * `/sign-in/oauth2`) — it registers providers used through the core
+ * `/sign-in/social` and `/callback/:id`, and the one dist hit for a literal
+ * `/oauth2/callback/` is inside `better-auth/plugins/oauth-popup`, which
+ * `plugins.ts` does not re-export — so today the branch fires for the core
+ * callback, and stays correct if the other becomes reachable.
  */
 const eventForPath = (path: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
@@ -101,15 +133,21 @@ const eventForPath = (path: string): AuthAuditEvent | undefined => {
         return "sign-up";
     }
 
-    if (ends("/sign-in/social") || ends("/sign-in/magic-link")) {
+    if (ends("/sign-in/social") || ends("/sign-in/magic-link") || ends("/sign-in/sso")) {
         return "sign-in-initiated";
     }
 
-    if (normalized.includes("/sign-in/") || normalized.includes("/callback/") || ends("/magic-link/verify") || normalized.includes("/two-factor/verify-")) {
+    if (
+        normalized.includes("/sign-in/") ||
+        normalized.includes("/callback/") ||
+        normalized.includes("/saml2/sp/acs/") ||
+        ends("/magic-link/verify") ||
+        normalized.includes("/two-factor/verify-")
+    ) {
         return "sign-in";
     }
 
-    if (ends("/sign-out")) {
+    if (ends("/sign-out") || normalized.includes("/saml2/logout/") || normalized.includes("/saml2/sp/slo/")) {
         return "sign-out";
     }
 

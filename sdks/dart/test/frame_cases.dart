@@ -40,9 +40,13 @@ void caseClientFrameBuilders() {
 
 void caseServerFrameConsumer() {
   covers('server_frame_consumer');
+  covers('complete_frame_cancels_without_dropping_the_subscription');
+
+  var cancellations = 0;
 
   for (final testCase in objectList(fixture('ws-frames.json')['serverFrames'])) {
-    final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+    final sent = <Map<String, Object?>>[];
+    final client = LunoraClient(url: 'https://app.example')..attachSocket(sent.add);
     final seen = <Object?>[];
     final errors = <LunoraSubscriptionError>[];
 
@@ -52,6 +56,7 @@ void caseServerFrameConsumer() {
       onData: seen.add,
       onError: errors.add,
     );
+    sent.clear();
 
     final expect = testCase['expect'] as Map<String, Object?>;
     final kind = client.handleFrame(jsonEncode(testCase['frame']));
@@ -67,7 +72,27 @@ void caseServerFrameConsumer() {
       equals(errors.length, 1, 'onError should fire once for ${testCase['name']}');
       equals(errors.first.code, expect['code'], 'error code for ${testCase['name']}');
     }
+
+    // Cancelled AND kept. Removing the entry takes it out of the map
+    // `resendSubscriptions` walks, which froze the query across every future
+    // reconnect with nothing reported.
+    if (expect['resendsAfterReconnect'] == true) {
+      cancellations += 1;
+      equals(errors.length, 1, 'a complete frame cancels once');
+      equals(errors.first.code, expect['code'], 'cancellation code');
+      equals(errors.first.message, expect['message'], 'cancellation message');
+      client.resendSubscriptions();
+      equals(
+        jsonEncode(sent.where((frame) => frame['type'] == 'subscribe').map((frame) => frame['id']).toList()),
+        jsonEncode(<Object?>[expect['id']]),
+        'the cancelled subscription is resent on reconnect',
+      );
+    }
   }
+
+  // A conditional assertion that never runs is worse than none: without this,
+  // renaming the fixture key would leave every suite green.
+  equals(cancellations, 1, 'serverFrames must carry one cancelling case');
 }
 
 /// The `Stream` form of a live query: same subscription, same decode, same order

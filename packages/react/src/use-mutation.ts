@@ -37,6 +37,9 @@ interface MutationHook<F extends FunctionReference> {
  * given mutation reference. Prefer destructuring at the call site so the React
  * linter can track dependencies on each field independently.
  *
+ * Not callable: `const send = useMutation(api.x.y); send({ … })` is a `TS2349`.
+ * Destructure the invoker — `const { mutate: send } = useMutation(api.x.y)`.
+ *
  * Built on TanStack Query's mutation cache (the same cache the query hooks use),
  * so it composes with Query Devtools and exposes the latest call's `data`/`error`
  * plus `reset()`. `mutate` maps to `mutateAsync`, so it stays an awaitable that

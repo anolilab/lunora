@@ -39,6 +39,7 @@ import {
 } from "../../../shared/otlp";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
 import { detectHostResource, detectServiceResource, mergeResourceAttributes } from "../../../shared/otlp-resource";
+import { SAMPLE_ERRORS_HEADER, shouldExportTrace } from "../../../shared/sampling";
 
 /**
  * An attribute value carried on a span or log.
@@ -92,6 +93,25 @@ interface ContainerLogInput {
  */
 interface ContainerTelemetryOptions {
     /**
+     * Keep a span that ERRORED even when the inbound `traceparent` says the trace
+     * was sampled out — the **tail bias**, the same rule `@lunora/runtime`'s
+     * `sampling.alwaysSampleErrors` and the shard apply.
+     *
+     * Normally you do not set this: the dispatch's verdict arrives on the
+     * inbound request (see {@link ContainerTelemetryOptions.request}), so all
+     * three tiers agree because they were told the same thing. Set it to
+     * override that. With neither, the `LUNORA_SAMPLE_ERRORS` env var applies
+     * (`"0"` turns it off) — which is what a one-shot container with no request
+     * to read has — and failing that, the tier default `true`.
+     *
+     * Per SPAN, not per trace: the container is a long-running process with no
+     * dispatch boundary to re-decide at, so a span that already settled `ok`
+     * before a sibling failed is not retro-exported. That is the same shape the
+     * worker applies to its own dispatch events.
+     */
+    alwaysSampleErrors?: boolean;
+
+    /**
      * Value of the `deployment.environment` resource attribute. Falls back to
      * the `DEPLOYMENT_ENVIRONMENT` / `ENVIRONMENT` / `NODE_ENV` env vars **only
      * when {@link ContainerTelemetryOptions.detectResources} is `true`** —
@@ -115,6 +135,24 @@ interface ContainerTelemetryOptions {
     headers?: Record<string, string>;
     /** Called with any send failure so the caller can surface it; the export itself always swallows. */
     onError?: (error: unknown) => void;
+
+    /**
+     * The inbound container request, read for the telemetry context the caller's
+     * Worker dispatch propagated onto it: the W3C `traceparent` and the
+     * tail-bias toggle.
+     *
+     * The one-call form of the per-request pattern. A container that serves many
+     * requests must build a telemetry instance per request anyway (the trace
+     * context differs each call), and passing the request means the handler does
+     * not have to know which headers carry what — which is the only way the
+     * toggle's header name would otherwise reach user code.
+     *
+     * ```ts
+     * const telemetry = createContainerTelemetry({ request });
+     * ```
+     */
+    request?: { headers: { get: (name: string) => null | string } };
+
     /** Additional resource attributes merged onto every signal. */
     resourceAttributes?: Record<string, ContainerAttributeValue>;
     /** `service.name` resource attribute; defaults to the `LUNORA_SERVICE_NAME` env var then `"lunora-container"`. */
@@ -144,26 +182,38 @@ interface ContainerTelemetryOptions {
      * OBEYS rather than re-derives: a `traceparent` whose flags say the trace was
      * sampled out (`…-00`) suppresses span export, because the worker and shard
      * spans of that trace were dropped and shipping ours would leave the collector
-     * holding the middle of a trace. Logs are never sampled and are unaffected.
+     * holding the middle of a trace. An ERRORED span is the exception — see
+     * {@link ContainerTelemetryOptions.alwaysSampleErrors}. Logs are never sampled
+     * and are unaffected.
      *
-     * `@lunora/container` stamps this trace context as the **`traceparent` request
-     * header** on every proxied fetch (`ctx.containers.<name>.…`), so a container
-     * that serves many requests should read it per request and create a telemetry
-     * instance scoped to that request — the trace context differs each call, so a
-     * single process-lifetime instance can't carry it:
+     * `@lunora/container` stamps this trace context on every proxied fetch
+     * (`ctx.containers.<name>.…`), so a container that serves many requests
+     * should create a telemetry instance per request — the trace context differs
+     * each call, so a single process-lifetime instance can't carry it. Prefer
+     * {@link ContainerTelemetryOptions.request}, which takes this AND the
+     * tail-bias toggle off the same request:
      *
      * ```ts
      * // inside the container's request handler
-     * const telemetry = createContainerTelemetry({ traceparent: request.headers.get("traceparent") ?? undefined });
+     * const telemetry = createContainerTelemetry({ request });
      * await telemetry.trace("transcode", () => transcode(job));
      * await telemetry.flush();
      * ```
      *
-     * The `LUNORA_TRACEPARENT` env fallback fits a one-shot container that
-     * processes a single job per start (the value is fixed for the process).
+     * Pass this option explicitly only to override what the request carries. The
+     * `LUNORA_TRACEPARENT` env fallback fits a one-shot container that processes
+     * a single job per start, where there is no request to read (the value is
+     * fixed for the process).
      */
     traceparent?: string;
 }
+
+/**
+ * Read a tail-bias toggle from a header value or env var: absent means nobody
+ * said, which is keep — the same reading every other tier applies to an absent
+ * verdict.
+ */
+const resolveSampleErrors = (raw: string | undefined): boolean => raw === undefined || raw !== "0";
 
 /** Default {@link ContainerTelemetryOptions.timeoutMs} — the OTLP-exporter-conventional 10s. */
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -319,15 +369,27 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     const enabled = endpoint !== undefined && endpoint.length > 0;
     const token = options.token ?? readEnv("LUNORA_OTLP_TOKEN");
     const serviceName = options.serviceName ?? readEnv("LUNORA_SERVICE_NAME") ?? "lunora-container";
-    const parent = parseTraceparent(options.traceparent ?? readEnv("LUNORA_TRACEPARENT"));
+    // Precedence for both halves of the propagated verdict, stated once so there
+    // is no question which source wins: an EXPLICIT option (the caller knows
+    // best), else the INBOUND REQUEST (what this dispatch was told), else the
+    // ENV (a one-shot container started with a fixed context and no request to
+    // read), else the tier default.
+    const inbound = options.request?.headers;
+    const parent = parseTraceparent(options.traceparent ?? inbound?.get("traceparent") ?? readEnv("LUNORA_TRACEPARENT"));
     // The head decision was settled by the worker and propagated on the
     // `traceparent`; a container re-derives NOTHING, it reads the verdict. Exporting
     // regardless leaves the collector holding container spans for traces whose
     // worker and shard spans were dropped — the "middle of a trace" the sampling
     // model promises cannot happen. No inbound verdict (no traceparent, or a
     // malformed one) reads as keep, exactly like every other tier. Logs are not
-    // sampled and keep flowing either way.
-    const exportSpans = parent?.sampled !== false;
+    // sampled and keep flowing either way. The one exception is the tail bias
+    // below, which every tier applies: an ERRORED span is kept regardless.
+    const headSampled = parent?.sampled !== false;
+    // The tail-bias toggle, down the same precedence chain. `!== "0"` is how the
+    // shard reads the header too, so all three tiers land on keep by default —
+    // and, when the worker propagated a verdict, on the SAME answer because they
+    // were told it rather than because their defaults happen to coincide.
+    const keepErrors = options.alwaysSampleErrors ?? resolveSampleErrors(inbound?.get(SAMPLE_ERRORS_HEADER) ?? readEnv("LUNORA_SAMPLE_ERRORS"));
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = resolveFetch(options.fetch);
     const headers = mergeHeaders({ "content-type": "application/json" }, options.headers, token);
@@ -442,7 +504,12 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     });
 
     const emitSpan = (span: ContainerSpanInput): void => {
-        if (!enabled || !exportSpans) {
+        // `shouldExportTrace` is the SAME decision the worker's `emitRpcEvent`
+        // and the shard's dispatch `finally` take — one implementation of the
+        // head-verdict-plus-tail-bias rule, not a third opinion. Previously this
+        // checked the head verdict alone, so a container failure inside a
+        // sampled-out trace was the one failure sampling silently hid.
+        if (!enabled || !shouldExportTrace({ isTraced: headSampled, keepErrors }, span.error !== undefined)) {
             return;
         }
 

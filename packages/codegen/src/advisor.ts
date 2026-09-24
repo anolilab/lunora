@@ -2,6 +2,7 @@ import type {
     AdvisorExportSink,
     AdvisorGeoIndexUsage,
     AdvisorIndex,
+    AdvisorMutatorDeclaration,
     AdvisorNotifyCall,
     AdvisorNotifyConfig,
     AdvisorSchema,
@@ -37,6 +38,7 @@ import type {
     MailRecipientAccessIR,
     MaskProcedureIR,
     MaskStrategyIR,
+    MutatorIR,
     MutatorWriteIR,
     NondeterministicCallIR,
     NormalizeIdAuthorizationIR,
@@ -163,6 +165,21 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     });
 
 /**
+ * Map discovered {@link MutatorIR}s to the advisor's
+ * {@link AdvisorMutatorDeclaration} evidence — the `mutator_without_owner_scope`
+ * lint input. Only the export name, source position and declared `owner` cross
+ * the boundary; `args` and the return type serve the emitters, not the lint.
+ *
+ * Not a straight pass-through like {@link MutatorWriteIR}: `filePath` is the
+ * `lunora/`-relative stem the emitters import by (`"mutators"`), and a finding
+ * has to name an openable path.
+ */
+const toAdvisorMutators = (mutators: ReadonlyArray<MutatorIR>): AdvisorMutatorDeclaration[] =>
+    mutators.map((mutator) => {
+        return { exportName: mutator.exportName, file: `lunora/${mutator.filePath}.ts`, line: mutator.line, owner: mutator.owner };
+    });
+
+/**
  * Named inputs for {@link lintSchema}. Every feeder is a discrete key rather than
  * a positional argument: the feeder list grows every few releases and many IR
  * types are structurally similar (`{file, exportName, line}`-shaped evidence),
@@ -199,6 +216,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
@@ -246,11 +264,12 @@ interface LintSchemaOptions {
  * ```
  */
 const toAdvisorContext = (options: LintSchemaOptions): LintContext => {
-    const { argumentValidators, queries, schema, shapes, ...rest } = options;
+    const { argumentValidators, mutators, queries, schema, shapes, ...rest } = options;
 
     return {
         ...rest,
         argValidators: argumentValidators,
+        mutators: mutators === undefined ? undefined : toAdvisorMutators(mutators),
         queries: queries ?? [],
         schema: toAdvisorSchema(schema),
         shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),

@@ -1,12 +1,10 @@
 import { rateLimit } from "lunorash/ratelimit";
 
-import { midpoint } from "./ordering.js";
-import { makeRateLimiter } from "./ratelimit/schema.js";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
-
-type Status = Doc<"tasks">["status"];
+import { midpoint } from "./ordering.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Every write here is unauthenticated — this demo has no sign-in — so the only
@@ -20,7 +18,9 @@ const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byCaller = { key: (ctx: MutationCtx): string => ctx.ip ?? "anon" };
 
 /** Cards on the board, in column-then-position order. Every browser subscribes to this one query. */
-export const list = query.query(async ({ ctx }): Promise<Doc<"tasks">[]> => ctx.db.query("tasks").withIndex("by_status_and_order").order("asc").collect());
+export const list = query.query(async ({ ctx }): Promise<Document_<"tasks">[]> =>
+    ctx.db.query("tasks").withIndex("by_status_and_order").order("asc").collect(),
+);
 
 /**
  * Append a card to the bottom of a column. The order key is derived server-side
@@ -34,7 +34,7 @@ export const create = mutation
         status: v.optional(v.union(v.literal("todo"), v.literal("in-progress"), v.literal("done"), v.literal("archived"))),
     })
     .mutation(async ({ args: { title, status: column }, ctx }): Promise<Id<"tasks">> => {
-        const target = (column ?? "todo") as Status;
+        const target = column ?? "todo";
         const cards = await ctx.db
             .query("tasks")
             .withIndex("by_status_and_order", (q) => q.eq("status", target))
@@ -75,7 +75,7 @@ export const move = mutation
             return;
         }
 
-        const target = column as Status;
+        const target = column;
         const cards = await ctx.db
             .query("tasks")
             .withIndex("by_status_and_order", (q) => q.eq("status", target))

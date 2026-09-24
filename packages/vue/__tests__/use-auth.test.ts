@@ -27,6 +27,14 @@ const createAuthFakeClient = () => {
         };
     });
 
+    // The shared identity store also watches the connection so it can retry a
+    // resolve that failed while offline; the double has to offer it.
+    const onConnectionStatus = vi.fn<(listener: (status: string) => void) => Unsubscribe>((listener) => {
+        listener("idle");
+
+        return () => {};
+    });
+
     const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => currentUser);
 
     const setCurrentUser = (user: User | null) => {
@@ -34,9 +42,13 @@ const createAuthFakeClient = () => {
     };
 
     const client = {
+        // The identity store declares itself on attach; this double has no
+        // gates to arm, so the method only has to exist.
+        expectIdentityResolution: () => undefined,
         getAuthToken,
         getCurrentUser,
         onAuthTokenChange,
+        onConnectionStatus,
         setAuthToken,
     } as unknown as LunoraClient;
 
@@ -44,7 +56,7 @@ const createAuthFakeClient = () => {
     app.provide(LUNORA_INJECTION_KEY, client);
     const provide = <T>(fn: () => T): T => app.runWithContext(fn);
 
-    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, provide, setAuthToken, setCurrentUser };
+    return { client, getAuthToken, getCurrentUser, onAuthTokenChange, onConnectionStatus, provide, setAuthToken, setCurrentUser };
 };
 
 const flushAsync = async (): Promise<void> => {

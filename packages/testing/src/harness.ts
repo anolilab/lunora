@@ -4,6 +4,8 @@ import type {
     ArgsValidator,
     AuthState,
     DatabaseWriter,
+    FacadeEntry,
+    FacadeWriterLike,
     InferArgs,
     LogFields,
     LunoraLogger,
@@ -18,7 +20,7 @@ import type {
     SpanHandle,
     TableDefinition,
 } from "@lunora/server";
-import { beginDeferredSchedules, withDeferredSchedules } from "@lunora/server";
+import { beginDeferredSchedules, bindTableFacade, withDeferredSchedules } from "@lunora/server";
 import type { SchemaLike, TransactionHeadroom } from "@lunora/shard-engine";
 import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations, TransactionHeadroomTracker } from "@lunora/shard-engine";
 
@@ -774,6 +776,29 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     const headroom = new DispatchHeadroom();
 
     /**
+     * Glue the per-table facade (`ctx.db.notes.findMany(...)`) onto a writer,
+     * exactly as production's generated `buildCtx` does — same `bindTableFacade`,
+     * same "bind every declared table through this one writer" rule, so the
+     * harness ctx has the shape a handler is written against. Without it every
+     * `ctx.db.<table>` read is `undefined` here while it works in production, and
+     * the `rls()` middleware — which re-binds the facade entries it finds on the
+     * writer it wraps — has nothing to re-bind (see issue #797).
+     *
+     * Mutates in place, like codegen's emitted glue: `ctx.db` must be ONE object
+     * carrying both the flat methods and the table accessors, and the `rls()`
+     * wrapper's `{ ...base }` spread only carries own enumerable keys.
+     */
+    const withTableFacades = (writer: DatabaseWriter): DatabaseWriter => {
+        const facade = writer as unknown as Record<string, FacadeEntry>;
+
+        for (const tableName of Object.keys(ddlSchema.tables)) {
+            facade[tableName] = bindTableFacade(writer as unknown as FacadeWriterLike, tableName);
+        }
+
+        return writer;
+    };
+
+    /**
      * The guarded `ctx.db` writer for one identity view, plus the trusted writer
      * behind it.
      *
@@ -804,7 +829,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // `@lunora/seed` helper built on it) — mirrors production's admin/migration/
         // studio writers, which are built from `createShardCtxDb` WITHOUT `enforceRls`
         // and so are never guarded.
-        return { database, rawDatabase: ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database };
+        const rawDatabase = ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database;
+
+        return { database: withTableFacades(database), rawDatabase: withTableFacades(rawDatabase) };
     };
 
     // Mutation atomicity — mirrors the real ShardDO, whose codegen dispatch routes

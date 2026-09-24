@@ -27,6 +27,32 @@ const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body
         method: "POST",
     });
 
+/**
+ * Write `count` already-due records straight into the DO's storage, in the
+ * layout `SchedulerDO` uses: an `id:<id>` header plus a `t:<paddedTime>:<id>`
+ * index entry (15-digit zero pad, so lexical order matches numeric order).
+ * Bypasses `/schedule` so no alarm is armed — the caller drives `alarm()`.
+ */
+const seedDue = async (stub: DurableObjectStub<TestSchedulerDO>, count: number, prefix: string, extra: Record<string, unknown> = {}): Promise<void> => {
+    const scheduledFor = Date.now() - 1000;
+    const padded = String(scheduledFor).padStart(15, "0");
+
+    await runInDurableObject(stub, async (_instance, state) => {
+        for (let index = 0; index < count; index += 1) {
+            const id = `${prefix}-${String(index)}`;
+
+            // eslint-disable-next-line no-await-in-loop -- seeding one DO's storage in a deterministic order
+            await state.storage.put(`id:${id}`, { args: {}, enqueuedAt: scheduledFor, functionPath: `${prefix}${String(index)}`, id, scheduledFor, ...extra });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await state.storage.put(`t:${padded}:${id}`, id);
+        }
+
+        if (typeof extra.pool === "string") {
+            await state.storage.put(`pool:${extra.pool}`, { inFlight: 0, inFlightIds: [], maxConcurrency: extra.maxConcurrency ?? 1 });
+        }
+    });
+};
+
 describe("schedulerDO (workerd)", () => {
     it("/schedule arms the runtime alarm for the earliest pending task", async () => {
         expect.hasAssertions();
@@ -126,6 +152,168 @@ describe("schedulerDO (workerd)", () => {
 
             // `end` itself is excluded; everything below it is returned.
             expect([...bounded.keys()]).toEqual(["t:000000000001000:a"]);
+        });
+    });
+
+    it("drains several due jobs concurrently on the real runtime", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("concurrent-drain");
+
+        // Seeded straight into storage rather than through `/schedule`: an
+        // already-due `/schedule` arms the alarm in the past and the runtime
+        // delivers it immediately, so the drain would race the test's barrier
+        // setup. This still exercises real Durable Object storage and real
+        // gating — only the alarm's delivery is driven by hand.
+        await seedDue(stub, 4, "job");
+
+        // Every dispatch parks until four are in flight together. A drain that
+        // awaits each job in turn can never reach that, so it falls through the
+        // bounded spin one job at a time and `peakInFlight` stays at 1.
+        await runInDurableObject(stub, async (instance) => {
+            instance.setBarrier(4);
+
+            await instance.alarm();
+
+            expect(instance.dispatched).toHaveLength(4);
+            expect(instance.peakInFlight).toBe(4);
+        });
+    });
+
+    it("never oversubscribes a pool past maxConcurrency under a concurrent drain", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("pool-concurrency");
+
+        await seedDue(stub, 5, "pooled", { maxConcurrency: 3, pool: "p" });
+
+        await runInDurableObject(stub, async (instance, state) => {
+            instance.setBarrier(3);
+
+            await instance.alarm();
+
+            // Exactly the cap in flight at the peak — not one (the old
+            // sequential drain) and not five (a drain whose pool reservations
+            // lose updates to each other across the real storage round trip).
+            expect(instance.peakInFlight).toBe(3);
+            expect(instance.dispatched).toHaveLength(3);
+
+            const pool = await state.storage.get<{ inFlight: number; inFlightIds: string[] }>("pool:p");
+
+            expect(pool?.inFlightIds).toHaveLength(3);
+
+            // The two over the cap were re-armed as backpressure and still hold
+            // both of their rows.
+            const headers = await state.storage.list({ prefix: "id:" });
+
+            expect(headers.size).toBe(2);
+        });
+    });
+
+    it("holds a lease on a claimed record's time index for the whole dispatch", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-held");
+
+        await seedDue(stub, 2, "leased");
+
+        await runInDurableObject(stub, async (instance, state) => {
+            const startedAt = Date.now();
+
+            await instance.alarm();
+
+            // Sampled from REAL Durable Object storage from inside each open
+            // dispatch — the instant an eviction would strike. Before the lease
+            // the claim deleted the entry outright, so this was `[]` and the
+            // record was an orphan a successor re-fired on sight.
+            expect(instance.indexDuringDispatch).toHaveLength(2);
+
+            for (const sample of instance.indexDuringDispatch) {
+                expect(sample.keys).toHaveLength(1);
+
+                const armedFor = Number.parseInt((sample.keys[0] as string).slice(2, 17), 10);
+
+                // Comfortably in the future: a successor cannot pick the record
+                // up until the horizon passes.
+                expect(armedFor).toBeGreaterThan(startedAt + 60_000);
+            }
+
+            // And a dispatched record leaves nothing behind once the drain settles.
+            const rows = await state.storage.list({ prefix: "t:" });
+
+            expect(rows.size).toBe(0);
+
+            const alarm = await state.storage.getAlarm();
+
+            expect(alarm).toBeNull();
+        });
+    });
+
+    it("drops the lease on a failed dispatch so the retry backoff owns the clock", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-released");
+
+        await seedDue(stub, 1, "failing");
+
+        await runInDurableObject(stub, async (instance, state) => {
+            instance.setDispatchOk(false);
+
+            const startedAt = Date.now();
+
+            await instance.alarm();
+
+            const rows = await state.storage.list<string>({ prefix: "t:" });
+
+            // Exactly one entry, and it is the retry's, not the lease's — a
+            // surviving lease would give every failed job a second index row and
+            // fire it again at the horizon.
+            expect(rows.size).toBe(1);
+
+            const armedFor = Number.parseInt([...rows.keys()][0]!.slice(2, 17), 10);
+
+            expect(armedFor).toBeLessThan(startedAt + 60_000);
+            await expect(state.storage.get("retry:failing-0")).resolves.toBeDefined();
+        });
+    });
+
+    it("re-claims an expired lease at the key it is indexed under, leaving one entry", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-expiry");
+        const id = "expired-0";
+        // The state an expired lease leaves behind, seeded directly so the test
+        // needs no 15-minute clock: the header still carries the job's real due
+        // time, while the live index entry sits at the (now past) lease horizon.
+        // The two keys therefore DISAGREE — which is the whole hazard. A claim
+        // that recomputed its key from `scheduledFor` would delete nothing and
+        // add a second entry, and the record would be dispatched twice.
+        const scheduledFor = Date.now() - 1_000_000;
+        const leasedUntil = Date.now() - 1000;
+
+        await runInDurableObject(stub, async (_instance, state) => {
+            await state.storage.put(`id:${id}`, { args: {}, enqueuedAt: scheduledFor, functionPath: "expired", id, scheduledFor });
+            await state.storage.put(`t:${String(leasedUntil).padStart(15, "0")}:${id}`, id);
+        });
+
+        await runInDurableObject(stub, async (instance, state) => {
+            // Fail the kick so the record keeps its header and stays visible; a
+            // clean dispatch deletes the header and hides a stale second key as a
+            // harmless dangling row.
+            instance.setDispatchOk(false);
+
+            await instance.alarm();
+
+            expect(instance.dispatched).toHaveLength(1);
+
+            const rows = await state.storage.list<string>({ prefix: "t:" });
+            const mine = [...rows.keys()].filter((key) => key.endsWith(`:${id}`));
+
+            // COUNT, do not merely check presence: the defect leaves two entries,
+            // and "has an index entry" is satisfied by both.
+            expect(mine).toHaveLength(1);
+            // …and it is the retry's key, not the stale lease horizon.
+            expect(mine[0]).not.toBe(`t:${String(leasedUntil).padStart(15, "0")}:${id}`);
         });
     });
 

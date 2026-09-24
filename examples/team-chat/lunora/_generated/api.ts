@@ -12,7 +12,7 @@ export interface ApiTypes {
         list: FunctionReference<"query", {}, import("./dataModel.js").Doc_channels[]>;
     };
     messages: {
-        attachmentUrl: FunctionReference<"action", { channelId: string; key: string }, string>;
+        attachmentUrl: FunctionReference<"action", { messageId: Id<"messages"> }, string>;
         list: FunctionReference<"query", { channelId: string }, import("./dataModel.js").Doc_messages[]>;
         requestAttachmentUpload: FunctionReference<"action", { channelId: string; contentType: string }, { key: string; url: string; }>;
         search: FunctionReference<"query", { channelId: string; text: string }, import("./dataModel.js").Doc_messages[]>;
@@ -24,7 +24,7 @@ export interface ApiTypes {
         list: FunctionReference<"query", { channelId: string }, import("./dataModel.js").Doc_presence[]>;
     };
     profiles: {
-        avatarUrl: FunctionReference<"action", { key: string }, string>;
+        avatarUrl: FunctionReference<"action", { userId: string }, string>;
         list: FunctionReference<"query", {}, import("./dataModel.js").Doc_profiles[]>;
         requestAvatarUpload: FunctionReference<"action", { contentType: string }, { key: string; url: string; }>;
         save: FunctionReference<"mutation", { name: string; avatarKey?: string }, Id<"profiles">>;

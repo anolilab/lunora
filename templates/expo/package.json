@@ -12,8 +12,8 @@
         "ios": "expo start --ios",
         "web": "expo start --web",
         "codegen": "lunora codegen",
-        "dev:server": "wrangler dev",
-        "deploy": "wrangler deploy",
+        "dev:server": "lunora dev",
+        "deploy": "lunora deploy",
         "lint:types": "lunora codegen && tsc --noEmit"
     },
     "dependencies": {

@@ -65,8 +65,14 @@ When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action cont
 import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action.input({ text: v.string() }).action(async ({ args: { text }, ctx }) => {
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
     const { text: summary } = await generateText({
+        // Both ends of the token bill are bounded: the input by `.max()` above,
+        // the completion here. An `action` is public RPC and inference is
+        // metered, so an unbounded completion is a denial-of-wallet vector — a
+        // short prompt can ask for an arbitrarily long answer, and output
+        // tokens are the expensive half.
+        maxOutputTokens: 300,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Summarize:\n\n${text}`,
     });

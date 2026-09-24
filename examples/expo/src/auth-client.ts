@@ -7,9 +7,9 @@ export const LUNORA_URL = process.env.EXPO_PUBLIC_LUNORA_URL ?? "http://localhos
 
 /**
  * better-auth React client wired for Expo. The Expo plugin persists the session
- * cookie in `SecureStore` (surviving app restarts, since React Native has no
- * cookie jar) and exposes `getCookie()`, which `src/lunora.ts` bridges into the
- * Lunora client so the live socket and RPC calls run as the signed-in user.
+ * token in `SecureStore` (surviving app restarts) and exposes `getCookie()`,
+ * which `App.tsx` bridges into the Lunora client as a bearer, so the live socket
+ * and RPC calls run as the signed-in user.
  *
  * `scheme` must match `app.json` → `expo.scheme` and the server's trusted origin
  * (`lunora/auth.ts`).

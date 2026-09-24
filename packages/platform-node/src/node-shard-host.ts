@@ -92,6 +92,24 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
             ) as Row[];
 
             return {
+                // Both optional cursor capabilities are LAZY, and both are
+                // answered only for a reader: `columns()` throws outright on a
+                // statement that returns no data, and positional rows are
+                // meaningless for one. A caller that never asks pays nothing —
+                // this is the engine's hot path, and the buffered object rows
+                // above stay exactly as they were.
+                //
+                // `raw()` re-runs the statement in better-sqlite3's positional
+                // mode rather than re-deriving arrays from the objects it
+                // already has, because the objects are precisely what loses the
+                // information (two result columns named `id` collapse to one
+                // key). The contract says a caller consumes `raw` OR `toArray`,
+                // so in practice this is still one execution; it is safe to
+                // repeat because only a reader reaches it and the whole
+                // `exec` runs inside the host's own serialized turn.
+                get columnNames(): string[] | undefined {
+                    return statement.reader ? statement.columns().map((column) => column.name) : undefined;
+                },
                 [Symbol.iterator]: () => rows[Symbol.iterator](),
                 one: () => {
                     if (rows.length !== 1) {
@@ -100,6 +118,17 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
 
                     return rows[0] as Row;
                 },
+                ...(statement.reader
+                    ? {
+                          raw: (): IterableIterator<unknown[]> =>
+                              (
+                                  database
+                                      .prepare(query)
+                                      .raw(true)
+                                      .all(...normalized) as unknown[][]
+                              )[Symbol.iterator](),
+                      }
+                    : {}),
                 toArray: () => [...rows],
             };
         },

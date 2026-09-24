@@ -1422,6 +1422,125 @@ describe("outbox replay backoff", () => {
         client.close();
     });
 
+    it("keeps a whole batch queued when a gateway answers 502 with a non-object error slot", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        // A proxy's own JSON error page: the `error` key is there, but it holds a
+        // STRING, so there is no envelope to read a verdict out of. Read unchecked
+        // it produced an `Error` with no `code`, and `settleWholeBatchError`
+        // requires a code before it will keep a write — so every durable write in
+        // the chunk was DROPPED over a gateway blip, silently, while the same
+        // reply classified by its 502 re-queues them.
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            attempt += 1;
+
+            if (attempt === 1) {
+                return jsonResponse({ error: "bad gateway" }, { status: 502 });
+            }
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Two writes take the batch path.
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error),
+            client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Nothing settled: both writes are still durable, waiting for the next flush.
+        expect(settled).toEqual([]);
+        expect(client.pendingCount()).toBe(2);
+
+        // Next reconnect → the same two writes replay and commit.
+        latestSocket().triggerClose();
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(pending).resolves.toEqual([{ ok: true }, { ok: true }]);
+        expect(settled.map((event) => event.status)).toEqual(["committed", "committed"]);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("keeps a batch slot queued when its body carries a null error slot", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // Per-slot version of the same shape: the slot body has an `error` key
+        // holding `null`. Read unchecked it threw a `TypeError` out of the flush,
+        // which nothing catches — and the writes had already left the queue.
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            attempt += 1;
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: attempt === 1 ? { error: null } : { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error),
+            client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(settled).toEqual([]);
+        expect(client.pendingCount()).toBe(2);
+
+        latestSocket().triggerClose();
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(pending).resolves.toEqual([{ ok: true }, { ok: true }]);
+        expect(settled.map((event) => event.status)).toEqual(["committed", "committed"]);
+
+        client.close();
+    });
+
     it("settles a whole batch on an envelope-less 4xx instead of wedging the outbox head", async () => {
         expect.assertions(3);
 

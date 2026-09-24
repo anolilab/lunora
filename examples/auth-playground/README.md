@@ -14,8 +14,9 @@ organization, invite a member, then ban a user from the admin panel.
 - Pre-deploy schema setup with `ensureMigrated(auth)` against the D1
   binding (use `compileMigrationsSql` + `wrangler d1 execute` in CI).
 - A `documents` table whose handlers scope every read and write to the
-  session's own `ownerId` — and a note in `lunora/documents.ts` on why the
-  stricter _membership_ check has to live in an `httpAction`, where the inbound
+  session's own `ownerId` — and a note in `lunora/documents.ts` on why it
+  carries no `organizationId`: a procedure context cannot verify one, so the
+  _membership_ check has to live in an `httpAction`, where the inbound
   `Headers` `getActiveMember` authorizes from are actually available.
 - Browser flows: sign-up, create-org, invite-member, admin ban/unban.
 

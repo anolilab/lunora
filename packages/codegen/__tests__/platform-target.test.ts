@@ -412,6 +412,28 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics[0]?.message).toContain("commit-ordered tables");
     });
 
+    it("diagnoses a relation graph the target cannot traverse", async () => {
+        expect.assertions(4);
+
+        // The `v.id(...)` columns are what make `ctx.db.related` meaningful, and
+        // they are a schema declaration — so a host that cannot serve the
+        // traversal's per-hop read shape must refuse the app rather than emit a
+        // `related` that fails on the first hop.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { relationGraph: { level: "unsupported" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { relationGraph: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("relation-graph traversal");
+        expect(result.signals.relationGraph).toBe(false);
+    });
+
     it("fails closed on an unrated app-declarable feature", async () => {
         expect.assertions(2);
 

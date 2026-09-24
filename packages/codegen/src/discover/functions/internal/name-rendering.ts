@@ -362,6 +362,18 @@ const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
+ * Whether `declaration`'s own module publishes it under a name — the condition
+ * for the checker being able to print `import("<module>").<name>` for it.
+ *
+ * `isExported()` covers all three spellings (an `export` modifier, a default
+ * export, and a later `export { X }`). The ambient-module arm is separate because
+ * a member of `declare module "spec" { … }` carries no `export` modifier and is
+ * exported all the same.
+ */
+const isExportedFromItsModule = (declaration: Node): boolean =>
+    ambientModuleSpecifier(declaration) !== undefined || (Node.isExportable(declaration) && declaration.isExported());
+
+/**
  * Classify one declaration. {@link classifyType} lifts this to a type and
  * {@link annotationRendering} to a syntactic annotation; both defer here so the
  * rule has one statement rather than three that must agree.
@@ -422,10 +434,14 @@ const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: str
 
     const qualified = importSpecifierFor(node.getSourceFile(), named, named.getName());
 
-    // Not imported here either, so the checker prints it as its own `import("…")`
-    // qualifier — already self-contained.
+    // Not imported here either. The checker CAN print it as its own `import("…")`
+    // qualifier — but only when the declaring module actually exports it, because
+    // that qualifier is spelled as an export access. A declaration its module keeps
+    // to itself has no such spelling, so the checker falls back to the bare name,
+    // which resolves nowhere from `_generated/` (TS2304, in both `api.ts` and
+    // `functions.ts`). Expand it instead: its structure, or `unknown`.
     if (qualified === undefined) {
-        return VERBATIM;
+        return isExportedFromItsModule(named) ? VERBATIM : EXPAND;
     }
 
     return isUnresolvableSpecifier(qualified.specifier, node) ? EXPAND : { kind: "qualify", qualified };

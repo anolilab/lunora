@@ -10,7 +10,7 @@
     "d1_databases": [
         // better-auth identity + sessions live in D1. Create the database with
         // `wrangler d1 create {{name}}` and paste the printed id below.
-        { "binding": "DB", "database_name": "{{name}}", "database_id": "REPLACE_WITH_D1_ID" },
+        { "binding": "DB", "database_name": "{{name}}", "database_id": "<replace-with-d1-create-id>" },
     ],
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
