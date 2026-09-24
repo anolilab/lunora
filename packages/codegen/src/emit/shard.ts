@@ -179,7 +179,7 @@ const emitShard = ({
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.stringify(hashSchemaSnapshot(schemaSnapshot))}, json: ${JSON.stringify(schemaSnapshotJson)} };
 `;
     const snapshotArgument = schemaSnapshot === undefined ? "" : ", schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT";
-    const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
+    const { build: aiBuild, configField: aiConfigField, stub: aiStub } = emitAiFragments(hasAi);
     // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
     // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
     // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
@@ -755,6 +755,7 @@ ${schema.tables
     // Each helper's ctx field is named after its local, so one list drives both
     // the attach here and the strip from a composed query's view of an action ctx.
     const actionOnlyFields = [
+        ...(hasAi ? ["ai"] : []),
         ...(hasImages ? ["images"] : []),
         ...(hasHyperdrive ? ["sql"] : []),
         ...(hasBrowser ? ["browser"] : []),
@@ -762,7 +763,7 @@ ${schema.tables
         ...(hasPipelines ? ["pipelines"] : []),
         ...(hasX402 ? ["x402"] : []),
     ];
-    const actionOnlyBuild = `${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}`;
+    const actionOnlyBuild = `${aiBuild}${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -977,7 +978,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, aiBuild, aiContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };

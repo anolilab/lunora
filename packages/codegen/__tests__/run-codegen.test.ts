@@ -982,7 +982,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
-            expect(result.generated.shard).toContain("ai,");
+            expect(result.generated.shard).toContain("ctx.ai = ai;");
             expect(result.generated.server).toContain("readonly ai: LunoraAi;");
         });
 
@@ -4307,7 +4307,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.ai into the ShardDO when AI is used", () => {
-            expect.assertions(8);
+            expect.assertions(9);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -4319,10 +4319,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
             expect(output).toContain("const aiStub: LunoraAi");
-            expect(output).toContain(
-                "createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })",
-            );
-            expect(output).toContain("ai,");
+            // The function's own tracer + metrics record every model call's usage.
+            expect(output).toContain("telemetry: { metrics, trace },");
+            // Inference is action-only: ctx.ai is attached inside the isAction
+            // block, never on a query/mutation ctx.
+            expect(output).toMatch(/if \(isAction\) \{[\s\S]*?const ai: LunoraAi = aiBinding[\s\S]*?ctx\.ai = ai;\n {12}\}/u);
+            expect(output).not.toMatch(/^ {16}ai,$/mu);
             // Correlation ids are threaded into the gateway metadata, reading the
             // dispatch trace under the same anchor guard the tracer uses.
             expect(output).toContain("const aiTrace = options.identity ? undefined : this.getCurrentTrace();");

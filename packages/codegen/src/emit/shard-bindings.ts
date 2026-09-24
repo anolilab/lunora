@@ -37,9 +37,9 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
  * when the project doesn't use Workers AI. Extracted from `emitShard` so
  * its body stays flat (the gating lives here, not as inline ternaries).
  */
-const emitAiFragments = (hasAi: boolean): { build: string; configField: string; contextField: string; stub: string } => {
+const emitAiFragments = (hasAi: boolean): { build: string; configField: string; stub: string } => {
     if (!hasAi) {
-        return { build: "", configField: "", contextField: "", stub: "" };
+        return { build: "", configField: "", stub: "" };
     }
 
     // ctx.ai falls back to this when neither `env.AI` nor a `config.ai` thunk
@@ -49,20 +49,28 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
 
     return {
         // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
-        // override, else `env.AI`). createAi is provider-agnostic — a model-id
-        // string resolves Workers AI, any AI SDK model object passes through — so
-        // a handler is never locked to Workers AI. Falls back to `aiStub`.
+        // override, else `env.AI`). createAi is provider-agnostic — a Workers AI id,
+        // a `"<provider>/<model>"` slug routed through AI Gateway, or any AI SDK
+        // model object — so a handler is never locked to Workers AI. Falls back to
+        // `aiStub`. An ActionCtx-only helper: inference is external,
+        // non-deterministic I/O, so a query/mutation ctx never carries it.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
             // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
             // function path + trace id into createAi, which folds them into the
-            // gateway's native \`metadata\` only when a gateway is configured (absent
-            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
-            // re-run must not borrow a concurrent dispatch's trace, so read
-            // \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
+            // gateway's \`metadata\`. Mirror the tracer's anchor guard — a deferred
+            // subscription re-run must not borrow a concurrent dispatch's trace, so
+            // read \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
             const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
+            // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
             const ai: LunoraAi = aiBinding
-                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
+                ? createAi({
+                      binding: aiBinding as AiBindingLike,
+                      env: env as Record<string, unknown>,
+                      metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                      telemetry: { metrics, trace },
+                  })
                 : aiStub;
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
@@ -70,7 +78,6 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
         // auto-reconciles); the thunk lets a caller point it elsewhere or inject
         // a double in tests.
         configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
-        contextField: `\n                ai,`,
         stub: `
 const aiStub: LunoraAi = {
     embeddingModel: () => {

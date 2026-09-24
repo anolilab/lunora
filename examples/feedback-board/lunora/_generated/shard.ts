@@ -840,18 +840,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
             const { identity, ip, userId } = caller;
 
-            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
-            // function path + trace id into createAi, which folds them into the
-            // gateway's native `metadata` only when a gateway is configured (absent
-            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
-            // re-run must not borrow a concurrent dispatch's trace, so read
-            // `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
-            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
-            const ai: LunoraAi = aiBinding
-                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
-                : aiStub;
-
             const secrets = createSecrets(env);
 
             // Which dispatch this ctx belongs to. Drives the two deferral facades
@@ -1075,9 +1063,33 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 span,
                 storage: contextStorage,
                 trace,
-                ai,
                 secrets,
             };
+            const isAction = contextKind === "action";
+
+            // ActionCtx-only helpers (external, non-deterministic I/O): constructed
+            // and attached only for an `action` so query/mutation ctx never carry them.
+            if (isAction) {
+
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+            // function path + trace id into createAi, which folds them into the
+            // gateway's `metadata`. Mirror the tracer's anchor guard — a deferred
+            // subscription re-run must not borrow a concurrent dispatch's trace, so
+            // read `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
+            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            // `telemetry` gives every model call an `ai.generate` / `ai.stream` span
+            // and `gen_ai.usage.*` token + cost counters attributed to this function.
+            const ai: LunoraAi = aiBinding
+                ? createAi({
+                      binding: aiBinding as AiBindingLike,
+                      env: env as Record<string, unknown>,
+                      metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                      telemetry: { metrics, trace },
+                  })
+                : aiStub;
+                ctx.ai = ai;
+            }
 
             const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
                 target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);
@@ -1129,6 +1141,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
                 if (queryView === undefined) {
                     const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);
+                    delete descriptors.ai;
                     // Writable and configurable, like the plain fields they replace.
                     const field = (value: unknown): PropertyDescriptor => ({ configurable: true, enumerable: true, value, writable: true });
 
