@@ -1,3 +1,10 @@
+## @lunora/ratelimit [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.70...@lunora/ratelimit@1.0.0-alpha.71) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
 ## @lunora/ratelimit [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.69...@lunora/ratelimit@1.0.0-alpha.70) (2026-09-24)
 
 
