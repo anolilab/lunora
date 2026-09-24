@@ -58,14 +58,17 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/platform": "1.0.0-alpha.24",
-        "@lunora/platform-cloudflare": "1.0.0-alpha.30"
+        "@lunora/platform": "1.0.0-alpha.33",
+        "@lunora/platform-cloudflare": "1.0.0-alpha.48"
     },
     "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/shard-engine": "1.0.0-alpha.79",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "@vitest/expect": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",

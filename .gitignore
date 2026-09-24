@@ -95,6 +95,8 @@ dist/
 
 # Wrangler local state
 .wrangler/
+# `celld dev` keeps its local fleet state beside the project config
+.celld/
 
 # Per-checkout Lunora dev state written by `lunora dev` / the Vite plugin in
 # workspace apps (dev.json lockfile, dev.log, binding-inference cache) —
