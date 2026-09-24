@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.40...@lunora/errors@1.0.0-alpha.41) (2026-09-24)
+
+### Bug Fixes
+
+* **do:** decline a dispatch whose idempotency id is still running ([#812](https://github.com/anolilab/lunora/issues/812)) ([f45963f](https://github.com/anolilab/lunora/commit/f45963f3f41f11afc70ecb96f2906be2c9908b0c))
+
 ## @lunora/errors [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.39...@lunora/errors@1.0.0-alpha.40) (2026-09-24)
 
 ### ⚠ BREAKING CHANGES
