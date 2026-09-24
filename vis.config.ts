@@ -156,7 +156,9 @@ export default defineConfig({
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then Prettier-format every staged file, repo-wide.
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write"],
+        // `--ignore-unknown`: Prettier has no TOML parser here, so a staged
+        // `.toml` would otherwise fail the hook instead of just the NUL check.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write --ignore-unknown"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.
