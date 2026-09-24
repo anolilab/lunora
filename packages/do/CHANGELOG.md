@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.157...@lunora/do@1.0.0-alpha.158) (2026-09-24)
+
+### Bug Fixes
+
+* **do:** decline a dispatch whose idempotency id is still running ([#812](https://github.com/anolilab/lunora/issues/812)) ([f45963f](https://github.com/anolilab/lunora/commit/f45963f3f41f11afc70ecb96f2906be2c9908b0c))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/observability:** upgraded to 1.0.0-alpha.88
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.48
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.79
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.68
+
 ## @lunora/do [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.156...@lunora/do@1.0.0-alpha.157) (2026-09-24)
 
 
