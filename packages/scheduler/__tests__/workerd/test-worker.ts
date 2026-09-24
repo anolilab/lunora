@@ -65,6 +65,17 @@ class TestSchedulerDO extends DurableObject<Env> {
     /** The largest `inFlight` ever observed — the drain's real concurrency. */
     public peakInFlight = 0;
 
+    /**
+     * Per dispatched record, the `t:` index rows carrying its id AT THE MOMENT
+     * its dispatch was open — the instant an eviction would strike. Sampled from
+     * real Durable Object storage, so it proves the claim's durable shape rather
+     * than a fake's.
+     */
+    public indexDuringDispatch: { id: string; keys: string[] }[] = [];
+
+    /** What every dispatch reports back. `false` drives the retry ladder. */
+    public dispatchOk = true;
+
     private readonly scheduler: ConcreteScheduler;
 
     public constructor(context: DurableObjectState, env: Env) {
@@ -75,9 +86,21 @@ class TestSchedulerDO extends DurableObject<Env> {
         this.scheduler = new ConcreteScheduler(toSchedulerState(context), env as unknown as SchedulerEnv, this);
     }
 
+    /** Sample the `t:` rows carrying `id`, from inside that record's open dispatch. */
+    public async sampleIndex(id: string): Promise<void> {
+        const rows = await this.ctx.storage.list<string>({ prefix: "t:" });
+
+        this.indexDuringDispatch.push({ id, keys: [...rows.keys()].filter((key) => key.endsWith(`:${id}`)) });
+    }
+
     /** Arm the `hold()` barrier. A setter, so a test never assigns to the instance directly. */
     public setBarrier(value: number): void {
         this.barrier = value;
+    }
+
+    /** Make every dispatch report `ok`, or not. A setter, for the same reason as `setBarrier`. */
+    public setDispatchOk(value: boolean): void {
+        this.dispatchOk = value;
     }
 
     /**
@@ -128,9 +151,10 @@ class ConcreteScheduler extends SchedulerDO {
     protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
         this.outer.dispatched.push(record);
 
+        await this.outer.sampleIndex(record.id);
         await this.outer.hold();
 
-        return true;
+        return this.outer.dispatchOk;
     }
 }
 
