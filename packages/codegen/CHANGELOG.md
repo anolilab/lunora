@@ -1,3 +1,30 @@
+## @lunora/codegen [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.203...@lunora/codegen@1.0.0-alpha.204) (2026-09-24)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a schema with a table named after a `ctx.db` writer method (`aggregate`,
+`count`, `findMany`, `rank`, `restore`, …) is now rejected at discovery. Such a schema was
+already broken at runtime; rename the table.
+
+### Bug Fixes
+
+* **codegen:** reserve every ctx.db writer method as a table name ([#807](https://github.com/anolilab/lunora/issues/807)) ([e344e62](https://github.com/anolilab/lunora/commit/e344e62f7a64252e8103d336d063c08a16de982b)), closes [#805](https://github.com/anolilab/lunora/issues/805)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.148
+* **@lunora/agent:** upgraded to 1.0.0-alpha.129
+* **@lunora/container:** upgraded to 1.0.0-alpha.55
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/queue:** upgraded to 1.0.0-alpha.61
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.79
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.59
+* **@lunora/do:** upgraded to 1.0.0-alpha.157
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/codegen [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.202...@lunora/codegen@1.0.0-alpha.203) (2026-09-23)
 
 ### ⚠ BREAKING CHANGES
