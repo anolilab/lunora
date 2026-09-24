@@ -1,3 +1,23 @@
+## @lunora/vite [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.240...@lunora/vite@1.0.0-alpha.241) (2026-09-24)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a schema with a table named after a `ctx.db` writer method (`aggregate`,
+`count`, `findMany`, `rank`, `restore`, …) is now rejected at discovery. Such a schema was
+already broken at runtime; rename the table.
+
+### Bug Fixes
+
+* **codegen:** reserve every ctx.db writer method as a table name ([#807](https://github.com/anolilab/lunora/issues/807)) ([e344e62](https://github.com/anolilab/lunora/commit/e344e62f7a64252e8103d336d063c08a16de982b)), closes [#805](https://github.com/anolilab/lunora/issues/805)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.204
+* **@lunora/config:** upgraded to 1.0.0-alpha.241
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/studio:** upgraded to 1.0.0-alpha.203
+
 ## @lunora/vite [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.239...@lunora/vite@1.0.0-alpha.240) (2026-09-23)
 
 
