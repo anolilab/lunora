@@ -532,6 +532,11 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Dispatch caller not authenticated";
     };
+    readonly DISPATCH_IN_PROGRESS: {
+        readonly hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.";
+        readonly status: 409;
+        readonly title: "Dispatch already in progress";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";

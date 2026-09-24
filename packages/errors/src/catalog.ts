@@ -426,6 +426,25 @@ export const ERROR_CATALOG = {
         status: 403,
         title: "Dispatch caller not authenticated",
     },
+
+    /**
+     * A dispatch arrived carrying an `x-lunora-mutation-id` whose handler is
+     * ALREADY executing in the shard, on the ungated (non-mutation) path where
+     * nothing serialises the two. The shard declines the second delivery rather
+     * than running it alongside the first.
+     *
+     * Deliberately a `409` and deliberately NOT one of `@lunora/dispatch`'s
+     * `DETERMINISTIC_DISPATCH_STATUSES`: the refusal is about WHEN the request
+     * arrived, not about the request. It clears on its own the moment the first
+     * attempt settles — at which point the same id replays into the dedup row
+     * and is served its cached result — so every caller (the scheduler's retry
+     * ladder, a queue consumer, a workflow step) must keep retrying it.
+     */
+    DISPATCH_IN_PROGRESS: {
+        hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.",
+        status: 409,
+        title: "Dispatch already in progress",
+    },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
