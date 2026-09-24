@@ -7,6 +7,7 @@ import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai
 // `metadata` one canonical form to hash (see `sourceIdentity`).
 import { stableStringify } from "../../../../shared/stable-key";
 import { estimateModelCost } from "../pricing";
+import reportedCostOf from "../usage";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
@@ -362,32 +363,6 @@ const modelIdOf = (model: EmbeddingModel): string | undefined => {
 };
 
 /**
- * Read an embed's dollar cost from AI SDK `providerMetadata`, defensively. AI
- * Gateway surfaces per-request cost there (under a provider bag's `cost` field,
- * e.g. the `cf-aig-*` / gateway metadata) once cost routing is enabled; until
- * then it is absent and this returns `undefined`, so the `gen_ai.usage.cost`
- * attribute is simply omitted. Probing rather than hard-depending keeps the embed
- * span correct with or without a gateway in front.
- */
-const embedCostOf = (providerMetadata: unknown): number | undefined => {
-    if (typeof providerMetadata !== "object" || providerMetadata === null) {
-        return undefined;
-    }
-
-    for (const bag of Object.values(providerMetadata as Record<string, unknown>)) {
-        if (typeof bag === "object" && bag !== null) {
-            const { cost } = bag as { cost?: unknown };
-
-            if (typeof cost === "number" && Number.isFinite(cost)) {
-                return cost;
-            }
-        }
-    }
-
-    return undefined;
-};
-
-/**
  * The bound context's Vectorize facade, or a directed error. `vectors` is
  * optional on {@link RagContext} because a configured `store` never reads it;
  * without one it is the store, and its absence is a wiring mistake worth
@@ -614,7 +589,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     // Gateway — but the two are never conflated: the source is
                     // stamped alongside, so a dashboard can tell a measured
                     // cost from a derived one.
-                    const reported = embedCostOf(providerMetadata);
+                    const reported = reportedCostOf(providerMetadata);
                     const cost =
                         reported ??
                         estimateModelCost(modelIdOf(resolvedModel), {

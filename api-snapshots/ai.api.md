@@ -65,6 +65,22 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AiMetrics` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiSpan` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTelemetry` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTracer` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `DEFAULT_MODEL_PRICES` (const)
 
 ```ts

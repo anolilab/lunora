@@ -1,10 +1,39 @@
 import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
+import { anthropic } from "workers-ai-provider/anthropic";
+import { openai } from "workers-ai-provider/openai";
 
 import type { AiGatewayMetadata } from "./gateway";
 import { AI_DEFAULT_EMBEDDING_MODEL_ENV, AI_DEFAULT_MODEL_ENV, buildAiGatewayMetadataFields, readAiGatewayEnvTags, readEnv, resolveAiGateway } from "./gateway";
+import instrumentModel from "./telemetry";
 import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+
+/**
+ * Wire-format plugins for AI Gateway catalog models. `openai` parses every
+ * OpenAI-compatible provider (OpenAI, Google and xAI on the run path, Groq,
+ * DeepSeek, Mistral, …) and dynamic routes; `anthropic` is needed because the
+ * gateway passes Anthropic through in its native format.
+ */
+const GATEWAY_PROVIDER_PLUGINS = [openai, anthropic];
+
+/**
+ * A `"<provider>/<model>"` catalog slug or a `dynamic/<route>` — anything slashed
+ * that is not a Workers AI id (`@cf/…`, `@hf/…`). Mirrors `workers-ai-provider`'s
+ * own routing test, which is what actually sends these through AI Gateway.
+ */
+const isGatewayModelId = (modelId: string): boolean => !modelId.startsWith("@") && modelId.includes("/");
+
+/**
+ * Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
+ * tags, which sit under the built-in correlation fields: the more specific the
+ * source, the later it wins.
+ */
+const withEnvironmentTags = (env: Record<string, unknown> | undefined, metadata: AiGatewayMetadata | undefined): AiGatewayMetadata | undefined => {
+    const environmentTags = env === undefined ? undefined : readAiGatewayEnvTags(env);
+
+    return environmentTags === undefined ? metadata : { ...metadata, tags: { ...environmentTags, ...metadata?.tags } };
+};
 
 /**
  * Resolve the effective Workers AI `gateway` option: an explicit
@@ -24,12 +53,7 @@ const resolveGatewayOption = (
     env: Record<string, unknown> | undefined,
     metadata: AiGatewayMetadata | undefined,
 ): AiGatewayOptions | undefined => {
-    // Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
-    // tags, which sit under the built-in correlation fields: the more specific
-    // the source, the later it wins.
-    const environmentTags = env === undefined ? undefined : readAiGatewayEnvTags(env);
-    const effectiveMetadata = environmentTags === undefined ? metadata : { ...metadata, tags: { ...environmentTags, ...metadata?.tags } };
-    const metadataFields = buildAiGatewayMetadataFields(effectiveMetadata);
+    const metadataFields = buildAiGatewayMetadataFields(metadata);
 
     if (gateway !== undefined) {
         return metadataFields !== undefined && gateway.metadata === undefined ? { ...gateway, metadata: metadataFields } : gateway;
@@ -44,7 +68,7 @@ const resolveGatewayOption = (
     // option has no authorization field — so `resolved.headers` (incl. any
     // `cf-aig-authorization`) is discarded here, and `resolveAiGateway` warns once
     // when an auth token was configured. See `AI_GATEWAY_TOKEN_ENV`.
-    const resolved = resolveAiGateway(env, effectiveMetadata, "workers-ai-binding");
+    const resolved = resolveAiGateway(env, metadata, "workers-ai-binding");
 
     if (resolved === undefined) {
         return undefined;
@@ -76,7 +100,7 @@ const resolveGatewayOption = (
  * @experimental
  */
 const createAi = (options: LunoraAiOptions): LunoraAi => {
-    const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider } = options;
+    const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider, telemetry } = options;
 
     if (!provider && !binding) {
         throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
@@ -87,7 +111,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // `gateway` wins; else an env-configured AI Gateway routes Workers AI through
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
     // Resolved once so the raw `ai.run()` path below routes through the same gateway.
-    const resolvedGateway = resolveGatewayOption(gateway, env, metadata);
+    const effectiveMetadata = withEnvironmentTags(env, metadata);
+    const resolvedGateway = resolveGatewayOption(gateway, env, effectiveMetadata);
+    // Catalog slugs carry the correlation fields per call, so a slug routed to the
+    // account's `default` gateway (no `LUNORA_AI_GATEWAY_ID`) is still attributed
+    // to its function and trace in the AI Gateway logs.
+    const gatewayMetadataFields = buildAiGatewayMetadataFields(effectiveMetadata);
 
     // The model defaults come from `env` when the caller did not pass them, for
     // the same reason the gateway does: the generated shard builds this facade as
@@ -99,23 +128,33 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // option still wins.
     const effectiveDefaultModel = defaultModel ?? readEnv(env, AI_DEFAULT_MODEL_ENV);
     const effectiveDefaultEmbeddingModel = defaultEmbeddingModel ?? readEnv(env, AI_DEFAULT_EMBEDDING_MODEL_ENV);
-    const workersai: WorkersAiProviderLike = provider ?? createWorkersAI({ binding: binding as AiBindingLike, gateway: resolvedGateway });
+    // `providers` routes `"<provider>/<model>"` slugs through AI Gateway over the
+    // same binding (Unified Billing, or keys stored on the gateway), defaulting to
+    // the account's `default` gateway when none is configured. `@cf/…` ids are
+    // unaffected.
+    const workersai: WorkersAiProviderLike =
+        provider ?? createWorkersAI({ binding: binding as AiBindingLike, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS });
+
+    const resolveModelId = (modelId: string): LanguageModel =>
+        isGatewayModelId(modelId) && gatewayMetadataFields !== undefined ? workersai(modelId, { metadata: gatewayMetadataFields }) : workersai(modelId);
 
     const model = (input?: ModelInput): LanguageModel => {
-        if (input === undefined) {
-            if (!effectiveDefaultModel) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `@lunora/ai: no model supplied and no default configured — pass a model id, or set ${AI_DEFAULT_MODEL_ENV} in the Worker env (wrangler \`vars\` / \`.dev.vars\`)`,
-                );
-            }
+        const requestedId = input ?? effectiveDefaultModel;
 
-            return workersai(effectiveDefaultModel);
+        if (requestedId === undefined || requestedId === "") {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/ai: no model supplied and no default configured — pass a model id, or set ${AI_DEFAULT_MODEL_ENV} in the Worker env (wrangler \`vars\` / \`.dev.vars\`)`,
+            );
         }
 
-        // A string is a Workers AI model id; anything else is an already-built
-        // AI SDK model from some provider — pass it straight through.
-        return typeof input === "string" ? workersai(input) : input;
+        // A string is a model id (Workers AI, or a gateway slug); anything else is
+        // an already-built AI SDK model from some provider — passed straight through.
+        if (typeof requestedId === "string") {
+            return instrumentModel(resolveModelId(requestedId), telemetry, requestedId);
+        }
+
+        return instrumentModel(requestedId, telemetry);
     };
 
     const resolveEmbeddingModel = (modelId: string): EmbeddingModel => {

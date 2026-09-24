@@ -14,7 +14,19 @@ export {
 } from "./gateway";
 export type { ModelPrice, ModelUsage } from "./pricing";
 export { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "./pricing";
-export type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+export type {
+    AiBindingLike,
+    AiGatewayOptions,
+    AiMetrics,
+    AiSpan,
+    AiTelemetry,
+    AiTracer,
+    EmbeddingModelInput,
+    LunoraAi,
+    LunoraAiOptions,
+    ModelInput,
+    WorkersAiProviderLike,
+} from "./types";
 
 // Re-export the AI SDK primitives apps reach for, so `@lunora/ai` is a single
 // import for the whole inference surface. These are provider-agnostic — pass
