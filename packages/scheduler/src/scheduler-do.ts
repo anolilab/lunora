@@ -931,6 +931,13 @@ class SchedulerDO {
 
             return;
         } finally {
+            // Cleared before the release below rather than after it, which leaves
+            // one storage op during which a `/cancel` cannot see the lease. That
+            // window is benign by construction: the attempt has already settled,
+            // so either the header is gone (a successful dispatch — `handleCancel`
+            // finds nothing to remove) or the record has been rewritten at its own
+            // retry/backpressure key, which `removeRecord` then derives correctly
+            // from the record it just read.
             this.activeLeases.delete(record.id);
         }
 
