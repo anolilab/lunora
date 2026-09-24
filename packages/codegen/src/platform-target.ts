@@ -121,9 +121,8 @@ const readTargetDiagnostics = (projectRoot: string, explicit?: string): Platform
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
  * entry per host package that ships a `PlatformCapabilities` — Cloudflare and
- * Node, both of which also ship a `@lunora/config` deploy driver, plus celld
- * (see `@lunora/platform-celld`), a spike host with no deploy story of its own
- * — celld apps deploy through `celld deploy`.
+ * Node, plus celld (see `@lunora/platform-celld`); each also has a
+ * `@lunora/config` deploy driver.
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
     celld: CELLD_CAPABILITIES,

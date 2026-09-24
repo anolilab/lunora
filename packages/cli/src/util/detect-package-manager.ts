@@ -7,4 +7,13 @@
  * there is one implementation, in `@lunora/config`.
  */
 export type { PackageManager, PackageManagerProbe } from "@lunora/config";
-export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand } from "@lunora/config";
+export {
+    addArgsFor,
+    detectInstalledManagers,
+    detectPackageManager,
+    execArgsFor,
+    installArgsFor,
+    runScriptArgsFor,
+    runScriptCommand,
+    toolchainExecArgs,
+} from "@lunora/config";

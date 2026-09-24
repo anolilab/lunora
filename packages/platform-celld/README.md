@@ -23,10 +23,30 @@ Ratings track **celld v0.5.1**. celld v0.3.0 shipped `state.storage.sql`, so the
 
 The rest are managed Cloudflare products celld has no binding for: Workers AI (and with it `defineAgent`, whose loop compiles onto celld's Workflows but has no model to call), Vectorize, Browser Rendering, Images, Analytics Engine, Pipelines, Hyperdrive, Secrets Store, plus the Cache API (an always-miss stub on celld) and Cloudflare Access. Codegen gates every one of them off for `target: "celld"` in `lunora.config.ts`, with a `platform_unsupported_feature` diagnostic naming the feature.
 
-Ratings derive from celld's documented compatibility surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld repo — both alpha), not from running the conformance TCK against a live fleet: celld is an external daemon plus an object store, which unit tests cannot stand up. celld's own rule is that an unsupported configuration or API must fail at deploy or first use, so its "Partial" ratings mean a listed set of gaps rather than silent degradation.
+## Using it
+
+Set the target once and the CLI drives celld's own tools:
+
+```ts
+// lunora.config.ts
+export default { target: "celld" };
+```
+
+- `lunora dev` runs codegen watch and the studio, and serves the worker with `celld dev` — even in a project on `@lunora/vite`, whose dev server runs the worker in workerd. Start the frontend's dev server separately.
+- `lunora deploy` runs the usual pipeline (codegen, schema-drift gate, binding reconcile, validation) and ships with `celld deploy`, which reads the fleet bucket from `CELLD_BUCKET` plus the standard AWS / GCS / Azure credential environment. `--dry-run`, `--preview`, `--env`, `--temporary` and `--outdir` are refused: celld has no equivalent.
+- Both commands hand celld a projection of `wrangler.jsonc`, written to `.celld.wrangler.json` beside it: celld refuses the Cloudflare-only keys Lunora writes (`observability`, `limits`, `version_metadata`, …), and the CLI names each one it leaves out. Add `.celld/` and `.celld.wrangler.json` to the app's `.gitignore`.
+- The `celld` binary is run from `PATH` (`curl -fsSL https://celld.dev/install.sh | sh`), never through `npx` / `bun x`; `celld deploy` also needs `esbuild` on `PATH`.
+- `lunora logs` and `lunora env push` refuse the target: celld has no log tail and no secret store — a deployed value lives in wrangler `vars`.
+- The worker entry must be a source file. A Vite virtual entry (`main: "virtual:lunora/worker"`) only exists inside a Vite build, and celld bundles from source with esbuild, so the projection refuses it; the `@lunora/vite` plugin likewise refuses its Cloudflare integration for this target (`lunora({ cloudflare: false })` keeps codegen and the studio).
+
+## Conformance
+
+`pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.5.1: 37 legs pass and 15 skip, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
+
+One difference from workerd surfaced: celld does not deliver a frame sent on an `acceptWebSocket` socket to a peer inside the same cell. Real clients get every frame, which a separate leg drives over the network (host sends, the wake-time socket id, tag fan-out); the engine harness records frames at the send boundary instead of reading them off an in-cell peer.
+
+Ratings derive from celld's documented compatibility surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld repo — all alpha), confirmed where the TCK reaches.
 
 ## Scope
 
-Not wired into `lunora dev`, and no `@lunora/config` deploy driver — deploying is celld's own flow (`celld deploy` bundles with esbuild and writes to the fleet bucket; nodes pick the deployment up from `deploy/current.json`, and `celld dev` runs a single node against a local SQLite object store). The package is gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`.
-
-Graduation checklist, in dependency order: run the `@lunora/platform/conformance` TCK against a live single-node fleet → add a `@lunora/config` deploy driver and `lunora dev --target celld`.
+Private and gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`. Before graduating: support apps whose worker is built by Vite (deploy the build output with `no_bundle`), and run the TCK against a multi-node fleet, which is where ownership moves and rebalancing live.

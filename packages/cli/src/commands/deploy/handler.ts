@@ -42,7 +42,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { detectPackageManager, execArgsFor, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { ExitCode } from "../../util/exit-code";
@@ -641,7 +641,7 @@ const provisionBindings = async (
  * never aborts the deploy; it does not prompt, so it's safe under
  * `--yes`/non-interactive flows.
  */
-const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
+const warnDevVariablesNotPushed = (cwd: string, logger: Logger, target: string): void => {
     const devVariablesPath = join(cwd, DEV_VARS_FILE);
 
     if (!existsSync(devVariablesPath)) {
@@ -661,9 +661,15 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
         return;
     }
 
+    const driver = resolveDeployDriver(target);
+
+    // `lunora env push` needs a secret store; celld has none, and only its dev
+    // server reads `.dev.vars` — a deployed value has to live in wrangler `vars`.
     logger.warn(
-        `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
-            `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
+        driver.toolchain?.secretPut === undefined
+            ? `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; put the values the deployed worker needs in wrangler \`vars\`.`
+            : `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
+                  `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
     );
 };
 
@@ -736,10 +742,11 @@ const pushMintableSecrets = async (
     const manager = detectPackageManager(cwd);
     const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
 
-    const { toolchain } = resolveDeployDriver(target);
+    const driver = resolveDeployDriver(target);
+    const secretPut = driver.toolchain?.secretPut;
 
-    if (toolchain === undefined) {
-        logger.error("deploy target has no command-line toolchain; cannot push secrets");
+    if (secretPut === undefined) {
+        logger.error(`deploy target "${driver.id}" has no secret store; cannot push secrets`);
 
         return { minted: [], ok: false };
     }
@@ -749,8 +756,8 @@ const pushMintableSecrets = async (
     for (const key of keys) {
         const value = generateSecretValue();
 
-        const secretCommand = toolchain.secretPut({ environment: options.env, key, temporary: options.temporary });
-        const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
+        const secretCommand = secretPut({ environment: options.env, key, temporary: options.temporary });
+        const exec = toolchainExecArgs(manager, secretCommand);
 
         // `wrangler secret put <name>` reads the value from stdin, so the value
         // never lands on the command line, in env, or in shell history.
@@ -1512,7 +1519,19 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     // wants done. Logging stays here because it is the CLI's voice, not the
     // driver's.
     const driver = resolveDeployDriver(target);
+
+    // A host with a strict config reader deploys a projection of wrangler.jsonc
+    // (celld refuses the Cloudflare-only keys Lunora's reconcilers write). Say
+    // what the projection left out: those keys configure nothing on that host,
+    // and an operator reading the Cloudflare config should not assume otherwise.
+    const projected = driver.projectConfig?.(cwd);
+
+    if (projected !== undefined && projected.dropped.length > 0) {
+        options.logger.warn(`${driver.name} ignores these wrangler keys, so they were left out of ${projected.configPath}: ${projected.dropped.join(", ")}`);
+    }
+
     const request = {
+        configPath: projected?.configPath,
         dryRun: options.dryRun,
         entry: composedEntry,
         environment: options.env,
@@ -1530,6 +1549,13 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     }
 
     return driver.toolchain.deploy(request);
+};
+
+/** Whether the deployed target has a log tail for the summary to point at. */
+const hasLogTail = (cwd: string, explicit: string | undefined): boolean => {
+    const { target } = resolveRunnableTargetOrError(cwd, explicit);
+
+    return target === undefined || resolveDeployDriver(target).toolchain?.tail !== undefined;
 };
 
 /**
@@ -1599,7 +1625,7 @@ const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: st
     const publishes = options.dryRun !== true;
 
     const deployCommand = buildDeployCommand(cwd, options, target);
-    const exec = execArgsFor(detectPackageManager(cwd), deployCommand.tool, deployCommand.args);
+    const exec = toolchainExecArgs(detectPackageManager(cwd), deployCommand);
 
     return {
         args: exec.args,
@@ -1851,7 +1877,9 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // The build half of the pre-deploy gates. The read-only checks already ran in
     // the shared pipeline; this pushes container images, so it no-ops on a dry
     // run (enforced inside `buildContainerImages`).
-    const buildError = await buildContainerImages(cwd, options);
+    // railpack builds and pushes to the Cloudflare registry; celld builds each
+    // container from its Dockerfile itself during `celld deploy`.
+    const buildError = target === "cloudflare" ? await buildContainerImages(cwd, options) : undefined;
 
     if (buildError !== undefined) {
         return abortResult(buildError);
@@ -1860,7 +1888,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
     // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
     // deployed worker with stale/missing secrets silently (Supabase #45242).
-    warnDevVariablesNotPushed(cwd, options.logger);
+    warnDevVariablesNotPushed(cwd, options.logger, target);
 
     // Detect required secrets not yet set on the target. Interactive: offer to
     // generate + push the mintable ones (provider keys flagged to set by hand).
@@ -1946,6 +1974,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
             logger: options.logger,
+            logsAvailable: hasLogTail(options.cwd ?? process.cwd(), options.target),
             mintedSecretsFile: result.mintedSecretsFile,
             // From the deploy that just ran, not the link file — the link can be
             // stale (or absent on a first deploy), and this run knows the truth.

@@ -535,13 +535,16 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * matrix.
  *
  * Ratings track celld **v0.5.1** and derive from its documented compatibility
- * surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld
- * repo, both alpha), not from running the conformance TCK against a live fleet
- * — celld is an external daemon plus an object store, which unit tests cannot
- * stand up. celld's own rule is that an unsupported configuration or API must
- * fail at deploy or first use, so "Partial" there means a listed set of gaps
- * rather than silent degradation; the gaps that bite Lunora are named per key
- * below.
+ * surface (`docs/cloudflare-compat.md`, `docs/services/*.md`,
+ * `docs/limitations.md` in the celld repo, all alpha). The host contracts
+ * behind `shardedState`, `localSql`, `shardAlarms`, `commitOrderedTables` and
+ * `websocketHibernation` are also exercised by the conformance TCK against a
+ * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project);
+ * the binding-backed ratings (D1, KV, R2, Queues, Workflows, Cron Triggers,
+ * Containers) rest on the docs alone. celld's own rule is that an unsupported
+ * configuration or API must fail at deploy or first use, so "Partial" there
+ * means a listed set of gaps rather than silent degradation; the gaps that bite
+ * Lunora are named per key below.
  *
  * v0.3.0 and v0.4.0 closed the blocker this matrix was first written around.
  * `state.storage.sql` is implemented, so the shard engine mounts and everything

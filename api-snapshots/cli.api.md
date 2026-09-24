@@ -204,6 +204,7 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    targetDev?: ToolchainCommand;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;

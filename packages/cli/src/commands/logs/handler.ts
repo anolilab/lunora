@@ -2,7 +2,7 @@ import { readLinkedProject, resolveDeployDriver } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -66,15 +66,17 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     const env = options.env ?? readLinkedProject(cwd)?.env;
     const driver = resolveDeployDriver(options.target);
 
-    if (driver.toolchain === undefined) {
-        const message = `logs: deploy target "${driver.id}" has no command-line toolchain`;
+    const tail = driver.toolchain?.tail;
+
+    if (tail === undefined) {
+        const message = `logs: deploy target "${driver.id}" has no log tail`;
 
         options.logger.error(message);
 
         return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message };
     }
 
-    const tailCommand = driver.toolchain.tail({
+    const tailCommand = tail({
         environment: env,
         format: options.format,
         search: options.search,
@@ -83,7 +85,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         worker: options.worker,
     });
 
-    const exec = execArgsFor(detectPackageManager(cwd), tailCommand.tool, tailCommand.args);
+    const exec = toolchainExecArgs(detectPackageManager(cwd), tailCommand);
     const descriptor: SpawnDescriptor = {
         args: exec.args,
         command: exec.command,
