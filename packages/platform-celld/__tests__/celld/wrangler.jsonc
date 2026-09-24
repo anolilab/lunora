@@ -1,0 +1,16 @@
+// The TCK worker `celld dev` runs for the `celld` vitest project. Not deployed
+// anywhere: it exists so celld can resolve the cell classes and their SQLite
+// migrations the way a Lunora app's config would.
+{
+    "name": "lunora-celld-tck",
+    "main": "tck-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "TCK", "class_name": "TckCell" },
+            { "name": "ECHO", "class_name": "EchoCell" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell"] }],
+}

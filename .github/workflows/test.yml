@@ -260,6 +260,62 @@
               "run": |
                   pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
 
+    # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
+    # live single-node celld (`@lunora/platform-celld`, project `celld`), gated
+    # behind LUNORA_CELLD_TESTS=1 for the workerd reasons: it needs the celld binary
+    # and localhost loopback, and contributes no coverage. The binary is a pinned
+    # release asset checked against its sha256 — the release publishes no checksum
+    # file or attestation of its own, so the pin is the integrity check. Bump
+    # CELLD_VERSION and CELLD_SHA256 together, alongside the ratings in
+    # CELLD_CAPABILITIES. With the gate on, a missing binary fails the spawn in
+    # `beforeAll`, so the job cannot go green having run nothing.
+    "test-celld":
+        "name": "celld integration (@lunora/platform-celld)"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "env":
+            "CELLD_VERSION": "v0.5.1"
+            "CELLD_SHA256": "b9f205da7365ef4a8b2e16f1f48065a8ddd5cda366edc258fea12a097d8ab4b7"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-celld"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Install celld"
+              "run": |
+                  curl -fsSL -o celld.gz "https://github.com/denoland/celld/releases/download/${CELLD_VERSION}/celld-x86_64-unknown-linux-gnu.gz"
+                  echo "${CELLD_SHA256}  celld.gz" | sha256sum --check --strict
+                  gunzip celld.gz
+                  install -m 0755 celld "${RUNNER_TEMP}/celld"
+                  echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=platform-celld"
+
+            - "name": "Run celld suites"
+              "env":
+                  "LUNORA_CELLD_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/platform-celld" run test --project celld
+
     # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
     # core renders for a `.global()` MySQL backend actually executes. mysqld comes
     # from `mysql-memory-server`, provisioned from npm like pglite and workerd
@@ -809,7 +865,7 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
+        "needs": ["files-changed", "test", "test-workerd", "test-celld", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

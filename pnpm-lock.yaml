@@ -566,6 +566,9 @@ catalogs:
     '@vitest/coverage-v8':
       specifier: 4.1.10
       version: 4.1.10
+    '@vitest/expect':
+      specifier: 4.1.10
+      version: 4.1.10
     fake-indexeddb:
       specifier: 6.2.5
       version: 6.2.5
@@ -3957,9 +3960,15 @@ importers:
         specifier: workspace:*
         version: link:../platform-cloudflare
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30)
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@types/node':
         specifier: catalog:types
         version: 26.4.1
@@ -3969,6 +3978,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
+      '@vitest/expect':
+        specifier: catalog:test
+        version: 4.1.10
       esbuild:
         specifier: catalog:build
         version: 0.28.2
