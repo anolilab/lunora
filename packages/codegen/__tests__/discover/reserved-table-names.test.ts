@@ -36,12 +36,14 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 
 describe("reservedTableNames", () => {
     // The drift gate. `_generated/shard.ts` assigns each table's facade onto the
-    // very object that carries the writer's flat methods
+    // very object that carries the writer's own members
     // (`facade[<table>] = bindTableFacade(db, <table>)`), so a member name that is
-    // also a table name is replaced by a `FacadeEntry` and every flat call to it
-    // throws. Restating the member list by hand is how six members ended up
-    // guarded and twenty-plus did not; this fails the moment the writer grows a
-    // member the set does not name.
+    // also a table name is overwritten by a `FacadeEntry`. Most members are
+    // methods, so the usual symptom is a flat call throwing — but not all are:
+    // `relationEdges` is array metadata, and it breaks by reading as the wrong
+    // value rather than by throwing. Restating the member list by hand is how six
+    // members ended up guarded and twenty-plus did not; this fails the moment the
+    // writer grows a member the set does not name.
     it("covers every member of DatabaseWriterLike", () => {
         expect.assertions(1);
 
@@ -73,6 +75,6 @@ describe("reservedTableNames", () => {
             });
         `);
 
-        expect(() => discoverSchema(project, schemaPath)).toThrow(/ctx\.db\.count\(\)/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/ctx\.db\.count\b/u);
     });
 });

@@ -167,7 +167,7 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
     if (RESERVED_TABLE_NAMES.has(unquoted)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own methods, so this table would replace \`ctx.db.${unquoted}()\` and every flat call to it would throw. Rename the table.`,
+            `table name "${unquoted}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own members, so this table would overwrite \`ctx.db.${unquoted}\` and every use of it would break. Rename the table.`,
         );
     }
 
