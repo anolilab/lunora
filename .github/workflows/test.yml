@@ -268,7 +268,10 @@
     # file or attestation of its own, so the pin is the integrity check. Bump
     # CELLD_VERSION and CELLD_SHA256 together, alongside the ratings in
     # CELLD_CAPABILITIES. With the gate on, a missing binary fails the spawn in
-    # `beforeAll`, so the job cannot go green having run nothing.
+    # `beforeAll`, so the job cannot go green having run nothing. The two-node
+    # fleet test needs an S3-compatible bucket; moto's server provides one (it
+    # implements the conditional writes celld's ownership records depend on),
+    # and on CI a missing endpoint fails the test rather than skipping it.
     "test-celld":
         "name": "celld integration (@lunora/platform-celld)"
         "if": "needs.files-changed.outputs.packages == 'true'"
@@ -278,6 +281,7 @@
         "env":
             "CELLD_VERSION": "v0.5.1"
             "CELLD_SHA256": "b9f205da7365ef4a8b2e16f1f48065a8ddd5cda366edc258fea12a097d8ab4b7"
+            "MOTO_VERSION": "5.2.3"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -306,6 +310,14 @@
                   install -m 0755 celld "${RUNNER_TEMP}/celld"
                   echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
 
+            - "name": "Start an S3-compatible endpoint for the fleet test"
+              "run": |
+                  pipx install "moto[server]==${MOTO_VERSION}"
+                  moto_server -p 19000 > "${RUNNER_TEMP}/moto.log" 2>&1 &
+                  for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:19000/ && exit 0; sleep 1; done
+                  cat "${RUNNER_TEMP}/moto.log" >&2
+                  exit 1
+
             - "name": "Build package and dependencies"
               "run": |
                   pnpm exec vis run build --query "project=platform-celld"
@@ -313,6 +325,7 @@
             - "name": "Run celld suites"
               "env":
                   "LUNORA_CELLD_TESTS": "1"
+                  "LUNORA_CELLD_S3_ENDPOINT": "http://127.0.0.1:19000"
               "run": |
                   pnpm --filter "@lunora/platform-celld" run test --project celld
 

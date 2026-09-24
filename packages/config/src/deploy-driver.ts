@@ -133,6 +133,9 @@ export interface DriverToolchain {
     tail?: (request: TailRequest) => ToolchainCommand;
 }
 
+/** What a {@link DeployDriver.projectConfig} projection is for — a dev server may need a different source than a deploy. */
+export type ProjectionPurpose = "deploy" | "dev";
+
 /** The result of {@link DeployDriver.projectConfig}. */
 export interface ProjectedConfig {
     /** The projected config file, to pass as the request's `configPath`. */
@@ -160,7 +163,7 @@ export interface DeployDriver {
      * so the caller can say so instead of silently deploying less than the
      * config describes.
      */
-    readonly projectConfig?: (projectRoot: string) => ProjectedConfig;
+    readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
 
     /**
      * The host's command-line surface, or `undefined` for a host that has none.

@@ -6,7 +6,9 @@ const CELLD_TESTS = ["__tests__/celld/**/*.test.ts"];
 
 /**
  * `unit` always runs. `celld` — the conformance suites against a live
- * single-node celld (`__tests__/celld/celld-tck.test.ts`) — is gated behind
+ * single-node celld (`__tests__/celld/celld-tck.test.ts`), and a two-node
+ * fleet over an S3-compatible endpoint (`celld-fleet.test.ts`, which needs
+ * `LUNORA_CELLD_S3_ENDPOINT`) — is gated behind
  * `LUNORA_CELLD_TESTS=1` for the reasons the `workerd` projects are gated: it
  * needs the `celld` binary and unrestricted localhost loopback, neither of
  * which a sandboxed runner has, and it contributes no v8 coverage (the code
@@ -38,10 +40,12 @@ const celld = {
         // `extends: true` concatenates the root `include`, so the unit files
         // have to be excluded explicitly or this project runs them again.
         exclude: [...configDefaults.exclude, "__tests__/*.test.ts"],
-        // Booting celld and bundling the TCK worker takes a few seconds cold.
+        // Booting celld and bundling the TCK worker takes a few seconds cold,
+        // and the fleet test waits out a dead owner's lease (~10 s) to take over.
         hookTimeout: 120_000,
         include: CELLD_TESTS,
         name: "celld",
+        testTimeout: 120_000,
     },
 };
 

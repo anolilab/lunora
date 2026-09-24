@@ -1524,7 +1524,7 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     // (celld refuses the Cloudflare-only keys Lunora's reconcilers write). Say
     // what the projection left out: those keys configure nothing on that host,
     // and an operator reading the Cloudflare config should not assume otherwise.
-    const projected = driver.projectConfig?.(cwd);
+    const projected = driver.projectConfig?.(cwd, "deploy");
 
     if (projected !== undefined && projected.dropped.length > 0) {
         options.logger.warn(`${driver.name} ignores these wrangler keys, so they were left out of ${projected.configPath}: ${projected.dropped.join(", ")}`);

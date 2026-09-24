@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,10 +122,26 @@ describe(projectCelldConfig, () => {
         );
     });
 
-    it("refuses a Vite virtual entry, which esbuild has no file for", () => {
+    it("drops module rules celld's bundler has no loader for", () => {
+        expect.assertions(2);
+
+        const { config, dropped } = projectCelldConfig({
+            rules: [
+                { globs: ["**/*.js"], type: "ESModule" },
+                { globs: ["**/*.txt"], type: "Text" },
+            ],
+        });
+
+        expect(config["rules"]).toStrictEqual([{ globs: ["**/*.txt"], type: "Text" }]);
+        expect(dropped).toStrictEqual(["rules[0]"]);
+    });
+
+    // A key celld refuses but whose value configures nothing is dropped without
+    // a report — otherwise every Vite build's generated defaults flood it.
+    it("does not report dropping a key that configures nothing", () => {
         expect.assertions(1);
 
-        expect(() => projectCelldConfig({ main: "virtual:lunora/worker" })).toThrow(/Vite virtual module/u);
+        expect(projectCelldConfig({ send_email: [], vectorize: [] }).dropped).toStrictEqual([]);
     });
 });
 
@@ -147,7 +163,7 @@ describe("celld config projection on disk", () => {
 
         writeFileSync(join(root, "wrangler.jsonc"), `{\n    // comment\n    "main": "src/server.ts",\n    "observability": { "enabled": true },\n}\n`, "utf8");
 
-        const projected = resolveDeployDriver("celld").projectConfig?.(root);
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
 
         expect(projected?.configPath).toBe(join(root, ".celld.wrangler.json"));
         expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toStrictEqual({ main: "src/server.ts" });
@@ -156,6 +172,80 @@ describe("celld config projection on disk", () => {
     it("says where celld deploys from when there is no wrangler config", () => {
         expect.assertions(1);
 
-        expect(() => resolveDeployDriver("celld").projectConfig?.(root)).toThrow(/no wrangler.jsonc or wrangler.json/u);
+        expect(() => resolveDeployDriver("celld").projectConfig?.(root, "deploy")).toThrow(/no wrangler.jsonc or wrangler.json/u);
+    });
+
+    /** A project on `@lunora/vite` after `vite build`: the plugin's output plus its deploy redirect. */
+    const writeViteBuild = (assetsIgnore = "wrangler.json\n.dev.vars\n"): void => {
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "virtual:lunora/worker", name: "app", observability: { enabled: true } }), "utf8");
+        mkdirSync(join(root, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(root, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }), "utf8");
+        mkdirSync(join(root, "dist", "server"), { recursive: true });
+        mkdirSync(join(root, "dist", "client"), { recursive: true });
+        writeFileSync(join(root, "dist", "client", ".assetsignore"), assetsIgnore, "utf8");
+        writeFileSync(
+            join(root, "dist", "server", "wrangler.json"),
+            JSON.stringify({
+                assets: { directory: "../client" },
+                jsx_factory: "React.createElement",
+                main: "index.js",
+                name: "app",
+                no_bundle: true,
+                observability: { enabled: true },
+                rules: [{ globs: ["**/*.js"], type: "ESModule" }],
+                vectorize: [],
+            }),
+            "utf8",
+        );
+    };
+
+    // The assets sit in a sibling of the server bundle, and celld wants every
+    // path inside the config's directory — so the projection lands in the
+    // build's output root with both paths rebased onto it.
+    it("deploys a Vite-built worker from its build output", () => {
+        expect.assertions(4);
+
+        writeViteBuild();
+
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
+
+        expect(projected?.configPath).toBe(join(root, "dist", ".celld.wrangler.json"));
+        expect(JSON.parse(readFileSync(join(root, "dist", ".celld.wrangler.json"), "utf8"))).toStrictEqual({
+            assets: { directory: "client" },
+            main: "server/index.js",
+            name: "app",
+            rules: [],
+        });
+        // Only what the project configured, plus what the projection did to the build.
+        expect(projected?.dropped).toStrictEqual(["observability", "no_bundle (celld re-bundles the build output)", "client/.assetsignore (matched no files)"]);
+        expect(existsSync(join(root, "dist", "client", ".assetsignore"))).toBe(false);
+    });
+
+    it("keeps an .assetsignore that is hiding something, and stops instead", () => {
+        expect.assertions(2);
+
+        writeViteBuild("secret.txt\n");
+        writeFileSync(join(root, "dist", "client", "secret.txt"), "x", "utf8");
+
+        expect(() => resolveDeployDriver("celld").projectConfig?.(root, "deploy")).toThrow(/hides secret.txt/u);
+        expect(existsSync(join(root, "dist", "client", ".assetsignore"))).toBe(true);
+    });
+
+    it("asks for a build when a Vite-built worker has none yet", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "virtual:lunora/worker" }), "utf8");
+
+        expect(() => resolveDeployDriver("celld").projectConfig?.(root, "deploy")).toThrow(/Run the project's build/u);
+    });
+
+    // `celld dev` watches and rebuilds from source; serving a stale build
+    // output as a dev server would be worse than saying so.
+    it("refuses a dev server for a Vite-built worker", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+
+        expect(() => resolveDeployDriver("celld").projectConfig?.(root, "dev")).toThrow(/`celld dev` rebuilds from a source file/u);
     });
 });
