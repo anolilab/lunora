@@ -31,13 +31,17 @@ interface ErasedReturn {
 let erased: ErasedReturn[] = [];
 
 /**
- * Whether the validator being parsed is a procedure's `.output(...)`. The
- * `v.from(...)` resolver runs for table fields and `.input(...)` too, where an
- * erasure is not a RETURN type and must not be reported as one. A flag rather
- * than an ancestor walk because `.output(sharedSchema)` resolves an identifier:
- * the `v.from` node then sits under a `const`, nowhere near the `.output` call.
+ * The `.output(...)` call whose validator is being parsed, or `undefined` outside
+ * one. The `v.from(...)` resolver runs for table fields and `.input(...)` too,
+ * where an erasure is not a RETURN type and must not be reported as one.
+ *
+ * Carried as context rather than found by an ancestor walk because
+ * `.output(sharedSchema)` resolves an identifier: the `v.from` node then sits
+ * under the shared `const`, nowhere near the procedure. Recording against that
+ * node would name the schema, not the procedure, and fold every procedure sharing
+ * it into one finding — so the record anchors here instead.
  */
-let parsingOutput = false;
+let outputSite: TsNode | undefined;
 
 /**
  * The nearest enclosing variable binding — `export const getDoc = query…` — so
@@ -72,25 +76,26 @@ const recordErasedReturn = (node: TsNode, rendered: string): void => {
 };
 
 /**
- * Record that a `v.from(...)` schema's output type erased — but only while
- * {@link parseOutput} is running, since only there is it a return type.
+ * Record that a `v.from(...)` schema's output type erased — against the
+ * `.output(...)` call {@link parseOutput} is parsing, and only then, since only
+ * there is it a return type.
  */
-const recordErasedOutput = (node: TsNode, rendered: string): void => {
-    if (parsingOutput) {
-        recordErasedReturn(node, rendered);
+const recordErasedOutput = (rendered: string): void => {
+    if (outputSite !== undefined) {
+        recordErasedReturn(outputSite, rendered);
     }
 };
 
-/** Run `parse` over a procedure's `.output(...)` validator, so its erasures are reported. */
-const parseOutput = <T>(parse: () => T): T => {
-    const previous = parsingOutput;
+/** Run `parse` over the validator of the `.output(...)` call `site`, so its erasures are reported there. */
+const parseOutput = <T>(site: TsNode, parse: () => T): T => {
+    const previous = outputSite;
 
-    parsingOutput = true;
+    outputSite = site;
 
     try {
         return parse();
     } finally {
-        parsingOutput = previous;
+        outputSite = previous;
     }
 };
 

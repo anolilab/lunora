@@ -135,7 +135,7 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
             const argument = node.getArguments()[0];
 
             if (argument && Node.isExpression(argument)) {
-                state.output = parseOutput(() => parseValidator(argument));
+                state.output = parseOutput(node, () => parseValidator(argument));
             }
         }
 

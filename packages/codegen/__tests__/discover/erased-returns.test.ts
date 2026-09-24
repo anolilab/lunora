@@ -63,6 +63,25 @@ const RECURSIVE_OUTPUT = `
 `;
 
 /**
+ * One unreproducible schema declared once and shared by two procedures' outputs.
+ * The `v.from` node lives in the shared `const`, so a record anchored there named
+ * `sharedTree` and merged both procedures into one finding.
+ */
+const SHARED_OUTPUT = `
+    import { query, v } from "@lunora/server";
+
+    interface Tree { value: string; child: Tree }
+
+    declare const treeSchema: { readonly "~standard": { readonly version: 1; readonly vendor: "probe"; readonly types?: { input: Tree; output: Tree } | undefined } };
+
+    const sharedTree = v.from(treeSchema);
+
+    export const firstTree = query.input({}).output(sharedTree).query(async () => null as never);
+
+    export const secondTree = query.input({}).output(sharedTree).query(async () => null as never);
+`;
+
+/**
  * The same unreproducible schema as an ARGUMENT. `v.from(…)` resolves through one
  * resolver wherever it appears, but an erased input is not a return type and was
  * reported as one.
@@ -131,6 +150,14 @@ describe("procedure_return_type_erased", () => {
         const findings = advisoriesFor({ "declared.ts": RECURSIVE_OUTPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getDeclaredTree"]);
+    }, 300_000);
+
+    it("reports a shared `.output(schema)` once per procedure that uses it", () => {
+        expect.assertions(1);
+
+        const findings = advisoriesFor({ "shared.ts": SHARED_OUTPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["firstTree", "secondTree"]);
     }, 300_000);
 
     it("does not report a `v.from(…)` that erased in `.input(…)`", () => {

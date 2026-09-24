@@ -101,7 +101,7 @@ const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
 
     const argument = step.call.getArguments()[0];
 
-    return argument && Node.isExpression(argument) ? parseOutput(() => parseValidator(argument)) : undefined;
+    return argument && Node.isExpression(argument) ? parseOutput(step.call, () => parseValidator(argument)) : undefined;
 };
 
 export { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall };

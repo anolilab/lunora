@@ -56,7 +56,7 @@ const resolveStandardSchemaType = (node: Node): string | undefined => {
         // a declared output type was dropped (issue #810). Only reported for
         // `.output(...)`; the same schema in a table or `.input(...)` is no return.
         if (expanded === undefined) {
-            recordErasedOutput(node, rendered);
+            recordErasedOutput(rendered);
         }
 
         return expanded;
