@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.206...@lunora/codegen@1.0.0-alpha.207) (2026-09-24)
+
+### Bug Fixes
+
+* **codegen:** expand only names the checker prints bare ([#811](https://github.com/anolilab/lunora/issues/811)) ([b887e4e](https://github.com/anolilab/lunora/commit/b887e4e9299c2d6cc9ee54779f47c8c56a2b9d88))
+
 ## @lunora/codegen [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.205...@lunora/codegen@1.0.0-alpha.206) (2026-09-24)
 
 
