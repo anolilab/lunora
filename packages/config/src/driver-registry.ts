@@ -15,6 +15,7 @@
  * the wrong provider — the one failure mode this resolution must never have.
  */
 
+import CELLD_DRIVER from "./celld/celld-driver";
 import CLOUDFLARE_DRIVER from "./cloudflare/cloudflare-driver";
 import type { DeployDriver } from "./deploy-driver";
 import NODE_DRIVER from "./node/node-driver";
@@ -27,6 +28,7 @@ const DEFAULT_DEPLOY_TARGET = "cloudflare";
  * driver; other targets land as their per-target platform packages do.
  */
 const DEPLOY_DRIVERS: Readonly<Record<string, DeployDriver>> = {
+    celld: CELLD_DRIVER,
     cloudflare: CLOUDFLARE_DRIVER,
     node: NODE_DRIVER,
 };

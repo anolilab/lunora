@@ -21,7 +21,7 @@ import {
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -313,19 +313,20 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     for (const entry of map.values()) {
         // The toolchain is the target's, not always wrangler's — resolving from the
         // project keeps a non-default target from shelling out to the wrong CLI.
-        const secretCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.secretPut({
+        const driver = resolveDeployDriver(resolveProjectTarget(cwd));
+        const secretCommand = driver.toolchain?.secretPut?.({
             environment,
             key: entry.key,
             temporary: options.temporary,
         });
 
         if (secretCommand === undefined) {
-            logger.error("deploy target has no command-line toolchain; cannot push secrets");
+            logger.error(`deploy target "${driver.id}" has no secret store; cannot push secrets`);
 
             return { code: EXIT_CODE.USAGE, descriptors: [] };
         }
 
-        const exec = execArgsFor(manager, secretCommand.tool, secretCommand.args);
+        const exec = toolchainExecArgs(manager, secretCommand);
         const descriptor: SpawnDescriptor = {
             args: exec.args,
             command: exec.command,

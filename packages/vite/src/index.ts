@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { isRunnableTarget, resolveDeployDriver, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -90,6 +90,17 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     }
 
     const projectRoot = input.projectRoot ?? process.cwd();
+    const target = resolveRunnableTargetOrThrow(projectRoot, input.target);
+
+    // `@cloudflare/vite-plugin` serves the worker in workerd and builds it for
+    // Cloudflare. A host that ships from its own config projection (celld)
+    // deploys neither artifact, so composing it would serve and build the app
+    // for the wrong runtime while the target says otherwise.
+    if (cloudflareOption !== false && resolveDeployDriver(target).projectConfig !== undefined) {
+        throw new Error(
+            `target "${target}" runs on its own runtime, not through @cloudflare/vite-plugin — set \`lunora({ cloudflare: false })\` and serve the worker with \`lunora dev\`, ship it with \`lunora deploy\``,
+        );
+    }
 
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
@@ -111,7 +122,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         // `lunora.config.*`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
         // fails here rather than emitting the default surface silently.
-        target: resolveRunnableTargetOrThrow(projectRoot, input.target),
+        target,
         validateWrangler: input.validateWrangler ?? true,
     };
 };

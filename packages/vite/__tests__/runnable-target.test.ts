@@ -31,6 +31,16 @@ describe("lunora() — runnable target guard", () => {
         expect(() => lunora({ target: "node" })).toThrow(new RegExp(runnable.join(", ")));
     });
 
+    // celld is runnable, but on its own runtime: composing
+    // `@cloudflare/vite-plugin` would serve the app in workerd and build a
+    // Cloudflare artifact celld never deploys.
+    it("refuses the Cloudflare integration for celld, and allows the plugin without it", () => {
+        expect.assertions(2);
+
+        expect(() => lunora({ target: "celld" })).toThrow(/cloudflare: false/);
+        expect(() => lunora({ cloudflare: false, target: "celld" })).not.toThrow();
+    });
+
     it("accepts a target that can actually be built", () => {
         expect.assertions(1);
 

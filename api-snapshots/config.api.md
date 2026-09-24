@@ -319,6 +319,7 @@ const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 interface DeployDriver {
     readonly id: string;
     readonly name: string;
+    readonly projectConfig?: (projectRoot: string) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -327,6 +328,7 @@ interface DeployDriver {
 
 ```ts
 interface DeployRequest {
+    configPath?: string;
     dryRun?: boolean;
     entry?: string;
     environment?: string;
@@ -476,9 +478,9 @@ interface DockerLike {
 interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     dev: (request: DevRequest) => ToolchainCommand;
-    secretList: (request: SecretRequest) => ToolchainCommand;
-    secretPut: (request: SecretRequest) => ToolchainCommand;
-    tail: (request: TailRequest) => ToolchainCommand;
+    secretList?: (request: SecretRequest) => ToolchainCommand;
+    secretPut?: (request: SecretRequest) => ToolchainCommand;
+    tail?: (request: TailRequest) => ToolchainCommand;
 }
 ```
 
@@ -841,6 +843,15 @@ interface PostCodegenHookResult {
 }
 ```
 
+### `ProjectedConfig` (interface)
+
+```ts
+interface ProjectedConfig {
+    configPath: string;
+    dropped: ReadonlyArray<string>;
+}
+```
+
 ### `ROOT_SKILL_NAME` (const)
 
 ```ts
@@ -1000,6 +1011,7 @@ interface TailRequest {
 ```ts
 interface ToolchainCommand {
     args: ReadonlyArray<string>;
+    onPath?: boolean;
     tool: string;
 }
 ```
@@ -1551,6 +1563,15 @@ const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[]
 const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
 ```
 
+### `toolchainExecArgs` (const)
+
+```ts
+const toolchainExecArgs: (manager: PackageManager, command: ToolchainCommand) => {
+    args: string[];
+    command: string;
+};
+```
+
 ### `updateDevServerState` (const)
 
 ```ts
@@ -1646,7 +1667,9 @@ interface BindingRequirement {
 ### `CLOUDFLARE_DRIVER` (const)
 
 ```ts
-const CLOUDFLARE_DRIVER: DeployDriver;
+const CLOUDFLARE_DRIVER: DeployDriver & {
+    readonly toolchain: Required<DriverToolchain>;
+};
 ```
 
 ### `ExportGap` (interface)

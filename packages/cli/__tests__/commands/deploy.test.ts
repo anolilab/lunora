@@ -219,6 +219,45 @@ describe("lunora deploy", () => {
 
                 expect(result.code).toBe(0);
             });
+
+            // celld refuses the Cloudflare-only keys the reconciler writes (it
+            // always adds `observability`), so the deploy must hand celld the
+            // projection — and run the `celld` binary itself, never through
+            // `pnpm exec` / `npx --`, which would resolve an npm package instead.
+            it("ships a celld-target app with `celld deploy` on the projected config", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result.code).toBe(0);
+                expect(calls.map((call) => [call.descriptor.command, ...call.descriptor.args])).toStrictEqual([
+                    ["celld", "deploy", join(workdir, ".celld.wrangler.json")],
+                ]);
+
+                const projected = JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8")) as Record<string, unknown>;
+
+                expect(projected["observability"]).toBeUndefined();
+                expect(projected["durable_objects"]).toBeDefined();
+                expect(warns.some((message) => message.includes("observability"))).toBe(true);
+            });
+
+            it("refuses --dry-run for celld instead of publishing", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await expect(runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" })).rejects.toThrow(
+                    /celld deploy` has no dry run/u,
+                );
+            });
         });
 
         it("--dry-run leaves the committed wrangler.jsonc byte-identical", async () => {

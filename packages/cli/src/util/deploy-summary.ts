@@ -18,6 +18,9 @@ interface DeploySummaryInputs {
     env?: string;
     logger: Logger;
 
+    /** Whether the target has a log tail — `lunora logs` refuses one without (celld). */
+    logsAvailable?: boolean;
+
     /**
      * The `.dev.vars`-shaped filename (never a value) a secret minted during
      * this deploy was recorded into, if any — surfaced here too because the
@@ -71,7 +74,9 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
             logger.info(`  secrets: generated value(s) recorded in ${mintedSecretsFile}`);
         }
 
-        logger.info("  logs:    lunora logs");
+        if (inputs.logsAvailable !== false) {
+            logger.info("  logs:    lunora logs");
+        }
     } catch {
         // A cosmetic summary must never fail an otherwise-successful deploy.
     }
