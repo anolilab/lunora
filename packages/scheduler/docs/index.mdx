@@ -236,3 +236,46 @@ A **cron trigger** takes a different route: the worker's `scheduled()` handler
 dispatches it straight to the shard, without touching the `SchedulerDO`. So the
 retry ladder, backoff, and dead-letter park above apply to `runAfter`/`runAt`
 jobs only — a failed cron tick is logged as `CRON_JOB_FAILED` and not retried.
+
+## Delivery guarantee
+
+**A scheduled job is delivered at least once.** That is the contract the retry
+ladder and the dead-letter park are built on, and it means a job can run more
+than once. There are two ways it happens, and they are not equally forgiving.
+
+**A retry after a failed attempt** is the ordinary one. The attempt is over
+before the next begins, so the record id — which rides to the shard as the
+replay-dedup key, and to Cloudflare Workflows as the instance id — finds the
+previous attempt's mark already in place. A `mutation` short-circuits to its
+cached result, a `workflow` re-attaches to the instance it already created, and
+an `action` short-circuits too.
+
+**A re-delivery that overlaps a live attempt** is the hard one, and it comes
+from exactly one source: the Durable Object that owns the schedule being evicted
+or crashing while a dispatch is open. Here the three kinds diverge.
+
+| Target             | Overlapping re-delivery                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `mutation`         | Runs once. The dedup read holds the shard's single-writer gate.          |
+| `workflow` / agent | Runs once. The record id is the instance id; a second create is a no-op. |
+| `action`           | **Can run twice, concurrently.** See below.                              |
+
+An action is dispatched without the shard's single-writer gate — taking it would
+let any caller freeze a whole shard for the length of an action's outbound I/O —
+and its dedup row is written only once the handler returns. A second delivery
+that arrives while the first is still running therefore finds nothing to dedup
+against and runs the handler again, alongside it.
+
+The scheduler narrows that window rather than leaving it open: a claimed job
+stays reserved for **15 minutes** before another instance may fire it, which is
+the platform's own ceiling on how long a dispatch this scheduler started can
+still be open (an alarm invocation, and the fetch it owns, are torn down at that
+mark). The cost is at the other edge: a job whose instance genuinely died waits
+out that reservation before it is retried. It is delayed, never dropped.
+
+<Callout type="warn">
+    **A scheduled `action` must be idempotent if it can run past 15 minutes**, or it must mark its own completion — a row it writes first and checks on entry, a
+    provider-side idempotency key, anything that makes a second concurrent run a no-op. Nothing below the handler can see that a handler has outlived the
+    request that started it. This is the same ceiling `exec` documents for container commands, and one more reason to move genuinely long jobs to
+    `createQueueWorkpool` + `createQueueConsumer`.
+</Callout>

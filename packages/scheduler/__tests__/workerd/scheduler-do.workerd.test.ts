@@ -210,6 +210,73 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
+    it("holds a lease on a claimed record's time index for the whole dispatch", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-held");
+
+        await seedDue(stub, 2, "leased");
+
+        await runInDurableObject(stub, async (instance, state) => {
+            const startedAt = Date.now();
+
+            await instance.alarm();
+
+            // Sampled from REAL Durable Object storage from inside each open
+            // dispatch — the instant an eviction would strike. Before the lease
+            // the claim deleted the entry outright, so this was `[]` and the
+            // record was an orphan a successor re-fired on sight.
+            expect(instance.indexDuringDispatch).toHaveLength(2);
+
+            for (const sample of instance.indexDuringDispatch) {
+                expect(sample.keys).toHaveLength(1);
+
+                const armedFor = Number.parseInt((sample.keys[0] as string).slice(2, 17), 10);
+
+                // Comfortably in the future: a successor cannot pick the record
+                // up until the horizon passes.
+                expect(armedFor).toBeGreaterThan(startedAt + 60_000);
+            }
+
+            // And a dispatched record leaves nothing behind once the drain settles.
+            const rows = await state.storage.list({ prefix: "t:" });
+
+            expect(rows.size).toBe(0);
+
+            const alarm = await state.storage.getAlarm();
+
+            expect(alarm).toBeNull();
+        });
+    });
+
+    it("drops the lease on a failed dispatch so the retry backoff owns the clock", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-released");
+
+        await seedDue(stub, 1, "failing");
+
+        await runInDurableObject(stub, async (instance, state) => {
+            instance.setDispatchOk(false);
+
+            const startedAt = Date.now();
+
+            await instance.alarm();
+
+            const rows = await state.storage.list<string>({ prefix: "t:" });
+
+            // Exactly one entry, and it is the retry's, not the lease's — a
+            // surviving lease would give every failed job a second index row and
+            // fire it again at the horizon.
+            expect(rows.size).toBe(1);
+
+            const armedFor = Number.parseInt([...rows.keys()][0]!.slice(2, 17), 10);
+
+            expect(armedFor).toBeLessThan(startedAt + 60_000);
+            await expect(state.storage.get("retry:failing-0")).resolves.toBeDefined();
+        });
+    });
+
     it("/dead answers a bounded page and its cursor walks the rest", async () => {
         expect.hasAssertions();
 
