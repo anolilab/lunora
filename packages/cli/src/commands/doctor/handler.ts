@@ -13,6 +13,7 @@ import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
+import checkAi from "./ai-checks";
 import type { DoctorOptions } from "./index";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -30,6 +31,9 @@ type FindingLevel = "fail" | "info" | "pass" | "warn";
 const DOCTOR_CODES = [
     "admin-token-missing",
     "admin-token-set",
+    "ai-binding-missing",
+    "ai-gateway-default",
+    "ai-gateway-token-unused",
     "cli-shadowed",
     "cpu-limit-missing",
     "d1-placeholder-id",
@@ -451,7 +455,7 @@ const checkAdminToken = (cwd: string, findings: Finding[]): void => {
  * no workflow to run. `collectExportGaps` covers all three from one place, so a
  * fourth kind cannot be added to inference and silently skipped here.
  */
-const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<void> => {
+const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<Awaited<ReturnType<typeof inferLunoraBindings>> | undefined> => {
     let inferred: Awaited<ReturnType<typeof inferLunoraBindings>>;
 
     try {
@@ -470,7 +474,7 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
             message: `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ${error instanceof Error ? error.message : String(error)}`,
         });
 
-        return;
+        return undefined;
     }
 
     const gaps = collectExportGaps(inferred);
@@ -498,6 +502,8 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
             message: `${gap.kind} "${gap.exportName}" is declared but ${gap.className} is not exported by the worker entry.`,
         });
     }
+
+    return inferred;
 };
 
 /** A parsed `1.0.0-alpha.31`-style Lunora version. `channel` is `""` for a stable release. */
@@ -717,7 +723,12 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkVectorMetadataIndexes(cwd, findings);
     checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
-    await checkDeclaredExports(cwd, findings);
+
+    const inferred = await checkDeclaredExports(cwd, findings);
+
+    // Reuses the inference above rather than scanning the source twice; a
+    // failed scan already reported `declared-export-unchecked`.
+    checkAi(parsed, inferred?.usesAi === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };
 

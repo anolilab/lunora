@@ -64,6 +64,8 @@ lunora analyze [--format json]          # wrangler dry-run: bundle size + top mo
 lunora containers <build|push|images|list|info|delete> [args…]
             [--tag <name:tag>] [--push] [--env <n>]
             [--format json]             #   json: list | info | images list
+lunora ai gateway [--id <id>]           # create/reuse a Cloudflare AI Gateway, write its id to vars
+            [--no-logs] [--dry-run] [--format json]
 
 # Data
 lunora logs [worker]                    # stream live Worker logs via wrangler tail
@@ -311,6 +313,10 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
   release channels (e.g. stable + alpha).
 - **CLI shadowing**: a globally-installed `lunora` running instead of the
   project's own, so the report describes a project this CLI is not pinned to.
+- **AI**: a project using `ctx.ai` with no `ai` binding, a
+  `LUNORA_AI_GATEWAY_TOKEN` with no gateway id to send it to, and (info) no
+  `LUNORA_AI_GATEWAY_ID`, which leaves `<provider>/<model>` slugs on the
+  account's `default` gateway.
 
 ```bash
 lunora doctor
@@ -356,6 +362,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
 | `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                |
 | `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                        |
+| `ai-binding-missing`             | warn  | The project uses `ctx.ai` but wrangler.jsonc declares no `ai` binding.              |
+| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` in vars; slugs route through the `default` AI Gateway.    |
+| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set in vars without a gateway id, so it is unused.     |
 | `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                              |
 | `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                               |
 | `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                |
@@ -1169,6 +1178,45 @@ lunora containers images delete transcoder:v1
 Registry in the same step. `--env` selects the Cloudflare environment. See
 [@lunora/container](/docs/packages/container) for declaring containers in the
 first place.
+
+### `lunora ai`
+
+`ctx.ai.model("<provider>/<model>")` (for example `"anthropic/claude-sonnet-5"`)
+routes through [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
+over the Workers `AI` binding. The gateway is the one named by
+`LUNORA_AI_GATEWAY_ID` in the Worker's `vars`; without it, calls go through the
+account's auto-created `default` gateway. `lunora ai gateway` gives the app its
+own:
+
+```bash
+lunora ai gateway                 # gateway id = the worker `name` in wrangler.jsonc
+lunora ai gateway --id my-gateway # explicit id
+lunora ai gateway --no-logs       # don't store prompts/responses in the gateway
+lunora ai gateway --dry-run       # print the plan; no API call, no file edit
+```
+
+It creates the gateway over the Cloudflare API (or reuses it when the id already
+exists on the account), then writes `LUNORA_AI_GATEWAY_ID` and
+`LUNORA_AI_GATEWAY_ACCOUNT_ID` into the top-level `vars` of `wrangler.jsonc`,
+keeping comments and formatting. Redeploy afterwards so the Worker sees them.
+
+Credentials follow wrangler's non-interactive convention: `CLOUDFLARE_API_TOKEN`
+(a token with the **AI Gateway Write** permission) and `CLOUDFLARE_ACCOUNT_ID`,
+which falls back to the config's `account_id`. The binding is pre-authenticated,
+so no gateway token is needed.
+
+Log collection is **on** by default, matching the dashboard, so requests, costs
+and errors show up in the gateway's logs. Those logs include prompts and
+responses; pass `--no-logs` if they may carry data you must not store.
+Caching and rate limiting are left off.
+
+The gateway does not pay for third-party models on its own. Before the first
+`<provider>/<model>` call, set one of these up in the dashboard:
+
+- **Unified Billing**: load credits on the account
+  ([docs](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)).
+- **BYOK**: store the provider's API key on the gateway
+  ([docs](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)).
 
 ### `lunora logs`
 
