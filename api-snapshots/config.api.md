@@ -307,7 +307,7 @@ const DEV_VARS_KEY_PATTERN: RegExp;
 interface DeployDriver {
     readonly id: string;
     readonly name: string;
-    readonly projectConfig?: (projectRoot: string) => ProjectedConfig;
+    readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -823,6 +823,12 @@ interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
 }
+```
+
+### `ProjectionPurpose` (type)
+
+```ts
+type ProjectionPurpose = "deploy" | "dev";
 ```
 
 ### `ROOT_SKILL_NAME` (const)

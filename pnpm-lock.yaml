@@ -3966,9 +3966,21 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../queue
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@types/node':
         specifier: catalog:types
         version: 26.4.1

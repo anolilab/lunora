@@ -539,12 +539,13 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * `docs/limitations.md` in the celld repo, all alpha). The host contracts
  * behind `shardedState`, `localSql`, `shardAlarms`, `commitOrderedTables` and
  * `websocketHibernation` are also exercised by the conformance TCK against a
- * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project);
- * the binding-backed ratings (D1, KV, R2, Queues, Workflows, Cron Triggers,
- * Containers) rest on the docs alone. celld's own rule is that an unsupported
- * configuration or API must fail at deploy or first use, so "Partial" there
- * means a listed set of gaps rather than silent degradation; the gaps that bite
- * Lunora are named per key below.
+ * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project),
+ * which also drives D1, KV, R2, Queues, Workflows and Cron Triggers through
+ * Lunora's own adapters, and a two-node fleet test covers routing and crash
+ * takeover; `containers` rests on the docs alone. celld's own rule is that an
+ * unsupported configuration or API must fail at deploy or first use, so
+ * "Partial" there means a listed set of gaps rather than silent degradation;
+ * the gaps that bite Lunora are named per key below.
  *
  * v0.3.0 and v0.4.0 closed the blocker this matrix was first written around.
  * `state.storage.sql` is implemented, so the shard engine mounts and everything
@@ -659,7 +660,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         pipelines: { level: "unsupported", note: "Pipelines is not a celld binding type" },
         queues: {
             level: "native",
-            note: "Queues bindings with batching, per-message ack/retry, delays and dead-letter queues, consumed by the `queue()` handler on the same worker that exports `fetch()` (the v0.4.0 rule forbidding that is gone as of v0.4.1). Differences: a queue is one cell with one writer, so write capacity scales by adding queues; a queue owner refuses more than 256 concurrent producer calls (retryable); retention is a fixed four days; no pull consumers or Queues HTTP API",
+            note: 'Queues bindings with batching, per-message ack/retry, delays and dead-letter queues, consumed by the `queue()` handler on the same worker that exports `fetch()` (the v0.4.0 rule forbidding that is gone as of v0.4.1). Differences: a queue is one cell with one writer, so write capacity scales by adding queues; a queue owner refuses more than 256 concurrent producer calls (retryable); retention is a fixed four days; no pull consumers or Queues HTTP API, so a `defineQueue({ mode: "pull" })` queue is refused at deploy',
         },
         relationGraph: {
             level: "emulated",
@@ -703,7 +704,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable",
+            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable — so a `defineStep({ rollback })` step fails at first use (\"step rollbackOptions are not implemented in celld\"). The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
         },
     },
 };

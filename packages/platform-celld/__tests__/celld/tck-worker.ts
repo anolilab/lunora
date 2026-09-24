@@ -25,11 +25,13 @@ import { createShardDirectory } from "@lunora/platform-cloudflare";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 
 import { createCelldShardPlatform } from "../../src/celld-platform";
+import type { BindingEnv } from "./tck-bindings";
+import { consumeQueue, handleBindingRoute, recordCron } from "./tck-bindings";
 import { createLegExpect } from "./tck-expect";
 import type { Factories, LegContext, SuiteName } from "./tck-legs";
 import { collectLegs, LegSkipped } from "./tck-legs";
 
-type Env = { ECHO: unknown; TCK: DurableObjectNamespace };
+type Env = BindingEnv & { ECHO: unknown; TCK: DurableObjectNamespace };
 
 type LegResult = { message?: string; status: "failed" | "passed" | "skipped" };
 
@@ -253,6 +255,7 @@ class EchoCell {
 }
 
 export { EchoCell, TckCell };
+export { TckWorkflow } from "./tck-bindings";
 
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -266,10 +269,22 @@ export default {
             return env.TCK.get(env.TCK.idFromName(url.searchParams.get("name") ?? "fleet")).fetch(request);
         }
 
+        if (url.pathname.startsWith("/binding/")) {
+            return Response.json(await handleBindingRoute(request, env));
+        }
+
         if (url.pathname !== "/leg") {
             return new Response("not found", { status: 404 });
         }
 
         return env.TCK.get(env.TCK.newUniqueId()).fetch(request);
+    },
+
+    async queue(batch: MessageBatch, env: Env): Promise<void> {
+        await consumeQueue(batch, env);
+    },
+
+    async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+        await recordCron(controller, env);
     },
 };
