@@ -47,6 +47,7 @@ type StudioTab =
     | "schema"
     | "advisorHealth"
     | "evals"
+    | "aiUsage"
     | "security"
     | "settings"
     | "sql"
