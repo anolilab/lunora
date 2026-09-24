@@ -16,7 +16,8 @@ const CODEGEN_MESSAGES = {
     jurisdiction: 'unknown jurisdiction "moon" — expected "eu", "us", or "fedramp"',
     notObjectLiteral: "defineSchema() expects an object literal",
     occ: 'optimistic concurrency conflict on "todos" — the row changed during this mutation; refetch and retry',
-    reserved: 'table name "insert" is reserved — it collides with a `ctx.db` member (one of "insert", "patch"). Rename the table.',
+    reserved:
+        "table name \"insert\" is reserved — the generated shard binds each table's facade onto the same object that carries `ctx.db`'s own methods, so this table would replace `ctx.db.insert()` and every flat call to it would throw. Rename the table.",
     schemaMissing: "defineSchema() not found in /app/lunora/schema.ts",
     uniqueLiteral: '`unique` must be a literal `true` or `false`, got "someFlag"',
     uniqueRuntime: 'unique constraint violation on "todos"',

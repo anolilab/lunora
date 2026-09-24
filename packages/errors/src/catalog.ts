@@ -743,7 +743,7 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
         body: [
             "This table name collides with a built-in `ctx.db` member, so the generated client can't expose it.",
             "",
-            "Rename the table to anything that isn't a reserved name (the error lists them) — e.g. `userAccounts` instead of `insert`.",
+            "Rename the table to anything that isn't a `ctx.db` method (the error names the one it hit) — e.g. `userAccounts` instead of `insert`, or `pageViews` instead of `count`.",
         ].join("\n"),
         header: "Table name is reserved",
         id: "lunora-table-reserved",

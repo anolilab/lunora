@@ -30,12 +30,55 @@ import {
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
 /**
- * Table names that collide with members of `ctx.db` (the typed reader/writer the
- * generated `_generated/server.ts` widens with the per-table facade). A table so
- * named would shadow the corresponding `ctx.db.<member>` and silently corrupt
- * the emitted type, so codegen rejects it up front with a clear diagnostic.
+ * Every member of `@lunora/shard-engine`'s `DatabaseWriterLike` — the writer the
+ * generated `_generated/shard.ts` widens with the per-table facade.
+ *
+ * The facade is assigned onto the writer ITSELF
+ * (`facade[<table>] = bindTableFacade(db, <table>)`), so a table whose name
+ * matches a member replaces that method with a `FacadeEntry` at runtime: every
+ * flat `ctx.db.<member>(...)` call then throws "is not a function". Codegen
+ * rejects such a name up front instead.
+ *
+ * The list is restated here rather than derived, because codegen must not take a
+ * runtime dependency on the engine (and interface members are erased anyway).
+ * `__tests__/discover/reserved-table-names.test.ts` parses `DatabaseWriterLike`
+ * from source and fails when the two diverge — the drift is the thing gated, and
+ * it went unnoticed long enough for twenty-plus members to accumulate unguarded.
  */
-const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
+const RESERVED_TABLE_NAMES = new Set([
+    "aggregate",
+    "asId",
+    "cdcChangedTables",
+    "count",
+    "delete",
+    "deleteAll",
+    "deleteMany",
+    "deleteWhere",
+    "findFirst",
+    "findFirstOrThrow",
+    "findMany",
+    "get",
+    "groupBy",
+    "insert",
+    "insertMany",
+    "insertManyUnsafe",
+    "lookupById",
+    "normalizeId",
+    "patch",
+    "patchMany",
+    "patchWhere",
+    "query",
+    "rank",
+    "rankBefore",
+    "rankPage",
+    "rankPageRows",
+    "related",
+    "relationEdges",
+    "replace",
+    "restore",
+    "system",
+    "wipeShard",
+]);
 
 /**
  * ES reserved words. `emit.ts` interpolates the table name raw into a bare
@@ -124,7 +167,7 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
     if (RESERVED_TABLE_NAMES.has(unquoted)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+            `table name "${unquoted}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own methods, so this table would replace \`ctx.db.${unquoted}()\` and every flat call to it would throw. Rename the table.`,
         );
     }
 
@@ -855,4 +898,4 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
     return tables;
 };
 
-export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE };
+export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE };
