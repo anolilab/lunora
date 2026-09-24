@@ -413,8 +413,8 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * differs is which primitives exist, and that difference is exactly this
  * matrix.
  *
- * Ratings track celld **v0.4.0** and derive from its documented compatibility
- * surface (`docs/cloudflare-compat.md`, `docs/limitations.md` in the celld
+ * Ratings track celld **v0.5.1** and derive from its documented compatibility
+ * surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld
  * repo, both alpha), not from running the conformance TCK against a live fleet
  * — celld is an external daemon plus an object store, which unit tests cannot
  * stand up. celld's own rule is that an unsupported configuration or API must
@@ -430,25 +430,16 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * bindings, so the ratings that used to read "no binding" now read against
  * celld's documented limits instead.
  *
- * Two ratings are `unsupported` for a reason worth stating, because neither is
- * a missing binding.
+ * v0.4.1–v0.5.1 lifted three more: a queue consumer may now export `fetch()`
+ * beside `queue()` (so `queues`, and `mail` with it, run on the one worker a
+ * Lunora app compiles to), `getTags()` exists and a hibernatable socket
+ * survives its cell hibernating (so `websocketHibernation` is real), and
+ * Containers ship behind `ctx.container`.
  *
- * `queues`: celld has Queues, but a queue takes one consumer script and that
- * consumer cannot also export a `fetch()` handler. A Lunora app compiles to ONE
- * worker whose default export carries `fetch`, `scheduled` and `queue` together
- * (`emit-app.ts`), and a celld fleet runs one application — so there is nowhere
- * to put a consumer that satisfies that rule. `mail` follows it down, since its
- * sends are queue-backed.
- *
- * `shardPlacement` and `shardReadReplicas`: celld assigns an unowned cell to
- * whichever node has capacity when traffic arrives and never rebalances, so
- * there is no location to hint at and no region to place a read replica in.
- *
- * `websocketHibernation` stays `emulated`, not `native`: the API is
- * implemented, but celld never sheds a cell holding a live WebSocket, so a
- * socket does not actually outlive its cell's memory — and `getTags()` is
- * absent, which the Cloudflare adapter already covers with accept-time socket
- * ids (sound here precisely because such a cell is never evicted).
+ * `shardPlacement` and `shardReadReplicas` stay `unsupported`: celld assigns a
+ * cell to whichever node has capacity, and its v0.4.1 rebalancing evens out
+ * cell COUNTS across nodes, not distance to a reader — so there is still no
+ * location to hint at and no region to place a read replica in.
  */
 export const CELLD_CAPABILITIES: PlatformCapabilities = {
     id: "celld",
@@ -460,7 +451,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "unsupported",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
         browser: { level: "unsupported", note: "Browser Rendering is not a celld binding type" },
@@ -468,10 +459,13 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "The two host properties the guarantee rests on are both celld's: `storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a cell executes one event at a time behind the same output gate Cloudflare's Durable Objects use. Derived from celld's documented Durable Object surface, not from a TCK run against a fleet",
         },
-        containers: { level: "unsupported", note: "Container execution is out of scope for celld" },
+        containers: {
+            level: "native",
+            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `@cloudflare/containers` runs as published. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral); `inspect()`, snapshots and outbound interception reject; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
+        },
         cronTriggers: {
             level: "native",
-            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, retried until the next occurrence unless the handler calls `noRetry()`, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
+            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
         },
         crossShardFanout: {
             level: "emulated",
@@ -487,11 +481,11 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         httpCache: {
             level: "unsupported",
-            note: "The Cache API is not implemented — celld has no CDN in front of a node, and `passThroughOnException()` is a no-op for the same reason. Responses degrade to headers-only caching at whatever ingress proxy fronts the fleet",
+            note: "The Cache API exists only as an always-miss stub — `put()` stores nothing and `match()` returns `undefined` — because celld has no shared cache in front of a node, and `passThroughOnException()` is a no-op for the same reason. Responses degrade to headers-only caching at whatever ingress proxy fronts the fleet",
         },
         hyperdrive: {
             level: "unsupported",
-            note: "Hyperdrive is not a celld binding type; celld also has no TCP sockets, so there is nothing to pool a connection over",
+            note: "Hyperdrive is not a celld binding type. celld does ship outbound TCP through `cloudflare:sockets`, but a socket cannot outlive its event, so there is no pool for a Hyperdrive-shaped binding to hand out",
         },
         identityProxy: {
             level: "unsupported",
@@ -507,8 +501,8 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. Two edges: celld refuses invalid UTF-8 from a TEXT value (store bytes in a BLOB, which the engine already does for sort keys and binary columns), and `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",
         },
         mail: {
-            level: "unsupported",
-            note: "Sends are queue-backed, and `queues` is unsupported here for the consumer/`fetch()` exclusivity reason below — not for a missing binding. Inbound Email Workers are separately absent",
+            level: "emulated",
+            note: "Resend (third-party) via celld Queues — the same queue-backed send as on Cloudflare, now that a celld queue consumer may live on the worker that exports `fetch()`. Inbound Email Workers are absent",
         },
         memoryTables: {
             level: "emulated",
@@ -528,8 +522,8 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         pipelines: { level: "unsupported", note: "Pipelines is not a celld binding type" },
         queues: {
-            level: "unsupported",
-            note: "celld ships Queues, but a queue takes one consumer script and that consumer cannot also export a `fetch()` handler. A Lunora app compiles to one worker exporting `fetch`, `scheduled` and `queue` together, and a celld fleet runs one application — so the consumer has nowhere to live. Blocked by a topology rule, not a missing binding; celld's other queue limits (one writer per queue, four-day retention, no pull consumers or HTTP API) are secondary to it",
+            level: "native",
+            note: "Queues bindings with batching, per-message ack/retry, delays and dead-letter queues, consumed by the `queue()` handler on the same worker that exports `fetch()` (the v0.4.0 rule forbidding that is gone as of v0.4.1). Differences: a queue is one cell with one writer, so write capacity scales by adding queues; a queue owner refuses more than 256 concurrent producer calls (retryable); retention is a fixed four days; no pull consumers or Queues HTTP API",
         },
         scheduler: {
             level: "emulated",
@@ -553,7 +547,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         shardPlacement: {
             level: "unsupported",
-            note: "celld assigns an unowned or released cell to whichever node has capacity when traffic reaches it, and a joining node never rebalances existing cells — so a `locationHint` has nothing to act on",
+            note: "celld makes no placement promise: a cell lands on whichever node has capacity, and rebalancing moves hibernated cells to even out per-node cell counts, not to bring a cell nearer its readers — so a `locationHint` has nothing to act on",
         },
         shardReadReplicas: {
             level: "unsupported",
@@ -564,12 +558,12 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "Vectorize is not a celld binding type. celld does honour the `sqlite_vec` compatibility flag, which is per-cell vector search inside `storage.sql` — not the fleet-wide index `ctx.vectors` is built on",
         },
         websocketHibernation: {
-            level: "emulated",
-            note: "`acceptWebSocket`/`getWebSockets`/attachments are implemented, but celld never sheds a cell holding a live WebSocket, so a socket never actually outlives the cell's memory. `getTags()` is absent — the shared adapter falls back to accept-time socket ids, which is sound precisely because such a cell is never evicted — and `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
+            level: "native",
+            note: "`acceptWebSocket`/`getWebSockets`/`getTags`/attachments, and a hibernatable socket survives its cell hibernating on the same node. It closes when the cell moves to another owner (a node stop, drain, or rebalance), so the client reconnects — which Lunora's client already does. `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
         },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, `create()` replaces a terminal instance with the same id instead of refusing it, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, and `delete()`/`deleteBatch()` and sensitive or `ReadableStream` step results are unavailable",
+            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable",
         },
     },
 };

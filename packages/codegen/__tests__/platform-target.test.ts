@@ -180,13 +180,10 @@ describe("gatePlatformFeatures", () => {
 
     // `celld` is the second spike target (see `@lunora/platform-celld`): a
     // Workers-compatible self-hosted Durable Objects runtime whose matrix
-    // (`CELLD_CAPABILITIES`, tracking celld v0.4.0) rates the bindings celld
-    // actually ships — KV, R2, D1, Workflows, Cron Triggers — as real support,
-    // so those must survive gating. What it gates is the managed Cloudflare
-    // services celld has no binding for (`ai`, `vectors`) plus the two blocked
-    // for a reason that is NOT a missing binding: `mail`, and the `queues` it
-    // rides on, because a celld queue consumer cannot also export `fetch()`
-    // and a Lunora app is one worker exporting both.
+    // (`CELLD_CAPABILITIES`, tracking celld v0.5.1) rates the bindings celld
+    // actually ships — KV, R2, D1, Queues, Workflows, Cron Triggers — as real
+    // support, so those (and the queue-backed `mail`) must survive gating. What
+    // it gates is the managed Cloudflare services celld has no binding for.
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
         expect.assertions(6);
 
@@ -198,11 +195,10 @@ describe("gatePlatformFeatures", () => {
         expect(result.usage.kv).toBe(true);
         expect(result.usage.storage).toBe(true);
         expect(result.usage.scheduler).toBe(true);
-        expect(result.usage.mail).toBe(false);
+        expect(result.usage.mail).toBe(true);
         expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
             "ai",
-            "mail",
             "vectors",
         ]);
     });
