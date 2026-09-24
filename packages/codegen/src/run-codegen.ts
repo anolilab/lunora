@@ -24,6 +24,7 @@ import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
+import { discoverErasedReturns, resetErasedReturns } from "./discover/erased-returns";
 import discoverExportSinks from "./discover/export-sinks";
 import discoverFailOpenGuards from "./discover/fail-open-guards";
 import { discoverFlagKeys } from "./discover/flag-keys";
@@ -598,6 +599,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
 
+    // Same reason, same place: the erasure buffer those resolvers fill is
+    // module-level, so a previous run that threw before draining it would
+    // otherwise report its erasures against this project.
+    resetErasedReturns();
+
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
     // Phase 1 — everything that must be resolved and RENDERED before a single
@@ -764,6 +770,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                       byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
                   }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
+                  // The third, and the output-side twin of the second: a return
+                  // type codegen could render as neither a name nor a structure,
+                  // so `api.ts` says `unknown` where the runtime returns a shape.
+                  // Drains a buffer the discovery passes above filled — the
+                  // signal ("expansion produced nothing") exists only at the
+                  // moment of the fallback, so it cannot be re-derived here.
+                  ...discoverErasedReturns(lunoraDirectory),
               ];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

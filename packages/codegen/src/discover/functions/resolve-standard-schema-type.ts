@@ -1,6 +1,7 @@
 import type { Node, Type } from "ts-morph";
 
 import isAnyDegraded from "./internal/any-token";
+import { recordErasedReturn } from "./internal/erased-returns";
 import { expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
 
 /**
@@ -48,7 +49,16 @@ const resolveStandardSchemaType = (node: Node): string | undefined => {
     const filePath = node.getSourceFile().getFilePath();
 
     if (referencesUnreachableLocalType(outputType, node, filePath)) {
-        return expandUnreachableType(outputType, node, filePath, 0, new Set<Type>());
+        const expanded = expandUnreachableType(outputType, node, filePath, 0, new Set<Type>());
+
+        // Same silent downgrade as the handler-return path, reported the same
+        // way: the caller turns `undefined` into `unknown` and nothing else says
+        // a declared output type was dropped (issue #810).
+        if (expanded === undefined) {
+            recordErasedReturn(node, rendered);
+        }
+
+        return expanded;
     }
 
     return rendered;
