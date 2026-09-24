@@ -89,6 +89,9 @@ class TestShardDO extends DurableObject<Env> {
     }
 }
 
+/** Paths {@link ConcreteCountingShard} reports as ACTIONS — ungated, so a parked one really is interleavable with a sibling dispatch. */
+const COUNTER_ACTION_PATHS = new Set(["counter:park", "counter:release", "counter:reqlog", "counter:slow", "counter:slowRelease", "counter:slowRuns"]);
+
 /**
  * A shard whose handler bumps a counter INSIDE a transaction and commits the
  * mutation-replay dedup row atomically with it via `commitMutationBookkeeping`
@@ -102,10 +105,22 @@ class TestShardDO extends DurableObject<Env> {
 class ConcreteCountingShard extends ShardDO {
     public runs = 0;
 
+    /**
+     * How many times `counter:slow` has entered its handler. Only the FIRST run
+     * parks; every later one returns at once. That asymmetry is what lets the
+     * in-flight-claim test assert a run COUNT rather than time out — an unfixed
+     * shard runs the second dispatch concurrently, and a second dispatch that
+     * also parked would hang the test instead of failing it.
+     */
+    public slowRuns = 0;
+
     private migrated = false;
 
     /** Resolver for the in-flight `counter:park` dispatch, fired by `counter:release`. */
     private releasePark: (() => void) | undefined;
+
+    /** Resolver for the parked first `counter:slow` dispatch, fired by `counter:slowRelease`. */
+    private releaseSlow: (() => void) | undefined;
 
     public override async handleRpc(functionPath: string): Promise<unknown> {
         this.ensureMigrated();
@@ -127,6 +142,34 @@ class ConcreteCountingShard extends ShardDO {
             this.releasePark = undefined;
 
             return { released: true };
+        }
+
+        // The long ACTION the scheduler's at-least-once re-delivery can land on
+        // top of (#803): ungated, so nothing but the in-flight claim stops a
+        // second delivery of the same `x-lunora-mutation-id` running alongside.
+        if (functionPath === "counter:slow") {
+            this.slowRuns += 1;
+
+            const run = this.slowRuns;
+
+            if (run === 1) {
+                await new Promise<void>((resolve) => {
+                    this.releaseSlow = resolve;
+                });
+            }
+
+            return { run };
+        }
+
+        if (functionPath === "counter:slowRelease") {
+            this.releaseSlow?.();
+            this.releaseSlow = undefined;
+
+            return { released: true };
+        }
+
+        if (functionPath === "counter:slowRuns") {
+            return { runs: this.slowRuns };
         }
 
         // The durable request log, as the studio and Logpush see it. Read
@@ -158,7 +201,7 @@ class ConcreteCountingShard extends ShardDO {
 
     // eslint-disable-next-line class-methods-use-this -- pure predicate over the path, mirroring the codegen override
     protected override isMutationFunction(functionPath: string): boolean {
-        return functionPath !== "counter:park" && functionPath !== "counter:release" && functionPath !== "counter:reqlog";
+        return !COUNTER_ACTION_PATHS.has(functionPath);
     }
 }
 
