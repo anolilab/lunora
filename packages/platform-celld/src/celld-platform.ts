@@ -13,11 +13,11 @@
  *
  * `createWorkerPlatform` hardcodes `CLOUDFLARE_CAPABILITIES`; on celld the
  * honest matrix is `CELLD_CAPABILITIES` (no Workers AI / Vectorize /
- * Containers / Hyperdrive / Secrets Store bindings, no Cache API, no cell
- * placement, and no usable Queues consumer — see its docstring in
- * `@lunora/platform` for why each). Swapping it is the whole package.
+ * Hyperdrive / Secrets Store bindings, an always-miss Cache API, and no cell
+ * placement — see its docstring in `@lunora/platform` for why each). Swapping
+ * it is the whole package.
  *
- * The shard root needs no wrapper at all as of celld v0.4.0. Until v0.3.0
+ * The shard root needs no wrapper at all as of celld v0.3.0. Until v0.3.0
  * celld exposed no `state.storage.sql` to the isolate, so this module guarded
  * `sql.exec` behind a call-time probe that threw an error naming the target
  * and the rating rather than letting a bare `TypeError` escape. celld ships
@@ -25,10 +25,9 @@
  * Cloudflare adapter mounts on a cell unchanged.
  *
  * Those adapters are already defensive about optional primitives (call-time
- * probes, degradation for doubles), which covers celld's remaining gaps: no
- * `getTags` means socket ids fall back to accept-time bookkeeping — sound on
- * celld, where a cell holding a live socket is never shed — and a missing
- * `blockConcurrencyWhile` or `storage.transaction` degrades to a bare call.
+ * probes, degradation for doubles). As of celld v0.4.1 even the one gap they
+ * papered over is closed: `getTags` exists, so hibernated sockets recover
+ * their ids exactly as on Cloudflare.
  */
 
 import { CELLD_CAPABILITIES } from "@lunora/platform";

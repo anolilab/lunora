@@ -5,7 +5,7 @@ import { createCelldShardPlatform, createCelldWorkerPlatform } from "../src/cell
 
 /**
  * A minimal `DurableObjectState` double carrying the surface celld documents
- * as of v0.4.0: key-value storage, `storage.sql`, alarms, and the hibernation
+ * as of v0.5.1: key-value storage, `storage.sql`, alarms, and the hibernation
  * socket API.
  */
 const createStateDouble = () => {
@@ -46,14 +46,16 @@ describe("createCelldWorkerPlatform", () => {
         expect(platform.capabilities.features.localSql?.level).toBe("native");
     });
 
-    it("rates the two features celld blocks for a reason other than a missing binding", () => {
-        expect.assertions(2);
+    it("rates the surfaces celld v0.4.1+ unblocked as working, and placement as not", () => {
+        expect.assertions(4);
 
         const { features } = createCelldWorkerPlatform({}).capabilities;
 
-        // celld ships Queues, but its consumer script cannot also export
-        // `fetch()` — and a Lunora app is one worker exporting both.
-        expect(features.queues?.level).toBe("unsupported");
+        // A celld queue consumer may now export `fetch()` on the same worker,
+        // so Queues and the queue-backed mail transport both run.
+        expect(features.queues?.level).toBe("native");
+        expect(features.mail?.level).toBe("emulated");
+        expect(features.websocketHibernation?.level).toBe("native");
         // Cells land on whichever node has capacity, so there is nowhere to
         // place a read replica nearer the reader.
         expect(features.shardReadReplicas?.level).toBe("unsupported");
