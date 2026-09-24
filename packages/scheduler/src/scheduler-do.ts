@@ -462,6 +462,24 @@ class SchedulerDO {
      */
     private poolLock: Promise<unknown> = Promise.resolve();
 
+    /**
+     * Record id → the `t:` index key its in-flight claim currently holds, for
+     * every dispatch this instance has open. See `drainRecordGuarded()`.
+     *
+     * A lease moves a record's index entry without rewriting its `scheduledFor`,
+     * so while a claim is held the live key is NOT the one derivable from the
+     * record. Anything that has to remove such a record — `removeRecord()`, on
+     * the `/cancel` path — would otherwise delete a key that no longer exists
+     * and strand the real one.
+     *
+     * In-memory and per-instance on purpose: it answers "is THIS instance
+     * dispatching that record right now", which is exactly when the divergence
+     * can be observed by another request. A lease left behind by an instance that
+     * died has no live dispatch to protect and is reconciled from storage
+     * instead — `alarm()` drops it as a dangling entry once the header is gone.
+     */
+    private readonly activeLeases = new Map<string, string>();
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -534,7 +552,14 @@ class SchedulerDO {
         await this.reindexOrphanedRecords();
 
         const now = Date.now();
-        const due: ScheduleRecord[] = [];
+        // Each entry carries the index key the record was SELECTED under, not one
+        // derived from the record. A leased record is indexed at its lease
+        // horizon while its `scheduledFor` still names its real due time, so the
+        // two disagree for the whole of a claim — and a claim that deletes a
+        // recomputed key deletes nothing and leaves the record indexed twice.
+        // See {@link drainRecordGuarded}.
+        const due: { claimKey: string; record: ScheduleRecord }[] = [];
+        const selected = new Set<string>();
 
         // Pull only the prefix slice that's due. `~` sorts after all digits
         // in ASCII so it bounds the time-padded id portion. If the runtime
@@ -552,8 +577,17 @@ class SchedulerDO {
             if (Number.isFinite(dueAt) && dueAt <= now) {
                 const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${recordId}`);
 
-                if (record) {
-                    due.push(record);
+                if (record && selected.has(recordId)) {
+                    // A record carrying TWO due index entries. One record is one
+                    // job: draining both would hand two lanes the same record and
+                    // dispatch it twice, which is the very thing the lease exists
+                    // to prevent. Nothing should produce this — but a swallowed
+                    // post-settle delete can (see `drainRecordGuarded`'s tail), so
+                    // the extra row is reconciled away here rather than dispatched.
+                    await this.state.storage.delete(indexKey);
+                } else if (record) {
+                    selected.add(recordId);
+                    due.push({ claimKey: indexKey, record });
                 } else {
                     // Dangling index entry: this `t:` row points at an `id:`
                     // header that no longer exists (e.g. a partial-failure path
@@ -738,7 +772,7 @@ class SchedulerDO {
      * {@link drainRecordGuarded} swallows every throw, so no lane can reject and
      * abandon its siblings.
      */
-    private async drainDue(due: ScheduleRecord[]): Promise<void> {
+    private async drainDue(due: { claimKey: string; record: ScheduleRecord }[]): Promise<void> {
         const queue = [...due];
         const lanes: Promise<void>[] = [];
         // Fixed BEFORE the loop: each lane's body runs synchronously up to its
@@ -750,9 +784,9 @@ class SchedulerDO {
         for (let lane = 0; lane < width; lane += 1) {
             lanes.push(
                 (async () => {
-                    for (let record = queue.shift(); record !== undefined; record = queue.shift()) {
+                    for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
                         // eslint-disable-next-line no-await-in-loop -- one lane drains its records in sequence; the lanes themselves are what run concurrently
-                        await this.drainRecordGuarded(record);
+                        await this.drainRecordGuarded(entry.record, entry.claimKey);
                     }
                 })(),
             );
@@ -827,9 +861,19 @@ class SchedulerDO {
      * With one exception, checked first: a record that already has a durable
      * `dead:` row is TERMINAL, and re-claiming it would re-dispatch a job the
      * dead-letter says is finished. See the comment on that branch.
+     *
+     * `claimKey` is the index key `alarm()` SELECTED this record under, passed
+     * down rather than recomputed. That is load-bearing, not tidiness: a lease
+     * moves the record's index entry and deliberately does NOT rewrite its
+     * `scheduledFor` (that field is the job's real due time, which `/list`,
+     * `/get`, `/dead` and the studio all show, and which `parkDead` preserves).
+     * So from the moment a lease is taken the live key and the key derivable
+     * from the record disagree — and a claim that recomputed it would delete a
+     * key that no longer exists while adding a second one, leaving the record
+     * indexed twice and dispatched twice. That is the same double-run the lease
+     * exists to close, re-entering through the expiry path.
      */
-    private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
-        const claimKey = SchedulerDO.indexKey(record.scheduledFor, record.id);
+    private async drainRecordGuarded(record: ScheduleRecord, claimKey: string): Promise<void> {
         // Derived once: the horizon must be the same value in the key written
         // below and in every key deleted afterwards, and `Date.now()` advances
         // across the awaits in between.
@@ -844,6 +888,10 @@ class SchedulerDO {
             // that fails too, `reindexOrphanedRecords`) re-arms.
             await this.state.storage.delete(claimKey);
             await this.state.storage.put(leaseKey, record.id);
+            // Only now is `leaseKey` the record's live index key. `removeRecord`
+            // reads this so a `/cancel` landing mid-dispatch deletes the key that
+            // EXISTS rather than one derived from `scheduledFor`.
+            this.activeLeases.set(record.id, leaseKey);
             await this.drainRecord(record);
         } catch {
             try {
@@ -882,17 +930,19 @@ class SchedulerDO {
             }
 
             return;
+        } finally {
+            this.activeLeases.delete(record.id);
         }
 
         try {
             await this.state.storage.delete(leaseKey);
         } catch {
-            // The attempt settled but its lease outlived it. Harmless: after a
-            // successful dispatch the `id:` header is already gone, so the
-            // surviving entry is a dangling index row `alarm()` deletes on sight
-            // rather than firing; after a retry/backpressure re-arm the record has
-            // its own, earlier entry and will have settled long before this one
-            // comes due.
+            // The attempt settled but its lease outlived it. After a successful
+            // dispatch the `id:` header is already gone, so the surviving entry
+            // is a dangling index row `alarm()` deletes on sight rather than
+            // firing. After a retry/backpressure re-arm the header DOES survive,
+            // so the record is briefly indexed twice — `alarm()` reconciles that
+            // by dropping the extra due entry rather than draining both.
         }
     }
 
@@ -1666,7 +1716,23 @@ class SchedulerDO {
     private async removeRecord(record: ScheduleRecord): Promise<void> {
         // Single batched delete: the header, time-index entry, and any pending
         // retry row in one storage round-trip instead of three.
-        await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`]);
+        //
+        // TWO index keys when the record is claimed by an in-flight dispatch on
+        // this instance. A lease moves the entry to its horizon but leaves
+        // `scheduledFor` alone, so the derivable key and the live key diverge for
+        // the length of the claim — and `/cancel` can land in exactly that window
+        // (the header is cleared only once the kick returns, so the cancel does
+        // take effect). Deleting only the derivable one would leave the lease
+        // entry behind, holding the alarm at the horizon. The keys are equal
+        // whenever nothing is leased, and deleting an absent key is a no-op.
+        const keys = [`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`];
+        const leaseKey = this.activeLeases.get(record.id);
+
+        if (leaseKey !== undefined) {
+            keys.push(leaseKey);
+        }
+
+        await this.state.storage.delete(keys);
     }
 
     /**

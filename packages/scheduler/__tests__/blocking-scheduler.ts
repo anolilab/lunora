@@ -100,13 +100,45 @@ export const scheduleDue = async (scheduler: SchedulerDO, count: number, extra: 
     return ids;
 };
 
-/** Is `id` still carried by a `t:` time-index entry (i.e. still re-fireable)? */
-export const isIndexed = (storageMap: Map<string, unknown>, id: string): boolean =>
-    [...storageMap.keys()].some((key) => key.startsWith("t:") && key.endsWith(`:${id}`));
+/**
+ * EVERY `t:` time-index entry carrying `id`, in key order.
+ *
+ * Prefer this over {@link isIndexed}/{@link indexedAt} whenever a test is about
+ * a claim moving between keys. A record is supposed to hold exactly ONE index
+ * entry; the interesting failure is two (the record then fires twice), and a
+ * predicate that asks whether it has "an" entry is satisfied by both — so the
+ * assertion that catches a double-index has to COUNT.
+ */
+export const indexKeysFor = (storageMap: Map<string, unknown>, id: string): string[] =>
+    [...storageMap.keys()]
+        .filter((key) => key.startsWith("t:") && key.endsWith(`:${id}`))
+        // Code-unit order, NOT locale-aware: these are time-padded index keys
+        // whose lexical byte order is their numeric order (see `fake-state`).
+        .toSorted((left, right) => {
+            if (left < right) {
+                return -1;
+            }
 
-/** The instant `id`'s `t:` time-index entry is armed for, or `undefined` when it has none. */
+            return left > right ? 1 : 0;
+        });
+
+/** Is `id` still carried by a `t:` time-index entry (i.e. still re-fireable)? */
+export const isIndexed = (storageMap: Map<string, unknown>, id: string): boolean => indexKeysFor(storageMap, id).length > 0;
+
+/**
+ * The instant `id`'s time-index entry is armed for, or `undefined` when it has
+ * none. Throws when the record holds more than one entry rather than silently
+ * reporting the earliest: two entries mean two dispatches, and a test reaching
+ * for "the" time has already assumed there is only one.
+ */
 export const indexedAt = (storageMap: Map<string, unknown>, id: string): number | undefined => {
-    const key = [...storageMap.keys()].find((candidate) => candidate.startsWith("t:") && candidate.endsWith(`:${id}`));
+    const keys = indexKeysFor(storageMap, id);
+
+    if (keys.length > 1) {
+        throw new Error(`indexedAt(${id}): ${String(keys.length)} index entries, expected at most one — ${keys.join(", ")}`);
+    }
+
+    const key = keys[0];
 
     return key === undefined ? undefined : Number.parseInt(key.slice(2, key.indexOf(":", 2)), 10);
 };

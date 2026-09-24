@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DISPATCH_LEASE_MS } from "../src/scheduler-do";
-import { BlockingScheduler, indexedAt, isIndexed, post, scheduleDue, settle } from "./blocking-scheduler";
+import { BlockingScheduler, indexedAt, indexKeysFor, isIndexed, post, scheduleDue, settle } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
 const env = { LUNORA_ORIGIN_URL: "https://app.test" };
@@ -343,5 +343,204 @@ describe("schedulerDO dispatch lease", () => {
 
         expect(state.storageMap.get("pool:p")).toMatchObject({ inFlight: 0 });
         expect(isIndexed(state.storageMap, "job-0")).toBe(false);
+    });
+});
+
+/**
+ * Claiming a record that is ALREADY leased — the expiry path.
+ *
+ * A lease moves a record's `t:` entry without touching the `scheduledFor` on its
+ * header, so from the second claim onward the two disagree: the live key carries
+ * the lease time, the header still carries the original due time. A claim that
+ * reconstructs its key from `record.scheduledFor` therefore deletes a key that no
+ * longer exists and ADDS a second one — leaving the record indexed twice and
+ * dispatched twice, which is the exact double-run the lease exists to close.
+ *
+ * Every assertion here COUNTS index entries. Asking whether the record has "an"
+ * entry is satisfied by two, which is why the original lease suite went green
+ * while the expiry path double-indexed.
+ */
+describe("schedulerDO dispatch lease — claiming an already-leased record", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /**
+     * Take a lease on `job-0`, then abandon the drain so the record is left
+     * claimed by an instance that never comes back — the state whose recovery is
+     * this block's subject. Returns fresh storage plus a successor over it,
+     * already past its orphan recovery.
+     */
+    const leaseThenLoseInstance = async (
+        extra: Record<string, unknown> = {},
+    ): Promise<{ state: ReturnType<typeof createFakeState>; successor: BlockingScheduler }> => {
+        const state = createFakeState();
+        const lost = new BlockingScheduler(state, env);
+
+        await scheduleDue(lost, 1, extra);
+
+        // The runtime clears an alarm before invoking the handler, so an
+        // abandoned drain leaves the DO with no clock.
+        state.alarm = null;
+
+        // Deliberately never awaited and never released: a lost instance's
+        // in-flight dispatches simply stop existing.
+        const abandoned = lost.alarm();
+
+        expect(abandoned).toBeInstanceOf(Promise);
+
+        await settle();
+
+        expect(lost.started).toStrictEqual(["job-0"]);
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+
+        const successor = new BlockingScheduler(state, env);
+
+        await successor.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
+
+        return { state, successor };
+    };
+
+    it("re-claims an expired lease at the key it is actually indexed under", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+        const advanceTo = pinClock(at);
+        const { state, successor } = await leaseThenLoseInstance();
+
+        advanceTo(at + DISPATCH_LEASE_MS + 1);
+
+        const redrain = successor.alarm();
+
+        await settle();
+
+        expect(successor.started).toStrictEqual(["job-0"]);
+        // THE DEFECT: the second claim reconstructed its key from the header's
+        // untouched `scheduledFor`, so the delete was a no-op and the new lease
+        // was a SECOND entry. One record, two index rows, two future dispatches.
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+
+        successor.releaseAll();
+        await redrain;
+    });
+
+    it("dispatches a re-leased record once across the expiry boundary, not once per stale key", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+        const advanceTo = pinClock(at);
+        // A 1 ms backoff so the retry lands next to the stale lease key and both
+        // come due in the SAME later alarm — which is what turns two index rows
+        // into two concurrent dispatches of one record.
+        const { state, successor } = await leaseThenLoseInstance({ retry: { baseMs: 1 } });
+
+        advanceTo(at + DISPATCH_LEASE_MS + 1);
+
+        const redrain = successor.alarm();
+
+        await settle();
+        // Fail the kick so the record is re-armed for retry and KEEPS its header
+        // — a record that dispatches cleanly deletes its header and hides the
+        // stale key as a harmless dangling row.
+        successor.release("job-0", false);
+        await redrain;
+
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+        expect(state.storageMap.has("id:job-0")).toBe(true);
+
+        advanceTo(at + DISPATCH_LEASE_MS + 10);
+
+        const retryDrain = successor.alarm();
+
+        await settle();
+
+        // One dispatch for the retry, not one per index row.
+        expect(successor.started).toStrictEqual(["job-0", "job-0"]);
+
+        successor.releaseAll();
+        await retryDrain;
+    });
+
+    it("re-claims an expired lease exactly once when the pool declines the job", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+        const advanceTo = pinClock(at);
+        const { state, successor } = await leaseThenLoseInstance({ maxConcurrency: 1, pool: "p" });
+
+        // The lost instance's reservation is still held — nothing released it —
+        // so the re-claim meets a saturated pool and is re-armed as backpressure
+        // without dispatching. The stale lease key must not survive that either.
+        advanceTo(at + DISPATCH_LEASE_MS + 1);
+
+        await successor.alarm();
+
+        expect(successor.started).toStrictEqual([]);
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+        expect(state.storageMap.has("id:job-0")).toBe(true);
+    });
+
+    it("drains a record carrying two due index entries once, and reconciles the extra away", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        // Seed the residue directly: a second due entry for the same record, of
+        // the kind a swallowed post-settle lease delete leaves behind. One
+        // record is one job however many rows point at it — draining both would
+        // hand two lanes the same record and dispatch it twice.
+        await state.storage.put(`t:${String(at - 500).padStart(15, "0")}:job-0`, "job-0");
+
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(2);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+
+        expect(scheduler.started).toStrictEqual(["job-0"]);
+
+        scheduler.releaseAll();
+        await drain;
+
+        expect(indexKeysFor(state.storageMap, "job-0")).toStrictEqual([]);
+    });
+
+    it("clears a leased record's index entry when it is cancelled mid-dispatch", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+
+        // Cancel WHILE the dispatch is open. The header still exists (it is
+        // deleted only once the kick returns), so the cancel takes effect — and
+        // it must take the live lease key with it, not the one it can derive
+        // from the record's untouched `scheduledFor`.
+        const cancelled = await scheduler.fetch(post("/cancel", { id: "job-0" }));
+
+        expect(cancelled.status).toBe(200);
+        expect(state.storageMap.has("id:job-0")).toBe(false);
+        expect(indexKeysFor(state.storageMap, "job-0")).toStrictEqual([]);
+
+        scheduler.releaseAll();
+        await drain;
     });
 });

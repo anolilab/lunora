@@ -277,6 +277,46 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
+    it("re-claims an expired lease at the key it is indexed under, leaving one entry", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("lease-expiry");
+        const id = "expired-0";
+        // The state an expired lease leaves behind, seeded directly so the test
+        // needs no 15-minute clock: the header still carries the job's real due
+        // time, while the live index entry sits at the (now past) lease horizon.
+        // The two keys therefore DISAGREE — which is the whole hazard. A claim
+        // that recomputed its key from `scheduledFor` would delete nothing and
+        // add a second entry, and the record would be dispatched twice.
+        const scheduledFor = Date.now() - 1_000_000;
+        const leasedUntil = Date.now() - 1000;
+
+        await runInDurableObject(stub, async (_instance, state) => {
+            await state.storage.put(`id:${id}`, { args: {}, enqueuedAt: scheduledFor, functionPath: "expired", id, scheduledFor });
+            await state.storage.put(`t:${String(leasedUntil).padStart(15, "0")}:${id}`, id);
+        });
+
+        await runInDurableObject(stub, async (instance, state) => {
+            // Fail the kick so the record keeps its header and stays visible; a
+            // clean dispatch deletes the header and hides a stale second key as a
+            // harmless dangling row.
+            instance.setDispatchOk(false);
+
+            await instance.alarm();
+
+            expect(instance.dispatched).toHaveLength(1);
+
+            const rows = await state.storage.list<string>({ prefix: "t:" });
+            const mine = [...rows.keys()].filter((key) => key.endsWith(`:${id}`));
+
+            // COUNT, do not merely check presence: the defect leaves two entries,
+            // and "has an index entry" is satisfied by both.
+            expect(mine).toHaveLength(1);
+            // …and it is the retry's key, not the stale lease horizon.
+            expect(mine[0]).not.toBe(`t:${String(leasedUntil).padStart(15, "0")}:${id}`);
+        });
+    });
+
     it("/dead answers a bounded page and its cursor walks the rest", async () => {
         expect.hasAssertions();
 
