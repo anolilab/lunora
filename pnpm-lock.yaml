@@ -308,6 +308,9 @@ catalogs:
     astro:
       specifier: 7.3.1
       version: 7.3.1
+    diff:
+      specifier: ^9.0.0
+      version: 9.0.0
     html-to-image:
       specifier: ^1.11.13
       version: 1.11.13
@@ -4815,6 +4818,9 @@ importers:
       clsx:
         specifier: catalog:ui
         version: 2.1.1
+      diff:
+        specifier: catalog:frontend
+        version: 9.0.0
       html-to-image:
         specifier: catalog:frontend
         version: 1.11.13

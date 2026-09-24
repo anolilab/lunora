@@ -41,20 +41,9 @@ const DiffView = ({ lines }: { readonly lines: ReadonlyArray<DiffLine> }): React
             className={cn("max-h-48 overflow-auto rounded-md border border-border bg-background", EDITOR_TEXT_CLASS)}
             data-testid="sql-inline-diff"
         >
-            {/*
-                The index belongs in this key, and `react-doctor/no-array-index-as-key`
-                is a false positive here. A `DiffLine` is `{ kind, text }` and carries
-                no id, and identical lines genuinely recur in SQL (`)`, a blank line,
-                a repeated `AND ...`), so a content-only key collides. The three
-                conditions the rule exists to protect are all absent: the list cannot
-                reorder — it renders only while `proposal !== null`, and `lineDiff`
-                recomputes the whole array from a new proposal; a retry goes through
-                Reject, which nulls `proposal` and UNMOUNTS the list rather than
-                re-ordering it; and no row holds per-row state or focus that a
-                mis-keyed re-render could carry onto the wrong line.
-            */}
-            {lines.map((line, index) => (
-                <li className={cn("flex gap-2", ROW_CLASS[line.kind])} data-kind={line.kind} key={`${index.toString()}-${line.text}`}>
+            {/* Keyed by the row's line numbers, not its text: identical lines recur in SQL (`)`, a blank line). */}
+            {lines.map((line) => (
+                <li className={cn("flex gap-2", ROW_CLASS[line.kind])} data-kind={line.kind} key={`${String(line.before)}:${String(line.after)}`}>
                     <span aria-hidden="true" className="shrink-0 select-none opacity-60">
                         {ROW_MARKER[line.kind]}
                     </span>

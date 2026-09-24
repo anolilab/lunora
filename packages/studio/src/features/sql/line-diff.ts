@@ -1,66 +1,56 @@
-/** One rendered row of a unified diff: a line, and what happened to it. */
+import { diffLines } from "diff";
+
+/**
+ * One rendered row of a unified diff: a line, what happened to it, and where it
+ * sits. `before` is the 1-based line number in the original statement (absent on
+ * an addition), `after` the same in the proposal (absent on a removal) — so the
+ * pair is unique per row and gives the row an identity of its own.
+ */
 interface DiffLine {
+    readonly after?: number;
+    readonly before?: number;
     readonly kind: "added" | "context" | "removed";
     readonly text: string;
 }
 
+/** A change's `value` is its lines joined with (and usually ending in) `\n`. */
+const splitLines = (value: string): string[] => (value.endsWith("\n") ? value.slice(0, -1) : value).split("\n");
+
 /**
  * A line-level unified diff, for showing an AI rewrite before it is accepted.
  *
- * Hand-rolled rather than pulled from a package because the whole algorithm is
- * one LCS table and the input is a single SQL statement — the engine caps what
- * it rewrites at 2,000 characters, so the quadratic table is a few hundred cells
- * for a realistic statement and never grows without bound.
+ * Myers' algorithm via `diff` (jsdiff), which already emits a replaced run as
+ * all its removals ahead of all its additions rather than interleaving them line
+ * by line — the difference between a diff that reads like a change and one that
+ * reads like noise.
  *
- * The table is walked FORWARD from the origin (it is filled backwards, so
- * `table[i][j]` is the LCS of the two suffixes). That ordering is what keeps a
- * run of removals grouped ahead of the matching run of additions rather than
- * interleaved line by line, which is the difference between a diff that reads
- * like a change and one that reads like noise.
+ * `ignoreNewlineAtEof` because the model rarely preserves the operator's trailing
+ * newline, and a statement whose only change is that newline should not show its
+ * last line as removed and re-added.
  *
  * ponytail: no intra-line diff — a reworded line shows as one removal plus one
- * addition. Add word-level marking if statements start arriving on one long line.
+ * addition. Add word-level marking (`diffWords`) if statements start arriving on
+ * one long line.
  */
 const lineDiff = (before: string, after: string): DiffLine[] => {
-    const from = before.split("\n");
-    const to = after.split("\n");
-    const width = to.length + 1;
-    // Flat, not nested: one allocation, and the row stride is explicit at every
-    // read rather than hidden behind a second index.
-    const table = new Int32Array((from.length + 1) * width);
-    /** LCS length of `from[i…]` against `to[j…]`. Out of range reads 0, which is the empty suffix. */
-    const lcs = (i: number, index: number): number => table[i * width + index] ?? 0;
-
-    for (let i = from.length - 1; i >= 0; i -= 1) {
-        for (let index = to.length - 1; index >= 0; index -= 1) {
-            table[i * width + index] = from[i] === to[index] ? lcs(i + 1, index + 1) + 1 : Math.max(lcs(i + 1, index), lcs(i, index + 1));
-        }
-    }
-
     const lines: DiffLine[] = [];
-    let i = 0;
-    let index = 0;
+    let beforeLine = 1;
+    let afterLine = 1;
 
-    while (i < from.length && index < to.length) {
-        if (from[i] === to[index]) {
-            lines.push({ kind: "context", text: from[i] ?? "" });
-            i += 1;
-            index += 1;
-        } else if (lcs(i + 1, index) >= lcs(i, index + 1)) {
-            lines.push({ kind: "removed", text: from[i] ?? "" });
-            i += 1;
-        } else {
-            lines.push({ kind: "added", text: to[index] ?? "" });
-            index += 1;
+    for (const change of diffLines(before, after, { ignoreNewlineAtEof: true })) {
+        for (const text of splitLines(change.value)) {
+            if (change.added) {
+                lines.push({ after: afterLine, kind: "added", text });
+                afterLine += 1;
+            } else if (change.removed) {
+                lines.push({ before: beforeLine, kind: "removed", text });
+                beforeLine += 1;
+            } else {
+                lines.push({ after: afterLine, before: beforeLine, kind: "context", text });
+                beforeLine += 1;
+                afterLine += 1;
+            }
         }
-    }
-
-    for (; i < from.length; i += 1) {
-        lines.push({ kind: "removed", text: from[i] ?? "" });
-    }
-
-    for (; index < to.length; index += 1) {
-        lines.push({ kind: "added", text: to[index] ?? "" });
     }
 
     return lines;
