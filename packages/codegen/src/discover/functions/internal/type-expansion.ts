@@ -117,7 +117,10 @@ const expandArrayType = (type: Type, node: Node, handlerFilePath: string, depth:
         return undefined;
     }
 
-    return element?.isUnion() ? `(${rendered})[]` : `${rendered}[]`;
+    // `[]` binds tighter than both `|` and `&`, so a composite element has to be
+    // parenthesised or `A & B[]` reads as `A & (B[])` — a different type that
+    // still compiles, which is the worst kind of wrong.
+    return element?.isUnion() === true || element?.isIntersection() === true ? `(${rendered})[]` : `${rendered}[]`;
 };
 
 /**
@@ -138,6 +141,42 @@ const expandUnionType = (type: Type, node: Node, handlerFilePath: string, depth:
     }
 
     return parts.join(" | ");
+};
+
+/**
+ * Expand an intersection type; returns `undefined` when any member can't be reproduced.
+ * Receives `expand` as a parameter to avoid a forward-reference cycle.
+ *
+ * Without this branch an intersection fell through to {@link expandObjectType},
+ * whose `isObject()` guard an intersection does not satisfy — so it declined and
+ * the caller erased the whole type to `unknown`. That is not an exotic shape: a
+ * mapped type split into optional and required halves is how `v.object(...)`
+ * infers, so every `Infer<v.object(…)>` that reached expansion landed on it
+ * (issue #810).
+ */
+const expandIntersectionType = (
+    type: Type,
+    node: Node,
+    handlerFilePath: string,
+    depth: number,
+    nextSeen: Set<Type>,
+    expand: ExpandFunction,
+): string | undefined => {
+    const parts: string[] = [];
+
+    for (const member of type.getIntersectionTypes()) {
+        const rendered = expand(member, node, handlerFilePath, depth, nextSeen);
+
+        if (rendered === undefined) {
+            return undefined;
+        }
+
+        // `&` binds tighter than `|`, so a union member needs parentheses or
+        // `A & B | C` silently becomes `(A & B) | C`.
+        parts.push(member.isUnion() ? `(${rendered})` : rendered);
+    }
+
+    return parts.join(" & ");
 };
 
 /**
@@ -441,6 +480,10 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     if (type.isUnion()) {
         return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    if (type.isIntersection()) {
+        return expandIntersectionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
     }
 
     return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);

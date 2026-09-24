@@ -24,12 +24,14 @@ import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
+import { discoverErasedReturns, resetErasedReturns } from "./discover/erased-returns";
 import discoverExportSinks from "./discover/export-sinks";
 import discoverFailOpenGuards from "./discover/fail-open-guards";
 import { discoverFlagKeys } from "./discover/flag-keys";
 import discoverFlagReads from "./discover/flag-reads";
 import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
 import discoverFunctions from "./discover/functions";
+import { checkpointErasedReturns } from "./discover/functions/internal/erased-returns";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
 import discoverGeoIndexUsages from "./discover/geo-index-usages";
 import discoverHttpActionGuards from "./discover/http-action-guards";
@@ -421,6 +423,10 @@ const inferToFixpoint = (options: {
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
     // the files those types resolve against change. Everything else in the
     // pipeline reads syntax, not inference, and stays outside.
+    // Erasures recorded by a pass that is then re-run are stale — a later pass
+    // may render the same return — so each re-run drops the previous pass's.
+    const rewindErasedReturns = checkpointErasedReturns();
+
     let functions = discoverFunctions(project, lunoraDirectory);
     let mutators = discoverMutators(project, lunoraDirectory);
     let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -456,6 +462,7 @@ const inferToFixpoint = (options: {
         syncProjectFile(project, apiPath, apiContent);
         syncProjectFile(project, generatedFunctionsPath, functionsContent);
 
+        rewindErasedReturns();
         functions = discoverFunctions(project, lunoraDirectory);
         mutators = discoverMutators(project, lunoraDirectory);
         httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
@@ -597,6 +604,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // registered here rather than imported by the parser, which would be a
     // cycle.
     setStandardTypeResolver(resolveStandardSchemaType);
+
+    // Same reason, same place: the erasure buffer those resolvers fill is
+    // module-level, so a previous run that threw before draining it would
+    // otherwise report its erasures against this project.
+    resetErasedReturns();
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
@@ -764,6 +776,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                       byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
                   }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
+                  // The third, and the output-side twin of the second: a return
+                  // type codegen could render as neither a name nor a structure,
+                  // so `api.ts` says `unknown` where the runtime returns a shape.
+                  // Drains a buffer the discovery passes above filled — the
+                  // signal ("expansion produced nothing") exists only at the
+                  // moment of the fallback, so it cannot be re-derived here.
+                  ...discoverErasedReturns(lunoraDirectory),
               ];
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

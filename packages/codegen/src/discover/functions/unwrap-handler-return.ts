@@ -1,6 +1,7 @@
 import type { Node, Type } from "ts-morph";
 
 import isAnyDegraded from "./internal/any-token";
+import { recordErasedReturn } from "./internal/erased-returns";
 import { containsUnencodableMember, expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
 
 /**
@@ -76,7 +77,17 @@ const unwrapHandlerReturn = (handler: Node): string => {
     const handlerFilePath = handler.getSourceFile().getFilePath();
 
     if (referencesUnreachableLocalType(returnType, handler, handlerFilePath)) {
-        return expandUnreachableType(returnType, handler, handlerFilePath, 0, new Set<Type>()) ?? "unknown";
+        const expanded = expandUnreachableType(returnType, handler, handlerFilePath, 0, new Set<Type>());
+
+        // Falling back here is a SILENT downgrade: the caller sees `unknown`
+        // where a shape was inferred, every consumer of it breaks, and codegen
+        // exits 0. Report it the way the argument side already reports an
+        // unreadable `.input()` record (issue #810).
+        if (expanded === undefined) {
+            recordErasedReturn(handler, rendered);
+        }
+
+        return expanded ?? "unknown";
     }
 
     return rendered;

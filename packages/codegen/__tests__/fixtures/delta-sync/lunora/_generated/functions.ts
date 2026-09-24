@@ -62,6 +62,7 @@ export interface RegisteredLunoraFunction {
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "notes:add": lunora_notes_0.add as unknown as RegisteredLunoraFunction,
     "notes:list": lunora_notes_0.list as unknown as RegisteredLunoraFunction,
+    "notes:summary": lunora_notes_0.summary as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -150,6 +151,7 @@ export interface Caller {
     notes: {
         add: (args: { body: string; boardId: string }) => Promise<import("@lunora/values").Id<"notes">>;
         list: (args: { boardId: string }) => Promise<import("./dataModel.js").Doc_notes[]>;
+        summary: (args?: {}) => Promise<({ body?: string | undefined; } & { title: string; }) | null>;
     };
 }
 
@@ -189,6 +191,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     notes: {
         add: (args) => callRegistered(context, "notes:add", args),
         list: (args) => callRegistered(context, "notes:list", args),
+        summary: (args) => callRegistered(context, "notes:summary", args),
     },
 });
 

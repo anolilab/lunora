@@ -5,6 +5,7 @@ import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../../parse-validator";
 import { builderChainSteps } from "../../builder-chain";
 import unwrapHandlerReturn from "../unwrap-handler-return";
+import { parseOutput } from "./erased-returns";
 
 /**
  * Pull the handler's return type out of an object-literal `query/mutation/action`
@@ -100,7 +101,7 @@ const outputFromBuilderChain = (receiver: Node): ValidatorIR | undefined => {
 
     const argument = step.call.getArguments()[0];
 
-    return argument && Node.isExpression(argument) ? parseValidator(argument) : undefined;
+    return argument && Node.isExpression(argument) ? parseOutput(step.call, () => parseValidator(argument)) : undefined;
 };
 
 export { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall };
