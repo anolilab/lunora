@@ -139,4 +139,44 @@ describe("durable object fts5 search companion on workerd", () => {
             expect(sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "${COMPANION}" WHERE "${COMPANION}"."rowid" > 0`).one().n).toBe(0);
         });
     });
+
+    it("drains a large legacy companion a bounded page at a time, and on search reads", async () => {
+        expect.assertions(3);
+
+        await withSql("search-legacy-large", async (sql) => {
+            const exec = sql as unknown as SqlExec;
+
+            runShardMigrations(exec, schemaWith([]));
+
+            const plain = createShardCtxDb({ schema: schemaWith([]), sql: exec });
+
+            for (let n = 0; n < 700; n += 1) {
+                // eslint-disable-next-line no-await-in-loop -- seeded in order
+                await plain.insert("docs", { _id: `d${String(n).padStart(4, "0")}`, body: `word${String(n)} common` }, { allowExplicitId: true });
+            }
+
+            sql.exec(`CREATE VIRTUAL TABLE "${COMPANION}" USING fts5("__text__", "__id__" UNINDEXED)`);
+            sql.exec(
+                `INSERT INTO "${COMPANION}" ("__text__", "__id__") SELECT json_extract("docs"."__doc__", '$.body'), "docs"."id" FROM "docs" ORDER BY "docs"."id"`,
+            );
+
+            const unmigrated = (): number => sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "${COMPANION}" WHERE "${COMPANION}"."rowid" > 0`).one().n;
+            const staged = schemaWith([{ ...INDEX, staged: true }]);
+
+            runShardMigrations(exec, staged);
+
+            // One cold start moves one bounded page…
+            expect(unmigrated()).toBe(200);
+
+            // …and a long-lived object keeps draining on its search reads.
+            await createShardCtxDb({ schema: staged, sql: exec })
+                .query("docs")
+                .withSearchIndex(INDEX.name, (q) => q.search("body", "common"))
+                .take(1)
+                .catch(() => undefined);
+
+            expect(unmigrated()).toBe(0);
+            expect(sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "${COMPANION}" WHERE "${COMPANION}"."__id__" <> ''`).one().n).toBe(700);
+        });
+    });
 });

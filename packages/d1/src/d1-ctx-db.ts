@@ -10,7 +10,7 @@
  */
 /* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts, introspect/admin, and every test import it as "./d1-ctx-db". */
 import type { SchemaLike } from "@lunora/shard-engine";
-import type { SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
+import type { SqlCtxDbOptions, SqlCtxExec, SqlSearchBackfillResult } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,
     createSqlCtxDb,
@@ -45,7 +45,8 @@ const runD1RankMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void
 const runD1SearchMigrations = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => runSqlSearchMigrations(exec, schema, sqliteDialect);
 
 /** Index existing rows into every search companion, including the `staged: true` ones migrations leave empty. */
-const backfillD1SearchIndexes = (exec: SqlCtxExec, schema: SchemaLike): Promise<void> => backfillSqlSearchIndexes(exec, schema, sqliteDialect);
+const backfillD1SearchIndexes = (exec: SqlCtxExec, schema: SchemaLike): Promise<SqlSearchBackfillResult> =>
+    backfillSqlSearchIndexes(exec, schema, sqliteDialect);
 
 /** Create the `__cdc_log` table in D1 (idempotent; only run when CDC is enabled). */
 const runD1CdcMigration = (exec: SqlCtxExec): Promise<void> => runSqlCdcMigration(exec, sqliteDialect);

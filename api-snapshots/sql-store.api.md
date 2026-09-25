@@ -107,10 +107,18 @@ interface SqlRunResult {
 }
 ```
 
+### `SqlSearchBackfillResult` (interface)
+
+```ts
+interface SqlSearchBackfillResult {
+    unmappedSkipped: number;
+}
+```
+
 ### `backfillSqlSearchIndexes` (const)
 
 ```ts
-const backfillSqlSearchIndexes: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<void>;
+const backfillSqlSearchIndexes: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<SqlSearchBackfillResult>;
 ```
 
 ### `createSqlCtxDb` (const)

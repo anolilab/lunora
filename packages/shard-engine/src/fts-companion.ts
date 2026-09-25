@@ -42,6 +42,11 @@ import { FTS_ID_COLUMN, FTS_TEXT_COLUMN } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { sqliteInList } from "./drizzle";
+
+/** Rowids bound one per parameter before the list goes as one JSON array; leaves room for the statement's other parameters. */
+const IN_LIST_BUDGET = 50;
+
 /** The mapped FTS5 rowid column in {@link ftsRowidMapName}. */
 const FTS_ROWID_COLUMN = "__rowid__";
 
@@ -73,16 +78,14 @@ interface FtsWriteOptions {
 const dropEntry = (companion: string, id: string, { guard, unmappedRowids }: FtsWriteOptions): SQL[] => {
     const map = ftsRowidMapName(companion);
     const guarded = guard === undefined ? sql`` : sql` AND ${guard}`;
+    // Past the 100-parameter cap, `sqliteInList` binds the rowids as one JSON array.
     const unmapped =
-        unmappedRowids === undefined
-            ? sql`${column(companion, "rowid")} > 0`
-            : sql`${column(companion, "rowid")} IN (${sql.join(
-                  unmappedRowids.map((rowid) => sql.param(rowid)),
-                  sql`, `,
-              )})`;
+        unmappedRowids === undefined ? sql`${column(companion, "rowid")} > 0` : sqliteInList(column(companion, "rowid"), unmappedRowids, false, IN_LIST_BUDGET);
 
     return [
-        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${unmapped} AND ${column(companion, FTS_ID_COLUMN)} = ${id}${guarded}`,
+        // Compared as text: a previous build's row may hold a non-text id, and
+        // an exact match would then never drop it.
+        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${unmapped} AND CAST(${column(companion, FTS_ID_COLUMN)} AS TEXT) = ${id}${guarded}`,
         // `__id__` re-checked: an isolate on the previous build may have purged
         // this rowid and reused it for another document.
         sql`DELETE FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} = (SELECT ${column(map, FTS_ROWID_COLUMN)} FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id}) AND ${column(companion, FTS_ID_COLUMN)} = ${id}${guarded}`,
@@ -96,7 +99,10 @@ const ftsCompanionDdl = (companion: string): SQL[] => [
     // COUNT — what lets the reader rank by the shared scorer in SQL.
     sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(`${companion}__vocab`)} USING fts5vocab(${sql.identifier(companion)}, ${sql.raw("instance")})`,
     sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(ftsRowidMapName(companion))} (${sql.identifier(FTS_ROWID_COLUMN)} INTEGER PRIMARY KEY, ${sql.identifier(FTS_ID_COLUMN)} TEXT NOT NULL UNIQUE)`,
-    // No text, so no term ever matches it, and an id no document has.
+    // No text, so no term ever matches it, and an id no document has. FTS5
+    // does count it as a document of length 0, which shifts `bm25()` (one more
+    // document, a lower average length) — but nothing here ranks by bm25: both
+    // readers score from the `fts5vocab` instance counts, where it has none.
     sql`INSERT INTO ${sql.identifier(companion)} (rowid, ${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) SELECT 0, '', '' WHERE NOT EXISTS (SELECT 1 FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} = 0)`,
 ];
 
@@ -126,10 +132,11 @@ const ftsPurgeDocument = (companion: string, id: string, options: FtsWriteOption
 
 /**
  * The next `limit` rows the map does not know about — a previous build's, in
- * rowid order — as `{ id, rowid }`. The sentinel at rowid 0 is excluded.
+ * rowid order, past `after` — as `{ id, rowid }`. The sentinel at rowid 0 is
+ * excluded.
  */
-const ftsUnmappedPage = (companion: string, limit: number): SQL =>
-    sql`SELECT ${column(companion, "rowid")} AS ${sql.identifier("rowid")}, ${column(companion, FTS_ID_COLUMN)} AS ${sql.identifier("id")} FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} > 0 AND ${column(companion, FTS_ID_COLUMN)} IS NOT NULL ORDER BY ${column(companion, "rowid")} ASC LIMIT ${sql.raw(String(limit))}`;
+const ftsUnmappedPage = (companion: string, limit: number, after = 0): SQL =>
+    sql`SELECT ${column(companion, "rowid")} AS ${sql.identifier("rowid")}, ${column(companion, FTS_ID_COLUMN)} AS ${sql.identifier("id")} FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} > ${sql.param(Math.max(0, after))} AND ${column(companion, FTS_ID_COLUMN)} IS NOT NULL ORDER BY ${column(companion, "rowid")} ASC LIMIT ${sql.raw(String(limit))}`;
 
 /** Group a {@link ftsUnmappedPage} result by document id. */
 const groupUnmappedRows = (rows: ReadonlyArray<Record<string, unknown>>): Map<string, number[]> => {

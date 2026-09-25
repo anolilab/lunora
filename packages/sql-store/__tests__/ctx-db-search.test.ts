@@ -478,7 +478,7 @@ describe("global search provisioning", () => {
 
             // "The documented remedy throws unless you happened to migrate first"
             // is not a remedy.
-            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toBeUndefined();
+            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toStrictEqual({ unmappedSkipped: 0 });
         });
 
         it("walks a table larger than one backfill page", async () => {

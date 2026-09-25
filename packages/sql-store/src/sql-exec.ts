@@ -119,8 +119,8 @@ const queryBatch = async (exec: SqlCtxExec, dialect: SqlDialect, queries: Readon
 /**
  * Run statements that must not be separated: in order, and on the `sqlite`
  * dialect, where an exec's `batch` is D1's ordered transaction, as one atomic
- * unit — no other writer lands between them. Without `batch` (the in-process
- * `node:sqlite` store) they run sequentially.
+ * unit — no other writer lands between them. An exec without `batch` runs them
+ * sequentially, which leaves them open to interleaving with another writer.
  */
 const runInOrder = async (exec: SqlCtxExec, dialect: SqlDialect, queries: ReadonlyArray<SQL>): Promise<void> => {
     if (exec.batch && dialect.name === "sqlite") {
@@ -402,9 +402,10 @@ const readRowsPage = (
     after: string | undefined,
     limit: number,
 ): Promise<Record<string, unknown>[]> => {
-    const seek = after === undefined ? sql`` : sql` WHERE ${sql.identifier("id")} > ${after}`;
+    const id = sql`${sql.identifier(tableName)}.${sql.identifier("id")}`;
+    const seek = after === undefined ? sql`` : sql` WHERE ${id} > ${after}`;
 
-    return queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)}${seek} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(limit))}`);
+    return queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)}${seek} ORDER BY ${id} ASC LIMIT ${sql.raw(String(limit))}`);
 };
 
 /**

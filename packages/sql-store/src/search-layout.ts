@@ -552,6 +552,16 @@ const globalSearchIndexes = function* (schema: SchemaLike): Generator<[string, T
 /** The companion table backing one index. */
 const companionFor = (tableName: string, index: SearchIndexDefinitionLike): string => ftsTableName(tableName, index.name);
 
+/** One {@link migrateUnmappedEntries} pass over a page of unmapped rows. */
+interface UnmappedPass {
+    /** No unmapped rows past this page. */
+    done: boolean;
+    /** The highest rowid the page covered: where the next page starts. */
+    last: number;
+    /** Rows of this page still unmapped — each one lost its write to a concurrent one. */
+    left: number;
+}
+
 /** FTS5 rows rewritten per migration pass — the bound on one cold start's share of it. */
 const FTS_UNMAPPED_PAGE_ROWS = 100;
 
@@ -590,8 +600,10 @@ const indexDocumentAsRead = async (
 /**
  * Rewrite one bounded page of the FTS5 rows the rowid map does not know about —
  * a previous build's, including any it wrote during the rollout — from the
- * source table. Returns `true` once none are left, which after that costs one
- * empty rowid-range read. A no-op on the other layouts.
+ * source table, starting past rowid `after`, and report how the page went (see
+ * {@link UnmappedPass}). Once none are left, a pass costs two reads: the source
+ * table's existence probe and an empty rowid-range read. A no-op on the other
+ * layouts.
  *
  * Rewriting from the source row, rather than adopting the stored text, is what
  * repairs a document indexed twice: which copy is stale cannot be told from the
@@ -605,22 +617,31 @@ const migrateUnmappedEntries = async (
     definition: TableDefinitionLike,
     tableName: string,
     index: SearchIndexDefinitionLike,
-): Promise<boolean> => {
+    after = 0,
+): Promise<UnmappedPass> => {
+    const nothing: UnmappedPass = { done: true, last: after, left: 0 };
+
     if (resolveSearchLayout(index, dialect) !== fts5Layout) {
-        return true;
+        return nothing;
     }
 
     const source = await queryAll(exec, dialect, dialect.tableExists(tableName));
 
     if (source.length === 0) {
-        return true;
+        return nothing;
     }
 
     const companion = companionFor(tableName, index);
-    const unmapped = await queryAll(exec, dialect, ftsUnmappedPage(companion, FTS_UNMAPPED_PAGE_ROWS));
+    const unmapped = await queryAll(exec, dialect, ftsUnmappedPage(companion, FTS_UNMAPPED_PAGE_ROWS, after));
+
+    if (unmapped.length === 0) {
+        return nothing;
+    }
+
+    const last = Math.max(...unmapped.map((row) => Number(row["rowid"])));
     const byId = groupUnmappedRows(unmapped);
     const ids = [...byId.keys()];
-    const sources = new Map<unknown, Record<string, unknown>>();
+    const sources = new Map<string, Record<string, unknown>>();
 
     // Bound parameters stay under the engine's 100 per statement.
     for (let start = 0; start < ids.length; start += SOURCE_LOOKUP_IDS) {
@@ -636,9 +657,12 @@ const migrateUnmappedEntries = async (
         );
 
         for (const row of rows) {
-            sources.set(row["id"], row);
+            // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
+            sources.set(String(row["id"]), row);
         }
     }
+
+    const statements: SQL[] = [];
 
     for (const [id, unmappedRowids] of byId) {
         const row = sources.get(id);
@@ -648,18 +672,29 @@ const migrateUnmappedEntries = async (
             row === undefined
                 ? sql`NOT EXISTS (SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} = ${id})`
                 : unchangedSince({ row, table: tableName });
-        const statements = document
-            ? ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard, unmappedRowids })
-            : ftsPurgeDocument(companion, id, { guard, unmappedRowids });
-
-        // eslint-disable-next-line no-await-in-loop -- one document's statements at a time on the shared connection.
-        await runInOrder(exec, dialect, statements);
+        statements.push(
+            ...(document
+                ? ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard, unmappedRowids })
+                : ftsPurgeDocument(companion, id, { guard, unmappedRowids })),
+        );
     }
 
-    return unmapped.length < FTS_UNMAPPED_PAGE_ROWS;
+    // The whole page in one batch: one D1 round trip, not one per document.
+    // Each document's statements carry their own guard, so one losing to a
+    // concurrent write leaves only its own rows in place.
+    await runInOrder(exec, dialect, statements);
+
+    // What lost to a concurrent write stays in the page's range.
+    const left = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(companion)} WHERE ${qualified(companion, "rowid")} > ${Math.max(0, after)} AND ${qualified(companion, "rowid")} <= ${last}`,
+    );
+
+    return { done: unmapped.length < FTS_UNMAPPED_PAGE_ROWS, last, left: Number(left[0]?.["n"] ?? 0) };
 };
 
-export type { SearchLayout, SearchStage, SourceRow };
+export type { SearchLayout, SearchStage, SourceRow, UnmappedPass };
 export {
     companionFor,
     companionProfile,

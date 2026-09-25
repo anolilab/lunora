@@ -96,18 +96,27 @@ export type NodeGlobalContextDatabaseOptions = Omit<SqlCtxDbOptions, "dialect" |
 /**
  * Wrap a `better-sqlite3` connection as the async exec the store core consumes.
  *
- * `batch` is deliberately **not** implemented. The contract lets an exec that
- * omits it fall back to a sequential `run()` loop, and that fallback is already
- * optimal here: `batch` exists to collapse network round trips (D1 does it
- * atomically in one request; the Hyperdrive adapters dispatch concurrently over
- * a pool), and an embedded database has no round trip to collapse. Declaring it
- * would buy nothing and would opt this exec into the "MAY reorder or
- * parallelize" licence for no reason.
+ * `batch` runs the statements in order inside one `better-sqlite3`
+ * transaction, which is synchronous, so nothing else runs between them. There is
+ * no round trip to save; atomicity is the point. The store core's FTS5 search
+ * companion writes each document as an ordered list of statements, and without
+ * this two async writers interleaved at every `await` between them: one could
+ * move a document's mapping while the other's entry was mid-write, leaving an
+ * entry no later write or purge could reach. The `sqlite` dialect's contract
+ * requires an ordered, atomic `batch` for exactly that reason.
  */
 export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- the exec seam is async so a networked engine can await; better-sqlite3 is synchronous
         all: async (statement, parameters) => preparedStatement(database, statement).all(...(parameters as unknown[])) as Record<string, unknown>[],
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
+        batch: async (statements) => {
+            database.transaction(() => {
+                for (const { params, sql } of statements) {
+                    preparedStatement(database, sql).run(...(params as unknown[]));
+                }
+            })();
+        },
         // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
         run: async (statement, parameters) => {
             const result = preparedStatement(database, statement).run(...(parameters as unknown[]));

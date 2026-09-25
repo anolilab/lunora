@@ -4058,7 +4058,7 @@ const ftsRowidMapName: (companion: string) => string;
 ### `ftsUnmappedPage` (const)
 
 ```ts
-const ftsUnmappedPage: (companion: string, limit: number) => SQL;
+const ftsUnmappedPage: (companion: string, limit: number, after?: number) => SQL;
 ```
 
 ### `ftsWriteDocument` (const)

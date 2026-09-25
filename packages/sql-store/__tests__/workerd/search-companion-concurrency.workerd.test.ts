@@ -564,6 +564,61 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         await expect(companionRows(table)).resolves.toBe(ROWS + 1);
     });
 
+    it("stops retrying a drain page whose documents are rewritten on every attempt, and reports them", async () => {
+        expect.assertions(4);
+
+        const table = "legacy_hot";
+        const companion = companionOf(table);
+
+        await legacyCompanion(table, (n) => `other${String(n)} common`);
+
+        // Another isolate, already past its own cold start (which moved only
+        // the first page), rewrites each document just before the drain
+        // writes it. Title-only writes: they never re-index a row themselves,
+        // so every drain write loses its guard and the page makes no progress.
+        const hotWriter = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+
+        await hotWriter.count(table);
+
+        let rewrites = 0;
+        const rewriteFirst = async (text: string, parameters: ReadonlyArray<unknown>): Promise<void> => {
+            const id = parameters.find((parameter) => typeof parameter === "string" && parameter.startsWith("r"));
+
+            if (text.startsWith(`DELETE FROM "${companion}" WHERE "${companion}"."rowid" IN`) && typeof id === "string") {
+                rewrites += 1;
+                await hotWriter.patch(id, { title: `t${String(rewrites)}` });
+            }
+        };
+
+        const result = await backfillSqlSearchIndexes(d1Exec(rewriteFirst), schemaFor(table, INDEX), d1Dialect);
+        const unmigrated = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."rowid" > 0`).first<{ n: number }>();
+
+        // Every row past the first page lost every attempt and is left for a
+        // later pass — counted, not spun on.
+        expect(unmigrated?.n).toBe(ROWS - 100);
+        expect(result.unmappedSkipped).toBe(ROWS - 100);
+        // A bounded number of attempts per row, not one per write the other isolate makes.
+        expect(rewrites).toBeLessThanOrEqual(3 * (ROWS - 100));
+        await expect(search(table, "other249")).resolves.toStrictEqual([pad(249)]);
+    }, 20_000);
+
+    it("drains a previous build's row whose id is not text", async () => {
+        expect.assertions(2);
+
+        const table = "legacy_numeric_id";
+        const companion = companionOf(table);
+
+        await legacyCompanion(table, (n) => `other${String(n)} common`);
+        // No document has this id — as text or otherwise — so its row has to go.
+        await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES ('ghost common', 12345)`).run();
+
+        const result = await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."rowid" > 0`).first<{ n: number }>();
+
+        expect(left?.n).toBe(0);
+        expect(result.unmappedSkipped).toBe(0);
+    }, 20_000);
+
     it("migrates a large companion a bounded page per cold start", async () => {
         expect.assertions(3);
 
@@ -588,7 +643,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         expect(before).toBe(ROWS);
         // One cold start moves one bounded page, and leaves the rest for later.
-        expect(afterOne).toBeGreaterThan(0);
+        expect(before - afterOne).toBe(100);
         await expect(unmigrated()).resolves.toBe(0);
     });
 });

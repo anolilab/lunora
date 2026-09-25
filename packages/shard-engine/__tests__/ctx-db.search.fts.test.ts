@@ -16,7 +16,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 const COMPANION = '"docs__fts_by_body"';
 const MAP = '"docs__fts_by_body__ids"';
 /** Drops the document's rows a previous build wrote (positive rowids), by `__id__`. */
-const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND ${COMPANION}."__id__" = ?`;
+const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND CAST(${COMPANION}."__id__" AS TEXT) = ?`;
 /** Drops the document's mapped row — only if it still holds this document. */
 const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
 const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;

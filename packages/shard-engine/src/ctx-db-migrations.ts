@@ -26,7 +26,7 @@ import { aggregateTableName } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
-import { backfillSearchIndexesForTable, drainUnmappedFtsRows } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateCommitSeq } from "./ctx-db-commit-seq";
@@ -255,7 +255,6 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
 
     for (const index of definition.searchIndexes) {
         runAll(sql, ftsCompanionDdl(ftsTableName(tableName, index.name)));
-        drainUnmappedFtsRows(sql, tableName, index);
     }
 
     backfillSearchIndexesForTable(sql, tableName, definition);

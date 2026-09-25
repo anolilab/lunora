@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { sqliteDialect } from "@lunora/d1";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import type { SqlCtxExec } from "@lunora/sql-store";
+import { createSqlCtxDb } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createNodeGlobalStore } from "../src/node-global-store";
@@ -97,6 +100,82 @@ describe("createNodeGlobalStore", () => {
             expect(document).toMatchObject({ body: "kept", slug: "keep" });
         } finally {
             second.dispose();
+        }
+    });
+
+    it("leaves no search entry unreachable when two writers of one document interleave", async () => {
+        expect.assertions(2);
+
+        const searchSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    indexes: [],
+                    searchIndexes: [{ field: "body", filterFields: [], name: "by_body" }],
+                    shape: { body: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+        const store = createNodeGlobalStore();
+
+        try {
+            await store.migrate(searchSchema);
+            await store.writer({ schema: searchSchema }).insert("docs", { _id: "x", body: "one" }, { allowExplicitId: true });
+
+            // Writer A is held just before it re-points the document's mapping,
+            // and writer B rewrites the same document meanwhile. The store's own
+            // exec, gated: a batch is held whole, as it runs whole.
+            let release!: () => void;
+            let reached!: () => void;
+            const released = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            const reachedHold = new Promise<void>((resolve) => {
+                reached = resolve;
+            });
+            const gate = async (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>): Promise<void> => {
+                if (statements.some(({ params, sql }) => sql.startsWith(`INSERT OR REPLACE INTO "docs__fts_by_body__ids"`) && params.includes("x"))) {
+                    reached();
+                    await released;
+                }
+            };
+            const { exec } = store;
+            const gated: SqlCtxExec = {
+                all: exec.all,
+                ...(exec.batch === undefined
+                    ? {}
+                    : {
+                          batch: async (statements) => {
+                              await gate(statements);
+                              await exec.batch?.(statements);
+                          },
+                      }),
+                run: async (sql, params) => {
+                    await gate([{ params, sql }]);
+
+                    return exec.run(sql, params);
+                },
+            };
+
+            const writerA = createSqlCtxDb({ dialect: sqliteDialect, exec: gated, schema: searchSchema }).patch("x", { body: "two" });
+
+            await reachedHold;
+            await createSqlCtxDb({ dialect: sqliteDialect, exec, schema: searchSchema }).patch("x", { body: "three" });
+            release();
+            await writerA;
+
+            const count = (where: string): number =>
+                (store.database.prepare(`SELECT COUNT(*) AS n FROM "docs__fts_by_body" AS f WHERE ${where}`).get() as { n: number }).n;
+
+            expect(count(`f."__id__" = 'x'`)).toBe(1);
+            // An entry the map does not point at can never be reached again.
+            expect(
+                count(
+                    `f."__id__" <> '' AND NOT EXISTS (SELECT 1 FROM "docs__fts_by_body__ids" AS k WHERE k."__rowid__" = f.rowid AND k."__id__" = f."__id__")`,
+                ),
+            ).toBe(0);
+        } finally {
+            store.dispose();
         }
     });
 });

@@ -17,6 +17,7 @@
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { analyzedSearchText, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -257,6 +258,9 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     return { done, rows: rows.length };
 };
 
+/** `"<table>"."<column>"`, so a name that resolves to nothing errors instead of reading as a string. */
+const qualified = (table: string, column: string): SQL => dsql`${dsql.identifier(table)}.${dsql.identifier(column)}`;
+
 /** Unmapped companion rows rewritten per cold start — the bound on one migration pass. */
 const FTS_UNMAPPED_PAGE_ROWS = 500;
 
@@ -268,21 +272,23 @@ const FTS_UNMAPPED_PAGE_ROWS = 500;
  * copy is fresh; a document that no longer parses, or no longer exists, loses
  * its entry. Once none are left this is one empty rowid-range read.
  */
-const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): void => {
+const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
     const ftName = ftsTableName(tableName, index.name);
-    const byId = groupUnmappedRows(runDrizzle(sql, ftsUnmappedPage(ftName, FTS_UNMAPPED_PAGE_ROWS)).toArray());
+    const page = runDrizzle(sql, ftsUnmappedPage(ftName, FTS_UNMAPPED_PAGE_ROWS)).toArray();
+    const byId = groupUnmappedRows(page);
 
     if (byId.size === 0) {
-        return;
+        return true;
     }
 
-    const sources = new Map<unknown, Record<string, unknown>>();
+    const sources = new Map<string, Record<string, unknown>>();
 
     for (const row of runDrizzle(
         sql,
-        dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(dsql.join([dsql.identifier("id")]), [...byId.keys()], false)}`,
+        dsql`SELECT ${qualified(tableName, "id")}, ${qualified(tableName, "_creationTime")}, ${qualified(tableName, DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(qualified(tableName, "id"), [...byId.keys()], false)}`,
     )) {
-        sources.set(row["id"], row);
+        // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
+        sources.set(String(row["id"]), row);
     }
 
     for (const [id, unmappedRowids] of byId) {
@@ -294,6 +300,19 @@ const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchInde
             record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index), { unmappedRowids }) : ftsPurgeDocument(ftName, id, { unmappedRowids }),
         );
     }
+
+    return page.length < FTS_UNMAPPED_PAGE_ROWS;
+};
+
+/** Drain a previous build's rows until none are left or `budget` pages are spent; returns the pages spent. */
+const drainUnmappedFtsPages = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike, budget: number): number => {
+    let pages = 0;
+
+    while (pages < budget && !drainUnmappedFtsRows(sql, tableName, index)) {
+        pages += 1;
+    }
+
+    return pages;
 };
 
 /**
@@ -361,6 +380,11 @@ const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definiti
     }
 
     for (const index of definition.searchIndexes ?? []) {
+        // A previous build's rows, a bounded page at a time — on cold start and
+        // on every search read, so a long-lived Durable Object keeps draining
+        // them. Once none are left this is one empty rowid-range read.
+        drainUnmappedFtsRows(sql, tableName, index);
+
         // `staged` keeps the row walk out of the cold start, for tables too large
         // to walk there. A table with no rows is not one of those, and skipping it
         // records nothing — so the index would report no coverage and refuse every
@@ -459,6 +483,13 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
         }
 
         for (const index of definition.searchIndexes) {
+            // A previous build's rows first, each drain page spending the same budget.
+            pages += drainUnmappedFtsPages(sql, tableName, index, maxPages - pages);
+
+            if (pages >= maxPages) {
+                return { done: false, pages };
+            }
+
             const progress = backfillSearchIndexPages(sql, tableName, index, maxPages - pages);
 
             pages += progress.pages;

@@ -412,6 +412,59 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
 };
 
 /**
+ * Attempts at one page of a previous build's rows before the drain moves past
+ * the ones that keep losing to a concurrent write. A loser is left in place:
+ * the next cold start's pass retries it, and a write that changes its text
+ * drops it anyway.
+ */
+const UNMAPPED_PAGE_ATTEMPTS = 3;
+
+/** What {@link backfillSqlSearchIndexes} could not finish. */
+interface SqlSearchBackfillResult {
+    /** A previous build's rows left unmigrated because every attempt at them lost to a concurrent write. */
+    unmappedSkipped: number;
+}
+
+/**
+ * Rewrite all of a companion's unmapped rows, a page at a time, retrying each
+ * page a bounded number of times. Returns how many rows it gave up on.
+ */
+const drainUnmappedEntries = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+): Promise<number> => {
+    let after = 0;
+    let skipped = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- pages are sequential: each starts where the last one ended.
+        let pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
+
+        for (let attempt = 1; pass.left > 0 && attempt < UNMAPPED_PAGE_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- a retry re-reads the page's losers from their newer source rows.
+            pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
+        }
+
+        if (pass.left > 0) {
+            skipped += pass.left;
+            // eslint-disable-next-line no-console -- the only channel a backfill pass has
+            console.warn(
+                `[@lunora/sql-store] search migration of "${companionFor(tableName, index)}": ${String(pass.left)} row(s) lost every one of ${String(UNMAPPED_PAGE_ATTEMPTS)} attempts to a concurrent write and were left for a later pass.`,
+            );
+        }
+
+        if (pass.done) {
+            return skipped;
+        }
+
+        after = pass.last;
+    }
+};
+
+/**
  * Run every declared search index — including the `staged: true` ones the
  * migration pass skips — through to completion. The entry point a host calls
  * out-of-band after deploying a search index over a table too large to index a
@@ -420,17 +473,17 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
  * Idempotent and resumable: an index recorded as complete is skipped, and an
  * interrupted run picks up from its cursor.
  */
-const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<SqlSearchBackfillResult> => {
+    let unmappedSkipped = 0;
+
     // Self-sufficient: a host may run this before any ctx-db has migrated this
     // binding, and "the documented remedy throws unless you happened to migrate
     // first" is not a remedy.
     await ensureSearchCompanions(exec, schema, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
-        // eslint-disable-next-line no-await-in-loop -- pages are sequential; a page that lost a race to a concurrent write leaves its rows for the next.
-        while (!(await migrateUnmappedEntries(exec, dialect, definition, tableName, index))) {
-            // Every page either rewrites its rows or leaves them for a newer source row.
-        }
+        // eslint-disable-next-line no-await-in-loop -- one companion at a time on the shared connection.
+        unmappedSkipped += await drainUnmappedEntries(exec, dialect, definition, tableName, index);
 
         let done = false;
 
@@ -439,6 +492,8 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
             done = await backfillSearchIndexPage(exec, dialect, definition, tableName, index);
         }
     }
+
+    return { unmappedSkipped };
 };
 
 /**
@@ -485,4 +540,5 @@ const createSearchSync = (deps: {
 };
 
 export type { SearchStage } from "./search-layout";
+export type { SqlSearchBackfillResult };
 export { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations };
