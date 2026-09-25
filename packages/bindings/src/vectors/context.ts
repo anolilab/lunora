@@ -323,6 +323,8 @@ interface TableVectorIndexLike {
     field: string;
     metadata?: ReadonlyArray<string>;
     metric?: string;
+    /** Declared identifier of what `embed` produces; part of the backfill fingerprint. */
+    model?: string;
     name: string;
 }
 
@@ -338,6 +340,8 @@ interface VectorIndexDefinitionLike {
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric?: string;
+    /** Declared identifier of what `embed` produces; part of the backfill fingerprint. */
+    model?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
@@ -770,26 +774,32 @@ const createVectorBackfillSync =
  * backfill, which re-walks a table whose fingerprint changed.
  *
  * Covers what the schema can see: index names, the inline source field,
- * dimensions, metric and inline metadata fields. A function (`embed`, a Shape B
- * `select`/`metadata`) has no stable identity to fingerprint — its source text
- * changes with unrelated rebuilds of the bundle, which would re-embed whole
- * tables for nothing — so changing one is announced by calling the backfill with
- * `restart: true`.
+ * dimensions, metric, inline metadata fields and the declared `model`. A
+ * function (`embed`, a Shape B `select`/`metadata`) has no stable identity to
+ * fingerprint — its source text changes with unrelated rebuilds of the bundle,
+ * which would re-embed whole tables for nothing — so the declared `model` string
+ * stands in for `embed`, and any other change is announced by calling the
+ * backfill with `restart: true`.
+ *
+ * `model` joins a descriptor only when declared, so an index without one keeps
+ * the fingerprint it was recorded under and is not re-embedded for it.
  */
 const vectorBackfillTargets = (schema: SchemaLike): { profile: string; table: string }[] => {
     const byTable = new Map<string, string[]>();
-    const add = (table: string, descriptor: unknown[]): void => {
-        byTable.set(table, [...(byTable.get(table) ?? []), JSON.stringify(descriptor)]);
+    const add = (table: string, descriptor: unknown[], model: string | undefined): void => {
+        const described = model === undefined ? descriptor : [...descriptor, model];
+
+        byTable.set(table, [...(byTable.get(table) ?? []), JSON.stringify(described)]);
     };
 
     for (const [table, definition] of Object.entries(schema.tables)) {
         for (const index of definition.vectorIndexes ?? []) {
-            add(table, [index.name, index.field, index.dimensions, index.metric, index.metadata ?? []]);
+            add(table, [index.name, index.field, index.dimensions, index.metric, index.metadata ?? []], index.model);
         }
     }
 
     for (const [name, index] of Object.entries(schema.vectorIndexes)) {
-        add(index.table, [name, "(select)", index.dimensions, index.metric]);
+        add(index.table, [name, "(select)", index.dimensions, index.metric], index.model);
     }
 
     return [...byTable].map(([table, descriptors]) => {

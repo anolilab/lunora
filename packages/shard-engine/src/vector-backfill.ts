@@ -185,11 +185,11 @@ const runPage = async (
  * (default 1).
  *
  * A target whose recorded profile differs from its current one (an index added,
- * renamed, re-pointed at another field, or given new dimensions/metric/metadata)
- * restarts from the top — the shared {@link planBackfillPass} decides, as it does
- * for search. Existing vectors are overwritten in place, never emptied first. An
- * embedder change the profile cannot see needs `restart: true`, which resets
- * every target up front.
+ * renamed, re-pointed at another field, or given new dimensions/metric/metadata/
+ * declared model) restarts from the top — the shared {@link planBackfillPass}
+ * decides, as it does for search. Existing vectors are overwritten in place, never
+ * emptied first. A change the profile cannot see (an `embed` swap with no declared
+ * `model`) needs `restart: true`, which resets every target up front.
  *
  * Two kinds of failure, handled oppositely. A row that fails on its own is
  * counted, reported and moved past: it would fail on every retry, and holding

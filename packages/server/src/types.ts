@@ -319,6 +319,8 @@ interface TableVectorIndex {
     field: string;
     metadata?: ReadonlyArray<string>;
     metric: VectorMetric;
+    /** Declared embedding model; see `VectorizeOptions.model`. */
+    model?: string;
     name: string;
 }
 
@@ -473,6 +475,8 @@ interface VectorIndexDefinition {
     readonly kind: "vectorIndex";
     readonly metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     readonly metric: VectorMetric;
+    /** Declared embedding model; see `VectorIndexOptions.model`. */
+    readonly model?: string;
     readonly select: (row: Record<string, unknown>) => string;
     readonly table: string;
 }

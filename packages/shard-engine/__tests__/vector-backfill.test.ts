@@ -112,7 +112,10 @@ describe("backfillVectorIndexes", () => {
     };
 
     /** Deploy 1 writes `count` rows with no vector index; deploy 2 declares `.vectorize(field)`. */
-    const deploy = async (count: number, field = "body", bodyOf: (index: number) => unknown = (index) => `body ${String(index)}`) => {
+    const deploy = async (
+        count: number,
+        { bodyOf = (index) => `body ${String(index)}`, field = "body", model }: { bodyOf?: (index: number) => unknown; field?: string; model?: string } = {},
+    ) => {
         const before: SchemaLike = { tables: { posts: { indexes: [], shape, softDeleteMode: { field: "deletedAt" } } } };
 
         runShardMigrations(harness.sql, before);
@@ -125,7 +128,7 @@ describe("backfillVectorIndexes", () => {
         }
 
         const schema = {
-            tables: { posts: { indexes: [], shape, softDeleteMode: { field: "deletedAt" }, vectorIndexes: [{ embed, field, name: "posts_body" }] } },
+            tables: { posts: { indexes: [], shape, softDeleteMode: { field: "deletedAt" }, vectorIndexes: [{ embed, field, model, name: "posts_body" }] } },
             vectorIndexes: {},
         } as never as SchemaLike & VectorSchemaLike;
         const vectors = memoryVectors();
@@ -180,7 +183,7 @@ describe("backfillVectorIndexes", () => {
 
         // Row 3 holds a non-string source; row 60 (second page) is text the model refuses.
         const bad: Record<number, unknown> = { 2: { not: "text" }, 59: "the model rejects this" };
-        const { run, vectors } = await deploy(PRE_EXISTING, "body", (index) => bad[index] ?? `body ${String(index)}`);
+        const { run, vectors } = await deploy(PRE_EXISTING, { bodyOf: (index) => bad[index] ?? `body ${String(index)}` });
 
         await expect(run({ maxPages: 10 })).resolves.toStrictEqual(
             progress({ done: true, failed: 2, failedIds: ["p_0003", "p_0060"], pages: 3, rows: PRE_EXISTING }),
@@ -215,11 +218,40 @@ describe("backfillVectorIndexes", () => {
         await run({ maxPages: 10 });
 
         // Re-pointed at another column: every stored vector embeds the wrong text now.
-        const repointed = await deploy(0, "title");
+        const repointed = await deploy(0, { field: "title" });
 
         await expect(repointed.run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true, pages: 3, rows: PRE_EXISTING }));
 
         expect(repointed.vectors.store.get("p_0001")).toBe("t0");
+    });
+
+    it("re-embeds the whole table when only the declared model changes", async () => {
+        expect.assertions(2);
+
+        const { run } = await deploy(PRE_EXISTING, { model: "@cf/baai/bge-base-en-v1.5" });
+
+        await run({ maxPages: 10 });
+
+        // Same field, dimensions and metric: only the model differs, so every stored vector is from the old one.
+        const swapped = await deploy(0, { model: "@cf/baai/bge-m3" });
+
+        await expect(swapped.run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true, pages: 3, rows: PRE_EXISTING }));
+
+        expect(swapped.vectors.store.size).toBe(PRE_EXISTING);
+    });
+
+    it("re-embeds nothing when the config, model included, is unchanged", async () => {
+        expect.assertions(2);
+
+        const { run } = await deploy(PRE_EXISTING, { model: "@cf/baai/bge-base-en-v1.5" });
+
+        await run({ maxPages: 10 });
+
+        const redeployed = await deploy(0, { model: "@cf/baai/bge-base-en-v1.5" });
+
+        await expect(redeployed.run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true }));
+
+        expect(redeployed.vectors.store.size).toBe(0);
     });
 
     it("restart re-embeds a finished table, even across calls that run out of budget", async () => {

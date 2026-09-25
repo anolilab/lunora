@@ -873,6 +873,7 @@ interface TableVectorIndexLike {
     field: string;
     metadata?: ReadonlyArray<string>;
     metric?: string;
+    model?: string;
     name: string;
 }
 ```
@@ -965,6 +966,7 @@ interface VectorIndexDefinitionLike {
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric?: string;
+    model?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
