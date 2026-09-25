@@ -55,6 +55,11 @@ interface MutationHook<F extends FunctionReference> {
  * call options pass straight through to `client.mutation`, which applies and
  * rolls them back against the Lunora subscription cache (Convex parity) — not
  * through TanStack's `onMutate`.
+ *
+ * Offline, the call is never paused by TanStack: it reaches `client.mutation`
+ * at once, which queues it (the offline queue or a durable outbox) and paints
+ * the optimistic update. It is never retried by TanStack either; the queue owns
+ * replays.
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
@@ -65,6 +70,15 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
 
     const mutation = useTanStackMutation<ReturnOf<F>, Error, MutateVariables<F>>({
         mutationFn: ({ args, options }) => client.mutation(function_, args, options),
+        // `client.mutation` owns offline behaviour: it applies the optimistic
+        // update, mints the `mutationId`, and hands the write to the offline queue
+        // or durable outbox. TanStack's default `"online"` mode paused the call
+        // before `client.mutation` ever ran, so an offline write got none of that,
+        // and closing the tab lost it.
+        networkMode: "always",
+        // A retry re-runs `mutationFn`, which mints a fresh `mutationId`, so the
+        // server cannot dedupe it against an attempt that already committed.
+        retry: 0,
         // `onMutate` fires when a call starts, `onSettled` when it resolves or
         // rejects — so overlapping calls compose and `pending` only clears once
         // the last one settles.
