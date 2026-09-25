@@ -56,7 +56,22 @@ interface CapturedQueueMessage {
     attempts: number;
     /** The message body (JSON-encoded + capped by the catcher). */
     body: unknown;
-    /** `true` when this failed delivery was the message's last (its retries are exhausted) AND the queue declares a `deadLetterQueue` for it to land in. Stays `false` for a queue with no DLQ, where the broker drops the exhausted message instead — `attempts > maxRetries` with `outcome !== "ack"` is what identifies that case. */
+
+    /**
+     * `true` when this failed delivery was the message's last (its retries are
+     * exhausted) AND the queue declares a `deadLetterQueue` for it to land in.
+     * Stays `false` for a queue with no DLQ, where the broker drops the
+     * exhausted message instead — `attempts > maxRetries` with
+     * `outcome !== "ack"` is what identifies that case.
+     *
+     * Read from the `defineQueue` DECLARATION, because a consumer has no
+     * runtime API that exposes its deployed `queues.consumers[]` settings. It is
+     * true of the deployed broker only because Lunora's binding reconcile (run by
+     * `lunora dev`, `deploy` and `prepare`) writes every declared tuning field
+     * onto the consumer, including onto one that already exists. A worker
+     * deployed with a bare `wrangler deploy` over a hand-edited consumer can
+     * still disagree, and nothing on this side can see that.
+     */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
     error?: string;

@@ -77,6 +77,9 @@ interface QueueProducerEntry {
 }
 
 interface QueueConsumerEntry {
+    // The tuning keys (`max_retries`, `dead_letter_queue`, …) are compared by
+    // name against what `defineQueue` declares, so the entry stays open.
+    [key: string]: unknown;
     queue?: string;
     type?: string;
 }
@@ -774,15 +777,55 @@ const reconcileWorkflows = (
 };
 
 /**
+ * The `queues.consumers[]` fields `defineQueue` declares for `queue`, in
+ * wrangler's spelling. Only the options the export actually sets appear, so a
+ * field it leaves unset is never written — and never overwritten.
+ */
+const declaredConsumerTuning = (queue: InferredQueue): Record<string, unknown> => {
+    const tuning: Record<string, unknown> = {};
+
+    if (queue.tuning.maxBatchSize !== undefined) {
+        tuning.max_batch_size = queue.tuning.maxBatchSize;
+    }
+
+    if (queue.tuning.maxBatchTimeout !== undefined) {
+        tuning.max_batch_timeout = queue.tuning.maxBatchTimeout;
+    }
+
+    if (queue.tuning.maxRetries !== undefined) {
+        tuning.max_retries = queue.tuning.maxRetries;
+    }
+
+    if (queue.tuning.deadLetterQueue !== undefined) {
+        tuning.dead_letter_queue = queue.tuning.deadLetterQueue;
+    }
+
+    if (queue.tuning.retryDelay !== undefined) {
+        tuning.retry_delay = queue.tuning.retryDelay;
+    }
+
+    return tuning;
+};
+
+/**
  * Add any missing `queues.producers[]` (matched by binding) and
  * `queues.consumers[]` (matched by queue name) from the declared `defineQueue`
- * exports. Every queue gets a producer; push queues add a worker consumer, pull
- * queues add a `type: "http_pull"` consumer. Like workflows, queues are NOT
- * Durable Objects — this writes only the `queues` block.
+ * exports, and bring an EXISTING consumer's tuning in line with its export.
+ * Every queue gets a producer; push queues add a worker consumer, pull queues
+ * add a `type: "http_pull"` consumer. Like workflows, queues are NOT Durable
+ * Objects — this writes only the `queues` block.
  *
- * Add-only: a producer or consumer no `defineQueue` export declares is left in
- * place and reported by {@link orphanedEntryWarnings} instead — see there for
- * why removal needs ownership this file cannot establish. Pure.
+ * The tuning update is what makes a later `defineQueue` edit deploy at all. A
+ * consumer is written once, the first time its queue is seen; add-only, a
+ * `deadLetterQueue` or `maxRetries` added afterwards never reached wrangler, so
+ * the broker kept dropping exhausted messages the code said were
+ * dead-lettered. It touches only the fields the export declares
+ * ({@link declaredConsumerTuning}): a field it leaves unset may have been set
+ * by hand, and this file cannot tell that apart from one it wrote.
+ *
+ * Add-only for ENTRIES: a producer or consumer no `defineQueue` export declares
+ * is left in place and reported by {@link orphanedEntryWarnings} instead — see
+ * there for why removal needs ownership this file cannot establish. Pure.
  */
 const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyArray<InferredQueue>): ReconcileStep => {
     const existing = parsed.queues ?? {};
@@ -795,7 +838,27 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
     const missingProducers = queues.filter((queue) => !haveProducer.has(queue.bindingName));
     const missingConsumers = queues.filter((queue) => !haveConsumer.has(queue.name));
 
-    if (missingProducers.length === 0 && missingConsumers.length === 0) {
+    const retuned: string[] = [];
+    const updatedConsumers = existingConsumers.map((entry) => {
+        const queue = queues.find((candidate) => candidate.name === entry.queue);
+
+        if (queue === undefined) {
+            return entry;
+        }
+
+        const tuning = declaredConsumerTuning(queue);
+        const drifted = Object.keys(tuning).filter((key) => entry[key] !== tuning[key]);
+
+        if (drifted.length === 0) {
+            return entry;
+        }
+
+        retuned.push(`queues.consumers/${queue.name} (${drifted.join(", ")})`);
+
+        return { ...entry, ...tuning };
+    });
+
+    if (missingProducers.length === 0 && missingConsumers.length === 0 && retuned.length === 0) {
         return { added: [], text };
     }
 
@@ -806,35 +869,9 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
         }),
     ];
     const nextConsumers = [
-        ...existingConsumers,
+        ...updatedConsumers,
         ...missingConsumers.map((queue) => {
-            const consumer: Record<string, unknown> = { queue: queue.name };
-
-            if (queue.mode === "pull") {
-                consumer.type = "http_pull";
-            }
-
-            if (queue.tuning.maxBatchSize !== undefined) {
-                consumer.max_batch_size = queue.tuning.maxBatchSize;
-            }
-
-            if (queue.tuning.maxBatchTimeout !== undefined) {
-                consumer.max_batch_timeout = queue.tuning.maxBatchTimeout;
-            }
-
-            if (queue.tuning.maxRetries !== undefined) {
-                consumer.max_retries = queue.tuning.maxRetries;
-            }
-
-            if (queue.tuning.deadLetterQueue !== undefined) {
-                consumer.dead_letter_queue = queue.tuning.deadLetterQueue;
-            }
-
-            if (queue.tuning.retryDelay !== undefined) {
-                consumer.retry_delay = queue.tuning.retryDelay;
-            }
-
-            return consumer;
+            return { queue: queue.name, ...(queue.mode === "pull" ? { type: "http_pull" } : {}), ...declaredConsumerTuning(queue) };
         }),
     ];
 
@@ -844,6 +881,7 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
         added: [
             ...missingProducers.map((queue) => `queues.producers/${queue.bindingName}`),
             ...missingConsumers.map((queue) => `queues.consumers/${queue.name}`),
+            ...retuned,
         ],
         text: nextText,
     };

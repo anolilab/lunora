@@ -989,6 +989,67 @@ describe("reconcileWranglerBindings", () => {
         });
     });
 
+    // Every other queue test starts from a config with no consumer, which is
+    // the one state where "write the tuning" and "write only missing entries"
+    // agree. These start from a consumer an earlier reconcile already wrote.
+    describe("queue tuning on an existing queues.consumers[] entry", () => {
+        const receiptQueue = (tuning: Record<string, unknown>) => {
+            return { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning };
+        };
+
+        const seedConsumer = (consumer: string): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [${consumer}],
+    },
+}
+`,
+                "utf8",
+            );
+        };
+
+        const receiptConsumer = (): Record<string, unknown> =>
+            readConfig().queues.consumers.find((entry: { queue: string }) => entry.queue === "receipt-queue") as Record<string, unknown>;
+
+        it("deploys a dead-letter queue and retry budget added to defineQueue after the consumer was first written", () => {
+            expect.assertions(3);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5, retryDelay: 60 })] }),
+            );
+
+            expect(result.changed).toBe(true);
+            expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue", retry_delay: 60 });
+            // Still exactly one consumer for the queue — updated in place, not appended.
+            expect(readConfig().queues.consumers).toHaveLength(1);
+        });
+
+        it("leaves a field defineQueue does not declare exactly as the user wrote it", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_batch_size": 50, "max_concurrency": 4, "max_retries": 3 }`);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 8 })] }));
+
+            expect(receiptConsumer()).toStrictEqual({ max_batch_size: 50, max_concurrency: 4, max_retries: 8, queue: "receipt-queue" });
+        });
+
+        it("is a no-op once the existing consumer already matches defineQueue", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }));
+
+            expect(result.changed).toBe(false);
+        });
+    });
+
     // Every step here is add-only, so a renamed `defineQueue`/`defineWorkflow`
     // export leaves the previous entry behind. Removing it would mean deleting
     // config this tool cannot prove it wrote, so the orphan is named in
