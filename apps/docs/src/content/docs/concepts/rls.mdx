@@ -200,9 +200,13 @@ narrow, so the `rls()` chain discovers a policy authored either way the same.
   columns, with a value of the column's own type, goes into the SQL, so
   `take(n)` reads about `n` rows. Any other policy (ranges, `contains`, `NOT`,
   relation predicates, a value whose type differs from the column's), and any
-  policy on a `.global()` table or behind `mask()`, is checked row by row: bounded
-  reads then fetch rows in growing batches until they have `n` matches. Either
-  way the policy is enforced on every returned row.
+  policy behind `mask()`, is checked row by row: bounded reads then fetch rows
+  in growing batches until they have `n` matches. A `.global()` table only
+  offers the search chain (`withSearchIndex()`); the same equality policies go
+  into its search SQL, except string and id comparisons on MySQL, whose
+  collation may fold case. Any other policy there is checked over the whole
+  relevance window (at most 1,024 matches). Either way the policy is enforced
+  on every returned row.
 - **Writes throw on denial.** `insert`, `patch`/`replace`, and `delete` evaluate
   the candidate/pre-write row and throw `FORBIDDEN` (HTTP 403) on a mismatch.
 - **`count` is unsupported on a restricted table.** It throws

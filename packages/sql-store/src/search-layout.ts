@@ -52,6 +52,13 @@ interface SearchStage {
     hasQuery: boolean;
     indexName: string;
     query: string;
+
+    /**
+     * A reader `.filter()`'s `where` compiled against the main table `m` — see
+     * `query()` in `ctx-db`. SQL keeps exactly the rows that filter keeps, so the
+     * read can stop at the caller's `limit`.
+     */
+    scope?: SQL;
 }
 
 /**
@@ -131,12 +138,16 @@ interface SearchLayout {
 const searchTermPredicate = (token: string, isLast: boolean): SQL =>
     isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
 
-/** The main-table (`m`) conditions every layout applies: the staged equality filters plus the soft-delete scope. */
+/** The main-table (`m`) conditions every layout applies: the staged equality filters, the soft-delete scope and a pushed `.filter()` scope. */
 const mainTableFilters = (definition: TableDefinitionLike, search: SearchStage): SQL[] => {
     const conditions = search.filters.map((filter) => sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
 
     if (definition.softDeleteMode) {
         conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
+
+    if (search.scope !== undefined) {
+        conditions.push(sql`(${search.scope})`);
     }
 
     return conditions;

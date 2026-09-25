@@ -78,6 +78,18 @@ describe(isPushableWhere, () => {
         expect.assertions(1);
         expect(isPushableWhere(where as never, shape)).toBe(false);
     });
+
+    it.each([
+        [{ userId: "u1" }, false],
+        [{ _id: "d1" }, false],
+        [{ orgId: { ne: "o1" } }, false],
+        [{ OR: [{ score: 1 }, { code: { in: ["a"] } }] }, false],
+        [{ score: 1, active: true }, true],
+        [{ _creationTime: { notIn: [5] } }, true],
+    ])("with inexact text equality (MySQL), %o pushes: %s", (where, pushed) => {
+        expect.assertions(1);
+        expect(isPushableWhere(where as never, shape, false)).toBe(pushed);
+    });
 });
 
 describe(whereFilter, () => {

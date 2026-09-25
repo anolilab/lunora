@@ -77,6 +77,7 @@ import {
     fanOutScalarCounts,
     foldAggregateTally,
     hasTrigger,
+    isPushableWhere,
     literalInList,
     matchesRankStaticWhere,
     matchesStaticWhere,
@@ -106,6 +107,7 @@ import {
     throwingScheduler,
     tiebreakDirectionFor,
     uniqueIndexFields,
+    whereOfFilter,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -3502,7 +3504,28 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Predicates pushed on by `.filter()`. RLS installs one of these on
             // every restricted read, so a search reader that refused them would
             // make `.withSearchIndex()` unusable on any table with a read policy.
+            //
+            // Every one of them runs over every returned row. A `whereFilter` that
+            // `isPushableWhere` proves exact on this engine is ALSO ANDed into the
+            // search SQL (`pushedWhere`), so it does not widen the read; any other
+            // predicate makes a bounded read scan the whole relevance window, as
+            // it does on the shard reader.
             const searchFilters: ((document: Record<string, unknown>) => boolean)[] = [];
+            let inMemoryFilters = 0;
+            let pushedWhere: undefined | WhereInput;
+
+            // MySQL text equality follows the column collation, and a table
+            // created before `@lunora/hyperdrive` pinned `utf8mb4_0900_bin` keeps a
+            // case-folding, PAD SPACE one — so string comparisons stay in memory
+            // there. ponytail: probe the column collation to push them on MySQL too.
+            const exactText = dialect.name !== "mysql";
+
+            // The pushed `where` joins the main table as `m`, beside the search
+            // companion, so every column it names is qualified.
+            const mainTableStrategy: WhereSqlStrategy = {
+                ...whereSqlStrategyFor(definition),
+                fieldRef: (field) => sql`m.${columnRefSql(field)}`,
+            };
 
             const passesSearchFilters = (document: Record<string, unknown>): boolean => searchFilters.every((predicate) => predicate(document));
 
@@ -3514,18 +3537,23 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // Relevance order bounds the read: the caller's limit when there
                 // is one, `MAX_SEARCH_SCAN` otherwise. An in-memory filter
                 // narrows *within* that window rather than widening the read, so
-                // it reads the full window and trims after.
-                const filtered = searchFilters.length > 0;
-                const rows = await runSqlSearch(exec, dialect, definition, tableName, stage, resolveSearchScan(filtered ? undefined : limit));
+                // it reads the full window and trims after. A pushed one is in
+                // the SQL already, so the caller's limit stands.
+                const selective = inMemoryFilters > 0;
+                const scope = pushedWhere === undefined ? undefined : compileWhereSql(pushedWhere, mainTableStrategy);
+                const rows = await runSqlSearch(
+                    exec,
+                    dialect,
+                    definition,
+                    tableName,
+                    scope === undefined ? stage : { ...stage, scope },
+                    resolveSearchScan(selective ? undefined : limit),
+                );
 
-                if (!filtered) {
-                    // An unbounded read asked for one row past the cap; a full
-                    // window means the caller would get a prefix that looks whole.
-                    if (limit === undefined) {
-                        assertSearchWithinCap(rows);
-                    }
-
-                    return rows;
+                // An unbounded read asked for one row past the cap; a full
+                // window means the caller would get a prefix that looks whole.
+                if (!selective && limit === undefined) {
+                    assertSearchWithinCap(rows);
                 }
 
                 const kept = rows.filter((row) => passesSearchFilters(row));
@@ -3607,6 +3635,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // chain still surfaces LEGACY_READER_ERROR at its
                         // terminal.
                         searchFilters.push(predicate);
+
+                        const where = whereOfFilter(predicate);
+
+                        if (where !== undefined && isPushableWhere(where, definition.shape, exactText)) {
+                            pushedWhere = mergeWhere(pushedWhere, where);
+                        } else {
+                            inMemoryFilters += 1;
+                        }
 
                         return reader;
                     },

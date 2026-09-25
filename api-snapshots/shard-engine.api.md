@@ -4192,6 +4192,12 @@ const isLossyBody: (body: unknown) => boolean;
 const isMemoryTable: (definition: TableDefinitionLike | undefined) => boolean;
 ```
 
+### `isPushableWhere` (const)
+
+```ts
+const isPushableWhere: (where: WhereInput, shape: Readonly<Record<string, ValidatorLike>>, exactText?: boolean) => boolean;
+```
+
 ### `isRelationPredicate` (const)
 
 ```ts
@@ -5162,6 +5168,12 @@ const validateImportRow: (schema: SchemaLike, table: string, record: Record<stri
 
 ```ts
 const whereFilter: (where: WhereInput, predicate: RowPredicate) => WhereFilter;
+```
+
+### `whereOfFilter` (const)
+
+```ts
+const whereOfFilter: (predicate: RowPredicate) => undefined | WhereInput;
 ```
 
 ### `writeCdcArchivedThrough` (const)

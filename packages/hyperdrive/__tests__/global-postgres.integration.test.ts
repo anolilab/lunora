@@ -1,4 +1,5 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,
     readSqlCdcChangedTables,
@@ -15,6 +16,7 @@ import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { postgresDialect } from "../src/global-dialect";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
+import rlsSearchCases from "./_helpers/rls-search-cases";
 import searchRaceCases from "./_helpers/search-races";
 
 /**
@@ -611,6 +613,38 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 await run();
             },
             60_000,
+        );
+    });
+
+    describe("full-text search behind a read policy", () => {
+        it.each(
+            rlsSearchCases({
+                setup: async (schema, onRows) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, postgresDialect);
+
+                    const exec: SqlExec = {
+                        ...harness.exec,
+                        all: async (text, parameters) => {
+                            const rows = await harness.exec.all(text, parameters);
+
+                            onRows(rows.length);
+
+                            return rows;
+                        },
+                    };
+
+                    return createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec, schema });
+                },
+                textPushed: true,
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            120_000,
         );
     });
 

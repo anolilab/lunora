@@ -3,8 +3,9 @@
  *
  * The RLS middleware (`@lunora/server`) guards the fluent reader with
  * `reader.filter(whereFilter(policy, (row) => matchesWhere(row, policy)))`. Any
- * reader can run that as the plain predicate it is. The shard reader
- * additionally ANDs the `where` into its SQL when {@link isPushableWhere} proves
+ * reader can run that as the plain predicate it is. The shard reader and the
+ * `.global()` search reader (`@lunora/sql-store`) additionally AND the `where`
+ * into their SQL when {@link isPushableWhere} proves
  * SQL keeps exactly the rows the predicate keeps — and still runs the predicate
  * over every row it returns. So the tag can only ever make a read smaller and
  * cheaper: a predicate is never skipped, and a tag the reader cannot prove exact
@@ -94,12 +95,19 @@ const hasType = (value: unknown, type: "boolean" | "number" | "string"): boolean
  * (`"3" < 5`, `5n < 10`), SQLite orders by storage class;
  * - `contains` — SQL folds case, JS does not;
  * - `NOT`, relation predicates, a malformed or empty group or operator bag;
- * - an operand whose type is not the column's, or a column with no single type.
+ * - an operand whose type is not the column's, or a column with no single type;
+ * - a string or id comparison when `exactText` is `false`: an engine whose text
+ * equality may fold case or trailing spaces (MySQL under a `_ci` / PAD SPACE
+ * collation) would both keep rows the matcher drops and drop rows it keeps.
+ *
+ * "Exactly" matters in both directions. SQL dropping a row the matcher keeps
+ * hides it; SQL keeping extra rows lets a `LIMIT n` fill with rows the matcher
+ * then discards, so a bounded read comes back short.
  */
-const isPushableWhere = (where: WhereInput, shape: Readonly<Record<string, ValidatorLike>>): boolean =>
+const isPushableWhere = (where: WhereInput, shape: Readonly<Record<string, ValidatorLike>>, exactText = true): boolean =>
     Object.entries(where).every(([key, value]) => {
         if (key === "AND" || key === "OR") {
-            return Array.isArray(value) && value.every((branch) => isPlainRecord(branch) && isPushableWhere(branch as WhereInput, shape));
+            return Array.isArray(value) && value.every((branch) => isPlainRecord(branch) && isPushableWhere(branch as WhereInput, shape, exactText));
         }
 
         if (key === "NOT" || isRelationPredicate(value)) {
@@ -108,7 +116,7 @@ const isPushableWhere = (where: WhereInput, shape: Readonly<Record<string, Valid
 
         const type = operandTypeOf(key, shape);
 
-        if (type === undefined) {
+        if (type === undefined || (type === "string" && !exactText)) {
             return false;
         }
 

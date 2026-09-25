@@ -1,5 +1,7 @@
 /* eslint-disable no-secrets/no-secrets -- companion table names like "__agg_todos_sumSeqByProject" trip the entropy heuristic; they're not secrets. */
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { whereFilter } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/sql-store";
 import {
     readSqlCdcChangedTables,
     readSqlCdcChanges,
@@ -15,6 +17,7 @@ import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
 import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
+import rlsSearchCases from "./_helpers/rls-search-cases";
 import searchRaceCases from "./_helpers/search-races";
 
 /**
@@ -533,6 +536,102 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 expect(ids(scoped)).toEqual(["n4"]);
                 expect(ids(fresh)).toEqual(["n2"]);
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
+    describe("full-text search behind a read policy", () => {
+        const resetNotes = async (): Promise<void> => {
+            await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+            await harness.query("DROP TABLE IF EXISTS `notes`");
+            await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
+        };
+
+        const writerOver = async (schema: SchemaLike, onRows: (count: number) => void = () => undefined): Promise<DatabaseWriterLike> => {
+            await resetNotes();
+            await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);
+
+            let tick = FIXED_CLOCK;
+            const exec: SqlExec = {
+                ...harness.exec,
+                all: async (text, parameters) => {
+                    const rows = await harness.exec.all(text, parameters);
+
+                    onRows(rows.length);
+
+                    return rows;
+                },
+            };
+
+            return createHyperdriveGlobalCtxDb({
+                clock: () => {
+                    tick += 1000;
+
+                    return tick;
+                },
+                engine: "mysql",
+                exec,
+                schema,
+            });
+        };
+
+        it.each(
+            rlsSearchCases({
+                setup: writerOver,
+                textPushed: false,
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            240_000,
+        );
+
+        it(
+            "keeps a string policy exact on a column created with a case-insensitive collation",
+            async () => {
+                expect.assertions(3);
+
+                const schema: SchemaLike = {
+                    tables: {
+                        notes: {
+                            indexes: [],
+                            searchIndexes: [{ field: "body", filterFields: [], name: "by_body" }],
+                            shape: { body: col("string"), ownerId: col("string") },
+                            shardMode: { kind: "global" },
+                        },
+                    },
+                };
+                const writer = await writerOver(schema);
+
+                // A table provisioned before the dialect pinned `utf8mb4_0900_bin`.
+                await harness.query("ALTER TABLE `notes` MODIFY `ownerId` LONGTEXT COLLATE utf8mb4_0900_ai_ci NOT NULL");
+                await writer.insert("notes", { _id: "lower", body: "alpha", ownerId: "u1" }, { allowExplicitId: true });
+                await writer.insert("notes", { _id: "upper", body: "alpha", ownerId: "U1" }, { allowExplicitId: true });
+
+                const search = (where: Record<string, unknown>, admits: (row: Record<string, unknown>) => boolean) =>
+                    writer
+                        .query("notes")
+                        .filter(whereFilter(where, admits))
+                        .withSearchIndex("by_body", (q) => q.search("body", "alpha"));
+
+                // `ownerId <> 'u1'` under `_ai_ci` would drop "U1", which the policy admits.
+                const notLower = await search({ ownerId: { ne: "u1" } }, (row) => row["ownerId"] !== "u1").collect();
+
+                expect(ids(notLower)).toStrictEqual(["upper"]);
+
+                // `ownerId = 'u1'` would admit "U1" (the newest) into a LIMIT 1 the policy then empties.
+                const lower = await search({ ownerId: "u1" }, (row) => row["ownerId"] === "u1").take(1);
+
+                expect(ids(lower)).toStrictEqual(["lower"]);
+
+                const lowerFirst = await search({ ownerId: "u1" }, (row) => row["ownerId"] === "u1").first();
+
+                expect(lowerFirst?.["_id"]).toBe("lower");
             },
             TEST_TIMEOUT,
         );
