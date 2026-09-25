@@ -47,7 +47,7 @@ import { recordSchemaVersion } from "./schema-history";
 
 /**
  * Every filtered read this store emits ends `ORDER BY _creationTime ASC, id ASC`
- * (the default total order; see `compileOrderBySql`). An index on the filter
+ * (the default total order; see `compileOrderByText`). An index on the filter
  * expressions ALONE cannot satisfy that ordering, so SQLite answers
  * `WHERE f = ? ORDER BY _creationTime, id LIMIT n` by reading every matching row
  * into a temp B-tree, sorting it, and returning n:

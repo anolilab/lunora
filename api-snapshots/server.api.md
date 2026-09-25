@@ -5461,9 +5461,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         patched: number;
     }>;
-    query: (tableName: string, options?: {
-        baseWhere?: WhereInput;
-    }) => TableReaderLike$1;
+    query: (tableName: string) => TableReaderLike$1;
     rank: (tableName: string, indexName: string, options: RankArgs) => Promise<null | {
         position: number;
         total: number;
@@ -5755,9 +5753,7 @@ interface MaskDatabase {
     }) => Promise<{
         patched: number;
     }>;
-    query: (tableName: string, options?: {
-        baseWhere?: Record<string, unknown>;
-    }) => TableReaderLike;
+    query: (tableName: string) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | {
         position: number;
         total: number;

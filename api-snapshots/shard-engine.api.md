@@ -692,9 +692,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         patched: number;
     }>;
-    query: (tableName: string, options?: {
-        baseWhere?: WhereInput;
-    }) => TableReaderLike;
+    query: (tableName: string) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
@@ -3349,6 +3347,14 @@ interface VectorBackfillProgress {
 }
 ```
 
+### `WhereFilter` (type)
+
+```ts
+type WhereFilter = RowPredicate & {
+    readonly [WHERE_FILTER]: WhereInput;
+};
+```
+
 ### `WhereInput` (interface)
 
 ```ts
@@ -5152,6 +5158,12 @@ const uniqueIndexFields: (indexes: ReadonlyArray<{
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
 ```
 
+### `whereFilter` (const)
+
+```ts
+const whereFilter: (where: WhereInput, predicate: RowPredicate) => WhereFilter;
+```
+
 ### `writeCdcArchivedThrough` (const)
 
 ```ts
@@ -5471,6 +5483,12 @@ interface ResolveContext {
         readonly tables: Record<string, TableDefinitionLike>;
     };
 }
+```
+
+### `RowPredicate` (type)
+
+```ts
+type RowPredicate = (document: Record<string, unknown>) => boolean;
 ```
 
 ### `SchemaVersionRow` (interface)

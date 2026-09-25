@@ -1,16 +1,16 @@
 /**
- * The fluent reader's `baseWhere` (#822) on real workerd SQLite.
+ * A pushed `whereFilter` (#822) on real workerd SQLite.
  *
- * `rls()` hands the reader its read policy so the policy lands in the SQL of
- * every terminal instead of an in-memory `.filter()` that forced a read of the
- * whole index range. `node:sqlite` builds with `SQLITE_DQS=0`, so a reference
- * that resolves to nothing fails loudly there and reads as a string literal
- * here — this runs the plain, keyset-page, FTS5 and geo statements the policy
- * joins into on the SQLite a Durable Object actually gets, and counts
- * `rowsRead` for the bounded ones.
+ * `rls()` guards the fluent reader with a predicate tagged with its policy
+ * `where`; the shard reader ANDs a provably exact `where` into its SQL, so the
+ * plain and keyset-page terminals keep their LIMIT. `node:sqlite` builds with
+ * `SQLITE_DQS=0`, so a reference that resolves to nothing fails loudly there and
+ * reads as a string literal here — this runs the plain, keyset-page, FTS5 and
+ * geo statements the `where` joins into on the SQLite a Durable Object actually
+ * gets, and counts `rowsRead` for a bounded plain read.
  */
 import type { SchemaLike, SqlCursor, SqlExec } from "@lunora/shard-engine";
-import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { createShardCtxDb, runShardMigrations, whereFilter } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -33,7 +33,8 @@ const schema = {
     },
 } as unknown as SchemaLike;
 
-const POLICY = { baseWhere: { userId: "u1" } };
+/** What `rls()` installs for a `{ userId: "u1" }` read policy. */
+const ownRows = () => whereFilter({ userId: "u1" }, (row) => row["userId"] === "u1");
 
 /** The object's SQLite as a `SqlExec`, adding up `rowsRead` for every SELECT against `notes`. */
 const metered = (sql: SqlStorage): { exec: SqlExec; rowsRead: () => number } => {
@@ -78,7 +79,11 @@ describe("reader baseWhere on workerd", () => {
                 await db.insert("notes", { body: `shared ${String(n)}`, location, status: "active", userId: n % 2 === 0 ? "u1" : "u2" });
             }
 
-            const range = () => db.query("notes", POLICY).withIndex("by_status", (q) => q.eq("status", "active"));
+            const range = () =>
+                db
+                    .query("notes")
+                    .filter(ownRows())
+                    .withIndex("by_status", (q) => q.eq("status", "active"));
             const before = rowsRead();
             const take = await range().take(5);
             const takeRows = rowsRead() - before;
@@ -111,11 +116,13 @@ describe("reader baseWhere on workerd", () => {
             expect(all.every((row) => row["userId"] === "u1")).toBe(true);
 
             const hits = await db
-                .query("notes", POLICY)
+                .query("notes")
+                .filter(ownRows())
                 .withSearchIndex("by_body", (q) => q.search("body", "shared"))
                 .take(10);
             const near = await db
-                .query("notes", POLICY)
+                .query("notes")
+                .filter(ownRows())
                 .withGeoIndex("by_location", (q) => q.near(location, 1000))
                 .collect();
 

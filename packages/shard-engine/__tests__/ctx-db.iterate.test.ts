@@ -144,11 +144,11 @@ describe("ctx.db reader — lazy iteration", () => {
     it("stays linear when the chain carries a .filter()", async () => {
         expect.assertions(2);
 
-        // `paginate` must return a FULL page of surviving rows, so with
-        // in-memory filters it drops the SQL LIMIT and scans the whole
-        // remainder — which made iteration quadratic. Counting predicate calls
-        // is the cheap proxy for rows decoded: with 2,000 rows and a 128-row
-        // page, the quadratic form ran the predicate ~16,000 times.
+        // `paginate` must return a FULL page of surviving rows; with in-memory
+        // filters it once dropped the SQL LIMIT and scanned the whole remainder,
+        // which made iteration quadratic. Counting predicate calls is the cheap
+        // proxy for rows decoded: with 2,000 rows and a 128-row page, the
+        // quadratic form ran the predicate ~16,000 times.
         const database = setupWriter();
 
         await seed(database, 2000);
@@ -168,8 +168,11 @@ describe("ctx.db reader — lazy iteration", () => {
         }
 
         expect(yieldedSeqs).toHaveLength(1000);
-        // Exactly once per row — never re-scanned. The old behaviour was ~8x this.
-        expect(predicateCalls).toBe(2000);
+        // About once per row. Each page reads up to its one-past-the-page probe
+        // row, and the next page starts after the last row it RETURNED, so the
+        // rows between the two are read twice — a row or two per page (16
+        // pages), never a rescan. The quadratic behaviour was ~8x this.
+        expect(predicateCalls).toBeLessThan(2000 + 16 * 3);
     });
 
     it("yields nothing for an empty table", async () => {

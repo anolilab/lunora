@@ -91,7 +91,7 @@ const encodePartitionKey = (partitionBy: ReadonlyArray<string>, source: Record<s
 /**
  * The implicit final tiebreak appended to every rank sort so the order is
  * total and `rank()` returns a deterministic position — same role the `_id`
- * tiebreak plays in `compileOrderBySql`/`buildSeekWhere`.
+ * tiebreak plays in `compileOrderByText`/`buildSeekWhere`.
  */
 const RANK_TIEBREAK = "__id__";
 

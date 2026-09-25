@@ -198,7 +198,7 @@ interface MaskDatabase {
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: { limit?: number },
     ) => Promise<{ patched: number }>;
-    query: (tableName: string, options?: { baseWhere?: Record<string, unknown> }) => TableReaderLike;
+    query: (tableName: string) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
@@ -1020,10 +1020,8 @@ const wrapDatabase = <Context>(
             return base.groupBy(tableName, options);
         },
 
-        query(tableName, options) {
-            // `options` carries an outer `rls()` step's read policy down to the
-            // writer's SQL; the mask never inspects it, as with `findMany`'s `baseWhere`.
-            const reader = base.query(tableName, options);
+        query(tableName) {
+            const reader = base.query(tableName);
             const columns = perTable.get(tableName);
 
             return columns ? wrapReader(reader, columns, tableName) : reader;

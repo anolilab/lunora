@@ -2,10 +2,10 @@
  * The JS twin of `@lunora/shard-engine`'s `where-sql.ts` — the same `WhereInput`
  * tree, evaluated against a document in memory instead of compiled to SQL.
  *
- * Two callers need it: the legacy `query()` reader, which verifies every row it
- * returns with a `.filter()` (after pushing an eligible policy into SQL — see
- * {@link isSqlPushable}), and every write gate, which has a candidate or
- * pre-write row and no query to run at all. Both must agree with the compiler, because the same policy is read
+ * Two callers need it: the legacy `query()` reader, which has no `baseWhere`
+ * seam and pushes the policy predicate down as a row-by-row `.filter()`, and
+ * every write gate, which has a candidate or pre-write row and no query to run
+ * at all. Both must agree with the compiler, because the same policy is read
  * through SQL and written through this — a predicate that admits a row here and
  * hides it there produces a row the writer can create and no reader can see.
  *
@@ -385,63 +385,6 @@ const containsRelationPredicate = (where: WhereInput): boolean =>
         return isRelationPredicate(value);
     });
 
-/** A comparison operand both engines read the same way: SQL NULL, a string, a finite number or a boolean. */
-const isPlainScalar = (value: unknown): boolean =>
-    value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
-
-/** An operator bag whose every operand is a {@link isPlainScalar} (a list of them for `in`/`notIn`, a boolean for `isNull`). */
-const isScalarOperatorBag = (operators: Record<string, unknown>): boolean =>
-    Object.entries(operators).every(([operator, operand]) => {
-        if (operator === "in" || operator === "notIn") {
-            return Array.isArray(operand) && operand.every((item) => isPlainScalar(item));
-        }
-
-        return operator === "isNull" ? typeof operand === "boolean" : isPlainScalar(operand);
-    });
-
-/**
- * May `where` be handed to the SQL compiler as the legacy reader's `baseWhere`
- * without the pushed statement ever dropping a row {@link matchesWhere} keeps?
- *
- * The reader pushes an eligible policy into SQL (keeping `take` / `first` /
- * `paginate` bounded) and STILL runs {@link matchesWhere} over every row it
- * returns, so the result is the intersection of the two engines — never wider
- * than this evaluator. The intersection equals this evaluator's answer exactly
- * when SQL admits a superset of it, and that holds for the shapes accepted here:
- * column comparisons against plain scalars, combined with `AND` / `OR`, where
- * the only remaining divergence (`contains` folding case in SQL) makes SQL the
- * WIDER side.
- *
- * Refused, so the reader filters in memory alone exactly as before:
- * - any `NOT` — negation flips which side is wider, so a divergence that SQL
- * over-admits would under-admit beneath it (and `{ NOT: {} }` is TRUE there,
- * FALSE here);
- * - relation predicates — the flat reader statement cannot resolve them, and
- * this evaluator has no fetcher to (a relation node denies here);
- * - a malformed group (a non-array `AND` / `OR`), which the compiler drops;
- * - an operand that is not a plain scalar — `undefined` (refused loudly here,
- * a driver error there), a `Date`, bytes, a `bigint`, an array or object used
- * as an equality value — anything whose SQL encoding is not a plain scalar
- * compare.
- *
- * What remains is type-confused comparisons (a number column compared with a
- * string operand, say), where SQLite's cross-type ordering can reject a row the
- * JS coercion admits. That only ever narrows the result — a hidden row is never
- * shown — and it is the answer `findMany` already gives the same policy.
- */
-const isSqlPushable = (where: WhereInput): boolean =>
-    Object.entries(where).every(([key, value]) => {
-        if (key === "NOT") {
-            return false;
-        }
-
-        if (key === "AND" || key === "OR") {
-            return Array.isArray(value) && value.every((branch) => isPlainObject(branch) && isSqlPushable(branch as WhereInput));
-        }
-
-        return isOperatorBag(value) ? isScalarOperatorBag(value) : isPlainScalar(value);
-    });
-
 /**
  * Evaluate one `WhereInput` node to a {@link Ternary}. Every key is a clause and
  * the clauses are ANDed, which is what the compiler's `compileNode` does.
@@ -494,4 +437,4 @@ const evaluateWhere = (document: Record<string, unknown>, where: WhereInput): Te
  */
 const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => evaluateWhere(document, where) === TRUE;
 
-export { containsRelationPredicate, isSqlPushable, matchesWhere };
+export { containsRelationPredicate, matchesWhere };

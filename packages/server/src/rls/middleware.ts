@@ -64,7 +64,7 @@ import { LunoraError } from "@lunora/errors";
 // and every package that builds against `@lunora/server` without declaring
 // `@lunora/shard-engine` then resolves it through pnpm's hoist — which packem
 // fails the build over, by design.
-import { findRelated } from "@lunora/shard-engine";
+import { findRelated, whereFilter } from "@lunora/shard-engine";
 
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
@@ -78,7 +78,7 @@ import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
-import { containsRelationPredicate, isSqlPushable, matchesWhere } from "./where-match";
+import { containsRelationPredicate, matchesWhere } from "./where-match";
 
 /**
  * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
@@ -283,7 +283,7 @@ interface DatabaseWriterLike {
         expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
-    query: (tableName: string, options?: { baseWhere?: WhereInput }) => TableReaderLike;
+    query: (tableName: string) => TableReaderLike;
 
     /**
      * Rank a row within its partition. A position is a count-of-rows-before, so
@@ -1517,23 +1517,20 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
         query(tableName) {
             const { baseWhere } = readBase(tableName);
+            const reader = route(tableName).query(tableName);
 
             if (!baseWhere) {
-                return route(tableName).query(tableName);
+                return reader;
             }
 
-            // Two layers, on purpose. An eligible policy (see `isSqlPushable`)
-            // rides into the reader's SQL like `findMany`'s `baseWhere`, so
-            // `take` / `first` / `paginate` read about `n` rows instead of the
-            // whole range. The JS `.filter()` then still runs over every row
-            // returned: it is what the policy MEANS on this path, so the SQL
-            // push-down can only ever narrow the read, never widen it — including
-            // on a writer that ignores the option. An ineligible policy is
-            // filtered in memory alone, and the reader serves bounded terminals
-            // from LIMIT-ed batches rather than the whole range.
-            const reader = route(tableName).query(tableName, isSqlPushable(baseWhere) ? { baseWhere } : undefined);
-
-            return reader.filter((document) => matchesWhere(document, baseWhere));
+            // The policy is enforced by this predicate, on every reader and every
+            // terminal. Tagging it with its `where` lets the shard reader also AND
+            // that `where` into its SQL when it can prove SQL keeps exactly the
+            // same rows, so `take` / `first` / `paginate` keep their LIMIT — the
+            // predicate still runs over every row returned. A reader that cannot
+            // push it (the D1 / `.global()` twin, a masked reader) runs the plain
+            // predicate, and a bounded terminal reads in LIMIT-ed batches.
+            return reader.filter(whereFilter(baseWhere, (document) => matchesWhere(document, baseWhere)));
         },
 
         /**

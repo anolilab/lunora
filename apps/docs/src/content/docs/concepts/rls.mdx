@@ -195,6 +195,11 @@ narrow, so the `rls()` chain discovers a policy authored either way the same.
 - **Reads are AND-merged.** Every `get`, `findFirst`/`findMany`, and the
   `query().withIndex().order().collect()/first()/take()/paginate()` chain folds
   the policy predicate in, so a non-matching row is invisible, not an error.
+  On that fluent chain, a policy made of equality checks (`eq`, `ne`, `in`,
+  `notIn`, `isNull`) on string, id, number or boolean columns goes into the SQL,
+  so `take(n)` reads about `n` rows. Any other policy (ranges, `contains`,
+  `NOT`, relation predicates) is checked row by row, and bounded reads fetch
+  rows in growing batches until they have `n` matches.
 - **Writes throw on denial.** `insert`, `patch`/`replace`, and `delete` evaluate
   the candidate/pre-write row and throw `FORBIDDEN` (HTTP 403) on a mismatch.
 - **`count` is unsupported on a restricted table.** It throws

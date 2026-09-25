@@ -140,7 +140,10 @@ const ownNear = query
  * spy sees each one; the tally is taken before the spy is restored, which would
  * clear it.
  */
-const rowsRead = async <T>(run: () => Promise<T>): Promise<{ result: T; rows: number }> => {
+const rowsRead = async <T>(
+    run: () => Promise<T>,
+    reads: (sql: string) => boolean = (sql) => sql.includes(`FROM "notes"`),
+): Promise<{ result: T; rows: number }> => {
     const spy = vi.spyOn(StatementSync.prototype, "all");
 
     try {
@@ -150,7 +153,7 @@ const rowsRead = async <T>(run: () => Promise<T>): Promise<{ result: T; rows: nu
                 const { sourceSQL } = context as StatementSync;
                 const returned = spy.mock.results[call]?.value as unknown[] | undefined;
 
-                return /^\s*SELECT/iu.test(sourceSQL) && sourceSQL.includes(`FROM "notes"`) ? (returned?.length ?? 0) : 0;
+                return /^\s*SELECT/iu.test(sourceSQL) && reads(sourceSQL) ? (returned?.length ?? 0) : 0;
             })
             .reduce((sum, count) => sum + count, 0);
 
@@ -327,5 +330,159 @@ describe("rls() legacy reader keeps its LIMIT (#822)", () => {
         expect(hits.every((document) => document.userId === "u1")).toBe(true);
         expect(near).toHaveLength(50);
         expect(near.every((document) => document.userId === "u1")).toBe(true);
+    });
+
+    it("keeps the search terminal's LIMIT behind a policy pushed into SQL", async () => {
+        expect.assertions(2);
+
+        const t = await seed();
+        // The FTS5 statement joins the table as `"notes" m`; its companion tables are `"notes__…"`.
+        const search = await rowsRead(
+            async () => t.withIdentity({ userId: "u1" }).query(ownSearch, {}),
+            (sql) => sql.includes(`"notes" m`),
+        );
+
+        expect(search.result).toHaveLength(5);
+        expect(search.rows).toBe(5);
+    });
+});
+
+const itemSchema = defineSchema({
+    items: defineTable({
+        code: v.string(),
+        hidden: v.boolean(),
+        level: v.bigint(),
+        parentId: v.union(v.string(), v.null()),
+        userId: v.string(),
+    })
+        .index("by_parent", ["parentId"])
+        .index("by_user", ["userId"]),
+});
+
+/** A read policy on `items` from a fixed `where`. */
+const itemPolicy = (where: Record<string, unknown>) =>
+    definePolicies([
+        definePolicy({
+            on: "read",
+            table: "items",
+            when: () => where as never,
+        }),
+    ]);
+
+/** 20 u1 rows: `level` 0n–19n, `code` "0"–"19", every 3rd hidden (7 rows), every other `parentId` null (10 rows). */
+const seedItems = async (): Promise<ReturnType<typeof lunoraTest>> => {
+    const t = lunoraTest(itemSchema);
+
+    open.push(t);
+
+    await t.run(async (ctx) => {
+        await ctx.db.insertMany(
+            "items",
+            Array.from({ length: 20 }, (_, index) => {
+                return { code: String(index), hidden: index % 3 === 0, level: BigInt(index), parentId: index % 2 === 0 ? null : "p", userId: "u1" };
+            }),
+        );
+    });
+
+    return t;
+};
+
+const byUser = (ctx: any) => ctx.db.query("items").withIndex("by_user", (q: any) => q.eq("userId", "u1"));
+
+/** Suspend an iterator on the reader, then run other terminals on the SAME reader object. */
+const interleaved = (where: Record<string, unknown>) =>
+    query
+        .use(rlsForTest(itemPolicy(where)))
+        .input({})
+        .query(async ({ ctx }) => {
+            const shared = byUser(ctx);
+            const iterator = shared[Symbol.asyncIterator]() as AsyncIterator<Record<string, unknown>>;
+
+            await iterator.next();
+
+            const collected = (await shared.collect()) as unknown[];
+            const taken = (await shared.take(100)) as unknown[];
+            const page = (await shared.paginate({ cursor: null, numItems: 100 })) as { page: unknown[] };
+
+            await iterator.return?.(undefined);
+
+            let iterated = 0;
+
+            for await (const row of byUser(ctx) as AsyncIterable<unknown>) {
+                iterated += row === undefined ? 0 : 1;
+            }
+
+            return { collected: collected.length, iterated, page: page.page.length, taken: taken.length };
+        });
+
+const counts = (where: Record<string, unknown>) =>
+    query
+        .use(rlsForTest(itemPolicy(where)))
+        .input({})
+        .query(async ({ ctx }) => {
+            return { collected: ((await byUser(ctx).collect()) as unknown[]).length, taken: ((await byUser(ctx).take(100)) as unknown[]).length };
+        });
+
+const nullParent = (ctx: any) => ctx.db.query("items").withIndex("by_parent", (q: any) => q.eq("parentId", null));
+
+const nullParentReads = query
+    .use(rlsForTest(itemPolicy({ userId: "u1" })))
+    .input({})
+    .query(async ({ ctx }) => {
+        return {
+            collected: ((await nullParent(ctx).collect()) as unknown[]).length,
+            first: (await nullParent(ctx).first()) === null ? 0 : 1,
+            page: ((await nullParent(ctx).paginate({ cursor: null, numItems: 100 })) as { page: unknown[] }).page.length,
+            taken: ((await nullParent(ctx).take(100)) as unknown[]).length,
+        };
+    });
+
+describe("rls() legacy reader edge cases (#822 review)", () => {
+    afterEach(() => {
+        while (open.length > 0) {
+            open.pop()?.close();
+        }
+    });
+
+    it("a suspended iterator never strips the policy from other terminals on the same reader", async () => {
+        expect.assertions(2);
+
+        const t = await seedItems();
+        const u1 = t.withIdentity({ userId: "u1" });
+        const admitted = { collected: 13, iterated: 13, page: 13, taken: 13 };
+
+        // Pushed into SQL, and kept in memory (`NOT`): 13 of the 20 rows are visible either way.
+        await expect(u1.query(interleaved({ hidden: false }), {})).resolves.toStrictEqual(admitted);
+        await expect(u1.query(interleaved({ NOT: { hidden: true } }), {})).resolves.toStrictEqual(admitted);
+    });
+
+    it("admits exactly what the JS matcher admits for comparisons SQL types differently", async () => {
+        expect.assertions(3);
+
+        const t = await seedItems();
+        const u1 = t.withIdentity({ userId: "u1" });
+
+        // bigint column vs number operand: 0n–9n are below 10.
+        await expect(u1.query(counts({ level: { lt: 10 } }), {})).resolves.toStrictEqual({ collected: 10, taken: 10 });
+        // string column vs number operand: JS coerces, so "0"–"4" are below 5.
+        await expect(u1.query(counts({ code: { lt: 5 } }), {})).resolves.toStrictEqual({ collected: 5, taken: 5 });
+        // An empty operator bag constrains nothing.
+        await expect(u1.query(counts({ userId: {} }), {})).resolves.toStrictEqual({ collected: 20, taken: 20 });
+    });
+
+    it("gives every terminal the same answer for withIndex(eq(field, null))", async () => {
+        expect.assertions(2);
+
+        const t = await seedItems();
+        const unguarded = await t.run(async (ctx) => {
+            const collected = await nullParent(ctx).collect();
+            const taken = await nullParent(ctx).take(100);
+
+            return { collected: collected.length, taken: taken.length };
+        });
+
+        // `eq(field, null)` matches the null rows, as `findMany({ where: { field: null } })` does.
+        expect(unguarded).toStrictEqual({ collected: 10, taken: 10 });
+        await expect(t.withIdentity({ userId: "u1" }).query(nullParentReads, {})).resolves.toStrictEqual({ collected: 10, first: 1, page: 10, taken: 10 });
     });
 });
