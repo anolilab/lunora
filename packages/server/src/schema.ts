@@ -1491,6 +1491,22 @@ const validateCommitOrdered = (tables: Record<string, TableDefinition>): void =>
     }
 };
 
+/**
+ * The per-table mode conflicts: each rejects a combination (`.global()` with
+ * `.ttl()`, `.commitOrdered()`, `.dropStalePatches()`, a `v.bigint()` column;
+ * `.memory()` with a companion it cannot clear) whose promise the backend it
+ * lands on cannot keep. Run by `defineSchema` and again by
+ * `mergeSchemaExtension` over the merged set, so a table an `.extend()` or a
+ * plugin contributes is held to the same rules as one the app declared.
+ */
+const validateTableModes = (tables: Record<string, TableDefinition>): void => {
+    validateCommitOrdered(tables);
+    validateDropStalePatches(tables);
+    validateGlobalBigint(tables);
+    validateGlobalTtl(tables);
+    validateMemoryTables(tables);
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1500,18 +1516,15 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
-    validateCommitOrdered(tables);
-    validateDropStalePatches(tables);
-    validateGlobalBigint(tables);
-    validateGlobalTtl(tables);
+    validateTableModes(tables);
     validateGlobalVectors(tables, vectorIndexes);
-    validateMemoryTables(tables);
     validateIndexFields(tables);
 
     return withExtend({ tables, vectorIndexes });
 };
 
-// `validateIndexFields` is exported package-internally (not re-exported from
+// `validateIndexFields` (and `validateTableModes`, for the same reason) is
+// exported package-internally (not re-exported from
 // `./index`, so it stays outside the public API surface) so `./plugin`'s
 // `mergeSchemaExtension` can re-run it against the merged table set — the
 // seam that closes the "extension-contributed bad index never validated" gap
@@ -1526,6 +1539,7 @@ export {
     indexFieldsFromSchema,
     validateGlobalVectors,
     validateIndexFields,
+    validateTableModes,
 };
 
 export type {
