@@ -12,7 +12,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
-import { CONTAINER_EXEC_HEADER } from "../exec";
+import { CONTAINER_EXEC_PATH, decodedPathForms } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
@@ -60,23 +60,25 @@ const withoutSegmentParams = (segment: string): string => {
 /**
  * Whether a path could reach Lunora's reserved container routes under a
  * router's reading of it. Deliberately coarser than the client guard, which
- * only looks at the first segment: ANY segment of the raw or once-decoded path
- * (split on `/` and `\`) that is `__lunora` once `;params` are dropped and case
- * is folded counts — so a router mounted under a prefix is covered too.
+ * only looks at the first segment: ANY segment of the raw path or of any of its
+ * successive percent-decodings (split on `/` and `\`) that is `__lunora` once
+ * `;params` are dropped and case is folded counts — so a router mounted under a
+ * prefix, or behind a proxy that decodes once more, is covered too.
  */
-const touchesReservedNamespace = (pathname: string): boolean => {
-    let decoded = pathname;
-
-    try {
-        decoded = decodeURIComponent(pathname);
-    } catch {
-        // Malformed escape: the raw spelling is still checked.
-    }
-
-    return [pathname, decoded].some((path) =>
+const touchesReservedNamespace = (pathname: string): boolean =>
+    decodedPathForms(pathname).some((path) =>
         path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER),
     );
+
+/** The pathname a `containerFetch(requestOrUrl, …)` call targets, whichever overload was used. */
+const containerFetchPathname = (requestOrUrl: unknown): string => {
+    const raw = requestOrUrl instanceof Request ? requestOrUrl.url : String(requestOrUrl);
+
+    return URL.parse(raw, "https://container")?.pathname ?? raw;
 };
+
+/** The header `@cloudflare/containers`' `switchPort` (and a handle's `.port(n)`) sets to target a non-default port. */
+const TARGET_PORT_HEADER = "cf-container-target-port";
 
 /**
  * Base class for the generated Container DO classes. Applies a
@@ -179,32 +181,62 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Entry for every request to this Durable Object. Refuses the reserved
-     * `/__lunora/*` namespace unless the request carries the mark only
-     * `handle.exec` sets (and every `handle.fetch` strips), so the client-side
-     * path guard is not the only thing between a caller-chosen path and the
-     * exec route.
+     * HTTP entry for every request to this Durable Object. Refuses the reserved
+     * `/__lunora/*` namespace unconditionally: `exec` reaches it only through
+     * the {@link lunoraExec} RPC, so no header, path spelling, or inbound request
+     * an app forwards as-is (`env.CONTAINER_X.get(id).fetch(request)`) opens it.
+     * The client-side path guard is the first line; this is the second.
      */
     public override async fetch(request: Request): Promise<Response> {
-        if (request.headers.get(CONTAINER_EXEC_HEADER) !== "1" && touchesReservedNamespace(new URL(request.url).pathname)) {
-            return new Response(`container "${this.lunoraName}": /${RESERVED_PATH_MARKER}/* is reserved for Lunora's own container routes; use exec.`, {
-                status: 403,
-            });
-        }
-
-        return super.fetch(request);
+        return this.refuseReserved(new URL(request.url).pathname) ?? super.fetch(request);
     }
 
     /**
-     * Proxy entry for every `ctx.containers.<name>` fetch. The base starts the
-     * container for this request through {@link startAndWaitForPorts}, which is
-     * where the `secretsStore` resolution lives — a request that finds the
-     * container already healthy needs no resolution at all.
+     * Proxy entry for every `ctx.containers.<name>` fetch — and a public RPC on
+     * the stub in its own right, so it applies the same `/__lunora/*` refusal
+     * as {@link fetch} rather than trusting that every caller came through it.
+     * The base starts the container for this request through
+     * {@link startAndWaitForPorts}, which is where the `secretsStore` resolution
+     * lives — a request that finds the container already healthy needs no
+     * resolution at all.
      */
     public override async containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response> {
+        const refused = this.refuseReserved(containerFetchPathname(args[0]));
+
+        if (refused !== undefined) {
+            return refused;
+        }
+
         await this.awaitReadinessGate();
 
         return super.containerFetch(...args);
+    }
+
+    /**
+     * The exec entry: `handle.exec` delivers its `POST /__lunora/exec` here, as
+     * an RPC, never over {@link fetch}. An RPC can only be invoked by code that
+     * holds the Durable Object binding, which is what makes the exec route
+     * unreachable from request content. Accepts exactly the exec route and
+     * nothing else under the reserved namespace, and honours a `.port(n)`
+     * handle's target-port header the way the base `fetch` does.
+     */
+    public async lunoraExec(request: Request): Promise<Response> {
+        const { pathname } = new URL(request.url);
+
+        if (request.method !== "POST" || pathname !== CONTAINER_EXEC_PATH) {
+            return new Response(`container "${this.lunoraName}": lunoraExec only serves POST ${CONTAINER_EXEC_PATH}.`, { status: 400 });
+        }
+
+        const portHeader = request.headers.get(TARGET_PORT_HEADER);
+        const port = portHeader === null ? this.defaultPort : Number.parseInt(portHeader, 10);
+
+        if (port === undefined || Number.isNaN(port)) {
+            return new Response(`container "${this.lunoraName}": exec needs a port — set \`defaultPort\` or exec through \`.port(n)\`.`, { status: 400 });
+        }
+
+        await this.awaitReadinessGate();
+
+        return super.containerFetch(request, port);
     }
 
     /**
@@ -337,6 +369,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraStops += 1;
 
         await super.onStop(parameters);
+    }
+
+    /** A 403 for a path under the reserved namespace, else `undefined`. */
+    private refuseReserved(pathname: string): Response | undefined {
+        if (!touchesReservedNamespace(pathname)) {
+            return undefined;
+        }
+
+        return new Response(`container "${this.lunoraName}": /${RESERVED_PATH_MARKER}/* is reserved for Lunora's own container routes; use exec.`, {
+            status: 403,
+        });
     }
 
     /**

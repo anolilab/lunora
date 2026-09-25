@@ -99,13 +99,52 @@ interface ContainerExecResult {
 const CONTAINER_EXEC_PATH = "/__lunora/exec";
 
 /**
- * Header `execViaFetch` stamps on its request so the container Durable Object
- * can tell an `exec` from a caller's `fetch`. The DO refuses any `/__lunora/*`
- * request that lacks it, and every handle's `fetch` strips it from what the
- * caller passed — so the client-side path guard is not the only thing standing
- * between a caller-chosen path and the exec route.
+ * In-worker routing mark `execViaFetch` stamps on its request. It never reaches
+ * the container Durable Object: the stub sender strips it and delivers a marked
+ * request through the DO's `lunoraExec` RPC instead of `fetch`, and every
+ * handle's `fetch` strips it from what the caller passed. The DO's HTTP entry
+ * points refuse `/__lunora/*` outright, so no header value — forged by a caller
+ * or forwarded from an inbound request — opens the exec route.
  */
 const CONTAINER_EXEC_HEADER = "x-lunora-container-exec";
+
+/** Most percent-decoding rounds {@link decodedPathForms} applies before giving up. */
+const MAX_PATH_DECODE_ROUNDS = 5;
+
+/**
+ * `pathname` and every successive percent-decoding of it, until decoding stops
+ * changing it (or fails, or {@link MAX_PATH_DECODE_ROUNDS} is reached).
+ *
+ * One round is what most routers apply, but a proxy that decodes before
+ * forwarding adds another, so `/%255F%255Flunora/exec` reaches a router as
+ * `/%5F%5Flunora/exec` and leaves it as `/__lunora/exec`. A guard that checks
+ * every form a chain of decoders could produce cannot be outrun by encoding
+ * the path one more time.
+ */
+const decodedPathForms = (pathname: string): string[] => {
+    const forms = [pathname];
+    let current = pathname;
+
+    for (let round = 0; round < MAX_PATH_DECODE_ROUNDS; round += 1) {
+        let next: string;
+
+        try {
+            next = decodeURIComponent(current);
+        } catch {
+            // A malformed escape: the forms so far are still checked.
+            break;
+        }
+
+        if (next === current) {
+            break;
+        }
+
+        forms.push(next);
+        current = next;
+    }
+
+    return forms;
+};
 
 /** How much of a failed exec response body is quoted back in the thrown error. */
 const EXEC_ERROR_BODY_LIMIT = 512;
@@ -274,4 +313,4 @@ const execViaFetch =
     };
 
 export type { ContainerExecOptions, ContainerExecResult };
-export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, execViaFetch };
+export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, decodedPathForms, execViaFetch };

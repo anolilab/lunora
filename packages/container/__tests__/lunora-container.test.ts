@@ -9,7 +9,6 @@ import { LunoraError } from "@lunora/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraContainer } from "../src/do/index";
-import { CONTAINER_EXEC_HEADER } from "../src/exec";
 import { defineContainer } from "../src/index";
 
 /** Overrides for the pieces the readiness/hard-timeout paths read off the ctx. */
@@ -122,38 +121,107 @@ describe(LunoraContainer, () => {
 /** Cast onto the private Secrets Store resolver + `envVars` the start path reads. */
 type SecretsStoreProbe = { envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<void> };
 
-describe("lunoraContainer reserved routes", () => {
-    it("refuses /__lunora/* unless the request came from exec, however the path is spelled", async () => {
-        expect.assertions(3);
+/** The status of a pending response, without reading a member off an `await`. */
+const statusOf = async (pending: Promise<Response>): Promise<number> => pending.then((response) => response.status);
 
+describe("lunoraContainer reserved routes", () => {
+    const reservedRouteInstance = (): { instance: LunoraContainer; proxied: { path: string; port: unknown }[] } => {
         const definition = defineContainer({ defaultPort: 8080, image: "./app" });
         const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "runner");
-        const proxied: string[] = [];
+        const proxied: { path: string; port: unknown }[] = [];
 
-        vi.spyOn(instance, "containerFetch").mockImplementation(async (request) => {
-            proxied.push(new URL((request as Request).url).pathname);
+        // Stub the upstream `Container.containerFetch` (two prototypes up), so
+        // LunoraContainer's own `fetch` / `containerFetch` / `lunoraExec` guards
+        // run for real and only the container proxy is faked.
+        vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { containerFetch: () => Promise<Response> }, "containerFetch").mockImplementation(
+            async (...args: unknown[]) => {
+                const target = args[0] as Request;
 
-            return new Response("ok");
-        });
+                proxied.push({ path: new URL(target.url).pathname, port: args[1] });
 
+                return new Response("ok");
+            },
+        );
+
+        return { instance, proxied };
+    };
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("refuses /__lunora/* over fetch however the path is spelled, and whatever the exec header says", async () => {
+        expect.assertions(2);
+
+        const { instance, proxied } = reservedRouteInstance();
+        const probes: Request[] = [
+            ...[
+                "/__lunora/exec",
+                "/__LUNORA/exec",
+                "/__lunora;x/exec",
+                "/%5F%5FLunora/exec",
+                "/api/__lunora/exec",
+                "/__lunora%2Fexec",
+                "/%255F%255Flunora/exec",
+            ].map((path) => new Request(`https://container${path}`, { method: "POST" })),
+            // The old in-band mark, in the value exec used and in wrong ones: none opens the route.
+            ...["1", "0", "true"].map(
+                (value) => new Request("https://container/__lunora/exec", { headers: { "x-lunora-container-exec": value }, method: "POST" }),
+            ),
+            // A websocket upgrade takes the same entry.
+            new Request("https://container/__lunora/exec", { headers: { Upgrade: "websocket" } }),
+        ];
         const statuses: number[] = [];
 
-        for (const path of ["/__lunora/exec", "/__LUNORA/exec", "/__lunora;x/exec", "/%5F%5FLunora/exec", "/api/__lunora/exec"]) {
+        for (const probe of probes) {
             // eslint-disable-next-line no-await-in-loop -- sequential probes against one instance
-            const response = await instance.fetch(new Request(`https://container${path}`, { method: "POST" }));
-
-            statuses.push(response.status);
+            statuses.push(await statusOf(instance.fetch(probe)));
         }
 
-        // The client-side guard is the first line; the DO is the second, so a
-        // spelling the guard misses still never reaches the container's router.
-        expect(statuses).toStrictEqual([403, 403, 403, 403, 403]);
+        expect(statuses).toStrictEqual(Array.from({ length: probes.length }).fill(403));
+        expect(proxied).toStrictEqual([]);
+    });
 
-        await instance.fetch(new Request("https://container/__lunora/exec", { headers: { [CONTAINER_EXEC_HEADER]: "1" }, method: "POST" }));
+    it("refuses /__lunora/* on the public containerFetch RPC too", async () => {
+        expect.assertions(3);
+
+        const { instance, proxied } = reservedRouteInstance();
+
+        // `containerFetch` is callable on the stub directly, skipping `fetch`.
+        await expect(statusOf(instance.containerFetch(new Request("https://container/__lunora/exec", { method: "POST" }), 8080))).resolves.toBe(403);
+        await expect(statusOf(instance.containerFetch("https://container/__LUNORA/exec", { method: "POST" }, 8080))).resolves.toBe(403);
+        expect(proxied).toStrictEqual([]);
+    });
+
+    it("serves exec only through lunoraExec, only for POST /__lunora/exec, on the targeted port", async () => {
+        expect.assertions(4);
+
+        const { instance, proxied } = reservedRouteInstance();
+
+        await expect(statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec", { method: "POST" })))).resolves.toBe(200);
+        await expect(
+            statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec", { headers: { "cf-container-target-port": "9090" }, method: "POST" }))),
+        ).resolves.toBe(200);
+        // Not a general bypass: another reserved path, or another method, is refused.
+        expect([
+            await statusOf(instance.lunoraExec(new Request("https://container/__lunora/other", { method: "POST" }))),
+            await statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec"))),
+        ]).toStrictEqual([400, 400]);
+        expect(proxied).toStrictEqual([
+            { path: "/__lunora/exec", port: 8080 },
+            { path: "/__lunora/exec", port: 9090 },
+        ]);
+    });
+
+    it("still proxies ordinary paths", async () => {
+        expect.assertions(1);
+
+        const { instance, proxied } = reservedRouteInstance();
+
         await instance.fetch(new Request("https://container/api/status"));
+        await instance.fetch(new Request("https://container/__lunora-status"));
 
-        expect(proxied).toStrictEqual(["/__lunora/exec", "/api/status"]);
-        expect(proxied).toHaveLength(2);
+        expect(proxied.map((entry) => entry.path)).toStrictEqual(["/api/status", "/__lunora-status"]);
     });
 });
 

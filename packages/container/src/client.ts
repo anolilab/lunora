@@ -13,7 +13,7 @@ import { readCapped } from "../../../shared/read-capped";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { containerBindingName } from "./define-container";
 import type { ContainerExecOptions, ContainerExecResult } from "./exec";
-import { CONTAINER_EXEC_HEADER, execViaFetch } from "./exec";
+import { CONTAINER_EXEC_HEADER, decodedPathForms, execViaFetch } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
 
@@ -57,6 +57,8 @@ interface ContainerStubLike {
     destroy?: () => Promise<void>;
     fetch: (input: Request) => Promise<Response>;
     getState?: () => Promise<ContainerInstanceState>;
+    /** The container DO's exec entry (`LunoraContainer.lunoraExec`), the only way a request reaches `/__lunora/exec`. */
+    lunoraExec?: (request: Request) => Promise<Response>;
     removeAllowedHost?: (hostname: string) => Promise<void>;
     removeDeniedHost?: (hostname: string) => Promise<void>;
     renewActivityTimeout?: () => Promise<void>;
@@ -343,11 +345,11 @@ const firstSegment = (pathname: string): string => {
  * route as `op: "fetch"` runs a command unattended. Guarding here rather than
  * in the gate is what makes that total — this is the last place that sees the
  * request before the container does, and it compares the same resolved
- * pathname the container's own router will, including the percent-decoded
- * spelling (routers commonly unescape before matching), in any letter case and
- * with `;params` removed. The container Durable Object refuses the namespace
- * too unless the request carries the exec mark, so a spelling this misses still
- * does not reach the route.
+ * pathname the container's own router will, including every percent-decoded
+ * spelling (routers unescape before matching, and a proxy chain may unescape
+ * more than once), in any letter case and with `;params` removed. The container
+ * Durable Object refuses the namespace on its HTTP entry points too, so a
+ * spelling this misses still does not reach the route.
  */
 const assertPathNotReserved = (input: Request | string, label: string): void => {
     // Resolved exactly the way `toRequest` resolves it, or the guard reads a
@@ -363,17 +365,7 @@ const assertPathNotReserved = (input: Request | string, label: string): void => 
         return;
     }
 
-    const { pathname } = url;
-    let decoded = pathname;
-
-    try {
-        decoded = decodeURIComponent(pathname);
-    } catch {
-        // A malformed escape can't be what a router decoded it to; the raw
-        // spelling below is still checked.
-    }
-
-    if (firstSegment(pathname) === RESERVED_PATH_SEGMENT || firstSegment(decoded) === RESERVED_PATH_SEGMENT) {
+    if (decodedPathForms(url.pathname).some((form) => firstSegment(form) === RESERVED_PATH_SEGMENT)) {
         throw new LunoraError(
             "BAD_REQUEST",
             `${label}: \`/${RESERVED_PATH_SEGMENT}/*\` is reserved for Lunora's own container routes and cannot be reached with \`fetch\`. ` +
@@ -595,6 +587,33 @@ const coldStartRetryingHandle = (
     };
 };
 
+/**
+ * Deliver one request to a container DO stub. An `exec` request (carrying the
+ * in-worker {@link CONTAINER_EXEC_HEADER} mark, which every caller `fetch` has
+ * stripped) goes through the DO's `lunoraExec` RPC with the mark removed;
+ * everything else through `fetch`, whose entry refuses `/__lunora/*`. An RPC
+ * is only callable by code holding the binding, so nothing in a request —
+ * header, path, or an inbound request forwarded as-is — can reach the exec
+ * route through `fetch`.
+ */
+const sendToStub = async (stub: ContainerStubLike, request: Request): Promise<Response> => {
+    if (!request.headers.has(CONTAINER_EXEC_HEADER)) {
+        return stub.fetch(request);
+    }
+
+    if (typeof stub.lunoraExec !== "function") {
+        throw new TypeError("ctx.containers: this container DO does not expose lunoraExec() — is @lunora/container/do up to date?");
+    }
+
+    // Mutated in place rather than cloned: every attempt builds its request
+    // afresh (`toRequest`), and a clone's signal only follows the original's
+    // through a weak reference, which is not something an exec deadline
+    // should depend on.
+    request.headers.delete(CONTAINER_EXEC_HEADER);
+
+    return stub.lunoraExec(request);
+};
+
 const handleFor = (
     namespace: ContainerNamespaceLike,
     instanceName: string,
@@ -602,10 +621,10 @@ const handleFor = (
     options?: InstanceRetryOptions,
     trace?: OutboundTraceContext,
 ): ContainerHandle =>
-    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), label, options, undefined, trace);
+    coldStartRetryingHandle(async (request) => sendToStub(namespace.get(namespace.idFromName(instanceName)), request), label, options, undefined, trace);
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
-type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
+type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch" | "lunoraExec">;
 
 /** Invoke an optional lifecycle/egress RPC on a stub, with a directed error if the runtime doesn't expose it. */
 const lifecycleCall = async <Result>(stub: ContainerStubLike, method: ContainerStubMethod, binding: string, argument?: unknown): Promise<Result> => {
@@ -645,7 +664,7 @@ const instanceHandleFor = (
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...coldStartRetryingHandle(async (request) => stub().fetch(request), handleLabel(spec), options, undefined, trace),
+        ...coldStartRetryingHandle(async (request) => sendToStub(stub(), request), handleLabel(spec), options, undefined, trace),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
@@ -726,7 +745,7 @@ const poolHandleFor = (
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                    const response = await namespace.get(namespace.idFromName(randomPoolName(size))).fetch(request);
+                    const response = await sendToStub(namespace.get(namespace.idFromName(randomPoolName(size))), request);
 
                     // eslint-disable-next-line no-await-in-loop -- the cold-start predicate peeks the body
                     if (attempt === totalAttempts - 1 || !(await shouldRetry(response))) {
@@ -861,6 +880,7 @@ const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike
             denyHost: () => Promise.resolve(),
             destroy: () => Promise.resolve(),
             fetch: (request) => Promise.resolve(handler(request, { name })),
+            lunoraExec: (request) => Promise.resolve(handler(request, { name })),
             getState: () => Promise.resolve({ lastChange: 0 }),
             removeAllowedHost: () => Promise.resolve(),
             removeDeniedHost: () => Promise.resolve(),
