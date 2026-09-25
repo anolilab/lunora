@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.207...@lunora/codegen@1.0.0-alpha.208) (2026-09-25)
+
+### Bug Fixes
+
+* **codegen:** erased-return advisory and expansion follow-ups ([#815](https://github.com/anolilab/lunora/issues/815)) ([a73f65a](https://github.com/anolilab/lunora/commit/a73f65ad799f8dc619d080601357f0f22cfd68c4)), closes [#810](https://github.com/anolilab/lunora/issues/810) [#811](https://github.com/anolilab/lunora/issues/811) [#811](https://github.com/anolilab/lunora/issues/811) [#811](https://github.com/anolilab/lunora/issues/811) [#781](https://github.com/anolilab/lunora/issues/781) [#810](https://github.com/anolilab/lunora/issues/810) [pre-#810](https://github.com/anolilab/pre-/issues/810)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.151
+* **@lunora/agent:** upgraded to 1.0.0-alpha.132
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+* **@lunora/queue:** upgraded to 1.0.0-alpha.63
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.82
+* **@lunora/do:** upgraded to 1.0.0-alpha.159
+* **@lunora/server:** upgraded to 1.0.0-alpha.140
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.80
+
 ## @lunora/codegen [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.206...@lunora/codegen@1.0.0-alpha.207) (2026-09-24)
 
 ### Bug Fixes
