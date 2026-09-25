@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.80...@lunora/shard-engine@1.0.0-alpha.81) (2026-09-25)
+
+### Bug Fixes
+
+* **search:** key fts5 companions by a rowid map and guard backfills ([#819](https://github.com/anolilab/lunora/issues/819)) ([8d57122](https://github.com/anolilab/lunora/commit/8d5712261cb2d5dc051b7db0f061c376fb995304))
+
 ## @lunora/shard-engine [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.79...@lunora/shard-engine@1.0.0-alpha.80) (2026-09-25)
 
 
