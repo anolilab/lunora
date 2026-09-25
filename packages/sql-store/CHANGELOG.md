@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.139...@lunora/sql-store@1.0.0-alpha.140) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** push rls policies into global search SQL; fix mid-iteration reorder ([#828](https://github.com/anolilab/lunora/issues/828)) ([3256c91](https://github.com/anolilab/lunora/commit/3256c911d6efbd1937935afafb4ca770be12b830))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.86
+* **@lunora/do:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/sql-store [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.138...@lunora/sql-store@1.0.0-alpha.139) (2026-09-25)
 
 ### Bug Fixes
