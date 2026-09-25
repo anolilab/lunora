@@ -175,5 +175,28 @@ describe("ragSyncTriggers", () => {
 
             expect(scheduled).toStrictEqual([]);
         });
+
+        it.each([
+            ["bigint", 1n, 1n],
+            ["Date", new Date(0), new Date(0)],
+        ])("re-indexes rather than failing the write when metadata holds a %s", async (_kind, before, after) => {
+            expect.assertions(2);
+
+            const { context, scheduled } = fakeContext();
+            const sync = ragSyncTriggers({
+                action: ACTION,
+                metadata: (document) => {
+                    return { orgId: document["orgId"] };
+                },
+                text: (document) => document["body"] as string,
+            });
+
+            // After-triggers run inside the write, so a throw here would fail the
+            // mutation itself. A value that cannot be encoded counts as changed.
+            await expect(
+                sync.afterUpdate(context, { doc: { body: "same", orgId: after }, id: "doc-1", previous: { body: "same", orgId: before } }),
+            ).resolves.toBeUndefined();
+            expect(scheduled.map((entry) => entry.args)).toStrictEqual([{ id: "doc-1", metadata: { orgId: after }, text: "same" }]);
+        });
     });
 });

@@ -115,23 +115,37 @@ type RagSyncHandler = (context: RagSyncTriggerContext, event: RagSyncEvent) => P
  * });
  * ```
  *
- * The action on the other end is three lines:
+ * The action on the other end forwards every field it receives:
  *
  * ```ts
- * export const reindex = internalAction.input({ deleted: v.optional(v.boolean()), id: v.string(), text: v.optional(v.string()) }).action(
- *     async ({ args, ctx }) => {
+ * export const reindex = internalAction
+ *     .input({
+ *         deleted: v.optional(v.boolean()),
+ *         id: v.string(),
+ *         metadata: v.optional(v.record(v.string(), v.any())),
+ *         namespace: v.optional(v.string()),
+ *         text: v.optional(v.string()),
+ *     })
+ *     .action(async ({ args, ctx }) => {
  *         const rag = docsRag(ctx);
+ *         const { id, metadata, namespace, text } = args;
  *
- *         await (args.deleted === true || args.text === undefined ? rag.remove({ id: args.id }) : rag.index({ id: args.id, text: args.text }));
- *     },
- * );
+ *         await (args.deleted === true || text === undefined ? rag.remove({ id, namespace }) : rag.index({ id, metadata, namespace, text }));
+ *     });
  * ```
  *
  * A multi-tenant table also passes `metadata` and/or `namespace` (for example
- * `metadata: (doc) => ({ orgId: doc.orgId })`) and forwards `args.metadata` /
- * `args.namespace` to `rag.index` and `rag.remove`. Without them, a row that
- * moves tenant keeps its old scope in the index and stays retrievable by the
- * tenant it left.
+ * `metadata: (doc) => ({ orgId: doc.orgId })`). Without them, a row that moves
+ * tenant keeps its old scope in the index and stays retrievable by the tenant it
+ * left. An action that drops `namespace` removes from (or indexes into) the
+ * wrong namespace, and one whose `input` omits `metadata` / `namespace` rejects
+ * the scheduled args and fails every job.
+ *
+ * Re-scoping is not atomic: the triggers only SCHEDULE the work, so after a row
+ * changes namespace its chunks stay retrievable in the old one until the
+ * scheduled delete runs (and until the re-index runs, it is missing from the new
+ * one). The same holds for a metadata change. Lower `delayMs` shortens that
+ * window; it does not close it.
  */
 const ragSyncTriggers = <Document extends Record<string, unknown> = Record<string, unknown>>(
     options: RagSyncOptions<Document>,
@@ -155,6 +169,21 @@ const ragSyncTriggers = <Document extends Record<string, unknown> = Record<strin
         const metadata = metadataOf(document);
 
         return { ...locate(document, fallbackId), ...(metadata === undefined ? {} : { metadata }), text };
+    };
+
+    /**
+     * Whether two rows project to the same metadata, key-order-insensitively.
+     * `stableStringify` throws on a value it cannot encode (a `bigint`, a `Date`,
+     * a class instance), and an after-trigger runs inside the write, so letting
+     * it escape would fail the mutation itself. "Cannot tell" counts as changed:
+     * the row re-indexes, as `rag.index` does for the same throw.
+     */
+    const sameMetadata = (document: Record<string, unknown>, previous: Record<string, unknown>): boolean => {
+        try {
+            return stableStringify(metadataOf(document)) === stableStringify(metadataOf(previous));
+        } catch {
+            return false;
+        }
     };
 
     const schedule = async (context: RagSyncTriggerContext, args: RagSyncArgs): Promise<void> => {
@@ -193,10 +222,7 @@ const ragSyncTriggers = <Document extends Record<string, unknown> = Record<strin
             // Metadata is what `rlsFilter` / `metadataFilter` scope by, so a change
             // to it is a change to who can retrieve the row, even when the text
             // is identical. Compared key-order-insensitively.
-            const metadataChanged =
-                options.metadata !== undefined &&
-                event.previous !== undefined &&
-                stableStringify(metadataOf(event.doc)) !== stableStringify(metadataOf(event.previous));
+            const metadataChanged = options.metadata !== undefined && event.previous !== undefined && !sameMetadata(event.doc, event.previous);
 
             if (moved) {
                 await schedule(context, { deleted: true, ...previousLocation });
