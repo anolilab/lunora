@@ -1,3 +1,16 @@
+## @lunora/server [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.142...@lunora/server@1.0.0-alpha.143) (2026-09-25)
+
+### Features
+
+* **vectors:** re-embed a table when its declared model changes ([#820](https://github.com/anolilab/lunora/issues/820)) ([ddbafa6](https://github.com/anolilab/lunora/commit/ddbafa6c35bf9b3d9ae68ed3db115465da876d38))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.85
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+* **@lunora/observability:** upgraded to 1.0.0-alpha.92
+
 ## @lunora/server [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.141...@lunora/server@1.0.0-alpha.142) (2026-09-25)
 
 ### ⚠ BREAKING CHANGES
