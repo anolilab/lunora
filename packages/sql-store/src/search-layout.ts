@@ -71,10 +71,9 @@ interface SearchLayout {
 
     /**
      * Replace one document's rows in the companion, from `document` — the state
-     * of the source row `readAs`. The FTS5 and inverted layouts land the write
-     * only while that row is still current ({@link unchangedSince}), checked
-     * inside the write, so a writer that lost a race to a newer one cannot
-     * overwrite its entry. The native layout writes regardless.
+     * of the source row `readAs`. Every layout lands the write only while that
+     * row is still current ({@link unchangedSince}), checked inside the write,
+     * so a writer that lost a race to a newer one cannot overwrite its entry.
      */
     indexDocument: (
         exec: SqlCtxExec,
@@ -101,9 +100,9 @@ interface SearchLayout {
 
     /**
      * Delete every companion row for one document, which was just deleted from
-     * `table`. The FTS5 and inverted layouts purge only while no row with that
-     * id is back in `table`, so a delete whose purge lands after a re-insert
-     * does not drop the new document's entry.
+     * `table`. Every layout purges only while no row with that id is back in
+     * `table`, so a delete whose purge lands after a re-insert does not drop
+     * the new document's entry.
      */
     purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string, table: string) => Promise<void>;
 
@@ -394,12 +393,10 @@ const fts5Layout: SearchLayout = {
 };
 
 /**
- * The engine's own full-text index, opted into with `strategy: "native"`. Its
- * writes are not guarded: a write that lost a race here is repaired only by the
- * caller's re-check (`indexRowsUntilCurrent` in `ctx-db-search`), and a purge
- * after a delete is neither guarded nor re-checked, so one landing after a
- * re-insert of the same id drops the new document's entry until it is next
- * written.
+ * The engine's own full-text index, opted into with `strategy: "native"` (only
+ * Postgres supplies one). One row per document, keyed by id: a write is the
+ * dialect's guarded upsert, so racing writers converge on one row, and a purge
+ * carries the same guard as the other layouts.
  */
 const nativeLayout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
@@ -423,14 +420,15 @@ const nativeLayout: SearchLayout = {
             return;
         }
 
-        const id = String(readAs.row["id"]);
-
-        await queryRun(exec, dialect, purgeStatement(companion, id));
-        await queryRun(exec, dialect, native.indexDocument(companion, id, analyzedSearchText(document, index)));
+        await queryRun(
+            exec,
+            dialect,
+            native.indexDocument(companion, String(readAs.row["id"]), analyzedSearchText(document, index), unchangedSince(dialect, readAs)),
+        );
     },
     name: "native",
-    purgeDocument: async (exec, dialect, companion, id) => {
-        await queryRun(exec, dialect, purgeStatement(companion, id));
+    purgeDocument: async (exec, dialect, companion, id, table) => {
+        await queryRun(exec, dialect, purgeStatement(companion, id, absentFrom(table, id)));
     },
     runSearch: runNativeSearch,
 };

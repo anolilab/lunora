@@ -648,6 +648,31 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
         );
     });
 
+    describe("full-text search (native Postgres strategy) across isolates", () => {
+        it.each(
+            searchRaceCases(
+                {
+                    dialect: postgresDialect,
+                    engine: "postgres",
+                    exec: () => harness.exec,
+                    indexes: async () => new Map(),
+                    query: (text, parameters) => harness.query(text, parameters),
+                    // Every case gets a fresh pglite from the suite's `beforeEach`.
+                    reset: async () => {},
+                },
+                { native: true },
+            ),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
+        );
+    });
+
     describe("full-text search (native Postgres strategy)", () => {
         const nativeSchema: SchemaLike = {
             tables: {

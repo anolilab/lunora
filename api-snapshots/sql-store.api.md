@@ -74,7 +74,7 @@ interface SqlDialect {
     nativeTextSearch?: {
         createCompanion: (companion: string, keyType: string) => SQL;
         createIndexes: (companion: string) => SQL[];
-        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+        indexDocument: (companion: string, id: string, analyzed: string, guard: SQL) => SQL;
         matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };

@@ -7,8 +7,9 @@ import type { HyperdriveEngine } from "../../src/global";
 import { createHyperdriveGlobalCtxDb } from "../../src/global";
 
 /**
- * The portable inverted search companion under writers from separate isolates,
- * against a real engine — the Postgres and MySQL twin of `@lunora/sql-store`'s
+ * A search companion under writers from separate isolates, against a real
+ * engine: the portable inverted layout, or with `native` the engine's own
+ * full-text index (Postgres only) — the Postgres and MySQL twin of `@lunora/sql-store`'s
  * workerd + D1 concurrency suite.
  *
  * Each case drives the interleaving deterministically: one exec is held at a
@@ -38,7 +39,6 @@ interface RaceTarget {
 type Gate = (text: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 
 const COMPANION = "notes__fts_by_body";
-const INDEX = { field: "body", filterFields: [], name: "by_body" };
 const ROWS = 30;
 
 const column = (kind: string): ValidatorLike => {
@@ -120,8 +120,12 @@ const insertsEntry = (target: string) => (text: string, parameters: ReadonlyArra
 
 type RaceCase = [name: string, run: () => Promise<void>];
 
-const searchRaceCases = (target: RaceTarget): RaceCase[] => {
+const searchRaceCases = (target: RaceTarget, options: { native?: boolean } = {}): RaceCase[] => {
     const cases: RaceCase[] = [];
+    const native = options.native === true;
+    const INDEX = { field: "body", filterFields: [], name: "by_body", ...(native ? { strategy: "native" } : {}) };
+    /** Companion rows one two-token document holds: one per token, or its one vector row. */
+    const perDocument = native ? 1 : 2;
     let tick = 1_700_000_000_000;
 
     const writer = (exec: SqlExec, index?: Record<string, unknown>): DatabaseWriterLike =>
@@ -186,17 +190,18 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
             hold.release();
             await isolateA;
 
-            await expect(companionRows(row)).resolves.toBe(2);
-            await expect(companionRows()).resolves.toBe(2 * ROWS);
+            await expect(companionRows(row)).resolves.toBe(perDocument);
+            await expect(companionRows()).resolves.toBe(perDocument * ROWS);
             await expect(search("apple")).resolves.toStrictEqual([row]);
         },
     ]);
 
-    const livePair = async (gate: Gate): Promise<[DatabaseWriterLike, DatabaseWriterLike]> => {
+    /** Two writers past their cold starts; A's statements pass through `gate`, then `wrap`. */
+    const livePair = async (gate: Gate, wrap: (exec: SqlExec) => SqlExec = (exec) => exec): Promise<[DatabaseWriterLike, DatabaseWriterLike]> => {
         await seed((n) => `word${String(n)} common`);
         await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
 
-        const isolateA = writer(gated(target.exec(), gate), INDEX);
+        const isolateA = writer(wrap(gated(target.exec(), gate)), INDEX);
         const isolateB = writer(target.exec(), INDEX);
 
         // Each past its own cold start.
@@ -224,7 +229,7 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
 
                 await expect(search("newerword")).resolves.toStrictEqual([row]);
                 await expect(search("olderword")).resolves.toStrictEqual([]);
-                await expect(companionRows(row)).resolves.toBe(2);
+                await expect(companionRows(row)).resolves.toBe(perDocument);
             },
         ],
         [
@@ -278,7 +283,7 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
                 await writing;
 
                 await expect(search("onlyword")).resolves.toStrictEqual([row]);
-                await expect(companionRows(row)).resolves.toBe(2);
+                await expect(companionRows(row)).resolves.toBe(perDocument);
             },
         ],
         [
@@ -297,26 +302,103 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
                 await deleting;
 
                 await expect(search("rebornword")).resolves.toStrictEqual([row]);
-                await expect(companionRows(row)).resolves.toBe(2);
+                await expect(companionRows(row)).resolves.toBe(perDocument);
             },
         ],
         [
-            "replaces a document's rows when its old and new text share tokens",
+            "never drops a re-inserted document's entry, even before the delete re-checks the row",
+            async () => {
+                expect.assertions(1);
+
+                // Held at its purge while B re-inserts the row, then just before it
+                // re-reads the row. By then its purge has run, so only the purge's
+                // own guard can have kept B's entry.
+                const row = pad(20);
+                const atPurge = holdAt(touchesCompanion(row));
+                const atRecheck = holdAt((text) => /^SELECT \* FROM [`"]notes[`"] WHERE [`"]notes[`"]\.[`"]id[`"] IN/u.test(text));
+                let purged = false;
+                const [isolateA, isolateB] = await livePair(async (text, parameters) => {
+                    await atPurge.gate(text, parameters);
+
+                    if (purged) {
+                        await atRecheck.gate(text, parameters);
+                    }
+                });
+                const deleting = isolateA.delete(row);
+
+                await atPurge.reached;
+                await isolateB.insert("notes", { _id: row, body: "rebornword common", title: "t" }, { allowExplicitId: true });
+                purged = true;
+                atPurge.release();
+                await atRecheck.reached;
+
+                const kept = await search("rebornword");
+
+                atRecheck.release();
+                await deleting;
+
+                expect(kept).toStrictEqual([row]);
+            },
+        ],
+        [
+            "re-indexes a re-inserted document when the delete's purge read the row as absent",
             async () => {
                 expect.assertions(2);
 
-                await seed((n) => `word${String(n)} common`);
-                await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
-                await writer(target.exec(), INDEX).patch(pad(3), { body: "common common fresh" });
+                // A Postgres DELETE reads its guard at the statement's snapshot, so a
+                // re-insert that commits while the purge runs still reads as absent.
+                // One connection cannot interleave inside a statement, so A's purge
+                // runs here without its guard, as that snapshot would decide it.
+                const row = pad(20);
+                let isolateB: DatabaseWriterLike | undefined;
+                let purged = false;
+                const staleSnapshot = (exec: SqlExec): SqlExec => {
+                    return {
+                        ...exec,
+                        run: async (text, parameters) => {
+                            if (purged || !/^DELETE FROM [`"]notes__fts_by_body[`"]/u.test(text) || !parameters.includes(row)) {
+                                return exec.run(text, parameters);
+                            }
 
-                // `common` is both purged and re-inserted by the one write.
-                const rows = await target.query(`SELECT __token__ AS t, __n__ AS n FROM ${COMPANION} WHERE __id__ = '${pad(3)}' ORDER BY __token__`);
+                            purged = true;
+                            await isolateB?.insert("notes", { _id: row, body: "rebornword common", title: "t" }, { allowExplicitId: true });
 
-                expect(rows.map((row) => `${String(row["t"])}:${String(row["n"])}`)).toStrictEqual(["common:2", "fresh:1"]);
-                await expect(search("word3")).resolves.toStrictEqual([]);
+                            return exec.run(text.slice(0, text.indexOf(" AND NOT EXISTS")), parameters.slice(0, 1));
+                        },
+                    };
+                };
+                const [isolateA, other] = await livePair(async () => {}, staleSnapshot);
+
+                isolateB = other;
+                await isolateA.delete(row);
+
+                await expect(search("rebornword")).resolves.toStrictEqual([row]);
+                await expect(companionRows(row)).resolves.toBe(perDocument);
             },
         ],
     );
+
+    if (native) {
+        // The rest pin the inverted layout's token rows and its unique-key migration.
+        return cases;
+    }
+
+    cases.push([
+        "replaces a document's rows when its old and new text share tokens",
+        async () => {
+            expect.assertions(2);
+
+            await seed((n) => `word${String(n)} common`);
+            await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
+            await writer(target.exec(), INDEX).patch(pad(3), { body: "common common fresh" });
+
+            // `common` is both purged and re-inserted by the one write.
+            const rows = await target.query(`SELECT __token__ AS t, __n__ AS n FROM ${COMPANION} WHERE __id__ = '${pad(3)}' ORDER BY __token__`);
+
+            expect(rows.map((row) => `${String(row["t"])}:${String(row["n"])}`)).toStrictEqual(["common:2", "fresh:1"]);
+            await expect(search("word3")).resolves.toStrictEqual([]);
+        },
+    ]);
 
     /**
      * The layout the previous build left: no unique key, the plain `(token, id)`
