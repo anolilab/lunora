@@ -1,3 +1,24 @@
+## @lunora/do [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.158...@lunora/do@1.0.0-alpha.159) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `SchedulerDO#dispatch` (protected) now returns
+`Promise<boolean | "in-progress">`; subclasses that only return booleans
+are unaffected.
+
+### Bug Fixes
+
+* **do:** bound dispatch claims and stop counting declines as failures ([#814](https://github.com/anolilab/lunora/issues/814)) ([c17ddbd](https://github.com/anolilab/lunora/commit/c17ddbd9d2b777e574be04b57eb123c29ff9ebec)), closes [#803](https://github.com/anolilab/lunora/issues/803) [#812](https://github.com/anolilab/lunora/issues/812)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.89
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.49
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.80
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.69
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+
 ## @lunora/do [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.157...@lunora/do@1.0.0-alpha.158) (2026-09-24)
 
 ### Bug Fixes
