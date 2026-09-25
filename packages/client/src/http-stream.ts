@@ -188,6 +188,22 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
     const decoder = new TextDecoder();
 
     let buffer = "";
+    // A `\r` that ended the previous chunk may be the first half of a `\r\n`
+    // split across two reads, so it waits for the next chunk before normalising.
+    let carriedCr = false;
+
+    /** Append decoded text with `\r\n` normalised to `\n`, across chunk boundaries too. */
+    const append = (text: string): void => {
+        let chunk = carriedCr ? `\r${text}` : text;
+
+        carriedCr = chunk.endsWith("\r");
+
+        if (carriedCr) {
+            chunk = chunk.slice(0, -1);
+        }
+
+        buffer += chunk.replaceAll("\r\n", "\n");
+    };
 
     /** Drain every complete frame currently in the buffer; `true` when a terminal frame was handled. */
     const drainFrames = (): boolean => {
@@ -218,7 +234,7 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
 
         // The server writes `\n`-only frames; normalise `\r\n` defensively so a
         // proxy that rewrites line endings doesn't break frame detection.
-        buffer += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+        append(decoder.decode(value, { stream: true }));
 
         if (drainFrames()) {
             // Terminal frame seen — release the connection and stop reading.
@@ -232,7 +248,8 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
     }
 
     // Flush any bytes the decoder buffered, then drain one last time.
-    buffer += decoder.decode().replaceAll("\r\n", "\n");
+    // A `\r` still carried here is a lone trailing one, which ends no frame.
+    append(decoder.decode());
 
     if (!drainFrames()) {
         // The pump always writes `complete` or `error` before closing, so a

@@ -176,6 +176,17 @@ describe("httpStream", () => {
         expect(chunks).toStrictEqual([{ text: "a" }]);
     });
 
+    it("normalises a `\\r\\n` split across two reads", async () => {
+        expect.assertions(1);
+
+        // The first read ends on the `\r` of the frame's closing `\r\n`.
+        const { fetchImpl } = fetchReturning(['data: {"text":"a"}\r\n\r', '\ndata: {"text":"b"}\r\n\r\nevent: complete\r\ndata: {}\r\n\r\n']);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl }));
+
+        expect(chunks).toStrictEqual([{ text: "a" }, { text: "b" }]);
+    });
+
     it("cancel() aborts the fetch signal and resolves the iterator", async () => {
         expect.assertions(2);
 
