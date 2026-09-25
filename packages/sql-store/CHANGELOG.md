@@ -1,3 +1,11 @@
+## @lunora/sql-store [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.134...@lunora/sql-store@1.0.0-alpha.135) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+* **@lunora/do:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/sql-store [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.133...@lunora/sql-store@1.0.0-alpha.134) (2026-09-25)
 
 ### ⚠ BREAKING CHANGES
