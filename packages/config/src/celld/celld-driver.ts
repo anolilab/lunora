@@ -23,11 +23,11 @@ import { writeCelldConfig } from "./celld-config";
 
 /**
  * The deploy options celld has no equivalent for, with what to do instead.
- * Refused rather than ignored: `--dry-run` quietly publishing, or `--env`
- * quietly deploying the top-level config, is worse than not running.
+ * Refused rather than ignored: `--env` quietly deploying the top-level
+ * config, or `--preview` quietly replacing production, is worse than not
+ * running.
  */
 const UNSUPPORTED_DEPLOY_OPTIONS: ReadonlyArray<[keyof DeployRequest, string]> = [
-    ["dryRun", "`celld deploy` has no dry run — `lunora prepare --target celld` validates without publishing"],
     ["entry", "`celld deploy` deploys the config's `main`; a composed framework entry has no celld equivalent yet"],
     ["environment", "celld has no Wrangler environments — deploy a separate config per environment"],
     ["outDir", "`celld deploy` does not write its bundle to disk"],
@@ -43,7 +43,9 @@ const CELLD_TOOLCHAIN: DriverToolchain = {
             throw new Error(refused[1]);
         }
 
-        return { args: ["deploy", request.configPath ?? "."], onPath: true, tool: "celld" };
+        // `celld deploy --dry-run` bundles and prints the version without
+        // writing to the bucket.
+        return { args: ["deploy", request.configPath ?? ".", ...(request.dryRun === true ? ["--dry-run"] : [])], onPath: true, tool: "celld" };
     },
 
     dev: (request) => {

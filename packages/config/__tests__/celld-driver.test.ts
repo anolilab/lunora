@@ -31,7 +31,6 @@ describe("celld deploy driver", () => {
     // `--env` that quietly deploys the top-level config — so the driver refuses
     // rather than drop the flag.
     it.each([
-        [{ dryRun: true }, /no dry run/u],
         [{ environment: "staging" }, /no Wrangler environments/u],
         [{ preview: true }, /no preview versions/u],
         [{ temporary: true }, /no short-lived accounts/u],
@@ -41,6 +40,12 @@ describe("celld deploy driver", () => {
         expect.assertions(1);
 
         expect(() => driver.toolchain?.deploy(request)).toThrow(message);
+    });
+
+    it("maps a dry run onto `celld deploy --dry-run`, which bundles without writing", () => {
+        expect.assertions(1);
+
+        expect(driver.toolchain?.deploy({ configPath: "c.json", dryRun: true }).args).toStrictEqual(["deploy", "c.json", "--dry-run"]);
     });
 
     it("declares no secret store and no log tail", () => {

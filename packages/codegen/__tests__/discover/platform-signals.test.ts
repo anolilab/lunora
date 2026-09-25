@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { PlatformCodeSignals } from "../../src/discover/platform-signals";
 import { discoverPlatformSignals } from "../../src/discover/platform-signals";
 
 let workdir: string;
@@ -14,7 +15,7 @@ const write = (name: string, source: string): void => {
     writeFileSync(join(workdir, "lunora", name), source, "utf8");
 };
 
-const signals = (): { durableStreams: boolean; secrets: boolean } => discoverPlatformSignals(project, join(workdir, "lunora"));
+const signals = (): PlatformCodeSignals => discoverPlatformSignals(project, join(workdir, "lunora"));
 
 // eslint-disable-next-line no-secrets/no-secrets -- false positive: a function name in a describe label, not a credential
 describe("discoverPlatformSignals", () => {
@@ -36,7 +37,58 @@ describe("discoverPlatformSignals", () => {
             `import { query } from "@lunora/server";\n\nexport const list = query({ args: {}, handler: async (ctx) => ctx.db.query("users").collect() });\n`,
         );
 
-        expect(signals()).toStrictEqual({ durableStreams: false, secrets: false });
+        expect(signals()).toStrictEqual({ containerEgressPolicy: false, durableStreams: false, secrets: false, workflowRollback: false });
+    });
+
+    // A host without step rollback fails the step rather than run it without
+    // the compensation, so a declared rollback must reach the platform gate.
+    it("detects a workflow step that declares a rollback, inline or hoisted", () => {
+        expect.assertions(2);
+
+        write(
+            "steps.ts",
+            `import { defineStep } from "@lunora/workflow";\n\nexport const charge = defineStep("charge", { args: {}, handler: async () => 1, rollback: async () => {} });\n`,
+        );
+
+        expect(signals().workflowRollback).toBe(true);
+
+        write(
+            "steps.ts",
+            `import { defineStep } from "@lunora/workflow";\n\nconst config = { args: {}, handler: async () => 1, rollback: async () => {} };\n\nexport const charge = defineStep("charge", config);\n`,
+        );
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        expect(signals().workflowRollback).toBe(true);
+    });
+
+    it("does not treat a step without a rollback, or `rollback: undefined`, as a declaration", () => {
+        expect.assertions(1);
+
+        write(
+            "steps.ts",
+            `import { defineStep } from "@lunora/workflow";\n\nexport const a = defineStep("a", { args: {}, handler: async () => 1 });\nexport const b = defineStep("b", { args: {}, handler: async () => 1, rollback: undefined });\n`,
+        );
+
+        expect(signals().workflowRollback).toBe(false);
+    });
+
+    it("detects a container egress policy by any of its keys, and not an explicit opt-out", () => {
+        expect.assertions(2);
+
+        write(
+            "containers.ts",
+            `import { defineContainer } from "@lunora/container";\n\nexport const box = defineContainer({ image: "./Dockerfile", interceptHttps: false });\n`,
+        );
+
+        expect(signals().containerEgressPolicy).toBe(false);
+
+        write(
+            "containers.ts",
+            `import { defineContainer } from "@lunora/container";\n\nexport const box = defineContainer({ allowedHosts: ["example.com"], image: "./Dockerfile" });\n`,
+        );
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        expect(signals().containerEgressPolicy).toBe(true);
     });
 
     it("detects a durable stream declared on the builder terminal", () => {

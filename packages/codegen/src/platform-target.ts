@@ -256,6 +256,8 @@ interface PlatformSignals {
     agents?: boolean;
     /** A `.commitOrdered()` table. */
     commitOrderedTables?: boolean;
+    /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
+    containerEgressPolicy?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
@@ -272,12 +274,15 @@ interface PlatformSignals {
     secrets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
     vectorStore?: boolean;
+    /** A `defineStep({ rollback })` compensation. */
+    workflowRollback?: boolean;
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
 const PLATFORM_SIGNAL_KEYS = [
     "agents",
     "commitOrderedTables",
+    "containerEgressPolicy",
     "cronTriggers",
     "crossShardFanout",
     "durableStreams",
@@ -286,12 +291,14 @@ const PLATFORM_SIGNAL_KEYS = [
     "relationGraph",
     "secrets",
     "vectorStore",
+    "workflowRollback",
 ] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
 const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = {
     agents: "durable agents (`defineAgent`)",
     commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
+    containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
@@ -300,6 +307,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
     vectorStore: "vector indexes (`.vectorize()`)",
+    workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */

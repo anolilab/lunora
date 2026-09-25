@@ -26,11 +26,11 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`, `containers`,
- * `cronTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`,
- * `hyperdrive`, `images`, `keyValueStore`, `mail`, `objectStorage`,
- * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
- * `vectorStore`, `workflows`.
+ * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
+ * `containerEgressPolicy`, `containers`, `cronTriggers`, `crossShardFanout`,
+ * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
+ * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
+ * `scheduler`, `secrets`, `vectorStore`, `workflowRollback`, `workflows`.
  *
  * Every other key here — `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
@@ -70,9 +70,9 @@
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
- * (`agents`, `commitOrderedTables`, `cronTriggers`, `crossShardFanout`,
- * `durableStreams`, `globalTables`, `queues`, `relationGraph`, `secrets`,
- * `vectorStore`).
+ * (`agents`, `commitOrderedTables`, `containerEgressPolicy`, `cronTriggers`,
+ * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
+ * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -149,6 +149,21 @@ export interface PlatformCapabilities {
          * guarantee — which is the only thing the feature is.
          */
         commitOrderedTables?: Capability;
+
+        /**
+         * An outbound-traffic policy on a container — `defineContainer({
+         * allowedHosts | deniedHosts | interceptHttps })`, which
+         * `LunoraContainer` applies through `@cloudflare/containers`'
+         * outbound interception.
+         *
+         * Rated apart from `containers` because a host can run a container and
+         * still not police its egress; the policy is then not merely absent,
+         * the container refuses to start. Gate-bearing: codegen sets the
+         * `containerEgressPolicy` `PlatformSignals` flag when a
+         * `defineContainer` call carries one of those keys, so the gap is a
+         * build-time diagnostic rather than a container that fails on first use.
+         */
+        containerEgressPolicy?: Capability;
 
         /**
          * Container execution (Cloudflare Containers / Fargate), including
@@ -404,6 +419,20 @@ export interface PlatformCapabilities {
         vectorStore?: Capability;
         /** Hibernated WebSocket subscriptions. */
         websocketHibernation?: Capability;
+
+        /**
+         * Compensation for a failed workflow — `defineStep({ rollback })`,
+         * which `@lunora/workflow` forwards to the host's `step.do` rollback
+         * option.
+         *
+         * Rated apart from `workflows` because a host can run steps, sleeps and
+         * events and still not implement rollback, and there the step does not
+         * run without it — it fails. Gate-bearing: codegen sets the
+         * `workflowRollback` `PlatformSignals` flag when a `defineStep` call
+         * declares a `rollback`, so the gap is a build-time diagnostic rather
+         * than a step that fails on first use.
+         */
+        workflowRollback?: Capability;
         /** Durable workflows (step-based). */
         workflows?: Capability;
     };
@@ -464,6 +493,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
         },
+        workflowRollback: { level: "native", note: "Workflows step rollback (the step.do rollback option)" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
@@ -495,6 +525,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
         },
+        containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
         analytics: { level: "native", note: "Analytics Engine" },
         edgeRequestMetadata: {
             level: "native",
@@ -584,9 +615,13 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "The two host properties the guarantee rests on are both celld's: `storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a cell executes one event at a time behind the same output gate Cloudflare's Durable Objects use. Derived from celld's documented Durable Object surface, not from a TCK run against a fleet",
         },
+        containerEgressPolicy: {
+            level: "unsupported",
+            note: "celld does not implement outbound interception: a container with an allowedHosts / deniedHosts / interceptHttps policy refuses to start (`interceptAllOutboundHttp()` is not implemented in celld). Egress is instead fenced per node — a container reaches the Internet and nothing of the node's own",
+        },
         containers: {
             level: "native",
-            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy refuses to start (`interceptAllOutboundHttp()` is not implemented in celld), as do `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
+            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
         },
         cronTriggers: {
             level: "native",
@@ -702,9 +737,13 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`acceptWebSocket`/`getWebSockets`/`getTags`/attachments, and a hibernatable socket survives its cell hibernating on the same node. It closes when the cell moves to another owner (a node stop, drain, or rebalance), so the client reconnects — which Lunora's client already does. `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
         },
+        workflowRollback: {
+            level: "unsupported",
+            note: "celld does not implement step rollback: a step.do with a rollback option fails at first use (`step rollbackOptions are not implemented in celld`)",
+        },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable — so a `defineStep({ rollback })` step fails at first use (\"step rollbackOptions are not implemented in celld\"). The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
+            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
         },
     },
 };
@@ -802,6 +841,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd's implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. Cloudflare's byte ceilings are enforced on send — 128 KiB per message and 256 KiB per sendBatch, measured over the encoded body — because @lunora/queue leaves both to the platform and this host is the only point where those bytes already exist. mode: \"pull\" queues are written but not consumed — nothing here serves the HTTP pull endpoint",
         },
+        workflowRollback: {
+            level: "emulated",
+            note: "createNodeWorkflowHost unwinds each settled step's rollback in reverse declaration order when a later step fails its last attempt. The compensations are plain calls, not durable steps — a crash during the unwind leaves it half-done — and rollbackConfig is ignored",
+        },
         workflows: {
             level: "emulated",
             note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so rollbackConfig is ignored and a crash mid-unwind leaves it half-done. terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running; no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
@@ -839,6 +882,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
+        containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",

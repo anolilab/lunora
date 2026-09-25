@@ -280,6 +280,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // a `@lunora/scheduler` import) cannot see one.
         cronTriggers: crons.length > 0,
         crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
+        containerEgressPolicy: codeSignals.containerEgressPolicy,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,
@@ -295,6 +296,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // while the `vectors` capability only flips on an import or a literal
         // `ctx.vectors` read, neither of which a `.vectorize()` declaration is.
         vectorStore: schema.vectorIndexes.length > 0,
+        workflowRollback: codeSignals.workflowRollback,
     });
     const featureUsage = platformGate.usage;
     // The gate's `vectorStore` verdict, named once for both consumers below.
