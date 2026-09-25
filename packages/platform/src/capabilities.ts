@@ -707,7 +707,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         secrets: {
             level: "unsupported",
-            note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, so a secret lives in the deployment's plaintext config rather than behind a binding",
+            note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
         serverReactors: {
             level: "emulated",
