@@ -857,6 +857,9 @@ interface SchemaLike {
 
 ```ts
 interface TableDefinitionLike {
+    softDeleteMode?: {
+        field: string;
+    };
     vectorIndexes?: ReadonlyArray<TableVectorIndexLike>;
 }
 ```
@@ -865,9 +868,11 @@ interface TableDefinitionLike {
 
 ```ts
 interface TableVectorIndexLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     field: string;
     metadata?: ReadonlyArray<string>;
+    metric?: string;
     name: string;
 }
 ```
@@ -928,6 +933,24 @@ interface VectorAdminQueryMatch {
 }
 ```
 
+### `VectorBackfillFailure` (interface)
+
+```ts
+interface VectorBackfillFailure {
+    error: unknown;
+    id: string;
+}
+```
+
+### `VectorBackfillSync` (type)
+
+```ts
+type VectorBackfillSync = (table: string, rows: ReadonlyArray<{
+    doc: Record<string, unknown>;
+    id: string;
+}>) => Promise<ReadonlyArray<VectorBackfillFailure>>;
+```
+
 ### `VectorEmbedderLike` (type)
 
 ```ts
@@ -938,8 +961,10 @@ type VectorEmbedderLike = (input: string) => Promise<ReadonlyArray<number>> | Re
 
 ```ts
 interface VectorIndexDefinitionLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
+    metric?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
@@ -1091,6 +1116,12 @@ const createContextVectors: (lunora: LunoraVectors, options?: CreateContextVecto
 const createVectorAdminIntrospector: (options: VectorAdminIntrospectorOptions) => VectorAdminIntrospector;
 ```
 
+### `createVectorBackfillSync` (const)
+
+```ts
+const createVectorBackfillSync: (options: BackfillSyncOptions) => VectorBackfillSync;
+```
+
 ### `createVectorSyncHook` (const)
 
 ```ts
@@ -1108,11 +1139,32 @@ const createVectorSyncHook: (options: {
 const createVectors: (options: LunoraVectorsOptions) => LunoraVectors;
 ```
 
+### `vectorBackfillTargets` (const)
+
+```ts
+const vectorBackfillTargets: (schema: SchemaLike) => {
+    profile: string;
+    table: string;
+}[];
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `BackfillSyncOptions` (type)
+
+```ts
+type BackfillSyncOptions = {
+    allowSharedNamespace?: boolean;
+    namespace?: string;
+    schema: SchemaLike;
+    upsertMany: LunoraVectors["upsertMany"];
+    vectors: VectorSearchLike;
+};
+```
 
 ### `CreateContextVectorsOptions` (interface)
 

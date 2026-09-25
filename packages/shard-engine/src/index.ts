@@ -474,6 +474,8 @@ export type {
     SubscriptionIdentity,
     SubscriptionQuery,
 } from "./types";
+export type { VectorBackfillProgress } from "./vector-backfill";
+export { backfillVectorIndexes, VECTOR_BACKFILL_MAX_PAGES } from "./vector-backfill";
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql, literalInList } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";

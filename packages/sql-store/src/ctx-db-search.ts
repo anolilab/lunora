@@ -18,7 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
+import { planBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { ftsRowidMapName } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
@@ -55,7 +55,7 @@ import { decodeRow, forEachRowPaged, queryAll, queryRun, readRowsPage } from "./
 const searchIndexCoversTable = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string, index: SearchIndexDefinitionLike): Promise<boolean> => {
     const companion = companionFor(tableName, index);
 
-    if (planSearchBackfillPass(await readSearchBackfillState(exec, dialect, companion), companionProfile(index, dialect)).finished) {
+    if (planBackfillPass(await readSearchBackfillState(exec, dialect, companion), companionProfile(index, dialect)).finished) {
         return true;
     }
 
@@ -235,7 +235,7 @@ const backfillSearchIndexPage = async (
 ): Promise<boolean> => {
     const companion = companionFor(tableName, index);
     const profile = companionProfile(index, dialect);
-    const pass = planSearchBackfillPass(await readSearchBackfillState(exec, dialect, companion), profile);
+    const pass = planBackfillPass(await readSearchBackfillState(exec, dialect, companion), profile);
 
     if (pass.finished) {
         return true;
@@ -337,7 +337,7 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
  *
  * `staged` defers the backfill of rows that PREDATE the index — and a table
  * holding none has nothing to defer. But with no progress row written at all,
- * `planSearchBackfillPass` says "not finished" and `readSearchIndexCoverage` says
+ * `planBackfillPass` says "not finished" and `readSearchIndexCoverage` says
  * "not covered", so {@link runSqlSearch} refuses every query on the index with
  * `SEARCH_INDEX_BUILDING`. Nothing lifts it: the migration pass never backfills a
  * staged index, so declaring one alongside a new table took search on that table

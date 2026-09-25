@@ -60,6 +60,7 @@ const ADMIN_FUNCTIONS = {
     aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
     backfillSearch: "__lunora_admin__:backfillSearch",
+    backfillVectors: "__lunora_admin__:backfillVectors",
     backRelationCounts: "__lunora_admin__:backRelationCounts",
     cdcSync: "__lunora_admin__:cdcSync",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",

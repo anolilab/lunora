@@ -362,6 +362,11 @@ abstract class ShardDO {
     protected runShardSearchBackfill(_options: {
         maxPages?: number;
     }): SearchBackfillProgress;
+    protected runShardVectorBackfill(_options: {
+        maxPages?: number;
+        restart?: boolean;
+    }): Promise<VectorBackfillProgress>;
+    protected runOrderedAfterWrites<T, U>(read: () => T, work: (value: T) => Promise<U>): Promise<U>;
     protected ensureMigrated(): void;
     protected tableRefs(_table: string): Record<string, string> | undefined;
     protected tableIndexes(_table: string): TableIndexInfo[];
@@ -627,6 +632,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `VectorBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `WhereInput` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -656,6 +665,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `backfillSearchIndexes` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillVectorIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

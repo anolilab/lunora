@@ -3,7 +3,7 @@ import type { AdvisorVectorNamespaceAccess } from "../../vector-namespace-access
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
- * Flags a `ctx.vectors.query`/`upsert`/`upsertMany` call whose `namespace`
+ * Flags a `ctx.vectors.query`/`upsert`/`upsertNow` call whose `namespace`
  * input is derived from the handler's `args` with no server-side scoping — a
  * tenant-partition escape.
  *
@@ -24,7 +24,7 @@ const vectorsNamespaceFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorV
     cacheKey: (access) => `vectors_namespace_from_user_input:${access.file}:${access.line.toString()}`,
     categories: ["SECURITY"],
     description:
-        "A `ctx.vectors.query`/`upsert`/`upsertMany` call uses a `namespace` derived from the handler's `args` with no server-side scoping. A Vectorize namespace partitions one index into isolated sub-collections, so an unscoped namespace lets any caller read or poison another tenant's vectors.",
+        "A `ctx.vectors.query`/`upsert`/`upsertNow` call uses a `namespace` derived from the handler's `args` with no server-side scoping. A Vectorize namespace partitions one index into isolated sub-collections, so an unscoped namespace lets any caller read or poison another tenant's vectors.",
     detail: (access) =>
         `\`ctx.vectors.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses a Vectorize namespace derived from \`args\` with no server-side scoping — any caller can read or poison another tenant's vectors. Derive the namespace from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
     facing: "EXTERNAL",

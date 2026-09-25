@@ -127,6 +127,7 @@ import type {
     TransactionLimits,
     TransactionSqlLike,
     TtlSweepSpec,
+    VectorBackfillProgress,
     WorkflowInstanceStatusResult,
     WorkflowsResult,
 } from "@lunora/shard-engine";
@@ -231,6 +232,7 @@ import {
     trimScheduleOutbox,
     trySendFrame,
     UNVOUCHABLE_DEP,
+    VECTOR_BACKFILL_MAX_PAGES,
     writeGlobalShapeSnapshot,
     writeIdempotent,
     writeReactorState,
@@ -1126,6 +1128,32 @@ const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
             clearTimeout(timer);
         }
     }
+};
+
+/**
+ * Read a backfill admin op's `maxPages`: absent when the caller gave none (each
+ * op picks its own default), a 400 `rejection` for anything that is not a whole
+ * number in `[1, ceiling]`. Strict because a lenient read of an operator's typo does the
+ * expensive thing quietly — `{"maxPages":"20 pages"}`, `0` and `-1` used to read
+ * as "run to completion" on exactly the tables that cannot be walked in one
+ * request. Same reason the retention knobs parse strictly (`env-int.ts`).
+ */
+const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: number): { maxPages?: number } | { rejection: Response } => {
+    const raw = args["maxPages"];
+
+    if (raw === undefined) {
+        return {};
+    }
+
+    const parsed = typeof raw === "number" ? raw : Number(raw);
+
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > ceiling) {
+        const range = Number.isFinite(ceiling) ? `an integer from 1 to ${String(ceiling)}` : "a positive integer";
+
+        return { rejection: jsonResponse({ error: { code: "BAD_REQUEST", message: `${op}: maxPages must be ${range}, or omitted` } }, 400) };
+    }
+
+    return { maxPages: Math.floor(parsed) };
 };
 
 const UNDELIVERED_BASELINE = "<undelivered>";
@@ -3233,6 +3261,20 @@ abstract class ShardDO {
      * transaction's queue drains entirely before the next transaction's — see
      * the hook chain in {@link ShardDO.runInTransaction}. Two writes to the same
      * row therefore reach the external index in commit order.
+     *
+     * With no transaction open — an action's `ctx.db` write, already committed —
+     * the work joins that same chain as its own link and this waits for it, so
+     * the caller still sees the work done (and its error) before it returns, as
+     * when it ran inline. Running it loose instead let it land before a hook, or
+     * a vector backfill page, that the chain was still holding, and that older
+     * work then overwrote it. The cost is the chain's: the action now also waits
+     * for work committed before it, bounded like a mutation by
+     * {@link AFTER_COMMIT_WAIT_MS} — past that it returns without waiting, the
+     * work stays linked, and a later failure is logged rather than thrown.
+     *
+     * Code already RUNNING on the chain must not write through a hook-carrying
+     * `ctx.db` outside a transaction: its work would queue behind itself, and the
+     * bounded wait turns that into a stall rather than a deadlock.
      * @param work the side effect to hold until the commit lands
      */
     protected async deferAfterCommit(work: () => Promise<void> | void): Promise<void> {
@@ -3242,7 +3284,31 @@ abstract class ShardDO {
             return;
         }
 
-        await work();
+        let waiting = true;
+        let failure: { error: unknown } | undefined;
+        const link = this.linkAfterCommit(async () => {
+            try {
+                await work();
+            } catch (error) {
+                if (waiting) {
+                    failure = { error };
+                } else {
+                    // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose external projection diverged
+                    console.error("[@lunora/do] after-commit write hook failed; the write committed and its external projection did not:", error);
+                }
+            }
+        });
+
+        if (this.afterCommitStalled || !(await waitForAfterCommit(link))) {
+            waiting = false;
+            this.afterCommitStalled = true;
+
+            return;
+        }
+
+        if (failure) {
+            throw failure.error;
+        }
     }
 
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
@@ -3315,21 +3381,8 @@ abstract class ShardDO {
                     return;
                 }
 
-                const link = this.afterCommitTail.then(async () =>
-                    // Recovery, on the link itself rather than beside it so the
-                    // chain stays one promise: once it has drained to here and
-                    // nothing has been queued behind it, the stall is over and
-                    // the next dispatch waits normally again. `flushed` is this
-                    // link, assigned below before anything can run this.
-                    flushAfterCommit(queued).finally(() => {
-                        if (this.afterCommitTail === flushed) {
-                            this.afterCommitStalled = false;
-                        }
-                    }),
-                );
-
-                this.afterCommitTail = link;
-                flushed = link;
+                // Stall recovery rides on the link itself — see `linkAfterCommit`.
+                flushed = this.linkAfterCommit(async () => flushAfterCommit(queued));
             },
         );
 
@@ -3503,6 +3556,67 @@ abstract class ShardDO {
         // `errorToResponse` would replace this message with "internal error" and the
         // caller would get a bare 501 with nothing actionable in it.
         throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema");
+    }
+
+    /**
+     * Embed the rows that predate a vector index — or a change to one — into
+     * Vectorize, `maxPages` pages per call. The write-through sync hook only sees
+     * rows written after the index existed; without this those rows are never
+     * findable. The base class has no schema or vector bindings, so it reports the
+     * op unsupported; the codegen subclass overrides it (only when the schema
+     * declares a vector index and the target has a vector store) to call
+     * the shard engine's vector backfill with the same sync hook `ctx.db` uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema and vector bindings
+    protected runShardVectorBackfill(_options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
+        return Promise.reject(
+            new LunoraError("NOT_IMPLEMENTED", "vector backfill is unavailable: this shard declares no vector index, or its host has no vector store"),
+        );
+    }
+
+    /**
+     * `read` inside the single-writer gate, then `work` on its result as a link of
+     * the commit-ordered after-commit chain — so `work` runs after the hooks of
+     * every write committed before `read` and before the hooks of every write
+     * committed after it. Resolves with `work`'s result once it has finished,
+     * rejecting with its error.
+     *
+     * This is what lets a backfill write to an external index without racing live
+     * writes: its snapshot and its position on the chain are taken at the same
+     * instant, so a newer write's hook always lands after it.
+     */
+    protected async runOrderedAfterWrites<T, U>(read: () => T, work: (value: T) => Promise<U>): Promise<U> {
+        // Settles with the error rather than rejecting: nothing awaits it until the
+        // transaction below returns, and a rejection in between would be reported
+        // as unhandled.
+        type Outcome = { error: unknown; ok: false } | { ok: true; value: U };
+
+        let settle = (_outcome: Outcome): void => undefined;
+        const outcome = new Promise<Outcome>((resolve) => {
+            settle = resolve;
+        });
+
+        await this.runInTransaction(async () => {
+            const value = read();
+
+            // Inside the transaction this only queues the work; it runs once the
+            // transaction commits, as this transaction's link on the chain.
+            await this.deferAfterCommit(async () => {
+                try {
+                    settle({ ok: true, value: await work(value) });
+                } catch (error) {
+                    settle({ error, ok: false });
+                }
+            });
+        });
+
+        const settled = await outcome;
+
+        if (!settled.ok) {
+            throw settled.error;
+        }
+
+        return settled.value;
     }
 
     /**
@@ -8610,33 +8724,79 @@ abstract class ShardDO {
      * CLI surface. Admin-gated by `handleAdminRpc`'s caller.
      */
     private handleBackfillSearch(args: Record<string, unknown>): Response {
-        const raw = args["maxPages"];
+        // ABSENT means "no cap" for search — a small shard finishes in one call.
+        // (`backfillVectors` defaults to ONE page instead: each of its rows is a
+        // remote call.)
+        const budget = parseMaxPages(args, "backfillSearch", Number.POSITIVE_INFINITY);
 
-        // ABSENT means "no cap" — a small shard finishes in one call. A PRESENT
-        // but unusable value is a 400, not a silent uncapping: `{"maxPages":"20
-        // pages"}`, `0`, and `-1` all used to read as "run to completion", which
-        // is the opposite of what the caller asked for and does it on exactly the
-        // tables `staged: true` exists for because they cannot be walked in one
-        // request. Same reason the retention knobs parse strictly (`env-int.ts`):
-        // a lenient read of an operator's typo does the destructive thing quietly.
-        let maxPages: number | undefined;
-
-        if (raw !== undefined) {
-            const parsed = typeof raw === "number" ? raw : Number(raw);
-
-            if (!Number.isFinite(parsed) || parsed < 1) {
-                return jsonResponse(
-                    { error: { code: "BAD_REQUEST", message: "backfillSearch: maxPages must be a positive integer, or omitted to run to completion" } },
-                    400,
-                );
-            }
-
-            maxPages = Math.floor(parsed);
+        if ("rejection" in budget) {
+            return budget.rejection;
         }
 
-        const result = this.runShardSearchBackfill(maxPages === undefined ? {} : { maxPages });
+        const result = this.runShardSearchBackfill(budget);
 
         this.recordAudit("backfillSearch", { detail: { done: result.done, pages: result.pages } });
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Append `task` to the after-commit chain and return its link. The link never
+     * rejects (`task` must not), and clears {@link ShardDO.afterCommitStalled}
+     * once the chain has drained to it with nothing queued behind.
+     */
+    private linkAfterCommit(task: () => Promise<void>): Promise<void> {
+        const link: Promise<void> = this.afterCommitTail.then(async () =>
+            task().finally(() => {
+                if (this.afterCommitTail === link) {
+                    this.afterCommitStalled = false;
+                }
+            }),
+        );
+
+        this.afterCommitTail = link;
+
+        return link;
+    }
+
+    /**
+     * `__lunora_admin__:backfillVectors` — embed the rows that predate this
+     * shard's vector indexes (or a change to one) into Vectorize.
+     *
+     * Bounded by default, unlike `backfillSearch`: every row is a remote embed plus
+     * a Vectorize upsert per index, so even a modest table cannot be embedded in
+     * one request. Absent `maxPages` runs ONE page, and more than the engine's
+     * per-call page ceiling is refused; the caller repeats until `done` —
+     * `lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}'`. `restart: true` re-embeds every vectorized table from the
+     * top, for an embedder change the recorded profile cannot see. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleBackfillVectors(args: Record<string, unknown>): Promise<Response> {
+        const rawRestart = args["restart"];
+        const budget = parseMaxPages(args, "backfillVectors", VECTOR_BACKFILL_MAX_PAGES);
+
+        if ("rejection" in budget) {
+            return budget.rejection;
+        }
+
+        // Strict for the same reason as `maxPages`: `restart` re-embeds whole
+        // tables, so `"false"` must not read as yes.
+        if (rawRestart !== undefined && typeof rawRestart !== "boolean") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "backfillVectors: restart must be a boolean" } }, 400);
+        }
+
+        const result = await this.runShardVectorBackfill({ ...budget, ...(rawRestart === true ? { restart: true } : {}) });
+
+        this.recordAudit("backfillVectors", {
+            detail: { done: result.done, error: result.error, failed: result.failed, pages: result.pages, restart: rawRestart === true, rows: result.rows },
+        });
+
+        // A page that failed as a whole (embedder or Vectorize unreachable) is a
+        // 503 the caller retries — but the progress made before it still counts,
+        // so it rides along instead of being thrown away.
+        if (result.error !== undefined) {
+            return jsonResponse({ error: { code: "SERVICE_UNAVAILABLE", message: `backfillVectors: ${result.error}` }, result }, 503);
+        }
 
         return adminResponse(result);
     }
@@ -9320,6 +9480,7 @@ abstract class ShardDO {
     private simpleAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response> | Response> {
         return {
             [ADMIN_FUNCTIONS.backfillSearch]: (args) => this.handleBackfillSearch(args),
+            [ADMIN_FUNCTIONS.backfillVectors]: (args) => this.handleBackfillVectors(args),
             [ADMIN_FUNCTIONS.findRelated]: (args) => this.handleFindRelated(args),
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),

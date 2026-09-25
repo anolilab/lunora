@@ -62,7 +62,7 @@ import { LunoraError } from "@lunora/errors";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
-import { validateIndexFields } from "./schema";
+import { validateGlobalVectors, validateIndexFields } from "./schema";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -444,6 +444,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     }
 
     validateIndexFields(merged);
+    validateGlobalVectors(merged, mergedVectorIndexes);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

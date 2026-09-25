@@ -357,4 +357,76 @@ describe("soft delete — Vectorize sync", () => {
 
         expect(vectors.upserts).toHaveLength(2);
     });
+
+    it("never gives a soft-deleted row a vector, whatever writes follow the delete", async () => {
+        expect.assertions(7);
+
+        // Codegen hands the hook the SAME schema object `ctx.db` runs on, so the
+        // soft-delete marker is visible to it — model that here.
+        const schema = {
+            tables: { messages: { ...ctxSchema.tables["messages"]!, ...vectorsSchema.tables["messages"]! } },
+            vectorIndexes: {},
+        };
+
+        runShardMigrations(harness.sql, schema);
+
+        // Stateful double: what is in the index right now, not what was called.
+        const stored = new Map<string, unknown>();
+        const vectors: VectorSearchLike = {
+            deleteByIds: async (_index, ids) => {
+                for (const id of ids) {
+                    stored.delete(id);
+                }
+            },
+            getByIds: async () => [],
+            query: async () => {
+                return {
+                    count: stored.size,
+                    matches: [...stored.keys()].map((id) => {
+                        return { id, metadata: {}, score: 1 };
+                    }),
+                };
+            },
+            upsert: async (_index, input) => {
+                stored.set(input.id, input.input);
+            },
+            upsertNow: async (_index, input) => {
+                stored.set(input.id, input.input);
+            },
+        };
+        const onWrite: WriteHook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
+        const writer = createShardContextDatabase({ clock: () => FIXED, idGenerator: () => "m1", onWrite, schema, sql: harness.sql });
+
+        await writer.insert("messages", { text: "hello" });
+        await writer.delete("m1", "messages");
+
+        // A patch on the hidden row must not bring its vector (and metadata) back.
+        await writer.patch("m1", { text: "edited while deleted" });
+
+        expect(stored.size).toBe(0);
+        await expect(writer.query("messages").collect()).resolves.toHaveLength(0);
+
+        // Nor may a replace.
+        await writer.replace("m1", { deletedAt: FIXED, text: "replaced while deleted" });
+
+        expect(stored.size).toBe(0);
+
+        // Restore re-embeds the row's CURRENT text.
+        await writer.restore!("m1", "messages");
+
+        expect([...stored.entries()]).toStrictEqual([["m1", "replaced while deleted"]]);
+
+        // Delete again, then patch again: still gone.
+        await writer.delete("m1", "messages");
+
+        expect(stored.size).toBe(0);
+
+        await writer.patch("m1", { text: "second edit while deleted" });
+
+        expect(stored.size).toBe(0);
+
+        await writer.restore!("m1", "messages");
+
+        expect([...stored.entries()]).toStrictEqual([["m1", "second edit while deleted"]]);
+    });
 });

@@ -5,6 +5,7 @@ import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
 import type {
@@ -1392,6 +1393,34 @@ const validateDropStalePatches = (tables: Record<string, TableDefinition>): void
     }
 };
 
+/**
+ * Reject a vector index on a `.global()` table — inline `.vectorize()` or a
+ * standalone `defineVectorIndex()` whose `source.table` is one.
+ *
+ * Vector sync is the shard write path's post-commit hook, and a `.global()`
+ * table's writes go to the SQL tier (D1/Hyperdrive), which has no such hook: the
+ * combination deployed, took writes, and indexed none of them. Nothing orders
+ * those writes either — two shards writing one global row would race their
+ * embeds — so wiring a hook there would trade "never indexed" for "sometimes
+ * stale". Keep the vectorized table shard-local, or maintain the index yourself
+ * with `ctx.vectors.upsert` / `deleteByIds` next to the write.
+ *
+ * Exported package-internally so `./plugin`'s merge re-runs it over the tables
+ * and indexes an extension contributes.
+ */
+const validateGlobalVectors = (tables: Record<string, TableDefinition>, vectorIndexes: Record<string, VectorIndexDefinition>): void => {
+    const sources: [string, string][] = [
+        ...Object.entries(tables).flatMap(([tableName, table]) => table.vectorIndexes.map((index): [string, string] => [tableName, index.name])),
+        ...Object.entries(vectorIndexes).map(([indexName, index]): [string, string] => [index.table, indexName]),
+    ];
+
+    for (const [tableName, indexName] of sources) {
+        if (tables[tableName]?.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalVectorIndexMessage(tableName, indexName)}`);
+        }
+    }
+};
+
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         if (table.commitOrderedMode) {
@@ -1434,6 +1463,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     validateCommitOrdered(tables);
     validateDropStalePatches(tables);
     validateGlobalBigint(tables);
+    validateGlobalVectors(tables, vectorIndexes);
     validateMemoryTables(tables);
     validateIndexFields(tables);
 
@@ -1446,7 +1476,16 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
 // seam that closes the "extension-contributed bad index never validated" gap
 // (plan 258 §1). Both `mergeSchemaExtension` callers (`withExtend.extend()`
 // here and `installPlugins` in `./plugin`) get the re-validation for free.
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema, validateIndexFields };
+export {
+    defineAggregateIndex,
+    defineRankIndex,
+    defineSchema,
+    defineTable,
+    defineVectorIndex,
+    indexFieldsFromSchema,
+    validateGlobalVectors,
+    validateIndexFields,
+};
 
 export type {
     AggregateIndexOptions,

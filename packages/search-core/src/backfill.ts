@@ -21,7 +21,7 @@ import { createSearchAnalyzer } from "./analyzer";
  * about the index that changes what the companion *stores*.
  *
  * Produced here rather than in either engine because it is the input to
- * {@link planSearchBackfillPass} below — the two have to agree on what counts
+ * {@link planBackfillPass} below — the two have to agree on what counts
  * as a rebuild, and a producer sitting beside the consumer is what stops one
  * engine detecting a change the other misses.
  *
@@ -72,7 +72,7 @@ export const searchIndexField = (profile: string): string => {
  * same three facts, and the decisions made from them are the shared policy
  * below.
  */
-export interface SearchBackfillState {
+export interface BackfillState {
     /** Last `id` indexed, or `undefined` when no page has run yet. */
     cursor: string | undefined;
     /** True once a page came back short — the table is fully indexed. */
@@ -82,7 +82,7 @@ export interface SearchBackfillState {
 }
 
 /** What a backfill pass should do, given where the last one got to. */
-export interface SearchBackfillPass {
+export interface BackfillPass {
     /** Resume past this id; `undefined` starts from the beginning of the table. */
     cursor: string | undefined;
     /** Nothing left to index. */
@@ -110,8 +110,11 @@ export interface SearchBackfillPass {
  * row with no recorded profile may be resumed (it may not — nothing says what
  * analyzed it), and whether a never-started index is worth wiping (it is not,
  * there is nothing in it).
+ *
+ * Not search-specific: the shard's vector backfill plans its passes with it
+ * too, with a profile of the vector index config in place of the analyzer's.
  */
-export const planSearchBackfillPass = (state: SearchBackfillState, profile: string): SearchBackfillPass => {
+export const planBackfillPass = (state: BackfillState, profile: string): BackfillPass => {
     if (state.profile !== profile) {
         return { cursor: undefined, finished: false, wipe: state.cursor !== undefined || state.done };
     }
@@ -129,7 +132,7 @@ export const planSearchBackfillPass = (state: SearchBackfillState, profile: stri
  * index in the fleet at once, and taking search offline for the length of each
  * re-walk — one page per request-driven pass — is a worse answer than serving
  * rows analyzed under the previous rules. Nothing is emptied (see
- * {@link SearchBackfillPass.wipe}), so those rows are all still there.
+ * {@link BackfillPass.wipe}), so those rows are all still there.
  *
  * What that justification rests on is that the stored rows are an answer about
  * THE COLUMN THAT WAS ASKED FOR, merely under older rules. Two cases break it:
@@ -153,7 +156,7 @@ export const planSearchBackfillPass = (state: SearchBackfillState, profile: stri
  * a visible, one-time, operator-closable refusal instead of matches over a
  * column nothing can confirm.
  *
- * Shared for the same reason as {@link planSearchBackfillPass}: one policy, and
+ * Shared for the same reason as {@link planBackfillPass}: one policy, and
  * the two engines that read it disagreed the last time each owned a copy.
  * `recorded` is `unknown` because the engines' drivers disagree about how a NULL
  * text column comes back, and that disagreement is exactly how they would start

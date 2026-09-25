@@ -75,13 +75,13 @@ export type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 export type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
 export type { RelatedPage } from "@lunora/shard-engine";
 export type { MutationDelta } from "@lunora/shard-engine";
-export type { SearchBackfillProgress } from "@lunora/shard-engine";
+export type { SearchBackfillProgress, VectorBackfillProgress } from "@lunora/shard-engine";
 export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
 export { exportShardRows, importShardRows } from "@lunora/shard-engine";
 export { runDataMigration } from "@lunora/shard-engine";
 export { buildReprojectionMigration, countLegacyRows, REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId, reprojectionTables } from "@lunora/shard-engine";
 export { isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "@lunora/shard-engine";
-export { applyCdcChanges, backfillSearchIndexes, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+export { applyCdcChanges, backfillSearchIndexes, backfillVectorIndexes, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 export { assertShapeShardable } from "@lunora/shard-engine";
 
 // Emitter-conditional: the generated shard imports `WhereInput` when the project
