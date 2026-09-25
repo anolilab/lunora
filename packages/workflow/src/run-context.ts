@@ -11,7 +11,7 @@ import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire } from "../../../shared/wire-codec";
-import { pinDedupId } from "./dedup-id";
+import { dedupNamespace, pinDedupId } from "./dedup-id";
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { raiseNonRetryable } from "./errors";
@@ -49,8 +49,10 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // activation. Pinning the counter here, per context, is what restarts it at
     // `.1` on each replay so the second activation reproduces the first's ids.
     // `createRunStep` gets the UNPINNED dispatcher: it pins its own per-step
-    // scopes, which must not sit inside this one's numbering. See `dedup-id.ts`.
-    const run = pinDedupId(dispatch, `${options.event.instanceId}#body`);
+    // scopes, which must not sit inside this one's numbering. See `dedup-id.ts`,
+    // including why the namespace carries the workflow and not just the instance.
+    const namespace = dedupNamespace(options.exportName, options.event.instanceId);
+    const run = pinDedupId(dispatch, `${namespace}#body`);
 
     // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the
     // shared naming helper — the same derivation codegen and the config layer use,
@@ -80,13 +82,22 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // — `boundInstanceId` in `fan-out.ts` — so both `ctx.parallel` and `ctx.spawn`
     // fold through one place and neither this allocator nor any other
     // `nextChildId` implementation has to restate the rule.
+    //
+    // The parent's export name sits in the id for the reason it sits in the
+    // dedup namespace: an instance id is unique only within its own workflow, so
+    // two parents of different workflows running as `order-42` would both mint
+    // `order-42-c0` on the SAME child binding, and `createOrAttach` would take
+    // the second create's "already exists" as its own earlier attempt and attach
+    // to the other parent's child. Anything outside the engine's id alphabet is
+    // folded to `_` so a `$` in an export name cannot make the id uncreatable.
+    const childScope = options.exportName.replaceAll(/\W/gu, "_");
     let childCounter = 0;
     const nextChildId = (explicit?: string): string => {
         if (explicit !== undefined) {
             return explicit;
         }
 
-        const id = `${options.event.instanceId}-c${String(childCounter)}`;
+        const id = `${options.event.instanceId}-${childScope}-c${String(childCounter)}`;
         childCounter += 1;
 
         return id;
@@ -141,8 +152,8 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         params,
         run,
         runStep: createRunStep({
+            dedupNamespace: namespace,
             env: options.env,
-            instanceId: options.event.instanceId,
             log,
             nonRetryableErrorClass: options.nonRetryableErrorClass,
             run: dispatch,

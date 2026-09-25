@@ -40,10 +40,10 @@ const validateStepArgs = (validators: StepArgsValidator, source: Record<string, 
 
 /** Dependencies needed to run a step: the native step API plus the workflow's env / runner / logger. */
 interface RunStepDeps {
+    /** The instance's `dedupNamespace(exportName, instanceId)` — the prefix of the replay-dedup ids the steps' dispatches carry (see `dedup-id.ts`). */
+    dedupNamespace: string;
     /** The Worker environment bindings, surfaced on the step context. */
     env: Record<string, unknown>;
-    /** This workflow instance's id — the namespace for the replay-dedup ids the steps' dispatches carry. */
-    instanceId: string;
     /** Structured logger surfaced on the step context. */
     log: WorkflowLogger;
     /** Native `cloudflare:workflows` `NonRetryableError` constructor — injected by `src/do`; absent in Node tests. */
@@ -72,7 +72,7 @@ const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
     let invocations = 0;
 
     return async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
-        const dedupScope = `${deps.instanceId}#step${String(invocations)}`;
+        const dedupScope = `${deps.dedupNamespace}#step${String(invocations)}`;
 
         invocations += 1;
 
