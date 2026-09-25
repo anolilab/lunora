@@ -278,6 +278,8 @@ class AppBuilder<Env extends object> {
  * bundled into the worker, and a runtime import in that file ships with it.
  */
 interface LunoraConfig<Env extends object = object> {
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. A literal, for the same reason as `target`. */
+    advisor?: { minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */

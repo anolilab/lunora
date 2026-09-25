@@ -10,6 +10,7 @@ import { Project } from "ts-morph";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
+import { applyAdvisorFloor } from "./advisor-floor";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { buildDeclarationSurface } from "./declaration-surface";
 import discoverAdminRoutes from "./discover/admin-routes";
@@ -768,10 +769,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // procedure but which never reached `api.ts` at all (dropped by the
     // syntactic scan), and one that did reach it carrying fewer arguments than
     // the runtime enforces (an argument record codegen could not read).
+    //
+    // `advisor.minSeverity` in `lunora.config.*` drops findings below that level
+    // from everything downstream (the result, and so the terminal, and the
+    // emitted shard) but never an ERROR, so the blocking gate is unaffected.
     const advisories =
         advisorContext === undefined
             ? []
-            : [
+            : applyAdvisorFloor(options.projectRoot, [
                   ...runAdvisor(advisorContext, { source: "static" }),
                   ...discoverUnregisteredProcedures(project, lunoraDirectory, {
                       // Workflows, queues, agents and containers record no file in
@@ -788,7 +793,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   // ("expansion produced nothing") exists only at the moment of
                   // the fallback, so it cannot be re-derived here.
                   ...erasedReturnFindings(erased, lunoraDirectory),
-              ];
+              ]);
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -1271,7 +1276,8 @@ export interface CodegenResult {
 
     /**
      * Static schema advisor findings (e.g. unindexed foreign keys) produced
-     * this run. Empty when `lint` is `false` or the schema is clean. Codegen
+     * this run, minus any below `lunora.config`'s `advisor.minSeverity` (never
+     * an ERROR). Empty when `lint` is `false` or the schema is clean. Codegen
      * does not print these itself — each caller presents them through its own
      * channel (the CLI logger, the vite overlay, the studio Advisors table).
      * `formatAdvisories` is exported for a plain multi-line rendering.
