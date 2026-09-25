@@ -13,7 +13,7 @@
  * a run — a test that calls the discoverer directly would pass over a buffer
  * nothing ever fills.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morp
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCodegen } from "../../src/index";
+import { makeFixtureWorkdir } from "../golden-fixtures";
 
 const SCHEMA = `
     import { defineSchema, defineTable, v } from "@lunora/server";
@@ -383,5 +384,140 @@ describe("procedure_return_type_erased (compiled output)", () => {
             });
 
         expect(diagnostics).toStrictEqual([]);
+    }, 300_000);
+});
+
+/** `__tests__/` — this file sits one level under it, and the fixtures live beside it. */
+const testsDirectory = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * A return type that only the SECOND inference pass can see.
+ *
+ * `wrap` reads its value back through the generated caller, which does not exist
+ * in the project on the first pass — so pass 1 infers `any`, bails before the
+ * expansion path and records nothing, and pass 2 resolves
+ * `{ v: number } | Tree`, where the self-referential `Tree` defeats expansion.
+ *
+ * Dropped into the `delta-sync` fixture because it needs a workdir where module
+ * resolution works; a bare `os.tmpdir()` project types every cross-module import
+ * `any` and never reaches a second pass's worth of information at all.
+ */
+const VIA_GENERATED_CALLER = `
+import { query } from "./_generated/server.js";
+import { createCaller } from "./_generated/functions.js";
+
+interface Tree { value: string; child: Tree }
+
+declare const tree: Tree;
+
+export const leaf = query.input({}).query(async () => ({ v: 1 }));
+
+export const wrap = query.input({}).query(async ({ ctx }) => {
+    const inner = await createCaller(ctx).probe.leaf();
+
+    return inner.v === 1 ? tree : inner;
+});
+`;
+
+/**
+ * The same shape again, but read back through a caller a STALE `functions.ts`
+ * has mistyped — see the pass-scoping test for why that is the only way an
+ * early pass can record anything at all.
+ */
+const VIA_STALE_CALLER = `
+import { query } from "./_generated/server.js";
+import { createCaller } from "./_generated/functions.js";
+
+export interface Tree { value: string; child: Tree }
+
+export const leaf = query.input({}).query(async () => ({ v: 1 }));
+
+export const wrap = query.input({}).query(async ({ ctx }) => createCaller(ctx).probe.leaf());
+`;
+
+const CALLER_ANCHOR = "export interface Caller {\n";
+const CREATE_CALLER_ANCHOR = "export const createCaller = (context: CallerCtx): Caller => ({\n";
+
+/**
+ * The fixture's own committed `functions.ts`, with a `probe.leaf` entry added
+ * that returns the recursive `Tree`. Patched rather than hand-written so the
+ * rest of the file stays whatever codegen actually emits — a hand-rolled
+ * `Caller` would stop resolving the moment the emitter changed shape.
+ *
+ * Throws if either anchor is gone: an unpatched file would make pass 1 record
+ * nothing, and the stale-pass test would pass without testing anything.
+ */
+const staleCallerFunctions = (): string => {
+    const committed = readFileSync(join(testsDirectory, "fixtures", "delta-sync", "lunora", "_generated", "functions.ts"), "utf8");
+
+    if (!committed.includes(CALLER_ANCHOR) || !committed.includes(CREATE_CALLER_ANCHOR)) {
+        throw new Error("delta-sync functions.ts no longer has the anchors the stale-caller patch needs; update staleCallerFunctions");
+    }
+
+    return committed
+        .replace(CALLER_ANCHOR, `${CALLER_ANCHOR}    probe: { leaf: (args?: {}) => Promise<import("../probe.js").Tree> };\n`)
+        .replace(CREATE_CALLER_ANCHOR, `${CREATE_CALLER_ANCHOR}    probe: { leaf: (args) => callRegistered(context, "probe:leaf", args) },\n`);
+};
+
+/**
+ * The inference loop's half of the scoping.
+ *
+ * `inferToFixpoint` renders `api.ts`/`functions.ts`, feeds them back and
+ * re-infers, so a handler's return type is resolved once per pass and only the
+ * LAST pass describes the output that is actually written. A record left by a
+ * superseded pass carries the same cache key as the real one, so the finding
+ * dedup cannot tell them apart — it removes duplicates, not staleness.
+ *
+ * The two tests pin opposite edges: reporting too little (losing the final
+ * pass's records) and reporting too much (keeping an earlier pass's).
+ */
+describe("procedure_return_type_erased across inference passes", () => {
+    it("reports an erasure that only the FINAL pass can see", () => {
+        expect.assertions(2);
+
+        // Pass 1 has no `functions.ts` yet, so `wrap` infers `any` and records
+        // nothing; only pass 2 resolves it to `{ v: number } | Tree`. Report any
+        // pass but the last and the only real erasure in the project disappears.
+        const resolvingWorkdir = makeFixtureWorkdir(join(testsDirectory, "fixtures", "delta-sync"));
+
+        try {
+            writeFileSync(join(resolvingWorkdir, "lunora", "probe.ts"), VIA_GENERATED_CALLER, "utf8");
+
+            const findings = runCodegen({ projectRoot: resolvingWorkdir }).advisories.filter((finding) => finding.name === "procedure_return_type_erased");
+
+            expect(findings).toHaveLength(1);
+            expect(findings[0]?.metadata).toMatchObject({ exportName: "wrap", rendered: "{ v: number; } | Tree" });
+        } finally {
+            rmSync(resolvingWorkdir, { force: true, recursive: true });
+        }
+    }, 300_000);
+
+    it("drops an erasure a later pass resolved, rather than reporting the superseded one", () => {
+        expect.assertions(1);
+
+        // A WARM but stale `_generated/` is what makes this reachable. On a cold
+        // tree the first pass has no generated files, so every caller-derived
+        // type is `any` and `unwrapHandlerReturn` bails before expansion — an
+        // early pass then records nothing. Seed a `functions.ts` that types
+        // `probe.leaf` as the recursive `Tree` instead, and pass 1 resolves a
+        // REAL type it cannot expand: it records `wrap: Tree`. Pass 2 regenerates
+        // the file, `wrap` becomes `{ v: number; }`, and the erasure never
+        // existed in the output.
+        //
+        // `.workdir-*` under `fixtures/` is gitignored by that exact pattern, so a
+        // crashed run cannot leave an unignored copy of the fixture app behind.
+        const staleWorkdir = mkdtempSync(join(testsDirectory, "fixtures", ".workdir-erased-"));
+
+        try {
+            cpSync(join(testsDirectory, "fixtures", "delta-sync", "lunora"), join(staleWorkdir, "lunora"), { recursive: true });
+            writeFileSync(join(staleWorkdir, "lunora", "probe.ts"), VIA_STALE_CALLER, "utf8");
+            writeFileSync(join(staleWorkdir, "lunora", "_generated", "functions.ts"), staleCallerFunctions(), "utf8");
+
+            const findings = runCodegen({ projectRoot: staleWorkdir }).advisories.filter((finding) => finding.name === "procedure_return_type_erased");
+
+            expect(findings).toHaveLength(0);
+        } finally {
+            rmSync(staleWorkdir, { force: true, recursive: true });
+        }
     }, 300_000);
 });
