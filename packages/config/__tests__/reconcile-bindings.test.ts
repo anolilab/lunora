@@ -1222,9 +1222,10 @@ describe("reconcileWranglerBindings", () => {
 
                 reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
 
+                // The field before the removed last one loses its now-trailing comma, not its comment.
                 expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain(`            {
                 "queue": "receipt-queue", // the receipts
-                "max_retries": 5, // raised in March
+                "max_retries": 5 // raised in March
             },`);
             });
 

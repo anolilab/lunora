@@ -826,6 +826,9 @@ const QUEUE_TUNING_RECORD = "queueTuning";
 /** What may follow a property on its own line: its comma, then a `//` comment. */
 const REST_OF_LINE = /^[\t ]*(?:,[\t ]*)?(?:\/\/[^\n\r]*)?\r?\n/u;
 
+/** The comma, and any spaces before it, that follows a property's value. */
+const TRAILING_COMMA = /^[\t ]*,/u;
+
 /**
  * Delete the property at `path`. A property on a line of its own goes with
  * the whole line, trailing `//` comment included; left to `jsonc-parser`, that
@@ -842,7 +845,17 @@ const removeProperty = (text: string, path: ReadonlyArray<number | string>): str
         const rest = REST_OF_LINE.exec(text.slice(end));
 
         if (rest !== null && text.slice(lineStart, property.offset).trim() === "") {
-            return text.slice(0, lineStart) + text.slice(end + rest[0].length);
+            const siblings = property.parent?.children ?? [];
+            const index = siblings.indexOf(property);
+            const previous = index === siblings.length - 1 && index > 0 ? siblings[index - 1] : undefined;
+            // Removing the last property leaves the one before it trailing a comma.
+            const comma = previous === undefined ? undefined : (TRAILING_COMMA.exec(text.slice(previous.offset + previous.length)) ?? undefined);
+            const head =
+                comma === undefined || previous === undefined
+                    ? text.slice(0, lineStart)
+                    : text.slice(0, previous.offset + previous.length) + text.slice(previous.offset + previous.length + comma[0].length, lineStart);
+
+            return head + text.slice(end + rest[0].length);
         }
     }
 
