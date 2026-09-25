@@ -59,6 +59,17 @@ class ScopeProbeShard extends SamplingShard {
     }
 }
 
+/** A shard recording the `traceparent` `buildCtx` would hand `createContainerContext`, next to the dispatch's own anchor. */
+class TraceparentProbeShard extends SamplingShard {
+    public seen: { anchor: { rootSpanId: string; traceId: string } | undefined; traceparent: string | undefined }[] = [];
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.seen.push({ anchor: this.getCurrentTrace(), traceparent: this.getCurrentTraceparent() });
+
+        return super.handleRpc(functionPath);
+    }
+}
+
 const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
     return {
         acceptWebSocket() {},
@@ -237,6 +248,39 @@ describe("shardDO trace sampling", () => {
             );
 
             expect(shard.seenSampleErrors).toBeUndefined();
+        } finally {
+            database.close();
+        }
+    });
+
+    it("forwards its own trace anchor to containers when the dispatch carried no traceparent", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new TraceparentProbeShard(makeState(database), {});
+
+            shard.plan = async () => undefined;
+
+            await shard.fetch(request("a:b", { sampled: true }));
+            await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "a:b" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            // An inbound traceparent is forwarded as-is.
+            expect(shard.seen[0]?.traceparent).toBe(`00-${TRACE_ID}-${PARENT_SPAN_ID}-01`);
+
+            // None inbound: the container joins the trace the shard minted, under
+            // the shard's root span, instead of starting a disconnected one.
+            const { anchor, traceparent } = shard.seen[1]!;
+
+            expect(anchor).toBeDefined();
+            expect(traceparent).toBe(`00-${anchor!.traceId}-${anchor!.rootSpanId}-01`);
         } finally {
             database.close();
         }

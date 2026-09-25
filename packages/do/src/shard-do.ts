@@ -254,7 +254,7 @@ import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
-import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
+import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
@@ -3493,12 +3493,17 @@ abstract class ShardDO {
     }
 
     /**
-     * W3C `traceparent` of the inbound RPC (forwarded by the runtime), or
-     * `undefined`. `buildCtx` passes it to `createContainerContext` so outbound
-     * container fetches carry it and the container's spans join the same trace.
+     * W3C `traceparent` for outbound container fetches: the inbound RPC's
+     * (forwarded by the runtime) or, when the dispatch carried none, this
+     * dispatch's own minted anchor under its root span. `buildCtx` passes it to
+     * `createContainerContext` so the container's spans join the shard's trace
+     * rather than each starting a disconnected one. `undefined` only outside a
+     * dispatch.
      */
     protected getCurrentTraceparent(): string | undefined {
-        return this.currentRequestTraceparent;
+        const trace = this.currentRequestTrace;
+
+        return this.currentRequestTraceparent ?? (trace === undefined ? undefined : buildTraceparent(trace.traceId, trace.rootSpanId));
     }
 
     /**

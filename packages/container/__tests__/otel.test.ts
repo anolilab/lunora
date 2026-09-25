@@ -381,6 +381,32 @@ describe(createContainerTelemetry, () => {
         expect(records[0]?.flags).toBe(1);
     });
 
+    it("mints ONE trace per telemetry instance without an inbound traceparent, and stamps it on logs", async () => {
+        expect.assertions(6);
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+
+        telemetry.emitSpan({ endMs: 10, name: "step-a", startMs: 5 });
+        telemetry.emitSpan({ endMs: 20, name: "step-b", startMs: 15 });
+        telemetry.emitLog({ message: "done" });
+        await telemetry.flush();
+
+        const traceBody = calls.find((call) => call.url.endsWith("/v1/traces"))!.body;
+        const { spans } = (JSON.parse(traceBody) as { resourceSpans: { scopeSpans: { spans: ParsedSpan[] }[] }[] }).resourceSpans[0]!.scopeSpans[0]!;
+        const { records } = logsFrom(calls.find((call) => call.url.endsWith("/v1/logs"))!.body);
+
+        // Two spans from one process are one trace, not two disconnected roots,
+        // and the process's logs are reachable from it.
+        expect(spans).toHaveLength(2);
+        expect(spans[0]!.traceId).toMatch(TRACE_ID_HEX);
+        expect(spans[1]!.traceId).toBe(spans[0]!.traceId);
+        expect(spans.map((span) => span.parentSpanId)).toStrictEqual([undefined, undefined]);
+        expect(records[0]?.traceId).toBe(spans[0]!.traceId);
+        // No parent span to point at: a log names the trace, not an invented span.
+        expect(records[0]?.spanId).toBeUndefined();
+    });
+
     it("carries the sampled bit in the exported span flags", async () => {
         const { calls, fetch } = stubFetch();
         const telemetry = createContainerTelemetry({
