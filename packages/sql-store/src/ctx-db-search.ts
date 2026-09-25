@@ -34,7 +34,7 @@ import type { SqlDialect } from "./dialect";
 import type { SearchStage } from "./search-layout";
 import { companionFor, companionProfile, globalSearchIndexes, resolveSearchLayout } from "./search-layout";
 import type { MigrationMode, MigrationReport } from "./search-layout-migrations";
-import { ROW_VERSION_COLUMNS } from "./search-writes";
+import { readSourceRows, ROW_VERSION_COLUMNS } from "./search-writes";
 import type { SqlCtxExec } from "./sql-exec";
 import { decodeRow, forEachRowPaged, queryAll, queryRun, readRowsPage } from "./sql-exec";
 
@@ -169,14 +169,13 @@ const rowsMovedSince = async (
  * Between reading or writing a source row and writing its entry, another
  * isolate may write the same row; the per-isolate single-flight memo does not
  * reach across isolates. So each entry write carries the row as last seen, and
- * on the FTS5 and inverted layouts it lands only if that row is still current,
- * checked inside the write itself — a stale entry never replaces a fresher one.
+ * lands only if that row is still current, checked inside the write itself — a
+ * stale entry never replaces a fresher one.
  *
  * A write that did not land was left to the concurrent writer, but that writer
  * re-indexes only if it changed the indexed text. So the rows are re-read
  * afterwards, and every row whose version moved is indexed again from its new
- * state, until none did. On the native layout, whose writes are unguarded, the
- * re-check alone makes the result correct.
+ * state, until none did.
  */
 const indexRowsUntilCurrent = async (
     exec: SqlCtxExec,
@@ -547,6 +546,20 @@ const createSearchSync = (deps: {
 
             // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
             await resolveSearchLayout(index, dialect).purgeDocument(exec, dialect, companion, id, tableName);
+
+            // The purge's guard cannot lock a row that is absent, and on Postgres
+            // a DELETE reads the guard at its snapshot: a re-insert that committed
+            // mid-statement and then overwrote the entry in place (the native
+            // upsert) still reads as absent, and the purge drops its entry. So the
+            // row is read once more, and a row that is back is indexed again.
+            // eslint-disable-next-line no-await-in-loop -- the re-check has to follow the purge it checks.
+            const sources = await readSourceRows(exec, dialect, tableName, [id]);
+            const reinserted = sources.get(id);
+
+            if (reinserted !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
+                await indexRowsUntilCurrent(exec, dialect, definition, tableName, companion, index, new Map([[id, { row: reinserted }]]));
+            }
         }
     };
 };

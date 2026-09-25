@@ -243,8 +243,8 @@ describe("global search provisioning", () => {
                     createCompanion: (companion, keyType) =>
                         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier("__id__")} ${sql.raw(keyType)} PRIMARY KEY, ${sql.identifier("__vector__")} TEXT)`,
                     createIndexes: () => [],
-                    indexDocument: (companion, id, analyzed) =>
-                        sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) VALUES (${id}, ${analyzed})`,
+                    indexDocument: (companion, id, analyzed, guard) =>
+                        sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) SELECT ${id}, ${analyzed} WHERE ${guard} ON CONFLICT (${sql.identifier("__id__")}) DO UPDATE SET ${sql.identifier("__vector__")} = excluded.${sql.identifier("__vector__")}`,
                     matches: (companion) => sql`${sql.identifier(companion)}.${sql.identifier("__vector__")} <> ''`,
                     rank: (companion) => sql`LENGTH(${sql.identifier(companion)}.${sql.identifier("__vector__")})`,
                 },
