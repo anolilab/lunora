@@ -381,11 +381,11 @@ describe(createContainerTelemetry, () => {
         expect(records[0]?.flags).toBe(1);
     });
 
-    it("mints ONE trace per telemetry instance without an inbound traceparent, and stamps it on logs", async () => {
-        expect.assertions(6);
-
+    const exportedTrace = async (
+        options: Parameters<typeof createContainerTelemetry>[0],
+    ): Promise<{ records: ReturnType<typeof logsFrom>["records"]; spans: ParsedSpan[] }> => {
         const { calls, fetch } = stubFetch();
-        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch });
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch, ...options });
 
         telemetry.emitSpan({ endMs: 10, name: "step-a", startMs: 5 });
         telemetry.emitSpan({ endMs: 20, name: "step-b", startMs: 15 });
@@ -394,17 +394,36 @@ describe(createContainerTelemetry, () => {
 
         const traceBody = calls.find((call) => call.url.endsWith("/v1/traces"))!.body;
         const { spans } = (JSON.parse(traceBody) as { resourceSpans: { scopeSpans: { spans: ParsedSpan[] }[] }[] }).resourceSpans[0]!.scopeSpans[0]!;
-        const { records } = logsFrom(calls.find((call) => call.url.endsWith("/v1/logs"))!.body);
 
-        // Two spans from one process are one trace, not two disconnected roots,
-        // and the process's logs are reachable from it.
-        expect(spans).toHaveLength(2);
+        return { records: logsFrom(calls.find((call) => call.url.endsWith("/v1/logs"))!.body).records, spans };
+    };
+
+    it("puts every span of an ANCHORED telemetry instance on the anchor's trace and stamps it on logs", async () => {
+        expect.assertions(4);
+
+        // A per-request or per-job instance with a traceparent (inbound request,
+        // explicit option, or LUNORA_TRACEPARENT) is one unit of work: one trace.
+        const { records, spans } = await exportedTrace({ traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" });
+
+        expect(spans.map((span) => span.traceId)).toStrictEqual(["0af7651916cd43dd8448eb211c80319c", "0af7651916cd43dd8448eb211c80319c"]);
+        expect(spans.map((span) => span.parentSpanId)).toStrictEqual(["b7ad6b7169203331", "b7ad6b7169203331"]);
+        expect(records[0]?.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(records[0]?.spanId).toBe("b7ad6b7169203331");
+    });
+
+    it("gives each span of an UNANCHORED telemetry instance its own trace", async () => {
+        expect.assertions(4);
+
+        // No anchor means nothing says these spans are one unit of work. A
+        // module-scope instance in a long-lived server is the common case, and
+        // pinning it to one trace would put every span the process ever makes
+        // into a single trace that never ends. Logs name no trace they cannot know.
+        const { records, spans } = await exportedTrace({});
+
         expect(spans[0]!.traceId).toMatch(TRACE_ID_HEX);
-        expect(spans[1]!.traceId).toBe(spans[0]!.traceId);
-        expect(spans.map((span) => span.parentSpanId)).toStrictEqual([undefined, undefined]);
-        expect(records[0]?.traceId).toBe(spans[0]!.traceId);
-        // No parent span to point at: a log names the trace, not an invented span.
-        expect(records[0]?.spanId).toBeUndefined();
+        expect(spans[1]!.traceId).toMatch(TRACE_ID_HEX);
+        expect(spans[1]!.traceId).not.toBe(spans[0]!.traceId);
+        expect(records[0]?.traceId).toBeUndefined();
     });
 
     it("carries the sampled bit in the exported span flags", async () => {

@@ -3788,7 +3788,10 @@ const emitContainerFragments = (
         // outbound container fetches: `getCurrentTraceparent()` so the
         // container's spans join the trace, and `getCurrentSampleErrors()` so it
         // exports on the verdict the worker settled rather than on its own
-        // environment. Both are `undefined` outside a propagated dispatch.
+        // environment. The traceparent is the inbound one or, when the dispatch
+        // carried none (an alarm, a non-Lunora caller), the shard's own minted
+        // anchor, so it is `undefined` only outside a dispatch. The sample-errors
+        // verdict is `undefined` whenever none was propagated (read as keep).
         build: `
             const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent(), this.getCurrentSampleErrors());
 `,

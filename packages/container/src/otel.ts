@@ -269,23 +269,11 @@ const resolveFetch = (injected: OtelFetchLike | undefined): OtelFetchLike | unde
     injected ?? (typeof globalThis.fetch === "function" ? globalThis.fetch : undefined);
 
 /**
- * The trace every span and log of one telemetry instance belongs to: the
- * inbound `traceparent` when there is one, else a trace minted once for the
- * instance. `parentSpanId` is absent in the minted case — the spans are roots
- * of that trace, and a log names the trace without inventing a span.
- */
-interface TraceAnchor {
-    parentSpanId?: string;
-    sampled: boolean;
-    traceId: string;
-}
-
-/**
  * Encode one container span as an OTLP span object. The `resourceSpans`
  * envelope is applied once per BATCH (see the exporter's span batcher), not
  * here, so several spans share one wrapper and one POST.
  */
-const encodeSpan = (span: ContainerSpanInput, anchor: TraceAnchor): unknown => {
+const encodeSpan = (span: ContainerSpanInput, parent: { parentSpanId: string; sampled: boolean; traceId: string } | undefined): unknown => {
     const attributes = encodeAttributes(span.attributes);
 
     if (span.error?.type !== undefined) {
@@ -298,19 +286,18 @@ const encodeSpan = (span: ContainerSpanInput, anchor: TraceAnchor): unknown => {
         // W3C trace flags, mirroring the verdict this container inherited. Without
         // it a collector reading `flags` sees 0 (UNSAMPLED) on every span we ship,
         // including the ones it is meant to keep.
-        flags: anchor.sampled ? SAMPLED_TRACE_FLAG : 0,
+        flags: (parent?.sampled ?? true) ? SAMPLED_TRACE_FLAG : 0,
         // SPAN_KIND_INTERNAL — the container's own work, not a server/client edge.
         kind: 1,
         name: span.name,
         // Always the span's own (child) id; with a parent, hang it off the parent
-        // span. The trace id is the instance's, inherited or minted once, so
-        // every span of this process stitches into one trace.
-        ...(anchor.parentSpanId === undefined ? {} : { parentSpanId: anchor.parentSpanId }),
+        // span and inherit the parent's trace id so the spans stitch into one trace.
+        ...(parent === undefined ? {} : { parentSpanId: parent.parentSpanId }),
         spanId: otlpRandomHex(8),
         startTimeUnixNano: otlpUnixNano(span.startMs),
         // STATUS_CODE_OK (1) / STATUS_CODE_ERROR (2).
         status: span.error === undefined ? { code: 1 } : { code: 2, message: span.error.message },
-        traceId: anchor.traceId,
+        traceId: parent?.traceId ?? otlpRandomHex(16),
     };
 
     // On error, record an OTel exception event with the standard `exception.*`
@@ -332,14 +319,14 @@ const encodeSpan = (span: ContainerSpanInput, anchor: TraceAnchor): unknown => {
  * Encode one container log line as an OTLP log record. The `resourceLogs`
  * envelope is applied once per batch.
  *
- * Stamped with the instance's trace (see {@link TraceAnchor}). A log record carrying
+ * Stamped with the inbound trace context when there is one. A log record carrying
  * no `traceId`/`spanId` is unreachable from the trace it belongs to — the whole
  * point of propagating a `traceparent` into the container is that one request
  * reads as one thing, and "show me this request's container logs" was a query
  * nobody could run. Logs are NOT sampled (only spans are), so this is stamped
  * whatever the verdict was; `flags` carries the verdict so a collector can tell.
  */
-const encodeLogRecord = (log: ContainerLogInput, nowMs: number, anchor: TraceAnchor): unknown => {
+const encodeLogRecord = (log: ContainerLogInput, nowMs: number, parent: { parentSpanId: string; sampled: boolean; traceId: string } | undefined): unknown => {
     const level = log.level ?? "info";
 
     return {
@@ -348,9 +335,7 @@ const encodeLogRecord = (log: ContainerLogInput, nowMs: number, anchor: TraceAnc
         severityNumber: OTLP_SEVERITY[level],
         severityText: level.toUpperCase(),
         timeUnixNano: otlpUnixNano(log.ts ?? nowMs),
-        flags: anchor.sampled ? SAMPLED_TRACE_FLAG : 0,
-        ...(anchor.parentSpanId === undefined ? {} : { spanId: anchor.parentSpanId }),
-        traceId: anchor.traceId,
+        ...(parent === undefined ? {} : { flags: parent.sampled ? SAMPLED_TRACE_FLAG : 0, spanId: parent.parentSpanId, traceId: parent.traceId }),
     };
 };
 
@@ -374,6 +359,11 @@ const encodeLogRecord = (log: ContainerLogInput, nowMs: number, anchor: TraceAnc
  * With no endpoint resolvable the returned exporter is disabled (`enabled ===
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records
  * nothing — so the same code runs unchanged locally and in the cloud.
+ *
+ * With a trace anchor (`traceparent`, the `request`'s header, or
+ * `LUNORA_TRACEPARENT`) every span hangs off it and every log is stamped with
+ * it. Without one each span starts its own trace — so in a long-running server,
+ * create the instance per request (`{ request }`), not once per process.
  * @param options Exporter options. Connection fields (`endpoint`, `token`,
  * `serviceName`, `traceparent`) always fall back to their `LUNORA_*` env var;
  * resource fields (`serviceVersion`, `deploymentEnvironment`) only do so under
@@ -400,11 +390,6 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
     // sampled and keep flowing either way. The one exception is the tail bias
     // below, which every tier applies: an ERRORED span is kept regardless.
     const headSampled = parent?.sampled !== false;
-    // No inbound parent: mint ONE trace for this instance rather than one per
-    // span, so a job's spans read as one trace and its logs are reachable from
-    // it. The shard forwards its own anchor when the worker sent none, so this
-    // only mints for a container nothing upstream traced.
-    const anchor: TraceAnchor = parent ?? { sampled: true, traceId: otlpRandomHex(16) };
     // The tail-bias toggle, down the same precedence chain. `!== "0"` is how the
     // shard reads the header too, so all three tiers land on keep by default —
     // and, when the worker propagated a verdict, on the SAME answer because they
@@ -533,7 +518,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        spanBatch.add(encodeSpan(span, anchor));
+        spanBatch.add(encodeSpan(span, parent));
     };
 
     const emitLog = (log: ContainerLogInput): void => {
@@ -541,7 +526,7 @@ const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): Cont
             return;
         }
 
-        logBatch.add(encodeLogRecord(log, Date.now(), anchor));
+        logBatch.add(encodeLogRecord(log, Date.now(), parent));
     };
 
     const trace = async <T>(name: string, run: () => Promise<T>, attributes?: Record<string, ContainerAttributeValue>): Promise<T> => {

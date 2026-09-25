@@ -3499,6 +3499,13 @@ abstract class ShardDO {
      * `createContainerContext` so the container's spans join the shard's trace
      * rather than each starting a disconnected one. `undefined` only outside a
      * dispatch.
+     *
+     * Known limit: both fields are shared per-instance state, read when the ctx
+     * is built. An RPC dispatch that begins while an alarm is in flight
+     * overwrites `currentRequestTrace`, so a ctx the alarm builds after that
+     * point forwards the RPC's trace (and vice versa) — the same trade
+     * `withTriggerTrace` documents for inner spans. Fixing it means passing the
+     * dispatch's anchor into `buildCtx` by value.
      */
     protected getCurrentTraceparent(): string | undefined {
         const trace = this.currentRequestTrace;

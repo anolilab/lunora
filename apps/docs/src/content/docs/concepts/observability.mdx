@@ -706,6 +706,24 @@ telemetry.emitLog({ level: "info", message: "done", attributes: { jobId: job.id 
 await telemetry.flush();
 ```
 
+**Which trace a span lands on** depends on whether the instance has an anchor:
+a `traceparent` option, the inbound `request` (its `traceparent` header), or
+`LUNORA_TRACEPARENT` in the env. An anchored instance puts every span under that
+trace and stamps it on every log, so one request or one job reads as one thing.
+An unanchored instance gives each span its own trace and leaves logs unstamped.
+So in a long-running server, create the telemetry **per request** from the
+inbound request rather than once per process:
+
+```ts
+app.post("/transcode", async (request) => {
+    const telemetry = createContainerTelemetry({ request }); // one trace per request
+    // …
+});
+```
+
+A module-scope instance is right for a one-shot job started with
+`LUNORA_TRACEPARENT`, where the whole process is one unit of work.
+
 With no endpoint resolvable the exporter is a **silent no-op** (`telemetry.enabled
 === false`): `trace` still runs your work, it just records nothing. The same code
 runs unchanged locally and in the cloud.
