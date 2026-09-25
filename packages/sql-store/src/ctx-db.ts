@@ -126,6 +126,7 @@ import {
     decodeRow,
     decodeRows,
     forEachRowPaged,
+    nextRowVersion,
     nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
     queryAll,
@@ -2424,7 +2425,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         );
         const base =
             verb === "UPDATE"
-                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = COALESCE(${versionRef}, 0) + 1 WHERE ${guardClause}`
+                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = ${nextRowVersion.sql(versionRef)} WHERE ${guardClause}`
                 : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
 
         const occConflict = (): never => {
@@ -2461,9 +2462,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * them.
      */
     const writtenBy = (snapshot: Record<string, unknown> | undefined, creationTime: unknown = snapshot?.["_creationTime"]): Record<string, unknown> => {
-        const version = snapshot?.[OCC_VERSION_COLUMN];
-
-        return { _creationTime: creationTime, [OCC_VERSION_COLUMN]: version === null || version === undefined ? 1 : Number(version) + 1 };
+        return { _creationTime: creationTime, [OCC_VERSION_COLUMN]: nextRowVersion.value(snapshot?.[OCC_VERSION_COLUMN]) };
     };
 
     /** Serialize a document into the ordered `[id, _creationTime, ...fields]` column tuple. */

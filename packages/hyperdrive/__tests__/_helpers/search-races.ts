@@ -354,11 +354,65 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
         }
     };
 
+    /** `exec`, recording every statement it is handed into `into`. */
+    const recording = (into: string[]): SqlExec =>
+        gated(target.exec(), async (text) => {
+            into.push(text);
+        });
+
+    /** Statements that read the companion's rows in bulk: a grouping scan, or a walk over its documents. */
+    const scansCompanion = (statements: ReadonlyArray<string>): string[] =>
+        statements.filter((text) => text.includes(COMPANION) && /\bGROUP BY\b|\bSELECT DISTINCT\b/u.test(text));
+
+    const hasKey = async (): Promise<boolean | undefined> => {
+        const held = await target.indexes(COMPANION);
+
+        return held.get(`${COMPANION}__unique`);
+    };
+
     cases.push(
         [
-            "migrates a companion holding duplicates to its unique key, repairing each from its source row",
+            "leaves a keyless companion alone on a cold start: no scan, no index build",
             async () => {
-                expect.assertions(5);
+                expect.assertions(3);
+
+                await legacyCompanion(ROWS, (n) => `word${String(n)} common`, []);
+
+                const statements: string[] = [];
+
+                await runSqlSearchMigrations(recording(statements), schemaFor(INDEX), target.dialect);
+
+                // The build belongs to `backfillSqlSearchIndexes`; a request pays one catalog probe.
+                expect(scansCompanion(statements)).toStrictEqual([]);
+                expect(statements.filter((text) => /CREATE UNIQUE INDEX/u.test(text))).toStrictEqual([]);
+                await expect(hasKey()).resolves.toBeUndefined();
+            },
+        ],
+        [
+            "adds the key to a clean companion in one statement, without scanning it for duplicates",
+            async () => {
+                expect.assertions(4);
+
+                await legacyCompanion(ROWS, (n) => `word${String(n)} common`, []);
+
+                const statements: string[] = [];
+                const result = await backfillSqlSearchIndexes(recording(statements), schemaFor(INDEX), target.dialect);
+
+                expect(scansCompanion(statements)).toStrictEqual([]);
+                expect(statements.filter((text) => /CREATE UNIQUE INDEX/u.test(text))).toHaveLength(1);
+                expect(result.uniqueKeyMissing).toStrictEqual([]);
+                await expect(target.indexes(COMPANION)).resolves.toStrictEqual(
+                    new Map([
+                        [`${COMPANION}__by_id`, false],
+                        [`${COMPANION}__unique`, true],
+                    ]),
+                );
+            },
+        ],
+        [
+            "adds the key to a companion holding duplicates, repairing each from its source row",
+            async () => {
+                expect.assertions(6);
 
                 // pad(4) doubled outright; pad(5) holds a stale token from a racing
                 // write as well as a duplicate of a current one.
@@ -368,14 +422,11 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
                     ["staleword", pad(5), 1],
                     ["common", pad(5), 1],
                 ]);
-                await runSqlSearchMigrations(target.exec(), schemaFor(INDEX), target.dialect);
 
-                await expect(target.indexes(COMPANION)).resolves.toStrictEqual(
-                    new Map([
-                        [`${COMPANION}__by_id`, false],
-                        [`${COMPANION}__unique`, true],
-                    ]),
-                );
+                const result = await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
+
+                expect(result.uniqueKeyMissing).toStrictEqual([]);
+                await expect(hasKey()).resolves.toBe(true);
                 await expect(companionRows(pad(4))).resolves.toBe(2);
                 await expect(companionRows(pad(5))).resolves.toBe(2);
                 await expect(companionRows()).resolves.toBe(2 * ROWS);
@@ -383,52 +434,110 @@ const searchRaceCases = (target: RaceTarget): RaceCase[] => {
             },
         ],
         [
-            "walks a large companion a bounded page per cold start before adding the key",
-            async () => {
-                expect.assertions(4);
-
-                const rows = 250;
-
-                await legacyCompanion(rows, (n) => `word${String(n)} common`, [["common", pad(240), 1]]);
-                await runSqlSearchMigrations(target.exec(), schemaFor(INDEX), target.dialect);
-
-                // One page of 100 documents: the duplicate past it is still there, and so is the old index.
-                await expect(companionRows(pad(240))).resolves.toBe(3);
-                await expect(target.indexes(COMPANION).then((held) => held.has(`${COMPANION}__unique`))).resolves.toBe(false);
-
-                await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
-
-                await expect(companionRows(pad(240))).resolves.toBe(2);
-                await expect(target.indexes(COMPANION).then((held) => held.get(`${COMPANION}__unique`))).resolves.toBe(true);
-            },
-        ],
-        [
-            "walks again when a duplicate appears behind the cursor before the key goes on",
+            "still adds the key when a duplicate appears while it builds",
             async () => {
                 expect.assertions(3);
 
                 await legacyCompanion(ROWS, (n) => `word${String(n)} common`, []);
 
-                // The walk's own read happens, then a writer on the previous build
-                // doubles a row the walk has already passed — so adding the key fails.
+                // A writer on the previous build doubles a row just before the build,
+                // so the first attempt fails on it.
                 const hold = holdAt((text) => /CREATE UNIQUE INDEX/u.test(text));
-                const walking = runSqlSearchMigrations(gated(target.exec(), hold.gate), schemaFor(INDEX), target.dialect);
+                const building = backfillSqlSearchIndexes(gated(target.exec(), hold.gate), schemaFor(INDEX), target.dialect);
 
                 await hold.reached;
                 await target.query(`INSERT INTO ${COMPANION} (__token__, __id__, __n__) VALUES ('common', '${pad(1)}', 1)`);
                 hold.release();
-                await walking;
 
-                await expect(target.indexes(COMPANION).then((held) => held.has(`${COMPANION}__unique`))).resolves.toBe(false);
+                const result = await building;
 
-                // The next cold start walks from the top, repairs it, and adds the key.
-                await runSqlSearchMigrations(target.exec(), schemaFor(INDEX), target.dialect);
-
+                expect(result.uniqueKeyMissing).toStrictEqual([]);
                 await expect(companionRows(pad(1))).resolves.toBe(2);
-                await expect(target.indexes(COMPANION).then((held) => held.get(`${COMPANION}__unique`))).resolves.toBe(true);
+                await expect(hasKey()).resolves.toBe(true);
+            },
+        ],
+        [
+            "never leaves a document with no rows when every later statement of each attempt loses to a field-only write",
+            async () => {
+                expect.assertions(3);
+
+                // A field-only write lands before every companion statement but the
+                // first of each attempt. Its writer skips the companion (the text is
+                // unchanged), so only this write's re-check can index the row — and
+                // it loses every round. What the first statements left must still
+                // hold the document.
+                const row = pad(20);
+                let other: DatabaseWriterLike | undefined;
+                let inAttempt = 0;
+                let bumps = 0;
+                const [isolateA, isolateB] = await livePair(async (text, parameters) => {
+                    if (/^SELECT \* FROM [`"]notes[`"] WHERE [`"]id[`"] >=/u.test(text)) {
+                        inAttempt = 0;
+
+                        return;
+                    }
+
+                    if (other !== undefined && text.includes(COMPANION) && parameters.includes(row)) {
+                        inAttempt += 1;
+
+                        if (inAttempt > 1) {
+                            bumps += 1;
+                            await other.patch(row, { title: `t${String(bumps)}` });
+                        }
+                    }
+                });
+
+                other = isolateB;
+                await isolateA.patch(row, { body: "freshword common" });
+
+                await expect(companionRows(row)).resolves.toBeGreaterThan(0);
+                await expect(search("common")).resolves.toContain(row);
+                // Postgres writes in one statement, so there is nothing to lose between.
+                expect(bumps).toBe(target.engine === "mysql" ? 10 : 0);
             },
         ],
     );
+
+    if (target.engine === "postgres") {
+        cases.push([
+            "drops an index a failed concurrent build left invalid, and builds the key again",
+            async () => {
+                expect.assertions(2);
+
+                await legacyCompanion(ROWS, (n) => `word${String(n)} common`, []);
+                await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
+                // What a `CREATE INDEX CONCURRENTLY` that failed part way leaves behind.
+                await target.query(`UPDATE pg_index SET indisvalid = false WHERE indexrelid = '${COMPANION}__unique'::regclass`);
+
+                const result = await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
+                const valid = await target.query(`SELECT indisvalid FROM pg_index WHERE indexrelid = '${COMPANION}__unique'::regclass`);
+
+                expect(result.uniqueKeyMissing).toStrictEqual([]);
+                expect(valid.map((entry) => entry["indisvalid"])).toStrictEqual([true]);
+            },
+        ]);
+    }
+
+    if (target.engine === "mysql") {
+        cases.push([
+            "reports the key missing when two ids share its 512-character id prefix",
+            async () => {
+                expect.assertions(2);
+
+                const prefix = "x".repeat(512);
+
+                await legacyCompanion(ROWS, (n) => `word${String(n)} common`, [
+                    ["common", `${prefix}a`, 1],
+                    ["common", `${prefix}b`, 1],
+                ]);
+
+                const result = await backfillSqlSearchIndexes(target.exec(), schemaFor(INDEX), target.dialect);
+
+                expect(result.uniqueKeyMissing).toStrictEqual([COMPANION]);
+                await expect(hasKey()).resolves.toBeUndefined();
+            },
+        ]);
+    }
 
     return cases;
 };

@@ -100,6 +100,18 @@ const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: un
 };
 
 /**
+ * The row version a guarded write leaves, in the two forms the store needs: as
+ * SQL for the write's own `SET`, where it costs no bound parameter, and as the
+ * value that SQL produces from the version the writer read, for the search
+ * companion's guard. One definition, so the two cannot drift — if they did,
+ * every guarded companion write would miss and fall back to the re-check.
+ */
+const nextRowVersion = {
+    sql: (reference: SQL): SQL => sql`COALESCE(${reference}, 0) + 1`,
+    value: (read: unknown): number => (read === null || read === undefined ? 0 : Number(read)) + 1,
+};
+
+/**
  * Run several write statements as one round trip when the exec exposes
  * {@link SqlCtxExec.batch}; falls back to the historical sequential
  * `run()`-per-statement loop when it doesn't, so an exec built before `batch`
@@ -163,9 +175,13 @@ const runInOrder = async (exec: SqlCtxExec, dialect: SqlDialect, queries: Readon
 const createIndexIfNotExists = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
-    spec: { columns: SQL; name: string; table: string; unique: boolean },
+    spec: { columns: SQL; concurrently?: boolean; name: string; table: string; unique: boolean },
 ): Promise<void> => {
     const unique = spec.unique ? sql`UNIQUE ` : sql``;
+    // Postgres only: build without blocking writes. It cannot run inside a
+    // transaction, which a Hyperdrive exec never opens. MySQL's InnoDB builds a
+    // secondary index online by default.
+    const concurrently = spec.concurrently === true && dialect.name === "postgres" ? sql`CONCURRENTLY ` : sql``;
 
     if (dialect.name === "mysql") {
         try {
@@ -184,7 +200,74 @@ const createIndexIfNotExists = async (
         return;
     }
 
-    await queryRun(exec, dialect, sql`CREATE ${unique}INDEX IF NOT EXISTS ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
+    await queryRun(
+        exec,
+        dialect,
+        sql`CREATE ${unique}INDEX ${concurrently}IF NOT EXISTS ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`,
+    );
+};
+
+/**
+ * Drop an index if it exists. MySQL has no `DROP INDEX IF EXISTS` and names the
+ * table, so it drops unconditionally and swallows the "can't drop" error
+ * (errno 1091) an absent index raises — the mirror of
+ * {@link createIndexIfNotExists}.
+ */
+const dropIndexIfExists = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, name: string): Promise<void> => {
+    if (dialect.name !== "mysql") {
+        await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
+
+        return;
+    }
+
+    try {
+        await queryRun(exec, dialect, sql`DROP INDEX ${sql.identifier(name)} ON ${sql.identifier(table)}`);
+    } catch (error) {
+        // ER_CANT_DROP_FIELD_OR_KEY; drivers disagree on the field, as for 1061.
+        const missing = error as { code?: unknown; errno?: unknown };
+
+        if (missing.errno !== 1091 && missing.code !== "ER_CANT_DROP_FIELD_OR_KEY" && missing.code !== 1091) {
+            throw error;
+        }
+    }
+};
+
+/**
+ * Whether index `name` on `table` exists, and whether it is usable. Only
+ * Postgres can hold an `invalid` one: what a `CREATE INDEX CONCURRENTLY` that
+ * failed part way leaves behind, which `IF NOT EXISTS` treats as present.
+ */
+const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, name: string): Promise<"absent" | "invalid" | "valid"> => {
+    switch (dialect.name) {
+        case "mysql": {
+            const rows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT 1 AS ${sql.identifier("present")} FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ${table} AND index_name = ${name} LIMIT 1`,
+            );
+
+            return rows.length > 0 ? "valid" : "absent";
+        }
+        case "postgres": {
+            // `quote_ident`, so a mixed-case name resolves as the DDL created it.
+            const rows = await queryAll(exec, dialect, sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(quote_ident(${name}))`);
+
+            if (rows.length === 0) {
+                return "absent";
+            }
+
+            return rows[0]?.["indisvalid"] === true ? "valid" : "invalid";
+        }
+        default: {
+            const rows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name}`,
+            );
+
+            return rows.length > 0 ? "valid" : "absent";
+        }
+    }
 };
 
 /**
@@ -483,7 +566,10 @@ export {
     decodeGlobalRow,
     decodeRow,
     decodeRows,
+    dropIndexIfExists,
     forEachRowPaged,
+    indexState,
+    nextRowVersion,
     nullSafeEqualsSql,
     physicalColumn,
     qualifiedColumnRefSql,

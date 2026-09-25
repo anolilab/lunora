@@ -482,7 +482,7 @@ describe("global search provisioning", () => {
 
             // "The documented remedy throws unless you happened to migrate first"
             // is not a remedy.
-            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toStrictEqual({ unmappedSkipped: 0 });
+            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toStrictEqual({ uniqueKeyMissing: [], unmappedSkipped: 0 });
         });
 
         it("walks a table larger than one backfill page", async () => {
@@ -503,6 +503,25 @@ describe("global search provisioning", () => {
     });
 
     describe("createSearchSync", () => {
+        it("guards a live write with the version the row write left, so it lands on the first attempt", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+
+            const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema: searchSchema });
+            const rechecks = (): number => statements.filter((text) => text.startsWith(`SELECT * FROM "notes" WHERE "id" >=`)).length;
+
+            await writer.insert("notes", { _id: "a", body: "hello world", channel: "general" }, { allowExplicitId: true });
+            await writer.patch("a", { body: "goodbye world" });
+            await writer.patch("a", { body: "farewell world" });
+
+            // One re-check per write: had the guard's version drifted from the one
+            // the row write set, each write would miss once and need a second.
+            expect(rechecks()).toBe(3);
+            expect(tokensFor("a")).toStrictEqual(["farewell", "world"]);
+            expect(raw(`SELECT "_version" AS v FROM "notes" WHERE "id" = 'a'`).map((row) => row["v"])).toStrictEqual([2]);
+        });
+
         it("indexes a written document and purges a removed one", async () => {
             expect.assertions(2);
 

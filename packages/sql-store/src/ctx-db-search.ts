@@ -32,16 +32,9 @@ import {
 } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import type { SearchStage } from "./search-layout";
-import {
-    companionFor,
-    companionProfile,
-    globalSearchIndexes,
-    invertedUniqueKeyState,
-    migrateInvertedUniqueKey,
-    migrateUnmappedEntries,
-    resolveSearchLayout,
-    ROW_VERSION_COLUMNS,
-} from "./search-layout";
+import { companionFor, companionProfile, globalSearchIndexes, resolveSearchLayout } from "./search-layout";
+import type { MigrationMode, MigrationReport } from "./search-layout-migrations";
+import { ROW_VERSION_COLUMNS } from "./search-writes";
 import type { SqlCtxExec } from "./sql-exec";
 import { decodeRow, forEachRowPaged, queryAll, queryRun, readRowsPage } from "./sql-exec";
 
@@ -336,9 +329,6 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
             await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(ftsRowidMapName(companion))}`);
             // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
             await clearSearchBackfillState(exec, dialect, companion);
-            // A companion created afresh has no unique key yet, whatever the old one had.
-            // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
-            await clearSearchBackfillState(exec, dialect, invertedUniqueKeyState(companion));
         }
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
@@ -397,6 +387,38 @@ const recordStagedIndexBaseline = async (
     await writeSearchBackfillState(exec, dialect, companion, undefined, rows === 0, companionProfile(index, dialect));
 };
 
+/** What {@link backfillSqlSearchIndexes} could not finish. */
+interface SqlSearchBackfillResult {
+    /**
+     * Inverted companions that still lack their unique `(token, id)` key. Writes
+     * keep working without it, but two backfills racing over one row can index
+     * it twice; the warning logged for each says why the key was refused.
+     */
+    uniqueKeyMissing: string[];
+
+    /** A previous build's rows left unmigrated because every attempt at them lost to a concurrent write. */
+    unmappedSkipped: number;
+}
+
+/** Run a layout's migration of an index's companion, if its layout has one. */
+const migrateCompanion = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+    mode: MigrationMode,
+): Promise<MigrationReport> => {
+    const report = await resolveSearchLayout(index, dialect).migrate?.(
+        exec,
+        dialect,
+        { companion: companionFor(tableName, index), definition, index, tableName },
+        mode,
+    );
+
+    return report ?? { uniqueKeyMissing: false, unmappedSkipped: 0 };
+};
+
 /**
  * Provision the search companions, then index one bounded page of the rows that
  * predate each index — unless it is declared `staged: true`, which leaves the
@@ -409,12 +431,9 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
     await ensureSearchCompanions(exec, schema, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
-        // One bounded page of a previous build's FTS5 rows per cold start, and
-        // one of the walk that gives an inverted companion its unique key.
+        // The layout's bounded per-cold-start share of migrating an older companion.
         // eslint-disable-next-line no-await-in-loop -- sequential on the shared connection.
-        await migrateUnmappedEntries(exec, dialect, definition, tableName, index);
-        // eslint-disable-next-line no-await-in-loop -- sequential on the shared connection.
-        await migrateInvertedUniqueKey(exec, dialect, definition, tableName, index);
+        await migrateCompanion(exec, dialect, definition, tableName, index, "step");
 
         if (index.staged) {
             // eslint-disable-next-line no-await-in-loop -- one indexed probe per staged index, on the shared connection.
@@ -429,77 +448,6 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
 };
 
 /**
- * Attempts at one page of a previous build's rows before the drain moves past
- * the ones that keep losing to a concurrent write. A loser is left in place:
- * the next cold start's pass retries it, and a write that changes its text
- * drops it anyway.
- */
-const UNMAPPED_PAGE_ATTEMPTS = 3;
-
-/** What {@link backfillSqlSearchIndexes} could not finish. */
-interface SqlSearchBackfillResult {
-    /** A previous build's rows left unmigrated because every attempt at them lost to a concurrent write. */
-    unmappedSkipped: number;
-}
-
-/**
- * Rewrite all of a companion's unmapped rows, a page at a time, retrying each
- * page a bounded number of times. Returns how many rows it gave up on.
- */
-const drainUnmappedEntries = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    index: SearchIndexDefinitionLike,
-): Promise<number> => {
-    let after = 0;
-    let skipped = 0;
-
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- pages are sequential: each starts where the last one ended.
-        let pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
-
-        for (let attempt = 1; pass.left > 0 && attempt < UNMAPPED_PAGE_ATTEMPTS; attempt += 1) {
-            // eslint-disable-next-line no-await-in-loop -- a retry re-reads the page's losers from their newer source rows.
-            pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
-        }
-
-        if (pass.left > 0) {
-            skipped += pass.left;
-            // eslint-disable-next-line no-console -- the only channel a backfill pass has
-            console.warn(
-                `[@lunora/sql-store] search migration of "${companionFor(tableName, index)}": ${String(pass.left)} row(s) lost every one of ${String(UNMAPPED_PAGE_ATTEMPTS)} attempts to a concurrent write and were left for a later pass.`,
-            );
-        }
-
-        if (pass.done) {
-            return skipped;
-        }
-
-        after = pass.last;
-    }
-};
-
-/**
- * Walk an inverted companion to its unique key. One full walk at most: a walk
- * that ends without the key (a duplicate written behind it) starts over on the
- * next cold start instead of spinning here.
- */
-const drainInvertedUniqueKey = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    index: SearchIndexDefinitionLike,
-): Promise<void> => {
-    // eslint-disable-next-line no-await-in-loop -- pages are sequential: each resumes from the recorded cursor.
-    while ((await migrateInvertedUniqueKey(exec, dialect, definition, tableName, index)) === "more") {
-        // The walk records its own cursor.
-    }
-};
-
-/**
  * Run every declared search index — including the `staged: true` ones the
  * migration pass skips — through to completion. The entry point a host calls
  * out-of-band after deploying a search index over a table too large to index a
@@ -509,7 +457,7 @@ const drainInvertedUniqueKey = async (
  * interrupted run picks up from its cursor.
  */
 const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<SqlSearchBackfillResult> => {
-    let unmappedSkipped = 0;
+    const result: SqlSearchBackfillResult = { uniqueKeyMissing: [], unmappedSkipped: 0 };
 
     // Self-sufficient: a host may run this before any ctx-db has migrated this
     // binding, and "the documented remedy throws unless you happened to migrate
@@ -518,9 +466,13 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
         // eslint-disable-next-line no-await-in-loop -- one companion at a time on the shared connection.
-        unmappedSkipped += await drainUnmappedEntries(exec, dialect, definition, tableName, index);
-        // eslint-disable-next-line no-await-in-loop -- one companion at a time on the shared connection.
-        await drainInvertedUniqueKey(exec, dialect, definition, tableName, index);
+        const report = await migrateCompanion(exec, dialect, definition, tableName, index, "drain");
+
+        result.unmappedSkipped += report.unmappedSkipped;
+
+        if (report.uniqueKeyMissing) {
+            result.uniqueKeyMissing.push(companionFor(tableName, index));
+        }
 
         let done = false;
 
@@ -530,7 +482,7 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
         }
     }
 
-    return { unmappedSkipped };
+    return result;
 };
 
 /** A row write, as the search hook sees it: the document now, before, and the version columns the write left. */

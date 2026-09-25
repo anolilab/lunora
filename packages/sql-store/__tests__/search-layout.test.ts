@@ -6,17 +6,9 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlDialect } from "../src/dialect";
-import type { SearchLayout, SearchStage, SourceRow } from "../src/search-layout";
-import {
-    companionFor,
-    companionProfile,
-    fts5Layout,
-    globalSearchIndexes,
-    invertedLayout,
-    migrateInvertedUniqueKey,
-    nativeLayout,
-    resolveSearchLayout,
-} from "../src/search-layout";
+import type { SearchLayout, SearchStage } from "../src/search-layout";
+import { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout } from "../src/search-layout";
+import type { SourceRow } from "../src/search-writes";
 import type { SqlCtxExec } from "../src/sql-exec";
 
 /**
@@ -405,10 +397,10 @@ describe("search layouts", () => {
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
 
             expect(harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, companion)).toHaveLength(1);
-            // The token index is the unique key, which `migrateInvertedUniqueKey` adds.
+            // An empty companion gets its unique token key at once.
             expect(
                 harness.raw(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name`, companion).map((row) => row["name"]),
-            ).toStrictEqual(["notes__fts_by_body__by_id"]);
+            ).toStrictEqual(["notes__fts_by_body__by_id", "notes__fts_by_body__unique"]);
         });
 
         it("stores one row per distinct token, counting repeats as the score", async () => {
@@ -752,13 +744,12 @@ describe("search layouts", () => {
      * runs the DDL, so they are asserted on the emitted SQL.
      */
     describe("companion index DDL per engine", () => {
-        /** The companion's index DDL: `ensureCompanion`'s, then the unique key an empty companion gets on its first pass. */
+        /** The companion's index DDL, as `ensureCompanion` issues it for an empty companion: `__by_id`, then the unique key. */
         const ddlFor = async (overrides: Partial<SqlDialect>): Promise<string[]> => {
             const recorder = recordingExec();
             const dialect = sqliteDialect({ supportsFts5: false, ...overrides });
 
             await invertedLayout.ensureCompanion(recorder.exec, dialect, "notes__fts_by_body");
-            await migrateInvertedUniqueKey(recorder.exec, dialect, notes, "notes", byBody);
 
             return recorder.statements.filter((statement) => /CREATE (?:UNIQUE )?INDEX/u.test(statement));
         };

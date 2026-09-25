@@ -10,10 +10,8 @@
  * permanently. Progress is therefore recorded explicitly, one row per
  * companion, in a reserved table beside the other `__lunora_*` bookkeeping.
  *
- * The table is a plain `key → {cursor, done, profile}` map and is shared with the
- * one other paged migration that needs the same bookkeeping — `ctx-db.ts`'s
- * bigint re-encoding pass, under a `bigint-rewrite:<table>` key. Its name is
- * historical; renaming it would be a migration of its own for no behavioural gain.
+ * The table is a plain `companion → {cursor, done, profile, covered}` map, one
+ * row per search companion, keyed by the companion's table name.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
