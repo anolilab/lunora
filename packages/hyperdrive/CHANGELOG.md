@@ -1,3 +1,15 @@
+## @lunora/hyperdrive [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.130...@lunora/hyperdrive@1.0.0-alpha.131) (2026-09-25)
+
+### Bug Fixes
+
+* **search:** key fts5 companions by a rowid map and guard backfills ([#819](https://github.com/anolilab/lunora/issues/819)) ([8d57122](https://github.com/anolilab/lunora/commit/8d5712261cb2d5dc051b7db0f061c376fb995304))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.81
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.133
+
 ## @lunora/hyperdrive [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.129...@lunora/hyperdrive@1.0.0-alpha.130) (2026-09-25)
 
 
