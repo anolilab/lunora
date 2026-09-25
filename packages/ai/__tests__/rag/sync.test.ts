@@ -98,7 +98,9 @@ describe("ragSyncTriggers", () => {
         const scoped = () =>
             ragSyncTriggers({
                 action: ACTION,
-                metadata: (document) => {return { orgId: document["orgId"] }},
+                metadata: (document) => {
+                    return { orgId: document["orgId"] };
+                },
                 namespace: (document) => document["space"] as string | undefined,
                 text: (document) => document["body"] as string,
             });
