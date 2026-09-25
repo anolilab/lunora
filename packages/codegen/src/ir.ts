@@ -1479,7 +1479,7 @@ export interface VectorNamespaceAccessIR {
     file: string;
     /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
     line: number;
-    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertMany`. */
+    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertNow`. */
     method: string;
 }
 

@@ -54,6 +54,20 @@ describe("discoverVectorNamespaceAccesses", () => {
         expect(found[0]).toMatchObject({ exportName: "indexDoc", method: "upsert" });
     });
 
+    it("flags an upsertNow with an args-derived namespace", () => {
+        expect.assertions(2);
+
+        write(
+            "index-now.ts",
+            `export const indexNow = mutation(async ({ ctx, args }) => { await ctx.vectors.upsertNow(idx, { namespace: args.tenant, embed, id: "a", input: "x" }); });`,
+        );
+
+        const found = discoverVectorNamespaceAccesses(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ exportName: "indexNow", method: "upsertNow" });
+    });
+
     it("flags an args namespace reached through one local const hop", () => {
         expect.assertions(1);
 

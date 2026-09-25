@@ -7,15 +7,12 @@ import { collectCallRows, propertyInitializer } from "./ast";
 
 /**
  * The `ctx.vectors` methods whose second argument may carry a `namespace`
- * field — confirmed against the `LunoraVectors` facade in
- * `@lunora/bindings/vectors`. `query` and `upsert` take a single
- * `{ namespace, … }` input object; `upsertMany` takes an *array* of such
- * objects, so its typical call shape does not satisfy the direct
- * object-literal check below and produces no evidence today. It is kept in
- * the sink set (rather than excluded) for shape completeness and so a future
- * per-element check can extend it without touching the sink list again.
+ * field — confirmed against the facade `createContextVectors` builds in
+ * `@lunora/bindings/vectors`, which is what `ctx.vectors` is. `query`,
+ * `upsert` and `upsertNow` each take a single `{ namespace, … }` input object.
+ * (`upsertMany` is a method of the raw binding, not of `ctx.vectors`.)
  */
-const VECTOR_NAMESPACE_METHODS = new Set(["query", "upsert", "upsertMany"]);
+const VECTOR_NAMESPACE_METHODS = new Set(["query", "upsert", "upsertNow"]);
 
 /**
  * The `ctx.vectors.<method>` namespace-taking method invoked by `node`, or
