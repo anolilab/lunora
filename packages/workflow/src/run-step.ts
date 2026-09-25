@@ -175,7 +175,7 @@ const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
                           // its ids. Its own scope, never the forward step's: a
                           // refund sharing the charge's id would dedup against it
                           // and silently never run.
-                          run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(rollbackContext.ctx.config, Date.now())), `${dedupScope}rollback`),
+                          run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(step.rollbackConfig, Date.now())), `${dedupScope}rollback`),
                       });
                   },
                   rollbackConfig: step.rollbackConfig,

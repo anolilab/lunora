@@ -92,9 +92,10 @@ describe("ctx.run — a DISPATCH_IN_PROGRESS decline", () => {
             );
 
         it.each([
-            // The wait gives up 2s before the timeout: re-checks at 0s, 1s, 3s and 4s.
-            ["6 seconds", 6000, 4],
-            [6000, 6000, 4],
+            // The wait gives up 2s before the timeout, keeping 1s for a last dispatch: re-checks
+            // at 0s, 1s and 3s.
+            ["6 seconds", 6000, 3],
+            [6000, 6000, 3],
             // Unset: Cloudflare's ten-minute default. Re-checks at 0s, 1s, 3s, 7s, 15s and 31s, every
             // 30s after that to 571s, and a last one cut short to 598s.
             [undefined, 600_000, 25],
@@ -113,6 +114,107 @@ describe("ctx.run — a DISPATCH_IN_PROGRESS decline", () => {
             await vi.advanceTimersByTimeAsync(60 * 60_000);
 
             expect(fetchImpl).toHaveBeenCalledTimes(dispatches);
+        });
+
+        it("gives a re-check that may run the call no more timeoutMs than the attempt has left", async () => {
+            expect.assertions(2);
+
+            // Declines at +0s and +1s, then the claim is gone and the call runs:
+            // with 3s of the 4s window left, that dispatch must not get its 30s.
+            const signals: AbortSignal[] = [];
+            let calls = 0;
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+                calls += 1;
+
+                if (calls <= 2) {
+                    return declined();
+                }
+
+                signals.push(init?.signal as AbortSignal);
+
+                // A real fetch rejects when its signal aborts.
+                return new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal?.reason as Error);
+                    });
+                });
+            });
+
+            const pending = runCharge(fetchImpl, { timeout: "6 seconds" }).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(4000);
+
+            expect(signals.map((signal) => signal.aborted)).toStrictEqual([true]);
+            // Ended by the bounded dispatch timeout, a retryable failure — inside the attempt.
+            await expect(pending).resolves.toMatchObject({ status: 503 });
+        });
+    });
+
+    // The engine hands a rollback the FORWARD step's context: on the local
+    // Workflows engine, `timeout: "1 hour"` with `rollbackConfig: { timeout:
+    // "7 seconds" }` gave the rollback `ctx.config.timeout === "1 hour"`. So the
+    // rollback's wait has to be bounded by `rollbackConfig`, not by `ctx.config`.
+    describe("inside a rollback", () => {
+        /**
+         * Run a step whose body makes no call, then its rollback, which makes one —
+         * handing the rollback the forward `config` the way the engine does.
+         */
+        const rollbackOf = async (fetchImpl: typeof fetch, forward: WorkflowStepConfigLike, rollbackConfig: WorkflowStepConfigLike): Promise<void> => {
+            let rollback: ((context: unknown) => Promise<void>) | undefined;
+            const stepApi = {
+                do: async (name: string, config: unknown, callback: unknown, options?: { rollback?: (context: unknown) => Promise<void> }) => {
+                    rollback = options?.rollback;
+
+                    return (callback as (context: unknown) => Promise<unknown>)({ attempt: 1, config, step: { count: 1, name } });
+                },
+            } as unknown as WorkflowStepLike;
+
+            await createWorkflowRunContext({ env: ENV, event: EVENT, exportName: "orderPipeline", fetchImpl, step: stepApi }).runStep(
+                defineStep("charge", {
+                    args: {},
+                    handler: async () => "charged",
+                    rollback: async (context) => {
+                        await context.run({ __lunoraRef: "orders:refund" });
+                    },
+                    rollbackConfig,
+                }),
+                {},
+                { config: forward },
+            );
+
+            await rollback?.({
+                ctx: { attempt: 1, config: forward, step: { count: 1, name: "charge" } },
+                error: new Error("later step"),
+                output: "charged",
+                stepName: "charge",
+            });
+        };
+
+        it("ends the wait before the rollback's own timeout when the forward step's is longer", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = origin(Number.POSITIVE_INFINITY);
+            const pending = rollbackOf(fetchImpl, { timeout: "1 hour" }, { timeout: "6 seconds" }).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(4000);
+
+            await expect(pending).resolves.toMatchObject({ code: "DISPATCH_IN_PROGRESS" });
+            // COUNT: +0s, +1s and +3s — the rollback's 6s window, not the forward step's hour.
+            expect(fetchImpl).toHaveBeenCalledTimes(3);
+        });
+
+        it("keeps waiting past the forward step's timeout when the rollback's is longer", async () => {
+            expect.assertions(2);
+
+            // Five declines (+0s … +15s), served on the sixth re-check at +31s:
+            // well past the forward step's 6s, well inside the rollback's hour.
+            const fetchImpl = origin(5);
+            const pending = rollbackOf(fetchImpl, { timeout: "6 seconds" }, { timeout: "1 hour" });
+
+            await vi.advanceTimersByTimeAsync(31_000);
+
+            await expect(pending).resolves.toBeUndefined();
+            expect(fetchImpl).toHaveBeenCalledTimes(6);
         });
     });
 

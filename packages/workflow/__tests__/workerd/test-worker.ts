@@ -25,6 +25,7 @@ interface SmokeOutput {
 
 interface Env {
     WORKFLOW_DECLINE: Workflow<DeclineParams>;
+    WORKFLOW_ROLLBACK_CONFIG: Workflow<Record<string, never>>;
     WORKFLOW_SMOKE: Workflow<SmokeParams>;
     WORKFLOW_TIMED_DECLINE: Workflow<DeclineParams>;
 }
@@ -169,6 +170,35 @@ const testWorker = {
     },
 };
 
+/** The `ctx.config` the engine handed the rollback in {@link rollbackConfigWorkflow}. */
+const rollbackLog: unknown[] = [];
+
+/**
+ * A step with a long timeout and a short rollback timeout, then a step that
+ * fails, so the engine runs the first one's rollback. Pins what the engine
+ * hands a rollback as `ctx.config`, which is what `run-step.ts` must NOT read
+ * the rollback's own timeout from.
+ */
+const rollbackConfigWorkflow: WorkflowDefinition<Record<string, never>> = defineWorkflow<Record<string, never>>({
+    handler: async (context) => {
+        await context.step.do("forward", { retries: { backoff: "constant", delay: "1 second", limit: 0 }, timeout: "1 hour" }, async () => "done", {
+            rollback: async (rollbackContext) => {
+                rollbackLog.push(rollbackContext.ctx.config);
+            },
+            rollbackConfig: { retries: { backoff: "constant", delay: "1 second", limit: 0 }, timeout: "7 seconds" },
+        });
+        await context.step.do("fail", { retries: { backoff: "constant", delay: "1 second", limit: 0 } }, async () => {
+            throw new Error("fail so the forward step rolls back");
+        });
+    },
+});
+
+class RollbackConfigWorkflow extends LunoraWorkflow<Record<string, never>> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(context, env, rollbackConfigWorkflow, "rollbackConfigWorkflow");
+    }
+}
+
 export default testWorker;
-export { declineLog, DeclineWorkflow, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
+export { declineLog, DeclineWorkflow, RollbackConfigWorkflow, rollbackLog, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
 export type { DeclineParams, Env, SmokeOutput, SmokeParams };

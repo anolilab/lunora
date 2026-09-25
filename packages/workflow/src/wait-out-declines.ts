@@ -27,10 +27,22 @@
  * names none) and rethrows the decline there. Left to run, the engine's
  * timeout would fail the attempt anyway, but the abandoned wait would keep
  * re-dispatching alongside the next attempt. Ending it first charges the
- * attempt once, to the decline, and the next attempt picks the wait up.
+ * attempt once, to the decline, and the next attempt picks the wait up. A
+ * re-check that finds the claim gone runs the call, so each one is given no
+ * more `timeoutMs` than the time left, and the wait ends while at least
+ * {@link MIN_RECHECK_DISPATCH_MS} remains.
+ *
+ * A rollback is bounded by its OWN `rollbackConfig.timeout`. The engine hands
+ * a rollback the forward step's context: on the local Workflows engine a step
+ * with `timeout: "1 hour"` and `rollbackConfig: { timeout: "7 seconds" }` gave
+ * its rollback `ctx.config.timeout === "1 hour"`.
+ *
+ * The Node host does not enforce a step timeout (see `NODE_CAPABILITIES`'s
+ * `workflows` note), so there the bound charges an attempt that host would not
+ * have ended; the next attempt resumes the wait.
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { DISPATCH_CLAIM_CEILING_MS, isDispatchDecline } from "@lunora/dispatch";
+import { DEFAULT_DISPATCH_TIMEOUT_MS, DISPATCH_CLAIM_CEILING_MS, isDispatchDecline } from "@lunora/dispatch";
 
 import type { ArgsOf, FunctionReference } from "../../../shared/function-reference";
 import type { RunFunctionOptions, WorkflowRunFunction, WorkflowStepConfigLike } from "./types";
@@ -43,6 +55,9 @@ const MAX_RECHECK_MS = 30_000;
 
 /** How long before a step's timeout the wait gives up, leaving room for the last re-check's round trip. */
 const STEP_TIMEOUT_MARGIN_MS = 2000;
+
+/** The least time a re-check under a step deadline is given to dispatch; with less left, the wait ends instead. */
+const MIN_RECHECK_DISPATCH_MS = 1000;
 
 /** Cloudflare Workflows' step `timeout` when the config names none. */
 const DEFAULT_STEP_TIMEOUT_MS = 600_000;
@@ -99,7 +114,15 @@ const waitOutDeclines =
     async <F extends FunctionReference>(function_: F, arguments_?: ArgsOf<F>, options?: RunFunctionOptions): Promise<unknown> => {
         const attempt = async (declinedSince: number | undefined, recheckMs: number): Promise<unknown> => {
             try {
-                return await run(function_, arguments_, options);
+                // A re-check can find the claim gone and run the call itself, and a
+                // dispatch may take the runner's whole 30s default; under a deadline it is
+                // given no more than what is left, so it cannot outlive the step.
+                const bounded =
+                    declinedSince === undefined || deadline === undefined
+                        ? options
+                        : { ...options, timeoutMs: Math.min(DEFAULT_DISPATCH_TIMEOUT_MS, deadline - Date.now()) };
+
+                return await run(function_, arguments_, bounded);
             } catch (error: unknown) {
                 if (!isDispatchDecline(error)) {
                     throw error;
@@ -107,7 +130,10 @@ const waitOutDeclines =
 
                 const now = Date.now();
                 const since = declinedSince ?? now;
-                const remaining = Math.min(since + DISPATCH_CLAIM_CEILING_MS, deadline ?? Number.POSITIVE_INFINITY) - now;
+                const untilCeiling = since + DISPATCH_CLAIM_CEILING_MS - now;
+                // Under a deadline, keep room for one more dispatch after the pause.
+                const untilDeadline = deadline === undefined ? Number.POSITIVE_INFINITY : deadline - now - MIN_RECHECK_DISPATCH_MS;
+                const remaining = Math.min(untilCeiling, untilDeadline);
 
                 if (remaining <= 0) {
                     throw error;
