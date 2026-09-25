@@ -3,6 +3,7 @@ import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 
 import type {
+    BindingElement,
     Block,
     CallExpression,
     Expression,
@@ -323,6 +324,14 @@ const propertyNameText = (nameNode: Node): string => {
 
 /** The runtime key of an object-literal member (or any named declaration) — see {@link propertyNameText}. */
 const propertyKeyName = (member: { getNameNode: () => Node }): string => propertyNameText(member.getNameNode());
+
+/**
+ * The property a destructuring element reads, quote-blind: `{ ctx }`,
+ * `{ ctx: c }` and `{ "ctx": c }` all read `ctx`. The same root cause as
+ * {@link propertyKeyName}, on the pattern side — `getPropertyNameNode().getText()`
+ * keeps a string-literal key's quotes.
+ */
+const bindingKeyName = (element: BindingElement): string => propertyNameText(element.getPropertyNameNode() ?? element.getNameNode());
 
 /**
  * The member of `object` whose runtime key is `name`, quoted or not — the
@@ -699,6 +708,7 @@ const stringPropertyFor =
     };
 
 export {
+    bindingKeyName,
     collectCallRows,
     collectSecurityCallRows,
     defaultExportExpression,

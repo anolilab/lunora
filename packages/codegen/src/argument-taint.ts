@@ -1,6 +1,8 @@
 import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { bindingKeyName } from "./discover/ast";
+
 /**
  * The parameter binding element that declares `name`, searched from the
  * innermost enclosing function outward so a shadowing parameter wins over an
@@ -66,7 +68,7 @@ const destructuringRootName = (element: BindingElement): string | undefined => {
 
         // The renamed spelling reads `propertyName`; a shorthand (and a rest
         // element) reads its own name.
-        return (outermost.getPropertyNameNode() ?? outermost.getNameNode()).getText();
+        return bindingKeyName(outermost);
     }
 };
 
