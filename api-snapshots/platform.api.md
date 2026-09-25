@@ -281,6 +281,7 @@ interface PlatformCapabilities {
         authJurisdictionMove?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
+        containerEgressPolicy?: Capability;
         containers?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
@@ -314,6 +315,7 @@ interface PlatformCapabilities {
         shardReadReplicas?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
+        workflowRollback?: Capability;
         workflows?: Capability;
     };
     id: string;

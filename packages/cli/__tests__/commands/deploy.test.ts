@@ -246,17 +246,20 @@ describe("lunora deploy", () => {
                 expect(warns.some((message) => message.includes("observability"))).toBe(true);
             });
 
-            it("refuses --dry-run for celld instead of publishing", async () => {
-                expect.assertions(1);
+            it("dry-runs celld with `celld deploy --dry-run`, and refuses --preview", async () => {
+                expect.assertions(2);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-                const { spawner } = createRecordingSpawner();
+                const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                await expect(runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" })).rejects.toThrow(
-                    /celld deploy` has no dry run/u,
-                );
+                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(calls.at(-1)?.descriptor.args.at(-1)).toBe("--dry-run");
+                await expect(
+                    runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" }),
+                ).rejects.toThrow(/no preview versions/u);
             });
         });
 
