@@ -534,4 +534,93 @@ describe("lunoraClient polling fallback", () => {
 
         client.close();
     });
+
+    it("queues a write on a shard with no live query while the origin is unreachable", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        // Connected once; then the only query goes away, so nothing is polled.
+        const unsubscribe = client.subscribe(fnRef("todos:list"), {}, () => {});
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        unsubscribe();
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        let outcome = "pending";
+
+        client
+            .mutation(fnRef("todos:add"), { text: "x" })
+            .then(
+                () => {
+                    outcome = "resolved";
+
+                    return undefined;
+                },
+                () => {
+                    outcome = "rejected";
+                },
+            )
+            .catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(client.connectionStatus()).not.toBe("polling");
+        expect(outcome).toBe("pending");
+        expect(client.pendingCount()).toBe(1);
+
+        client.close();
+    });
+
+    it("drops a poll answered after the identity it was sent for was retired", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        let answer = (): void => {};
+        const fetchMock = vi.fn<typeof fetch>(
+            async () =>
+                new Promise<Response>((resolve) => {
+                    answer = () => {
+                        resolve(jsonResponse({ results: [{ body: { result: ["A-secret"] }, id: 0, status: 200 }] }));
+                    };
+                }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 60_000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+        const seen: unknown[] = [];
+
+        client.setAuthToken("jwt-A", "user-A");
+        client.subscribe(fnRef("messages:mine"), {}, (value) => seen.push(value));
+
+        // The first poll goes out under user A and stays in flight.
+        await failOpens(2);
+
+        client.setAuthToken("jwt-B", "user-B");
+        answer();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(seen).not.toContainEqual(["A-secret"]);
+
+        client.close();
+    });
 });

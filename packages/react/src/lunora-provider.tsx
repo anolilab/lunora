@@ -58,8 +58,11 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     const effectiveClient = queryClient ?? parentQueryClient ?? internalClient;
 
     // A sign-out or user switch must not leave the previous user's rows in the
-    // TanStack cache, where a remounting query would read them back.
-    useEffect(() => getSubscriptionRegistry(client).clearOnIdentityChange(effectiveClient), [client, effectiveClient]);
+    // TanStack cache, where a remounting query would read them back. Deliberately
+    // not torn down on unmount: see `clearOnIdentityChange`.
+    useEffect(() => {
+        getSubscriptionRegistry(client).clearOnIdentityChange(effectiveClient);
+    }, [client, effectiveClient]);
 
     const content = <LunoraContext value={client}>{children}</LunoraContext>;
 

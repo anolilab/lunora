@@ -5553,10 +5553,17 @@ class LunoraClient {
         const states = this.subscriptions.all().filter((state) => connectionKey(state.shardKey) === key);
 
         if (states.length === 0) {
-            return true;
+            // Nothing to refresh, but the answer still gates `mutation()`: a live
+            // fallback sends writes over HTTP instead of queueing them. So ask the
+            // origin rather than assume it answers.
+            return this.probeOrigin();
         }
 
         const snapshotMark = acknowledgementMark();
+        // An identity change mid-flight retires everything this request was sent
+        // for: it carries the previous credential, so its rows are not the new
+        // identity's to see.
+        const identity = this.identityFingerprint();
         let slots: BatchSlot[];
 
         try {
@@ -5570,6 +5577,10 @@ class LunoraClient {
             // origin (browsers, undici, React Native alike). Everything `batch`
             // throws after a response arrived is a coded `Error` instead.
             return !(error instanceof TypeError);
+        }
+
+        if (this.identityFingerprint() !== identity) {
+            return true;
         }
 
         for (const [index, state] of states.entries()) {
@@ -5594,6 +5605,28 @@ class LunoraClient {
         }
 
         return true;
+    }
+
+    /**
+     * Whether a request reaches the origin at all: an empty batch, whose answer
+     * (even a refusal) is the proof. `false` only when `fetch` itself rejects.
+     */
+    private async probeOrigin(): Promise<boolean> {
+        if (!this.fetchImpl) {
+            return false;
+        }
+
+        try {
+            await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                body: JSON.stringify({ calls: [] }),
+                headers: this.rpcRequestHeaders({}),
+                method: "POST",
+            });
+
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /** Recompute the aggregate status and notify listeners if it changed. */

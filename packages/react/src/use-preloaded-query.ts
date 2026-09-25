@@ -2,7 +2,7 @@
 
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -25,6 +25,11 @@ import { useLunora } from "./lunora-provider";
  * Pass `onError` to surface a subscription-scoped error the server pushes (a
  * session expiry, an RLS denial). Without it such an error is dropped and the
  * hook keeps rendering the SSR snapshot as if it were live.
+ *
+ * The preloaded value was read for whoever was signed in when it was rendered.
+ * After a sign-out or user switch retires that identity, the hook stops
+ * falling back to it and returns `undefined` until the new identity's value
+ * arrives, like the other Lunora adapters do.
  */
 const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
     const client = useLunora();
@@ -43,7 +48,20 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
         onErrorRef.current?.(error);
     }, []);
 
-    const { args, functionPath, shardKey, value } = preloaded;
+    // Set from the client's identity-change event, never during render or in an
+    // effect body.
+    const [identityRetired, setIdentityRetired] = useState(false);
+
+    useEffect(
+        () =>
+            client.onIdentityChange(() => {
+                setIdentityRetired(true);
+            }),
+        [client],
+    );
+
+    const { args, functionPath, shardKey } = preloaded;
+    const value = identityRetired ? undefined : preloaded.value;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
     // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
     // reference each render is fine — React Compiler auto-memoizes these
@@ -77,7 +95,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     // Lunora query result (document deleted, access revoked): a live push of
     // `null` must pass through, not resurrect the stale preloaded value.
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional: a live null push must pass through, not fall back to the stale preloaded value
-    return data === undefined ? value : data;
+    return (data === undefined ? value : data) as T;
 };
 
 /**

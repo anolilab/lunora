@@ -100,6 +100,9 @@ class LunoraSubscriptionRegistry {
     /** Open snapshot samples per key — the lifetime bound on the push counter. */
     private readonly samples = new Map<string, number>();
 
+    /** Query clients already cleared on an identity change (see `clearOnIdentityChange`). */
+    private readonly identityWatched = new WeakSet<QueryClient>();
+
     public constructor(private readonly client: LunoraClient) {}
 
     /**
@@ -186,7 +189,10 @@ class LunoraSubscriptionRegistry {
     /**
      * Clear `queryClient`'s `["lunora", …]` entries whenever the client retires
      * the previous identity's session (see `LunoraClient.onIdentityChange`).
-     * Returns the unsubscribe.
+     * Idempotent per `QueryClient`, and never unsubscribed: an app can keep its
+     * `QueryClient` across an unmounted `LunoraProvider`, and a sign-out in that
+     * window must still clear it. The listener lives as long as the client
+     * (`close()` releases it).
      *
      * The client blanks only the subscriptions still open. An entry kept for an
      * unmounted query (the 5-minute `gcTime`) hears nothing, and a remount would
@@ -195,8 +201,14 @@ class LunoraSubscriptionRegistry {
      * still in use (an observer, or a hook fed through this registry) are blanked
      * so their observers stay attached.
      */
-    public clearOnIdentityChange(queryClient: QueryClient): Unsubscribe {
-        return this.client.onIdentityChange(() => {
+    public clearOnIdentityChange(queryClient: QueryClient): void {
+        if (this.identityWatched.has(queryClient)) {
+            return;
+        }
+
+        this.identityWatched.add(queryClient);
+
+        this.client.onIdentityChange(() => {
             const cache = queryClient.getQueryCache();
 
             for (const query of cache.findAll({ queryKey: ["lunora"] })) {

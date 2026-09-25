@@ -1,10 +1,12 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, Preloaded } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
+import { QueryClient } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
+import usePreloadedQuery from "../src/use-preloaded-query";
 import useQuery from "../src/use-query";
 import type { MockSocket } from "./mock-socket";
 import { createMockWebSocket } from "./mock-socket";
@@ -200,6 +202,86 @@ describe("useQuery across an identity change", () => {
 
         expect(afterRemount.filter((text) => text.includes("A-secret"))).toStrictEqual([]);
         expect(afterRemount.at(-1)).toBe("B-secret");
+
+        client.close();
+    });
+
+    it("keeps clearing a QueryClient the app retains while the provider is unmounted", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 0, staleTime: Number.POSITIVE_INFINITY } } });
+
+        client.setAuthToken("jwt-A", "user-A");
+
+        const Shell = ({ show }: { show: boolean }): ReactElement =>
+            show ? (
+                <LunoraProvider client={client} queryClient={queryClient}>
+                    <View />
+                </LunoraProvider>
+            ) : (
+                <div />
+            );
+        const view = render(<Shell show />);
+
+        await serve(sockets, ROWS["Bearer jwt-A"]);
+
+        // The whole provider goes away; the app keeps its QueryClient.
+        view.rerender(<Shell show={false} />);
+
+        await act(async () => {
+            client.setAuthToken("jwt-B", "user-B");
+            await settle();
+        });
+
+        const remountedAt = renders.length;
+
+        view.rerender(<Shell show />);
+        await serve(sockets, ROWS["Bearer jwt-B"]);
+
+        const afterRemount = renders.slice(remountedAt);
+
+        expect(afterRemount.filter((text) => text.includes("A-secret"))).toStrictEqual([]);
+        expect(afterRemount.at(-1)).toBe("B-secret");
+
+        client.close();
+    });
+
+    it("stops falling back to user A's preloaded value once user B is signed in", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+        const preloaded: Preloaded<{ text: string }[]> = {
+            __lunoraPreloaded: true,
+            args: {},
+            functionPath: "messages:mine",
+            value: [{ text: "A-secret" }],
+        };
+
+        client.setAuthToken("jwt-A", "user-A");
+
+        const Preloaded = (): ReactElement => {
+            const rows = usePreloadedQuery(preloaded) as { text: string }[] | undefined;
+
+            return <div>{rows === undefined ? "(none)" : rows.map((row) => row.text).join(",")}</div>;
+        };
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <Preloaded />
+            </LunoraProvider>,
+        );
+
+        expect(view.container.textContent).toBe("A-secret");
+
+        await act(async () => {
+            client.setAuthToken("jwt-B", "user-B");
+            await settle();
+        });
+
+        expect(view.container.textContent).toBe("(none)");
 
         client.close();
     });
