@@ -863,6 +863,8 @@ const createDevMockClient = (): LunoraClient =>
         updateAuthUser: async (input: { userId: string }): Promise<unknown> => {
             return { id: input.userId };
         },
+        // The dev mock has one fixed identity, so nothing ever retires it.
+        onIdentityChange: (): (() => void) => noop,
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.

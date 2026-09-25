@@ -497,6 +497,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listStorageObjects,
         listVectorIndexes,
         mutation,
+        onIdentityChange: () => () => undefined,
         putKvValue,
         query,
         queryLogArchive,
