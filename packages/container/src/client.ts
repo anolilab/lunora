@@ -649,10 +649,28 @@ const instanceHandleFor = (
     };
 };
 
+/**
+ * Prefix of the instance names `.any()` / `.pool()` pick. Reserved, so a
+ * `.get(name)` for an entity can never land on a pool member's Durable Object
+ * and share its disk or lifecycle — with a bare `pool-N`, `.get("pool-0")`
+ * was the pool's first instance, and its `destroy()` stopped a pool member.
+ */
+const POOL_INSTANCE_PREFIX = `${RESERVED_PATH_SEGMENT}-pool-`;
+
 /** A random pool-instance name in `[0, size)`. */
 const randomPoolName = (size: number): string =>
     // eslint-disable-next-line sonarjs/pseudo-random -- load-balancing pick across interchangeable instances, not a security decision
-    `pool-${String(Math.floor(Math.random() * size))}`;
+    `${POOL_INSTANCE_PREFIX}${String(Math.floor(Math.random() * size))}`;
+
+/** Refuse a `.get(name)` into the pool's reserved instance names. */
+const assertInstanceNameNotReserved = (name: string, spec: ContainerBindingSpec): void => {
+    if (name.startsWith(POOL_INSTANCE_PREFIX)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${handleLabel(spec)}.get(): instance names starting with "${POOL_INSTANCE_PREFIX}" are reserved for .any()/.pool(). Pick another name.`,
+        );
+    }
+};
 
 /** Default retry predicate: a server error (5xx) is worth another instance. */
 const retryOnServerError = (response: Response): boolean => response.status >= 500;
@@ -750,7 +768,11 @@ const poolHandleFor = (
 const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, trace?: OutboundTraceContext): ContainerAccessor => {
     return {
         any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), options, trace),
-        get: (name, options) => instanceHandleFor(namespace, spec, name, options, trace),
+        get: (name, options) => {
+            assertInstanceNameNotReserved(name, spec);
+
+            return instanceHandleFor(namespace, spec, name, options, trace);
+        },
         pool: (options) => poolHandleFor(namespace, spec, options, undefined, trace),
     };
 };
@@ -874,7 +896,11 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
             // (`attempts: 1` keeps a handler's own 5xx from looping).
             any: (count, options) =>
                 handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), handleLabel(spec), { attempts: 1, ...options }),
-            get: (name, options) => instanceHandleFor(namespace, spec, name, { attempts: 1, ...options }),
+            get: (name, options) => {
+                assertInstanceNameNotReserved(name, spec);
+
+                return instanceHandleFor(namespace, spec, name, { attempts: 1, ...options });
+            },
             pool: (options) => poolHandleFor(namespace, spec, { ...options, attempts: 1 }),
         };
     }

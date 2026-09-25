@@ -133,11 +133,34 @@ describe(createContainerContext, () => {
 
         await containers.transcoder!.any().fetch("/probe");
 
-        expect(names).toStrictEqual(["pool-1"]);
+        expect(names).toStrictEqual(["__lunora-pool-1"]);
 
         await containers.transcoder!.any(10).fetch("/probe");
 
-        expect(names[1]).toBe("pool-9");
+        expect(names[1]).toBe("__lunora-pool-9");
+
+        vi.restoreAllMocks();
+    });
+
+    it("keeps pool instances out of the .get(name) namespace", async () => {
+        expect.assertions(3);
+
+        const { names, namespace } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 1 },
+        ]);
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        // An entity that happens to be called "pool-0" must not share a Durable
+        // Object (disk, lifecycle, `destroy()`) with the pool's first instance.
+        await containers.transcoder!.get("pool-0").fetch("/probe");
+        await containers.transcoder!.any().fetch("/probe");
+        await containers.transcoder!.pool().fetch("/probe");
+
+        expect(names).toStrictEqual(["pool-0", "__lunora-pool-0", "__lunora-pool-0"]);
+        expect(new Set(names).size).toBe(2);
+        expect(() => containers.transcoder!.get("__lunora-pool-0")).toThrow(/reserved/u);
 
         vi.restoreAllMocks();
     });
