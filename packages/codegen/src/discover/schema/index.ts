@@ -70,6 +70,19 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     // plus extension-contributed standalone vector indexes.
     const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes, ...extensionStandaloneVectorIndexes];
 
+    // Same rule as `defineSchema`'s `validateGlobalVectors`, surfaced at generate
+    // time: vector sync is a shard write hook, and a `.global()` table's writes
+    // never take the shard path, so the index would stay empty.
+    const globalTables = new Set(tables.filter((table) => table.shardMode === "global").map((table) => table.name));
+    const globalVectorIndex = vectorIndexes.find((index) => globalTables.has(index.table));
+
+    if (globalVectorIndex) {
+        throw diagnosticAt(
+            defineSchemaCall,
+            `table "${globalVectorIndex.table}" is .global() and declares vector index "${globalVectorIndex.name}". Vector sync runs on the shard write path, which a global (D1/Hyperdrive) table's writes never take — the index would stay empty. Drop .global(), or keep the index yourself with ctx.vectors.upsert/deleteByIds.`,
+        );
+    }
+
     return { jurisdiction: jurisdictionOf(defineSchemaCall), rlsMode: rlsModeOf(defineSchemaCall), tables, vectorIndexes };
 };
 
