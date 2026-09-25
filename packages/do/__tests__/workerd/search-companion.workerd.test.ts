@@ -98,8 +98,8 @@ describe("durable object fts5 search companion on workerd", () => {
         expect(large).toBe(small);
     });
 
-    it("adopts a companion built before the rowid map, dropping a duplicate row", async () => {
-        expect.assertions(4);
+    it("migrates a companion built before the rowid map, repairing a duplicate from its source row", async () => {
+        expect.assertions(5);
 
         await withSql("search-legacy", async (sql) => {
             const exec = sql as unknown as SqlExec;
@@ -111,17 +111,21 @@ describe("durable object fts5 search companion on workerd", () => {
             await plain.insert("docs", { _id: "a", body: "apple common" }, { allowExplicitId: true });
             await plain.insert("docs", { _id: "b", body: "berry common" }, { allowExplicitId: true });
 
-            // The shape a previous build left: auto rowids, no map, and a doubled row.
+            // The shape a previous build left: auto rowids, no map, and a doubled
+            // row whose NEWER copy is the stale one — a backfill that read an old
+            // version and inserted after the write that replaced it.
             sql.exec(`CREATE VIRTUAL TABLE "${COMPANION}" USING fts5("__text__", "__id__" UNINDEXED)`);
-            sql.exec(`INSERT INTO "${COMPANION}" ("__text__", "__id__") VALUES ('apple common', 'a'), ('berry common', 'b'), ('apple common', 'a')`);
+            sql.exec(`INSERT INTO "${COMPANION}" ("__text__", "__id__") VALUES ('apple common', 'a'), ('berry common', 'b'), ('stale common', 'a')`);
 
-            // `staged`, so no backfill page rewrites the rows first: adoption is
-            // the only thing that can have dropped the duplicate.
+            // `staged`, so no backfill page rewrites the rows first: the
+            // migration is the only thing that can have repaired the duplicate.
             const staged = schemaWith([{ ...INDEX, staged: true }]);
 
             runShardMigrations(exec, staged);
 
-            expect(companionRows(sql, "a")).toBe(1);
+            expect(
+                sql.exec<{ t: string }>(`SELECT "${COMPANION}"."__text__" AS t FROM "${COMPANION}" WHERE "${COMPANION}"."__id__" = 'a'`).toArray(),
+            ).toStrictEqual([{ t: "apple common" }]);
             expect(companionRows(sql, "b")).toBe(1);
 
             const writer = createShardCtxDb({ schema: staged, sql: exec });
@@ -131,6 +135,8 @@ describe("durable object fts5 search companion on workerd", () => {
 
             expect(companionRows(sql, "a")).toBe(1);
             expect(companionRows(sql, "b")).toBe(0);
+            // Nothing left at a positive rowid but what the previous build never wrote.
+            expect(sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "${COMPANION}" WHERE "${COMPANION}"."rowid" > 0`).one().n).toBe(0);
         });
     });
 });

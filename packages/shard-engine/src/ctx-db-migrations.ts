@@ -26,7 +26,7 @@ import { aggregateTableName } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
-import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
+import { backfillSearchIndexesForTable, drainUnmappedFtsRows } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateCommitSeq } from "./ctx-db-commit-seq";
@@ -36,11 +36,11 @@ import { migrateRelayShapes } from "./ctx-db-relay-shapes";
 import { migrateScheduleOutbox } from "./ctx-db-schedule-outbox";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
-import { runDrizzle } from "./do-exec";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { renderSql } from "./drizzle";
 import { migrateDurableStreams } from "./durable-stream";
-import { adoptFtsCompanion, ftsCompanionDdl, ftsRowidMapName } from "./fts-companion";
+import { ftsCompanionDdl } from "./fts-companion";
 import { rankTableName, sortColumnName } from "./rank";
 import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
@@ -238,8 +238,9 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
  * only on engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
  * runner doesn't, where `.search()` transparently falls back to a scan).
  * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row,
- * and the `__ids` map beside it finds a document's row without a scan (see
- * `fts-companion.ts`).
+ * and the `__ids` map beside it finds a document's row without a scan. Rows a
+ * previous build wrote are rewritten into that layout a bounded page per cold
+ * start (see `fts-companion.ts`).
  *
  * A freshly created shadow is then backfilled from the rows already in the
  * table, so declaring a search index on a table that already holds data makes
@@ -253,21 +254,8 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
     }
 
     for (const index of definition.searchIndexes) {
-        const ftName = ftsTableName(tableName, index.name);
-        // A companion built before the rowid map existed holds rows the map
-        // knows nothing about; adopt them the one time the map is created.
-        const mapExisted =
-            runDrizzle(sql, dsql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${ftsRowidMapName(ftName)}`).toArray().length > 0;
-
-        for (const statement of ftsCompanionDdl(ftName)) {
-            runDrizzle(sql, statement);
-        }
-
-        if (!mapExisted) {
-            for (const statement of adoptFtsCompanion(ftName)) {
-                runDrizzle(sql, statement);
-            }
-        }
+        runAll(sql, ftsCompanionDdl(ftsTableName(tableName, index.name)));
+        drainUnmappedFtsRows(sql, tableName, index);
     }
 
     backfillSearchIndexesForTable(sql, tableName, definition);

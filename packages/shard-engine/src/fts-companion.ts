@@ -9,20 +9,32 @@
  * same document twice.
  *
  * The fix is an ordinary table beside it — `<companion>__ids` — mapping each
- * document id to the FTS5 `rowid` its entry lives at. `__id__` is UNIQUE there
- * and `__rowid__` is the table's own INTEGER PRIMARY KEY. So a purge is two
- * primary-key lookups instead of a scan. A write is `INSERT OR REPLACE` at the
- * mapped rowid, and FTS5 enforces rowid uniqueness, so two concurrent writers of
- * one document converge on one row whatever order their statements interleave
- * in. And a writer that must not overwrite a fresher entry passes a `guard`,
- * checked inside the same statement as the write, so no other writer can land
- * between the check and the write.
+ * document id (UNIQUE) to the FTS5 rowid its entry lives at, so a write finds
+ * the entry it replaces with two primary-key lookups.
  *
- * An external-content FTS5 table (`content=<table>`) was the alternative, and
- * it does not fit: it reads the indexed text back from a column of the source
- * table, and our indexed text is *derived* (a dotted field path, analyzed) — no
- * source column holds it. Its `rowid` would also be the source table's implicit
- * rowid, which `VACUUM` may renumber on a table keyed by a TEXT primary key.
+ * The rowid space is split. The current build writes every entry at a fresh
+ * NEGATIVE rowid, below everything the map holds. Everything else — rows a
+ * previous build wrote, and rows an isolate still running it writes during a
+ * rollout — sits at a POSITIVE rowid, because FTS5 assigns `max(rowid) + 1` and
+ * a text-less sentinel row at rowid 0 keeps that maximum from ever going
+ * negative. So:
+ *
+ * - a fresh rowid can never collide with a row the map does not know about;
+ * - "rows the map does not know about" is the range `rowid > 0`, which FTS5
+ * answers as a rowid range: empty, and so free, once it has drained;
+ * - a write also purges its document's positive rows by `__id__`, which keeps
+ * the previous build's own repair-on-write while any such rows exist;
+ * - `ftsUnmappedPage` feeds a bounded per-cold-start drain that rewrites those
+ * rows from the source table, so no marker records "migrated": the data does.
+ *
+ * External-content FTS5 (`content=<table>`) was the alternative, and it does not
+ * fit: it reads the indexed text back from a source column, and our indexed text
+ * is derived (a dotted field path, analyzed) — no column holds it. Its rowid
+ * would also be the source table's implicit rowid, which `VACUUM` may renumber
+ * on a table keyed by a TEXT primary key.
+ *
+ * Every write and purge is a short list of statements that must run in order,
+ * and on D1 as one atomic batch: between them, the entry and the map disagree.
  */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
@@ -39,69 +51,98 @@ const ftsRowidMapName = (companion: string): string => `${companion}__ids`;
 /** `<table>.<column>`, qualified so an unknown name is an error on engines built with double-quoted strings. */
 const column = (table: string, name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
 
-/** Create the FTS5 companion, its vocabulary view and its rowid map. Idempotent. */
+/** How a write or purge treats the document's rows at positive rowids, and whether it is conditional. */
+interface FtsWriteOptions {
+    /**
+     * A boolean condition checked inside every statement: the write lands only
+     * where it holds. The backfill passes "the source row is still the version
+     * I read".
+     */
+    guard?: SQL;
+
+    /**
+     * The positive rowids to drop for this document. Absent, every positive row
+     * with the document's `__id__` is dropped, which costs a scan of the
+     * positive range — nothing once it has drained. The drain, which already
+     * knows the rowids it read, passes them to avoid that scan.
+     */
+    unmappedRowids?: ReadonlyArray<number>;
+}
+
+/** The statements dropping one document's positive (unmapped) rows and its mapped row. */
+const dropEntry = (companion: string, id: string, { guard, unmappedRowids }: FtsWriteOptions): SQL[] => {
+    const map = ftsRowidMapName(companion);
+    const guarded = guard === undefined ? sql`` : sql` AND ${guard}`;
+    const unmapped =
+        unmappedRowids === undefined
+            ? sql`${column(companion, "rowid")} > 0`
+            : sql`${column(companion, "rowid")} IN (${sql.join(
+                  unmappedRowids.map((rowid) => sql.param(rowid)),
+                  sql`, `,
+              )})`;
+
+    return [
+        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${unmapped} AND ${column(companion, FTS_ID_COLUMN)} = ${id}${guarded}`,
+        // `__id__` re-checked: an isolate on the previous build may have purged
+        // this rowid and reused it for another document.
+        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} = (SELECT ${column(map, FTS_ROWID_COLUMN)} FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id}) AND ${column(companion, FTS_ID_COLUMN)} = ${id}${guarded}`,
+    ];
+};
+
+/** Create the FTS5 companion, its vocabulary view, its rowid map and the rowid-0 sentinel. Idempotent. */
 const ftsCompanionDdl = (companion: string): SQL[] => [
     sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(companion)} USING fts5(${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
     // One row per term *instance*, so a term's frequency in a document is a
     // COUNT — what lets the reader rank by the shared scorer in SQL.
     sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(`${companion}__vocab`)} USING fts5vocab(${sql.identifier(companion)}, ${sql.raw("instance")})`,
     sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(ftsRowidMapName(companion))} (${sql.identifier(FTS_ROWID_COLUMN)} INTEGER PRIMARY KEY, ${sql.identifier(FTS_ID_COLUMN)} TEXT NOT NULL UNIQUE)`,
+    // No text, so no term ever matches it, and an id no document has.
+    sql`INSERT INTO ${sql.identifier(companion)} (rowid, ${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) SELECT 0, '', '' WHERE NOT EXISTS (SELECT 1 FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} = 0)`,
 ];
 
 /**
- * Bring a companion that predates the rowid map under it. Run once, right after
- * the map is created over a companion that already holds rows.
- *
- * Every existing row is adopted at the rowid it already has. Where a document
- * has more than one row — the duplicate two interleaved backfills used to leave
- * — the newest (highest rowid) is kept and the rest are deleted, since a row
- * the map does not point at could never be purged again. Idempotent, so two
- * cold starts adopting at once converge.
- *
- * Both statements scan the companion once. That is the cost of the migration,
- * paid once; everything after it is keyed.
+ * Write one document's entry at a fresh negative rowid, replacing whatever it
+ * had. Run in order, and on D1 as one batch.
  */
-const adoptFtsCompanion = (companion: string): SQL[] => {
+const ftsWriteDocument = (companion: string, id: string, text: string, options: FtsWriteOptions = {}): SQL[] => {
     const map = ftsRowidMapName(companion);
+    const guarded = options.guard === undefined ? sql`` : sql` AND ${options.guard}`;
+    const fresh = sql`MIN(COALESCE((SELECT MIN(${column(map, FTS_ROWID_COLUMN)}) FROM ${sql.identifier(map)}), 0), 0) - 1`;
 
     return [
-        sql`INSERT OR IGNORE INTO ${sql.identifier(map)} (${sql.identifier(FTS_ROWID_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) SELECT ${column(companion, "rowid")}, ${column(companion, FTS_ID_COLUMN)} FROM ${sql.identifier(companion)} ORDER BY ${column(companion, "rowid")} DESC`,
-        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} NOT IN (SELECT ${column(map, FTS_ROWID_COLUMN)} FROM ${sql.identifier(map)})`,
-    ];
-};
-
-/**
- * Write one document's entry: claim its rowid in the map, then insert-or-replace
- * the FTS5 row at that rowid. Run in order.
- *
- * `guard` is a boolean SQL condition evaluated inside both statements — the
- * backfill passes "the source row is still the version I read", so a page that
- * read a row before a concurrent write cannot overwrite that write's entry.
- */
-const ftsWriteDocument = (companion: string, id: string, text: string, guard?: SQL): SQL[] => {
-    const map = ftsRowidMapName(companion);
-    const guarded = guard === undefined ? sql`` : sql` AND ${guard}`;
-
-    return [
-        guard === undefined
-            ? sql`INSERT OR IGNORE INTO ${sql.identifier(map)} (${sql.identifier(FTS_ID_COLUMN)}) VALUES (${id})`
-            : sql`INSERT OR IGNORE INTO ${sql.identifier(map)} (${sql.identifier(FTS_ID_COLUMN)}) SELECT ${id} WHERE ${guard}`,
+        ...dropEntry(companion, id, options),
+        sql`INSERT OR REPLACE INTO ${sql.identifier(map)} (${sql.identifier(FTS_ROWID_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) SELECT ${fresh}, ${id} WHERE 1 = 1${guarded}`,
         sql`INSERT OR REPLACE INTO ${sql.identifier(companion)} (rowid, ${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)}) SELECT ${column(map, FTS_ROWID_COLUMN)}, ${text}, ${column(map, FTS_ID_COLUMN)} FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id}${guarded}`,
     ];
 };
 
-/**
- * Remove one document's entry: the FTS5 row by its mapped rowid, then the
- * mapping. Run in order — the FTS5 row goes first, so there is never a moment
- * an entry exists that the map cannot reach.
- */
-const ftsPurgeDocument = (companion: string, id: string): SQL[] => {
+/** Remove one document's entry and its mapping. Run in order, and on D1 as one batch. */
+const ftsPurgeDocument = (companion: string, id: string, options: FtsWriteOptions = {}): SQL[] => {
     const map = ftsRowidMapName(companion);
+    const guarded = options.guard === undefined ? sql`` : sql` AND ${options.guard}`;
 
-    return [
-        sql`DELETE FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} = (SELECT ${column(map, FTS_ROWID_COLUMN)} FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id})`,
-        sql`DELETE FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id}`,
-    ];
+    return [...dropEntry(companion, id, options), sql`DELETE FROM ${sql.identifier(map)} WHERE ${column(map, FTS_ID_COLUMN)} = ${id}${guarded}`];
 };
 
-export { adoptFtsCompanion, ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsWriteDocument };
+/**
+ * The next `limit` rows the map does not know about — a previous build's, in
+ * rowid order — as `{ id, rowid }`. The sentinel at rowid 0 is excluded.
+ */
+const ftsUnmappedPage = (companion: string, limit: number): SQL =>
+    sql`SELECT ${column(companion, "rowid")} AS ${sql.identifier("rowid")}, ${column(companion, FTS_ID_COLUMN)} AS ${sql.identifier("id")} FROM ${sql.identifier(companion)} WHERE ${column(companion, "rowid")} > 0 AND ${column(companion, FTS_ID_COLUMN)} IS NOT NULL ORDER BY ${column(companion, "rowid")} ASC LIMIT ${sql.raw(String(limit))}`;
+
+/** Group a {@link ftsUnmappedPage} result by document id. */
+const groupUnmappedRows = (rows: ReadonlyArray<Record<string, unknown>>): Map<string, number[]> => {
+    const byId = new Map<string, number[]>();
+
+    for (const row of rows) {
+        const id = String(row["id"]);
+
+        byId.set(id, [...(byId.get(id) ?? []), Number(row["rowid"])]);
+    }
+
+    return byId;
+};
+
+export type { FtsWriteOptions };
+export { ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows };

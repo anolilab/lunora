@@ -27,9 +27,10 @@ import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./ag
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
-import { runDrizzle } from "./do-exec";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
-import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
+import { sqliteInList } from "./drizzle";
+import { ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
 import { isLiveForCompanion } from "./query-args";
 import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
@@ -246,11 +247,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
         // rather than kept: a stale row serving text the document no longer
         // has is worse than the row being unsearchable.
         const record = tryRowToDocument(row);
-        const statements = record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index)) : ftsPurgeDocument(ftName, id);
-
-        for (const statement of statements) {
-            runDrizzle(sql, statement);
-        }
+        runAll(sql, record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index)) : ftsPurgeDocument(ftName, id));
     }
 
     const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;
@@ -258,6 +255,45 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
     return { done, rows: rows.length };
+};
+
+/** Unmapped companion rows rewritten per cold start — the bound on one migration pass. */
+const FTS_UNMAPPED_PAGE_ROWS = 500;
+
+/**
+ * Rewrite one bounded page of the companion rows the rowid map does not know
+ * about — the ones a previous build wrote — from the document table, so each
+ * document ends with exactly the entry its current text produces. A document
+ * indexed twice is repaired from its source row rather than by guessing which
+ * copy is fresh; a document that no longer parses, or no longer exists, loses
+ * its entry. Once none are left this is one empty rowid-range read.
+ */
+const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): void => {
+    const ftName = ftsTableName(tableName, index.name);
+    const byId = groupUnmappedRows(runDrizzle(sql, ftsUnmappedPage(ftName, FTS_UNMAPPED_PAGE_ROWS)).toArray());
+
+    if (byId.size === 0) {
+        return;
+    }
+
+    const sources = new Map<unknown, Record<string, unknown>>();
+
+    for (const row of runDrizzle(
+        sql,
+        dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(dsql.join([dsql.identifier("id")]), [...byId.keys()], false)}`,
+    )) {
+        sources.set(row["id"], row);
+    }
+
+    for (const [id, unmappedRowids] of byId) {
+        const source = sources.get(id);
+        const record = source ? tryRowToDocument(source) : undefined;
+
+        runAll(
+            sql,
+            record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index), { unmappedRowids }) : ftsPurgeDocument(ftName, id, { unmappedRowids }),
+        );
+    }
 };
 
 /**
@@ -437,4 +473,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, searchIndexCoversTable };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, drainUnmappedFtsRows, searchIndexCoversTable };

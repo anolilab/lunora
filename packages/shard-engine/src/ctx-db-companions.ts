@@ -36,7 +36,7 @@ import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggr
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
@@ -670,9 +670,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
             const ftName = ftsTableName(tableName, index.name);
 
-            for (const statement of document ? ftsWriteDocument(ftName, id, analyzedSearchText(document, index)) : ftsPurgeDocument(ftName, id)) {
-                runDrizzle(sql, statement);
-            }
+            runAll(sql, document ? ftsWriteDocument(ftName, id, analyzedSearchText(document, index)) : ftsPurgeDocument(ftName, id));
         }
     };
 
