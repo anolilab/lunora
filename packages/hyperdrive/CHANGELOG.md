@@ -1,3 +1,14 @@
+## @lunora/hyperdrive [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.136...@lunora/hyperdrive@1.0.0-alpha.137) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** guard native search writes and purges ([#827](https://github.com/anolilab/lunora/issues/827)) ([c1f4a2d](https://github.com/anolilab/lunora/commit/c1f4a2df34052eec74ce20eb381df3a957e66cfb))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/hyperdrive [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.135...@lunora/hyperdrive@1.0.0-alpha.136) (2026-09-25)
 
 
