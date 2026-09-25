@@ -16,25 +16,44 @@
  * page is read where no write can interleave and its work joins the same
  * commit-ordered chain the write hooks drain on, so every hook of an earlier
  * write runs before the page and every hook of a later one runs after it.
+ *
+ * The price of that ordering is that a page HOLDS the chain: every mutation that
+ * commits while it runs has its own hook queued behind it, and its response
+ * waits for that hook. So a page is small ({@link VECTOR_BACKFILL_PAGE_ROWS}
+ * rows, embedded with bounded concurrency and written with one batch call per
+ * index) — a few seconds with a typical remote embedder, well under the host's
+ * after-commit wait bound.
  */
 
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { planBackfillPass } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
-import type { SqlExec, WriteHook } from "./ctx-db";
+import type { SqlExec } from "./ctx-db";
+import { readKeysetPage } from "./ctx-db-backfill";
+import { readBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
-import { DOC_COLUMN, tryRowToDocument } from "./do-sql";
+import { tryRowToDocument } from "./do-sql";
 
-/** Reserved table holding one backfill-progress row per vectorized table. */
+/** Reserved table holding one backfill-progress row per vectorized table, keyed `companion` like the search state. */
 const VECTOR_BACKFILL_STATE_TABLE = "__lunora_vector_backfill";
 
 /**
- * Rows per page. Each row costs an embed plus an upsert per index, so this is
- * sized to a request's subrequest budget, not to SQLite.
+ * Rows per page. Sized to how long the page holds the shard's write-hook chain,
+ * not to SQLite: at the hook fan-out's concurrency of 8 and ~300 ms per remote
+ * embed, 50 rows is about two seconds.
  */
-const VECTOR_BACKFILL_PAGE_ROWS = 100;
+const VECTOR_BACKFILL_PAGE_ROWS = 50;
 
-/** Rows embedded at once within a page — the same bound the write hook's fan-out uses. */
-const VECTOR_BACKFILL_CONCURRENCY = 8;
+/**
+ * Most pages one call may run — about a thousand rows. A call is one request,
+ * and a caller asking for more is asking for a request that outlives its budget;
+ * it repeats the call instead.
+ */
+const VECTOR_BACKFILL_MAX_PAGES = 20;
+
+/** How many failed row ids one call reports back. The count is always exact. */
+const FAILED_IDS_REPORTED = 20;
 
 /** A vectorized table to walk, and a fingerprint of the index config its vectors were built with. */
 interface VectorBackfillTarget {
@@ -43,129 +62,145 @@ interface VectorBackfillTarget {
 }
 
 interface VectorBackfillProgress {
-    /** `false` when the page budget ran out first — call again to resume. */
+    /** `false` when the page budget ran out, or a page failed — call again to resume. */
     done: boolean;
-    /** Pages walked by this call. */
+
+    /**
+     * Set when a page failed as a whole (the embedder or Vectorize unreachable).
+     * That page's cursor was held, so the next call retries it.
+     */
+    error?: string;
+
+    /** Rows this call could not index and moved past — a bad source value, rejected text, refused metadata. */
+    failed: number;
+
+    /** The first few of those rows' ids. */
+    failedIds: string[];
+
+    /** Row-walking pages this call ran. */
     pages: number;
-    /** Rows handed to the sync hook by this call. */
+
+    /** Rows this call walked, failed ones included. */
     rows: number;
 }
 
 /**
+ * Index one page of rows; resolves with the rows that failed on their own and
+ * rejects when the whole page failed. `@lunora/bindings/vectors`'
+ * `createVectorBackfillSync` builds it.
+ */
+type VectorPageSync = (
+    table: string,
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>,
+) => Promise<ReadonlyArray<{ error: unknown; id: string }>>;
+
+/**
  * Run `read` where no write can interleave, then `work` on its result, ordered
  * after the post-commit hooks of every write committed before `read` and before
- * those of every write committed after it. Rejects with `work`'s error.
+ * those of every write committed after it. Resolves with `work`'s result.
  */
-type OrderedAfterWrites = <T>(read: () => T, work: (value: T) => Promise<void>) => Promise<void>;
+type OrderedAfterWrites = <T, U>(read: () => T, work: (value: T) => Promise<U>) => Promise<U>;
 
-interface VectorBackfillState {
-    cursor: string | undefined;
-    done: boolean;
-    profile: string | undefined;
+interface VectorPage {
+    documents: { doc: Record<string, unknown>; id: string }[];
+    lastId: string | undefined;
+    /** Rows past this page exist. Read by peeking one row, so a table that ends on a page boundary finishes on that page. */
+    more: boolean;
+    unparseable: string[];
 }
 
 const migrateVectorBackfillState = (sql: SqlExec): void => {
     runDrizzle(
         sql,
-        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(VECTOR_BACKFILL_STATE_TABLE)} (${dsql.identifier("tbl")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
+        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(VECTOR_BACKFILL_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT)`,
     );
 };
 
-const readState = (sql: SqlExec, table: string): VectorBackfillState => {
-    const row = runDrizzle<{ cursor: unknown; done: unknown; profile: unknown }>(
-        sql,
-        dsql`SELECT ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")} FROM ${dsql.identifier(VECTOR_BACKFILL_STATE_TABLE)} WHERE ${dsql.identifier("tbl")} = ${table}`,
-    ).toArray()[0];
-
-    return {
-        cursor: typeof row?.cursor === "string" ? row.cursor : undefined,
-        done: Number(row?.done ?? 0) === 1,
-        profile: typeof row?.profile === "string" ? row.profile : undefined,
-    };
-};
-
-const writeState = (sql: SqlExec, table: string, state: VectorBackfillState & { profile: string }): void => {
+const writeState = (sql: SqlExec, table: string, cursor: string | undefined, done: boolean, profile: string): void => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
-    const cursor = state.cursor ?? null;
+    const cursorValue = cursor ?? null;
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(VECTOR_BACKFILL_STATE_TABLE)} (${dsql.identifier("tbl")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}) VALUES (${table}, ${cursor}, ${state.done ? 1 : 0}, ${state.profile}) ON CONFLICT (${dsql.identifier("tbl")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}`,
+        dsql`INSERT INTO ${dsql.identifier(VECTOR_BACKFILL_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")}) VALUES (${table}, ${cursorValue}, ${done ? 1 : 0}, ${profile}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("cursor")} = excluded.${dsql.identifier("cursor")}, ${dsql.identifier("done")} = excluded.${dsql.identifier("done")}, ${dsql.identifier("profile")} = excluded.${dsql.identifier("profile")}`,
     );
 };
 
-/** One page of `table` past `cursor`, in `id` order, decoded. Unparseable documents are skipped but still advance the cursor. */
-const readPage = (
-    sql: SqlExec,
-    table: string,
-    cursor: string | undefined,
-): { documents: { doc: Record<string, unknown>; id: string }[]; lastId: string | undefined; size: number } => {
-    const limit = dsql.raw(String(VECTOR_BACKFILL_PAGE_ROWS));
-    const rows = runDrizzle(
-        sql,
-        cursor === undefined
-            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(table)} ORDER BY id ASC LIMIT ${limit}`
-            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(table)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${limit}`,
-    ).toArray();
-    const documents: { doc: Record<string, unknown>; id: string }[] = [];
-    let lastId = cursor;
+const readPage = (sql: SqlExec, table: string, cursor: string | undefined): VectorPage => {
+    const rows = readKeysetPage(sql, table, cursor, VECTOR_BACKFILL_PAGE_ROWS + 1);
+    const page: VectorPage = { documents: [], lastId: cursor, more: rows.length > VECTOR_BACKFILL_PAGE_ROWS, unparseable: [] };
 
-    for (const row of rows) {
+    for (const row of rows.slice(0, VECTOR_BACKFILL_PAGE_ROWS)) {
         if (typeof row["id"] !== "string") {
             continue;
         }
 
-        lastId = row["id"];
+        page.lastId = row["id"];
 
         const record = tryRowToDocument(row);
 
         if (record) {
-            documents.push({ doc: record, id: lastId });
+            page.documents.push({ doc: record, id: page.lastId });
+        } else {
+            page.unparseable.push(page.lastId);
         }
     }
 
-    return { documents, lastId, size: rows.length };
+    return page;
 };
 
 /**
- * Hand every document to `sync` as an `update`, at most
- * {@link VECTOR_BACKFILL_CONCURRENCY} at a time. Settles every call before
- * rethrowing the first failure: a page that "failed" while an upsert was still in
- * flight would release the chain, and that upsert could land after the next
- * write's hook for the same row.
+ * Read and sync one page on the host's ordered path. Resolves with the page and
+ * the ids of rows that could not be indexed, or with `error` when the page failed
+ * as a whole — the caller then holds the cursor.
  */
-const syncPage = async (table: string, documents: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>, sync: WriteHook): Promise<void> => {
-    for (let start = 0; start < documents.length; start += VECTOR_BACKFILL_CONCURRENCY) {
-        // eslint-disable-next-line no-await-in-loop -- one bounded batch at a time is the point
-        const settled = await Promise.allSettled(
-            documents.slice(start, start + VECTOR_BACKFILL_CONCURRENCY).map(async ({ doc, id }) => sync({ doc, id, op: "update", table })),
+const runPage = async (
+    sql: SqlExec,
+    table: string,
+    cursor: string | undefined,
+    sync: VectorPageSync,
+    ordered: OrderedAfterWrites,
+): Promise<{ error: string } | { failedIds: string[]; page: VectorPage }> => {
+    try {
+        const { failures, page } = await ordered(
+            () => readPage(sql, table, cursor),
+            async (read) => {
+                return { failures: await sync(table, read.documents), page: read };
+            },
         );
-        const failure = settled.find((result) => result.status === "rejected");
 
-        if (failure) {
-            throw failure.reason;
+        if (failures.length > 0) {
+            // eslint-disable-next-line no-console -- the live hook logs its failures the same way; this is their backfill twin
+            console.warn(`[@lunora/shard-engine] vector backfill: ${String(failures.length)} row(s) of "${table}" could not be indexed:`, failures);
         }
+
+        return { failedIds: [...page.unparseable, ...failures.map((failure) => failure.id)], page };
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
     }
 };
 
 /**
- * Walk each target table forward through `sync` — the same hook live writes use,
- * so a soft-deleted row is purged rather than indexed and a cleared field drops
- * its vector — for at most `maxPages` pages (default 1).
+ * Walk each target table forward through `sync` for at most `maxPages` pages
+ * (default 1).
  *
  * A target whose recorded profile differs from its current one (an index added,
  * renamed, re-pointed at another field, or given new dimensions/metric/metadata)
- * restarts from the top; its existing vectors are overwritten in place, never
- * emptied first. An embedder change the profile cannot see (same source text,
- * different model) needs `restart: true`, which resets every target once.
+ * restarts from the top — the shared {@link planBackfillPass} decides, as it does
+ * for search. Existing vectors are overwritten in place, never emptied first. An
+ * embedder change the profile cannot see needs `restart: true`, which resets
+ * every target up front.
  *
- * The cursor advances only after a page's hooks all succeeded, so a failed page
- * is retried by the next call rather than skipped.
+ * Two kinds of failure, handled oppositely. A row that fails on its own is
+ * counted, reported and moved past: it would fail on every retry, and holding
+ * the cursor on it would stop this table — and every table after it — for good.
+ * A page that fails as a whole holds its cursor and ends the call with `error`
+ * set, so the next call retries it. Either way the counts so far are returned.
  */
 const backfillVectorIndexes = async (
     sql: SqlExec,
     targets: ReadonlyArray<VectorBackfillTarget>,
-    sync: WriteHook,
+    sync: VectorPageSync,
     options: { maxPages?: number; ordered: OrderedAfterWrites; restart?: boolean },
 ): Promise<VectorBackfillProgress> => {
     migrateVectorBackfillState(sql);
@@ -175,45 +210,46 @@ const backfillVectorIndexes = async (
     // `restart` — they would read as finished and never be re-embedded.
     if (options.restart === true) {
         for (const { profile, table } of targets) {
-            writeState(sql, table, { cursor: undefined, done: false, profile });
+            writeState(sql, table, undefined, false, profile);
         }
     }
 
-    const maxPages = options.maxPages ?? 1;
-    let pages = 0;
-    let rows = 0;
+    const maxPages = Math.min(options.maxPages ?? 1, VECTOR_BACKFILL_MAX_PAGES);
+    const progress: VectorBackfillProgress = { done: false, failed: 0, failedIds: [], pages: 0, rows: 0 };
 
     for (const { profile, table } of targets) {
-        const recorded = readState(sql, table);
-        let state: VectorBackfillState & { profile: string } =
-            recorded.profile === profile ? { ...recorded, profile } : { cursor: undefined, done: false, profile };
+        const pass = planBackfillPass(readBackfillState(sql, VECTOR_BACKFILL_STATE_TABLE, table), profile);
+        let { cursor } = pass;
+        let done = pass.finished;
 
-        while (!state.done) {
-            if (pages >= maxPages) {
-                return { done: false, pages, rows };
+        while (!done) {
+            if (progress.pages >= maxPages) {
+                return progress;
             }
 
-            const { cursor } = state;
-            let page: ReturnType<typeof readPage> | undefined;
-
             // eslint-disable-next-line no-await-in-loop -- pages are sequential: each resumes past the last
-            await options.ordered(
-                () => readPage(sql, table, cursor),
-                async (read) => {
-                    page = read;
-                    await syncPage(table, read.documents, sync);
-                },
-            );
+            const outcome = await runPage(sql, table, cursor, sync, options.ordered);
 
-            pages += 1;
-            rows += page?.documents.length ?? 0;
-            state = { cursor: page?.lastId ?? cursor, done: (page?.size ?? 0) < VECTOR_BACKFILL_PAGE_ROWS, profile };
-            writeState(sql, table, state);
+            if ("error" in outcome) {
+                return { ...progress, error: outcome.error };
+            }
+
+            const { failedIds, page } = outcome;
+            const walked = page.documents.length + page.unparseable.length;
+
+            progress.pages += walked > 0 ? 1 : 0;
+            progress.rows += walked;
+            progress.failed += failedIds.length;
+            progress.failedIds = [...progress.failedIds, ...failedIds].slice(0, FAILED_IDS_REPORTED);
+
+            cursor = page.lastId;
+            done = !page.more;
+            writeState(sql, table, cursor, done, profile);
         }
     }
 
-    return { done: true, pages, rows };
+    return { ...progress, done: true };
 };
 
-export type { OrderedAfterWrites, VectorBackfillProgress, VectorBackfillTarget };
-export { backfillVectorIndexes, VECTOR_BACKFILL_PAGE_ROWS };
+export type { VectorBackfillProgress, VectorBackfillTarget, VectorPageSync };
+export { backfillVectorIndexes, VECTOR_BACKFILL_MAX_PAGES, VECTOR_BACKFILL_PAGE_ROWS };

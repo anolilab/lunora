@@ -116,29 +116,52 @@ up reflecting.
 
 ### Indexing existing rows
 
-Run the `backfillVectors` admin operation once per shard after deploying a new
-vector index over a table that already has rows:
+Run the `backfillVectors` admin operation on each shard after deploying a new
+vector index over a table that already has rows. Target a shard with `--shard`:
 
 ```sh
 lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}'
+lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}' --shard workspace:acme
 ```
 
-Each call embeds at most `maxPages` pages of 100 rows (one page when you omit it),
-because every row is a remote embed plus a Vectorize upsert and a large table
+Each call embeds at most `maxPages` pages of 50 rows (one page when you omit it,
+at most 20). Every row is a remote embed plus a Vectorize write, so a large table
 cannot be embedded in one request. The result reports
-`{ done, pages, rows }`. Progress is stored in the shard, so repeat the call until
-`done` is `true`. A page that fails is retried by the next call, not skipped.
+`{ done, pages, rows, failed, failedIds }`. Progress is stored in the shard, so
+repeat the call until `done` is `true`.
+
+Two kinds of failure are handled differently:
+
+- **A row that can never be indexed** is counted in `failed`, its id listed in
+  `failedIds` (the first 20), and skipped. Examples: a non-string source value,
+  text the embedding model refuses, metadata Vectorize rejects. The live write
+  sync only logs these too.
+- **A page that fails as a whole**, because the embedder or Vectorize is
+  unreachable, answers `503` with the progress made so far. That page is retried
+  by the next call, not skipped.
 
 The backfill records the index configuration it built from. When you change an
 index's `field`, `dimensions`, `metric` or `metadata`, or add or rename an index,
 the next call re-embeds the table from the top. Existing vectors are overwritten
-in place, never cleared first. A change to the `embed` function itself (a
-different model with the same dimensions) is invisible to that check, so pass
-`{"restart":true}` once to re-embed everything.
+in place, never cleared first. Pass `{"restart":true}` once to re-embed
+everything when the check cannot see the change:
 
-A backfill never overwrites a newer write. Each page is read inside the shard's
-single-writer gate and synced in commit order with live writes. A row patched or
-deleted while its page is embedding ends up with the patched vector, or none.
+- a change to the `embed` function itself, such as a different model with the
+  same dimensions;
+- rows written through the admin writer, such as a bulk import with
+  `lunora import`. That path skips write sync, so those rows have no vectors
+  until a backfill walks them.
+
+A backfill never overwrites a newer write, from a mutation or an action. Each
+page is read inside the shard's single-writer gate and synced in commit order
+with live writes. A row patched or deleted while its page is embedding ends up
+with the patched vector, or none.
+
+That ordering has a cost while a backfill runs. A page holds the shard's
+write-sync queue for as long as it takes to embed its rows (a few seconds with a
+typical remote embedder), and a mutation or action that commits meanwhile waits
+for its own sync behind it before it returns. Run large backfills with a small
+`maxPages` in quiet periods if that latency matters.
 
 <Callout type="warn">
     **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries

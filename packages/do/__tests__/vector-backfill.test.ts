@@ -1,7 +1,7 @@
 import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@lunora/bindings/vectors";
-import { createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";
-import type { OrderedAfterWrites, SchemaLike, SqlExec, VectorBackfillProgress, WriteHook } from "@lunora/shard-engine";
-import { ADMIN_FUNCTIONS, backfillVectorIndexes, createShardCtxDb, runShardMigrations, VECTOR_BACKFILL_PAGE_ROWS } from "@lunora/shard-engine";
+import { createVectorBackfillSync, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";
+import type { SchemaLike, SqlExec, VectorBackfillProgress, WriteHook } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, backfillVectorIndexes, createShardCtxDb, runShardMigrations, VECTOR_BACKFILL_MAX_PAGES } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
@@ -21,6 +21,11 @@ import createSqliteExec from "./_helpers/node-sqlite";
  */
 
 const ADMIN_TOKEN = "s3cret-admin";
+
+/** The engine's page size — not exported, so pinned here; the counts below fail loudly if it moves. */
+const PAGE_ROWS = 50;
+
+type Ordered = <T, U>(read: () => T, work: (value: T) => Promise<U>) => Promise<U>;
 
 /** Swapped per test: lets a test hold a page's embeds open while writes commit. */
 let embedder: (text: string) => Promise<ReadonlyArray<number>>;
@@ -83,7 +88,10 @@ const makeState = (): ShardDOState => {
     } as unknown as ShardDOState;
 };
 
-const memoryVectors = (): VectorSearchLike & { store: Map<string, string> } => {
+const memoryVectors = (): VectorSearchLike & {
+    store: Map<string, string>;
+    upsertMany: (index: string, inputs: ReadonlyArray<{ embed: (text: string) => unknown; id: string; input: string }>) => Promise<void>;
+} => {
     const store = new Map<string, string>();
     const put = async (_index: string, input: { embed: (text: string) => unknown; id: string; input: string }): Promise<void> => {
         await input.embed(input.input);
@@ -102,6 +110,12 @@ const memoryVectors = (): VectorSearchLike & { store: Map<string, string> } => {
         },
         store,
         upsert: put,
+        upsertMany: async (index, inputs) => {
+            for (const input of inputs) {
+                // eslint-disable-next-line no-await-in-loop -- mirrors the binding: one call, every vector
+                await put(index, input);
+            }
+        },
         upsertNow: put,
     };
 };
@@ -112,7 +126,7 @@ class VectorShard extends ShardDO {
     public readonly hook: WriteHook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors: this.vectors });
 
     /** Swap in the unordered read-then-work to prove the race is real. */
-    public ordered?: OrderedAfterWrites;
+    public ordered?: Ordered;
 
     public constructor(state: ShardDOState) {
         super(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -135,8 +149,22 @@ class VectorShard extends ShardDO {
         await this.runInTransaction(() => write(db));
     }
 
+    /** An action's `ctx.db`: the same `onWrite` wiring, but no transaction around it. */
+    public async act(write: (db: ReturnType<typeof createShardCtxDb>) => Promise<unknown>): Promise<void> {
+        await write(
+            createShardCtxDb({
+                inTransaction: () => this.isInTransaction(),
+                onWrite: (event) => this.deferAfterCommit(() => this.hook(event)),
+                schema,
+                sql: this.sql as SqlExec,
+            }),
+        );
+    }
+
     protected override runShardVectorBackfill(options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
-        return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema), this.hook, {
+        const sync = createVectorBackfillSync({ allowSharedNamespace: true, schema, upsertMany: this.vectors.upsertMany as never, vectors: this.vectors });
+
+        return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema), sync, {
             ...options,
             ordered: this.ordered ?? (async (read, work) => this.runOrderedAfterWrites(read, work)),
         });
@@ -190,7 +218,10 @@ describe("backfillVectors admin RPC", () => {
      * snapshot), commit a patch of p_0001 and a delete of p_0002, then let the page
      * finish. Reports what the index ends up holding for those two rows.
      */
-    const raceWritesAgainstPage = async (unordered: boolean): Promise<{ deletedRowHasVector: boolean; patched: string | undefined }> => {
+    const raceWritesAgainstPage = async (
+        unordered: boolean,
+        via: "action" | "mutation" = "mutation",
+    ): Promise<{ deletedRowHasVector: boolean; patched: string | undefined }> => {
         await seed(3);
 
         const shard = new VectorShard(makeState());
@@ -221,14 +252,21 @@ describe("backfillVectors admin RPC", () => {
 
         await embedding;
 
-        const patch = shard.mutate(async (db) => db.patch("p_0001", { body: "new body" }));
-        const remove = shard.mutate(async (db) => db.delete("p_0002", "posts"));
+        const write = via === "action" ? shard.act.bind(shard) : shard.mutate.bind(shard);
+        const patch = write(async (db) => db.patch("p_0001", { body: "new body" }));
+        const remove = write(async (db) => db.delete("p_0002", "posts"));
 
         // Unordered, the writes' hooks do not wait for the page, so they land
         // first. (Ordered, awaiting them here would wait on the held page.)
         if (unordered) {
             await Promise.all([patch, remove]);
         }
+
+        // Both rows are committed in SQLite while the page still holds its stale
+        // snapshot of them — an action has no transaction to wait on.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
 
         release();
         await Promise.all([backfill, patch, remove]);
@@ -237,20 +275,21 @@ describe("backfillVectors admin RPC", () => {
     };
 
     it("is gated by the admin bearer and rejects a malformed budget", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const shard = new VectorShard(makeState());
 
         await expect(status(shard, {}, null)).resolves.toBe(403);
         await expect(status(shard, {}, "nope")).resolves.toBe(403);
         await expect(status(shard, { maxPages: 0 })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: VECTOR_BACKFILL_MAX_PAGES + 1 })).resolves.toBe(400);
         await expect(status(shard, { restart: "false" })).resolves.toBe(400);
     });
 
     it("indexes pre-existing rows a page per call until done", async () => {
         expect.assertions(4);
 
-        const rows = Math.floor(VECTOR_BACKFILL_PAGE_ROWS * 2.5);
+        const rows = Math.floor(PAGE_ROWS * 2.5);
 
         await seed(rows);
 
@@ -262,11 +301,21 @@ describe("backfillVectors admin RPC", () => {
             return body.result;
         };
 
-        await expect(call({})).resolves.toStrictEqual({ done: false, pages: 1, rows: VECTOR_BACKFILL_PAGE_ROWS });
-        await expect(call({ maxPages: 5 })).resolves.toStrictEqual({ done: true, pages: 2, rows: rows - VECTOR_BACKFILL_PAGE_ROWS });
-        await expect(call({ maxPages: 5 })).resolves.toStrictEqual({ done: true, pages: 0, rows: 0 });
+        const none = { failed: 0, failedIds: [] };
+
+        await expect(call({})).resolves.toStrictEqual({ ...none, done: false, pages: 1, rows: PAGE_ROWS });
+        await expect(call({ maxPages: 5 })).resolves.toStrictEqual({ ...none, done: true, pages: 2, rows: rows - PAGE_ROWS });
+        await expect(call({ maxPages: 5 })).resolves.toStrictEqual({ ...none, done: true, pages: 0, rows: 0 });
 
         expect(shard.vectors.store.size).toBe(rows);
+    });
+
+    it("lets an ACTION's write that commits while a page is embedding win", async () => {
+        expect.assertions(1);
+
+        // An action runs no transaction, so its hook has nothing to be held
+        // behind — it has to join the same chain the page is on.
+        await expect(raceWritesAgainstPage(false, "action")).resolves.toStrictEqual({ deletedRowHasVector: false, patched: "new body" });
     });
 
     it("lets a write that commits while a page is embedding win", async () => {

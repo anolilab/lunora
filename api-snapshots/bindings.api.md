@@ -933,6 +933,24 @@ interface VectorAdminQueryMatch {
 }
 ```
 
+### `VectorBackfillFailure` (interface)
+
+```ts
+interface VectorBackfillFailure {
+    error: unknown;
+    id: string;
+}
+```
+
+### `VectorBackfillSync` (type)
+
+```ts
+type VectorBackfillSync = (table: string, rows: ReadonlyArray<{
+    doc: Record<string, unknown>;
+    id: string;
+}>) => Promise<ReadonlyArray<VectorBackfillFailure>>;
+```
+
 ### `VectorEmbedderLike` (type)
 
 ```ts
@@ -1098,6 +1116,12 @@ const createContextVectors: (lunora: LunoraVectors, options?: CreateContextVecto
 const createVectorAdminIntrospector: (options: VectorAdminIntrospectorOptions) => VectorAdminIntrospector;
 ```
 
+### `createVectorBackfillSync` (const)
+
+```ts
+const createVectorBackfillSync: (options: BackfillSyncOptions) => VectorBackfillSync;
+```
+
 ### `createVectorSyncHook` (const)
 
 ```ts
@@ -1129,6 +1153,18 @@ const vectorBackfillTargets: (schema: SchemaLike) => {
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `BackfillSyncOptions` (type)
+
+```ts
+type BackfillSyncOptions = {
+    allowSharedNamespace?: boolean;
+    namespace?: string;
+    schema: SchemaLike;
+    upsertMany: LunoraVectors["upsertMany"];
+    vectors: VectorSearchLike;
+};
+```
 
 ### `CreateContextVectorsOptions` (interface)
 

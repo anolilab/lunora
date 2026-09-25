@@ -366,7 +366,7 @@ abstract class ShardDO {
         maxPages?: number;
         restart?: boolean;
     }): Promise<VectorBackfillProgress>;
-    protected runOrderedAfterWrites<T>(read: () => T, work: (value: T) => Promise<void>): Promise<void>;
+    protected runOrderedAfterWrites<T, U>(read: () => T, work: (value: T) => Promise<U>): Promise<U>;
     protected ensureMigrated(): void;
     protected tableRefs(_table: string): Record<string, string> | undefined;
     protected tableIndexes(_table: string): TableIndexInfo[];

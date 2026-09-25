@@ -4756,8 +4756,8 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
 
     if (hasVectorIndexes) {
         importLines.push(
-            `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";`,
-            `import { createContextVectors, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";`,
+            `import type { SchemaLike as VectorSchemaLike, VectorBackfillSync, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";`,
+            `import { createContextVectors, createVectorBackfillSync, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";`,
         );
     }
 
@@ -4864,11 +4864,7 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
     // (e.g. a mixed app where only SOME vectorized tables are `.shardBy()`)
     // namespace-less, same as today. Gated on `hasShardedVectors` so a schema
     // with no `.shardBy()`'d vector table emits the bare call, unchanged.
-    const vectorNamespaceField = hasShardedVectors
-        ? `
-                const vectorShardKey = this.currentShardKey();
-`
-        : "";
+    const vectorNamespaceField = hasShardedVectors ? "            const vectorShardKey = this.currentShardKey();\n" : "";
     const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
     // Read-side counterpart to `vectorNamespaceOption`: threaded into
     // `createContextVectors` so `ctx.vectors` (query/getByIds/deleteByIds/
@@ -4918,47 +4914,52 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
     const vectorsContextOption = `, { ${vectorsContextOptions.join(", ")} }`;
     const vectorsBuild = hasVectorIndexes
         ? `
-            let vectors: VectorSearchLike;
-            let onWrite: WriteHook | undefined;
-
-            if (config.vectors) {
-                const lunora = createVectors({ indexes: config.vectors(env) });
-${vectorNamespaceField}
-                vectors = createContextVectors(lunora${vectorsContextOption});
-                onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors });
-            } else {
-                vectors = vectorsStub;
-                onWrite = undefined;
-            }
-
+            const vectorSync = this.vectorSync(env);
             // Vectorize lives outside this shard's SQLite, so a query whose result
             // depends on a similarity search cannot be proven current on reconnect —
             // an unrelated upsert (or a re-index) moves the matches without touching
-            // \`__cdc_log\`. Wrapped AFTER \`onWrite\` is built so the write-through
+            // \`__cdc_log\`. Only \`ctx.vectors\` is wrapped: the write-through
             // vector-sync hook keeps calling the bare facade.
-            vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
+            const bareVectors = vectorSync?.vectors ?? vectorsStub;
+            const vectors = markUnvouchableReads(bareVectors, options.onRead, ["getByIds", "query"]);
+            const onWrite = vectorSync?.onWrite;
 `
         : "";
 
-    // `__lunora_admin__:backfillVectors`: the rows that predate a vector index go
-    // through the SAME sync hook `ctx.db` uses (built from the same fragments as
-    // `vectorsBuild` above, so namespace scoping cannot drift), each page ordered
-    // on the shard's after-commit chain so it never lands over a newer write's.
-    const vectorBackfillOverride = hasVectorIndexes
+    // The one place the Vectorize adapters are assembled: `ctx.vectors` and its
+    // write-through hook for `buildCtx`, and the batched page sync for the
+    // `backfillVectors` override below — so the namespace scoping of all three
+    // cannot drift apart. `undefined` when the app configured no `vectors`.
+    const vectorSyncMethod = hasVectorIndexes
         ? `
+        private vectorSync(env: Record<string, unknown>): { backfill: VectorBackfillSync; onWrite: WriteHook; vectors: VectorSearchLike } | undefined {
+            if (!config.vectors) {
+                return undefined;
+            }
+
+            const lunora = createVectors({ indexes: config.vectors(env) });
+${vectorNamespaceField}            const vectors = createContextVectors(lunora${vectorsContextOption});
+
+            return {
+                backfill: createVectorBackfillSync({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, upsertMany: lunora.upsertMany, vectors }),
+                onWrite: createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors }),
+                vectors,
+            };
+        }
+
+        // \`__lunora_admin__:backfillVectors\`: the rows that predate a vector index,
+        // a page at a time, each page ordered on the after-commit chain so it
+        // never lands over a newer write's vector.
         protected override async runShardVectorBackfill(options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
             this.ensureMigrated();
 
-            if (!config.vectors) {
-                throw new Error("vector backfill: no vectors configured. Pass \`vectors\` to createShardDO().");
+            const vectorSync = this.vectorSync((this.env ?? {}) as Record<string, unknown>);
+
+            if (!vectorSync) {
+                throw new LunoraError("NOT_IMPLEMENTED", "vector backfill is unavailable: no vectors configured. Pass \`vectors\` to createShardDO().");
             }
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const lunora = createVectors({ indexes: config.vectors(env) });
-${vectorNamespaceField}
-            const onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors: createContextVectors(lunora${vectorsContextOption}) });
-
-            return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), onWrite, {
+            return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), vectorSync.backfill, {
                 ...options,
                 ordered: async (read, work) => this.runOrderedAfterWrites(read, work),
             });
@@ -6229,7 +6230,7 @@ ${
         }
 `
         : ""
-}${vectorBackfillOverride}
+}${vectorSyncMethod}
         private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one

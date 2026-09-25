@@ -5,8 +5,8 @@ import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrati
 import { applyCdcChanges, backfillVectorIndexes, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
-import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";
-import { createContextVectors, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";
+import type { SchemaLike as VectorSchemaLike, VectorBackfillSync, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";
+import { createContextVectors, createVectorBackfillSync, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";
 
 import schema from "../schema.js";
 import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
@@ -1323,19 +1323,34 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
+        private vectorSync(env: Record<string, unknown>): { backfill: VectorBackfillSync; onWrite: WriteHook; vectors: VectorSearchLike } | undefined {
+            if (!config.vectors) {
+                return undefined;
+            }
+
+            const lunora = createVectors({ indexes: config.vectors(env) });
+            const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });
+
+            return {
+                backfill: createVectorBackfillSync({ schema: schema as unknown as VectorSchemaLike, upsertMany: lunora.upsertMany, vectors }),
+                onWrite: createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors }),
+                vectors,
+            };
+        }
+
+        // `__lunora_admin__:backfillVectors`: the rows that predate a vector index,
+        // a page at a time, each page ordered on the after-commit chain so it
+        // never lands over a newer write's vector.
         protected override async runShardVectorBackfill(options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
             this.ensureMigrated();
 
-            if (!config.vectors) {
-                throw new Error("vector backfill: no vectors configured. Pass `vectors` to createShardDO().");
+            const vectorSync = this.vectorSync((this.env ?? {}) as Record<string, unknown>);
+
+            if (!vectorSync) {
+                throw new LunoraError("NOT_IMPLEMENTED", "vector backfill is unavailable: no vectors configured. Pass `vectors` to createShardDO().");
             }
 
-            const env = (this.env ?? {}) as Record<string, unknown>;
-            const lunora = createVectors({ indexes: config.vectors(env) });
-
-            const onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors: createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) }) });
-
-            return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), onWrite, {
+            return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), vectorSync.backfill, {
                 ...options,
                 ordered: async (read, work) => this.runOrderedAfterWrites(read, work),
             });
@@ -1363,25 +1378,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
             const { identity, ip, userId } = caller;
 
-            let vectors: VectorSearchLike;
-            let onWrite: WriteHook | undefined;
-
-            if (config.vectors) {
-                const lunora = createVectors({ indexes: config.vectors(env) });
-
-                vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });
-                onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
-            } else {
-                vectors = vectorsStub;
-                onWrite = undefined;
-            }
-
+            const vectorSync = this.vectorSync(env);
             // Vectorize lives outside this shard's SQLite, so a query whose result
             // depends on a similarity search cannot be proven current on reconnect —
             // an unrelated upsert (or a re-index) moves the matches without touching
-            // `__cdc_log`. Wrapped AFTER `onWrite` is built so the write-through
+            // `__cdc_log`. Only `ctx.vectors` is wrapped: the write-through
             // vector-sync hook keeps calling the bare facade.
-            vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
+            const bareVectors = vectorSync?.vectors ?? vectorsStub;
+            const vectors = markUnvouchableReads(bareVectors, options.onRead, ["getByIds", "query"]);
+            const onWrite = vectorSync?.onWrite;
 
             const secrets = createSecrets(env);
 

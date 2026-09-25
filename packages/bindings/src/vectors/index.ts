@@ -2,6 +2,8 @@ export type {
     SchemaLike,
     TableDefinitionLike,
     TableVectorIndexLike,
+    VectorBackfillFailure,
+    VectorBackfillSync,
     VectorEmbedderLike,
     VectorIndexDefinitionLike,
     VectorMatchesLike,
@@ -13,7 +15,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./context";
-export { createContextVectors, createVectorSyncHook, vectorBackfillTargets } from "./context";
+export { createContextVectors, createVectorBackfillSync, createVectorSyncHook, vectorBackfillTargets } from "./context";
 export type {
     VectorAdminIndexSummary,
     VectorAdminIntrospector,

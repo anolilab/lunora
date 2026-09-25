@@ -1467,12 +1467,6 @@ interface OrderKeyConstraints {
 }
 ```
 
-### `OrderedAfterWrites` (type)
-
-```ts
-type OrderedAfterWrites = <T>(read: () => T, work: (value: T) => Promise<void>) => Promise<void>;
-```
-
 ### `OwnerRelay` (class)
 
 ```ts
@@ -3309,10 +3303,10 @@ interface TtlSweepSpec {
 const UNVOUCHABLE_DEP = "!unvouchable";
 ```
 
-### `VECTOR_BACKFILL_PAGE_ROWS` (const)
+### `VECTOR_BACKFILL_MAX_PAGES` (const)
 
 ```ts
-const VECTOR_BACKFILL_PAGE_ROWS = 100;
+const VECTOR_BACKFILL_MAX_PAGES = 20;
 ```
 
 ### `ValidatorLike` (interface)
@@ -3336,17 +3330,11 @@ interface ValidatorLike {
 ```ts
 interface VectorBackfillProgress {
     done: boolean;
+    error?: string;
+    failed: number;
+    failedIds: string[];
     pages: number;
     rows: number;
-}
-```
-
-### `VectorBackfillTarget` (interface)
-
-```ts
-interface VectorBackfillTarget {
-    profile: string;
-    table: string;
 }
 ```
 
@@ -3583,7 +3571,7 @@ const backfillSearchIndexesForTable: (sql: SqlExec, tableName: string, definitio
 ### `backfillVectorIndexes` (const)
 
 ```ts
-const backfillVectorIndexes: (sql: SqlExec, targets: ReadonlyArray<VectorBackfillTarget>, sync: WriteHook, options: {
+const backfillVectorIndexes: (sql: SqlExec, targets: ReadonlyArray<VectorBackfillTarget>, sync: VectorPageSync, options: {
     maxPages?: number;
     ordered: OrderedAfterWrites;
     restart?: boolean;
@@ -4679,7 +4667,7 @@ const readSchemaVersion: (sql: SqlExec, hash: string) => SchemaVersionRow | unde
 ### `readSearchBackfillState` (const)
 
 ```ts
-const readSearchBackfillState: (sql: SqlExec, companion: string) => SearchBackfillState;
+const readSearchBackfillState: (sql: SqlExec, companion: string) => BackfillState;
 ```
 
 ### `readShapePokeCursor` (const)
@@ -5233,6 +5221,16 @@ interface ApplyOnDeleteOptions {
 }
 ```
 
+### `BackfillState` (interface)
+
+```ts
+interface BackfillState {
+    cursor: string | undefined;
+    done: boolean;
+    profile: string | undefined;
+}
+```
+
 ### `DataMigrationContext` (interface)
 
 ```ts
@@ -5319,6 +5317,12 @@ interface GuardableSchema {
 
 ```ts
 type IndexUseHook = (table: string, indexName: string, kind: "geo" | "index" | "rank" | "search") => void;
+```
+
+### `OrderedAfterWrites` (type)
+
+```ts
+type OrderedAfterWrites = <T, U>(read: () => T, work: (value: T) => Promise<U>) => Promise<U>;
 ```
 
 ### `REGION_HINTS` (const)
@@ -5433,16 +5437,6 @@ interface SchemaVersionRow {
 }
 ```
 
-### `SearchBackfillState` (interface)
-
-```ts
-interface SearchBackfillState {
-    cursor: string | undefined;
-    done: boolean;
-    profile: string | undefined;
-}
-```
-
 ### `SerializeValue` (type)
 
 ```ts
@@ -5535,6 +5529,27 @@ type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefi
 
 ```ts
 type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
+```
+
+### `VectorBackfillTarget` (interface)
+
+```ts
+interface VectorBackfillTarget {
+    profile: string;
+    table: string;
+}
+```
+
+### `VectorPageSync` (type)
+
+```ts
+type VectorPageSync = (table: string, rows: ReadonlyArray<{
+    doc: Record<string, unknown>;
+    id: string;
+}>) => Promise<ReadonlyArray<{
+    error: unknown;
+    id: string;
+}>>;
 ```
 
 ### `WhereFragments` (interface)
