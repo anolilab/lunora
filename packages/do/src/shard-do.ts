@@ -8768,7 +8768,8 @@ abstract class ShardDO {
      * one request. Absent `maxPages` runs ONE page, and more than the engine's
      * per-call page ceiling is refused; the caller repeats until `done` —
      * `lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}'`. `restart: true` re-embeds every vectorized table from the
-     * top, for an embedder change the recorded profile cannot see. Admin-gated by
+     * top, for a change the recorded profile cannot see (an `embed` swap with no
+     * declared `model`, a Shape B `select`/`metadata` edit). Admin-gated by
      * `handleAdminRpc`'s caller.
      */
     private async handleBackfillVectors(args: Record<string, unknown>): Promise<Response> {

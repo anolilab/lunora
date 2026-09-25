@@ -486,7 +486,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
             level: "native",
-            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option. Write sync and the `backfillVectors` admin op (paged embedding of pre-existing rows) are Lunora's, carried by ShardHost: pages are read under `runSerialized` and synced on the shard's after-commit chain. Shard-local tables only: `.global()` plus a vector index is rejected, since D1/Hyperdrive writes never reach that chain",
+            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option. Write sync and the `backfillVectors` admin op (paged embedding of pre-existing rows; re-embeds a table when its index config or declared `model` changes) are Lunora's, carried by ShardHost: pages are read under `runSerialized` and synced on the shard's after-commit chain. Shard-local tables only: `.global()` plus a vector index is rejected, since D1/Hyperdrive writes never reach that chain",
         },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
@@ -651,7 +651,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: {
             level: "unsupported",
-            note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED",
+            note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED, and an index's declared `model` is accepted but read by nothing",
         },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },

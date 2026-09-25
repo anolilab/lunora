@@ -48,7 +48,7 @@ your query, mutation, and action contexts.
 A vector index always names a source of text to embed. The common case is to
 embed one string column: chain `.vectorize` off `defineTable`. The `index` is
 the logical name (it must match a `vectorize` binding in `wrangler.jsonc`);
-`embed` is your own embedder.
+`embed` is your own embedder, and `model` names the model it calls.
 
 ```ts
 // lunora/schema.ts
@@ -67,6 +67,7 @@ export default defineSchema({
             dimensions: 1024,
             metric: "cosine",
             embed,
+            model: "@cf/baai/bge-m3", // the model `embed` calls; changing it re-embeds on the next backfill
             metadata: ["title", "workspaceId"], // mirrored into Vectorize metadata for filtering
         }),
 });
@@ -88,7 +89,7 @@ back, and `restore()` re-embeds the row's current text.
 
 Write sync only sees writes made **after** the index exists. Rows already in the
 table when you add `.vectorize()` (or change an index's `field`, `dimensions`,
-`metric` or `metadata`) are indexed by the `backfillVectors` admin operation; see
+`metric`, `metadata` or `model`) are indexed by the `backfillVectors` admin operation; see
 [Indexing existing rows](#indexing-existing-rows).
 
 A `.global()` table cannot declare a vector index. Its writes go to D1 or
@@ -141,13 +142,25 @@ Two kinds of failure are handled differently:
   by the next call, not skipped.
 
 The backfill records the index configuration it built from. When you change an
-index's `field`, `dimensions`, `metric` or `metadata`, or add or rename an index,
-the next call re-embeds the table from the top. Existing vectors are overwritten
-in place, never cleared first. Pass `{"restart":true}` once to re-embed
-everything when the check cannot see the change:
+index's `field`, `dimensions`, `metric`, `metadata` or `model`, or add or rename
+an index, the next call re-embeds the table from the top. Existing vectors are
+overwritten in place, never cleared first.
 
-- a change to the `embed` function itself, such as a different model with the
-  same dimensions;
+`embed` is a function, and Lunora cannot tell which model it calls: its source
+text changes with every rebuild of your bundle, so it is not compared. The
+optional `model` string is what makes a model swap visible. Set it to the model
+`embed` calls and change the two together. `model` is only compared, never
+parsed, so any string works, and changing it on purpose re-embeds the table.
+Adding `model` to an index that had none re-embeds that table once, because the
+backfill has no record of which model built the stored vectors. An index without
+`model` keeps its recorded configuration and is not re-embedded.
+
+Pass `{"restart":true}` once to re-embed everything when the check cannot see
+the change:
+
+- a different model behind `embed` with no `model` declared, or with `model` left
+  unchanged;
+- a change to a `defineVectorIndex` `select` or `metadata` function;
 - rows written through the admin writer, such as a bulk import with
   `lunora import`. That path skips write sync, so those rows have no vectors
   until a backfill walks them.

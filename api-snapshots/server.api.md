@@ -2432,6 +2432,7 @@ interface TableVectorIndex {
     field: string;
     metadata?: ReadonlyArray<string>;
     metric: VectorMetric;
+    model?: string;
     name: string;
 }
 ```
@@ -2705,6 +2706,7 @@ interface VectorIndexDefinition {
     readonly kind: "vectorIndex";
     readonly metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     readonly metric: VectorMetric;
+    readonly model?: string;
     readonly select: (row: Record<string, unknown>) => string;
     readonly table: string;
 }
@@ -2718,6 +2720,7 @@ interface VectorIndexOptions {
     embed: VectorEmbedder;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric: VectorMetric;
+    model?: string;
     source: {
         select: (row: Record<string, unknown>) => string;
         table: string;
@@ -2813,6 +2816,7 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
     index: string;
     metadata?: ReadonlyArray<keyof Shape & string>;
     metric: VectorMetric;
+    model?: string;
 }
 ```
 

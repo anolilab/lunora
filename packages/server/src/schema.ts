@@ -56,6 +56,15 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
     /** Fields mirrored into Vectorize metadata for filtering. */
     metadata?: ReadonlyArray<keyof Shape & string>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed until the backfill is run with `restart: true`.
+     */
+    model?: string;
 }
 
 /** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
@@ -407,6 +416,16 @@ interface VectorIndexOptions {
     /** Optional projection of the source row into Vectorize metadata. */
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed, as does a change to `select` or `metadata`, until the backfill
+     * is run with `restart: true`.
+     */
+    model?: string;
     /** The vector source: which table, and how to derive the embedded text. */
     source: { select: (row: Record<string, unknown>) => string; table: string };
 }
@@ -708,6 +727,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 field,
                 metadata: options.metadata,
                 metric: options.metric,
+                model: options.model,
                 name: options.index,
             });
 
@@ -730,6 +750,7 @@ const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition =
         kind: "vectorIndex",
         metadata: options.metadata,
         metric: options.metric,
+        model: options.model,
         select: options.source.select,
         table: options.source.table,
     };
