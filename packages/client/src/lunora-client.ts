@@ -2795,9 +2795,12 @@ class LunoraClient {
         // durable path still holds anything for this shard, go behind it.
         //
         // The durable path's OWN replay is the exception: it re-enters here
-        // carrying the original `mutationId`, is already persisted, and
-        // re-queueing it would loop it back into the queue it is draining.
-        const queuedAhead = shouldQueueOffline && options.mutationId === undefined && this.hasPendingWriteAhead(options.shardKey);
+        // carrying `replayBaseline` (every durable replay pins one), is already
+        // persisted, and re-queueing it would loop it back into the queue it is
+        // draining. A caller-supplied `mutationId` alone is not a replay:
+        // `importRows` and app code pass one for idempotency, and those writes
+        // must still go behind the queue.
+        const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
 
         if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect || queuedAhead) {
             return this.enqueueOfflineMutation(
@@ -2873,7 +2876,8 @@ class LunoraClient {
      * wait per row (a 200-row import becomes 200 sequential hops), while a single
      * giant call blows the DO's batch limit. So: chunk, send sequentially, and give
      * each chunk a stable idempotency key derived from `importId` + its index, so a
-     * resumed or retried import doesn't double-insert the chunks that already landed.
+     * resumed or retried import doesn't double-insert the chunks that already landed
+     * (for an anonymous caller only while the `clientId` is the same; see `importId`).
      *
      * The server mutation is yours (Lunora can't guess the table or the row shape);
      * back it with `ctx.db.insertMany(...)`, or `insertManyUnsafe(...)` for data you
@@ -2908,6 +2912,13 @@ class LunoraClient {
              * SILENTLY DROPS those rows. Keep `chunkSize` (and the row order) identical
              * across resumes of the same `importId`. Omit `importId` only for a
              * throwaway import where double-insertion is acceptable.
+             *
+             * CAVEAT — anonymous callers: the server scopes the key to the signed-in
+             * user, or to the client's `clientId` when nobody is signed in. A
+             * `LunoraClient` mints a fresh `clientId` on every construction, so an
+             * anonymous import resumed after a reload is not deduped and inserts the
+             * landed chunks again. Pass a persisted `clientId` to the constructor to
+             * resume anonymously, or run the import signed in.
              */
             importId?: string;
 

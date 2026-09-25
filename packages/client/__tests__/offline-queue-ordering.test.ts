@@ -240,10 +240,53 @@ describe("offline queue ordering vs a live mutation", () => {
         await settle();
 
         // The `@lunora/db` outbox replays by calling back into `mutation()` with
-        // the write's original key. It is already durable — the gate must let it
-        // through rather than loop it back into the queue it is draining.
-        await client.mutation(fnRef("todos.set"), { text: "REPLAYED" }, { mutationId: "outbox:1" });
+        // the write's original key and its pinned baseline. It is already
+        // durable — the gate must let it through rather than loop it back into
+        // the queue it is draining.
+        await client.mutation(fnRef("todos.set"), { text: "REPLAYED" }, { mutationId: "outbox:1", replayBaseline: null });
 
         expect(server.observed).toStrictEqual(["REPLAYED"]);
+    });
+
+    it("sends an importRows chunk behind an older held write, despite its idempotency key", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.setAuthToken("jwt-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const older = client.mutation(fnRef("todos.set"), { text: "OLDER" });
+
+        older.catch(() => undefined);
+        await settle();
+
+        client.setAuthToken("jwt-2");
+        sockets.at(-1)?.open();
+        await settle();
+
+        // `importRows` sends every chunk with a `mutationId` of its own. That is
+        // an idempotency key, not a durable replay, so it must not skip the gate.
+        const imported = client.importRows(fnRef("todos.import"), ["NEWER"], { importId: "import-1" });
+
+        imported.catch(() => undefined);
+        await settle();
+
+        expect(server.observed).toStrictEqual([]);
+
+        client.setAuthToken("jwt-2", "user-1");
+        await settle();
+
+        await expect(imported).resolves.toStrictEqual({ chunks: 1, imported: 1 });
+        expect(server.observed).toStrictEqual(["OLDER", "NEWER"]);
     });
 });
