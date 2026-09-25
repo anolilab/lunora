@@ -1,3 +1,9 @@
+## @lunora/queue [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.67...@lunora/queue@1.0.0-alpha.68) (2026-09-25)
+
+### Bug Fixes
+
+* **config:** remove dropped queue tuning and retune --env consumers ([#830](https://github.com/anolilab/lunora/issues/830)) ([753650e](https://github.com/anolilab/lunora/commit/753650e921801a24b4a4f0be2dbba19ea32c553d)), closes [#817](https://github.com/anolilab/lunora/issues/817)
+
 ## @lunora/queue [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.66...@lunora/queue@1.0.0-alpha.67) (2026-09-25)
 
 
