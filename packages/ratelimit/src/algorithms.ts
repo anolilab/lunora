@@ -172,19 +172,36 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
 };
 
 /**
- * Milliseconds from `now` until a fixed window whose balance is `value` at the
- * window starting `windowTs` holds at least `needed` — the first window boundary
- * at which {@link projectFixedWindow} projects enough.
+ * Milliseconds from `now` until the stored fixed-window state `stored` projects
+ * to at least `needed` — the first window boundary after `windowTs` at which
+ * {@link projectFixedWindow} (what the next call will actually run) says so.
  *
  * Always saying "the next window" was wrong whenever the balance carries across
  * the boundary (reserved debt, or rollover under an explicit `capacity`): one
  * window's `rate` does not repay a deeper debt, so the caller woke, was rejected
- * again, and was told "next window" once more. Without carry the next window
- * resets to `rate`, which always covers an admissible `count`.
+ * again, and was told "next window" once more.
+ *
+ * The window count is estimated in closed form from `value` (the balance at
+ * `windowTs`) and then corrected against the projection itself, because the
+ * projection sums `carry + periods * rate` from the STORED state: with a
+ * fractional `rate` that rounds differently from `(needed - value) / rate`, and
+ * the estimate alone could be one window off either way.
  */
-const fixedWindowWait = (config: RateLimitConfig, windowTs: number, value: number, needed: number, now: number): number => {
+const fixedWindowWait = (config: RateLimitConfig, stored: RateLimitValue | undefined, windowTs: number, value: number, needed: number, now: number): number => {
+    const projects = (windows: number): boolean => projectFixedWindow(config, stored, windowTs + windows * config.period).value >= needed;
     const carries = value < 0 || config.capacity !== undefined;
-    const windows = carries ? Math.max(1, Math.ceil((needed - value) / config.rate)) : 1;
+    let windows = carries ? Math.max(1, Math.ceil((needed - value) / config.rate)) : 1;
+
+    // Each loop moves at most a window or two: the estimate is off only by
+    // floating-point rounding. The step bound keeps a pathological config from
+    // spinning; past it the estimate stands.
+    for (let step = 0; step < 4 && windows > 1 && projects(windows - 1); step += 1) {
+        windows -= 1;
+    }
+
+    for (let step = 0; step < 4 && !projects(windows); step += 1) {
+        windows += 1;
+    }
 
     return windowTs + windows * config.period - now;
 };
@@ -211,14 +228,20 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         const reserved = base.value - options.count;
 
         // When the reserved debt clears — the balance is back to zero.
-        return { status: { ok: true, retryAfter: fixedWindowWait(config, base.ts, reserved, 0, options.now) }, value: { ts: base.ts, value: reserved } };
+        return {
+            status: { ok: true, retryAfter: fixedWindowWait(config, { ts: base.ts, value: reserved }, base.ts, reserved, 0, options.now) },
+            value: { ts: base.ts, value: reserved },
+        };
     }
 
     if (options.count > capacity) {
         throwCountExceedsCapacity(options.count, capacity);
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter: fixedWindowWait(config, base.ts, base.value, options.count, options.now) }, value: undefined };
+    return {
+        status: { ok: false, reason: "rate", retryAfter: fixedWindowWait(config, prior, base.ts, base.value, options.count, options.now) },
+        value: undefined,
+    };
 };
 
 /**

@@ -329,6 +329,45 @@ describe("fixed window", () => {
         expect(branches.reserve).toBeGreaterThan(1000);
         expect(failures.slice(0, 5)).toStrictEqual([]);
     });
+
+    it("reports an exact retryAfter for a fractional rate too", () => {
+        expect.assertions(3);
+
+        // `carry + periods * rate` and `(needed - value) / rate` round
+        // differently once `rate` is not an integer, so a closed-form window
+        // count alone lands a window early or late on some of these.
+        const random = seededRandom(7);
+        const rates = [0.1, 0.3, 1 / 3, 2 / 3];
+        const failures: string[] = [];
+        const branches = { admit: 0, reject: 0, reserve: 0 };
+
+        for (let trial = 0; trial < 4000; trial += 1) {
+            const rate = rates[trial % rates.length] as number;
+            const period = 100 + Math.floor(random() * 1000);
+            // A fractional rate needs an explicit capacity of at least one unit,
+            // or no integer count could ever be admitted.
+            const capacity = 1 + Math.floor(random() * 5);
+            const config: RateLimitConfig = { capacity, kind: "fixed window", period, rate, start: Math.floor(random() * period) };
+            let state: RateLimitValue | undefined;
+            let now = Math.floor(random() * 5000);
+
+            for (let step = 0; step < 12; step += 1) {
+                now += Math.floor(random() * period * 3);
+                const outcome = checkRetryAfter(config, state, { count: 1 + Math.floor(random() * capacity), now, reserve: random() < 0.3 });
+
+                branches[outcome.branch] += 1;
+                state = outcome.next;
+
+                if (outcome.failure !== undefined) {
+                    failures.push(outcome.failure);
+                }
+            }
+        }
+
+        expect(branches.reject).toBeGreaterThan(5000);
+        expect(branches.reserve).toBeGreaterThan(1000);
+        expect(failures.slice(0, 5)).toStrictEqual([]);
+    });
 });
 
 describe("sliding window", () => {

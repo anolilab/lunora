@@ -318,16 +318,15 @@ describe("live refill", () => {
 
 describe("a limit enforces its whole rate on one key", () => {
     // `shards` used to route every key to one of N sub-buckets holding
-    // `rate / shards`, so a documented 10_000/s ingest limit admitted 625. The
-    // option is gone; a config still carrying it (plain JS, a stale object that
-    // skips the excess-property check) must enforce the full rate.
+    // `rate / shards`, so a documented 10_000/s ingest limit admitted 625.
     it("admits exactly `rate` in one period for a global limit and for a keyed one", async () => {
         expect.assertions(2);
 
-        const staleIngest = { kind: "token bucket", period: 1000, rate: 1000, shards: 16 } as const;
-        const staleApi = { kind: "fixed window", period: 60_000, rate: 100, shards: 4 } as const;
         const limiter = new RateLimiter({
-            config: { api: staleApi, ingest: staleIngest },
+            config: {
+                api: { kind: "fixed window", period: 60_000, rate: 100 },
+                ingest: { kind: "token bucket", period: 1000, rate: 1000 },
+            },
             now: () => 0,
             store: createMemoryStore(),
         });
@@ -350,6 +349,19 @@ describe("a limit enforces its whole rate on one key", () => {
 
         expect(ingest).toBe(1000);
         expect(api).toBe(100);
+    });
+
+    it("refuses a config that still carries `shards` instead of ignoring it", () => {
+        expect.assertions(1);
+
+        // A plain-JS config, or one built as a wider object, skips the excess-
+        // property check. Ignoring the key would silently enforce a different
+        // limit, so construction fails and names the fix.
+        const stale = { kind: "token bucket", period: 1000, rate: 16_000, shards: 16 } as RateLimitConfigMap<"ingest">["ingest"];
+
+        expect(() => new RateLimiter({ config: { ingest: stale }, now: () => 0, store: createMemoryStore() })).toThrow(
+            'rate limit "ingest": `shards` is no longer supported',
+        );
     });
 });
 

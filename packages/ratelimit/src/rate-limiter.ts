@@ -12,8 +12,7 @@ interface RateLimiterOptions<Names extends string> {
 
     /**
      * Optional key normalizer applied to every incoming `args.key` (the
-     * deny-list check, the storage key, and downstream shard selection all see
-     * the normalized form). Use for case-folding, trimming, or canonicalizing
+     * deny-list check and the storage key both see the normalized form). Use for case-folding, trimming, or canonicalizing
      * IPs/emails so equivalent inputs share a single bucket. The deny-list
      * itself is consulted as-is; normalize the deny-list entries up front to
      * match.
@@ -84,6 +83,16 @@ class RateLimiter<Names extends string = string> {
         this.store = options.store ?? createMemoryStore();
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
+            // `shards` is gone. Ignoring a leftover one would silently enforce a
+            // different limit: an app that raised `rate` to offset the split
+            // would now admit `shards` times the traffic it meant to.
+            if (Object.hasOwn(config, "shards")) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `rate limit "${name}": \`shards\` is no longer supported — remove it; the limit now enforces its full \`rate\` (lower \`rate\` if you raised it to offset the split)`,
+                );
+            }
+
             // A zero/negative/non-finite period divides by zero in the token
             // bucket (ratePerMs = rate / period → Infinity) and produces NaN
             // window starts in the windowed algorithms — silently corrupting
