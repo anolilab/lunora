@@ -1,3 +1,15 @@
+## @lunora/sql-store [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.132...@lunora/sql-store@1.0.0-alpha.133) (2026-09-25)
+
+### Bug Fixes
+
+* **search:** key fts5 companions by a rowid map and guard backfills ([#819](https://github.com/anolilab/lunora/issues/819)) ([8d57122](https://github.com/anolilab/lunora/commit/8d5712261cb2d5dc051b7db0f061c376fb995304))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.81
+* **@lunora/do:** upgraded to 1.0.0-alpha.160
+
 ## @lunora/sql-store [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.131...@lunora/sql-store@1.0.0-alpha.132) (2026-09-25)
 
 
