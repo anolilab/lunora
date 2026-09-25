@@ -387,6 +387,14 @@ const isExportedFromItsModule = (declaration: Node): boolean =>
  * character AND a regex anchor, so an unescaped `QueryPage$1` would match
  * nothing and read as "already inlined" — the exact bare name #781 exists to
  * catch, waved through.
+ *
+ * Errs in the safe direction only. A false positive — the name matched inside a
+ * string literal type, say — merely restores the pre-#810 answer, `expand`,
+ * which costs precision and never correctness. A false NEGATIVE is the dangerous
+ * one, since it prints a name that does not resolve. The pattern's `\w` is
+ * ASCII-only, so a non-ASCII identifier character beside the name does not count
+ * as part of it: `Shapeé` matches `Shape` — another false positive, same safe
+ * direction.
  */
 const mentionsBareName = (printed: string, name: string): boolean =>
     new RegExp(String.raw`(?<![$\w])${name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`)}(?![$\w])`, "u").test(printed);

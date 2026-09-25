@@ -419,14 +419,14 @@ const inferToFixpoint = (options: {
 } => {
     const { agents, apiPath, generatedFunctionsPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } = options;
 
-    // The three discoverers that read an inferred return type through
-    // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
-    // the files those types resolve against change. Everything else in the
-    // pipeline reads syntax, not inference, and stays outside.
     // Erasures recorded by a pass that is then re-run are stale — a later pass
     // may render the same return — so each re-run drops the previous pass's.
     const rewindErasedReturns = checkpointErasedReturns();
 
+    // The three discoverers that read an inferred return type through
+    // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
+    // the files those types resolve against change. Everything else in the
+    // pipeline reads syntax, not inference, and stays outside.
     let functions = discoverFunctions(project, lunoraDirectory);
     let mutators = discoverMutators(project, lunoraDirectory);
     let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);

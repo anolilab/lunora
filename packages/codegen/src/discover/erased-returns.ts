@@ -45,8 +45,9 @@ const findingFor = (record: ErasedReturn, relativePath: string): Finding => {
  * Reads a buffer the discovery passes filled rather than re-deriving anything —
  * the signal is "expansion was attempted and produced nothing", which exists
  * only at the moment of the fallback. Deduplicated on the cache key, because one
- * procedure reaches the render path more than once (the declaration surface is
- * emitted before handler types are inferred against it, so discovery runs twice).
+ * procedure can record several erasures in a single pass — one per erasing
+ * `v.from(...)` inside its `.output(...)`. Re-run inference passes are not the
+ * source: `inferToFixpoint` rewinds each one's records before the next.
  */
 const discoverErasedReturns = (lunoraDirectory: string): Finding[] => {
     const byKey = new Map<string, Finding>();

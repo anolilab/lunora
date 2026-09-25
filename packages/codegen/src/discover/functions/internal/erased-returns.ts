@@ -17,9 +17,8 @@ interface ErasedReturn {
  * Return types this codegen run erased to `unknown` because no renderable form
  * could be produced.
  *
- * A module-level buffer rather than a threaded return value, for the same reason
- * `parse-validator.ts` registers its Standard Schema resolver that way: the two
- * places that detect an erasure (`unwrap-handler-return.ts` and
+ * A module-level buffer rather than a threaded return value: the two places that
+ * detect an erasure (`unwrap-handler-return.ts` and
  * `resolve-standard-schema-type.ts`) are reached through `discoverFunctions`,
  * `discoverMutators`, `discoverHttpRoutes`, the builder-chain walker and the
  * validator parser, each of which returns a rendered STRING. Threading a finding
@@ -86,7 +85,15 @@ const recordErasedOutput = (rendered: string): void => {
     }
 };
 
-/** Run `parse` over the validator of the `.output(...)` call `site`, so its erasures are reported there. */
+/**
+ * Run `parse` over the validator of the `.output(...)` call `site`, so its
+ * erasures are reported there.
+ *
+ * Opt-in, and the only way in: an erasure recorded outside this context is
+ * DROPPED, because the same resolver also runs for table fields and `.input()`.
+ * So every `.output(...)` parse site whose type reaches a generated file must
+ * go through here, or its erasures are silently never reported.
+ */
 const parseOutput = <T>(site: TsNode, parse: () => T): T => {
     const previous = outputSite;
 
