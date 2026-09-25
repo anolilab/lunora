@@ -1,3 +1,169 @@
+## @lunora/codegen [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.209...@lunora/codegen@1.0.0-alpha.210) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **vectors:** a schema declaring a vector index on a `.global()` table no
+longer loads. It never synced; drop `.global()` or maintain the index with
+`ctx.vectors.upsert`/`deleteByIds`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(do): backfill pre-existing rows into vector indexes
+
+Vector sync only ever saw writes made after an index existed. Rows already in
+a table when `.vectorize()` was added were never indexed, and changing an
+index's field or dimensions never re-embedded anything. There was no path to
+fix either: nothing called `upsertMany` and no admin op existed.
+
+`__lunora_admin__:backfillVectors` walks each vectorized table through the
+same sync hook `ctx.db` uses, so soft-deleted rows are purged, not indexed.
+
+- Paged and resumable: 100 rows a page, one page per call unless `maxPages`
+  says otherwise, since every row is a remote embed plus an upsert. Progress
+  lives in `__lunora_vector_backfill`; the cursor only advances after a page's
+  hooks all succeeded, so a failed page is retried, not skipped.
+- Config changes: each table records a profile of its indexes (names, field,
+  dimensions, metric, metadata). A different profile re-walks the table,
+  overwriting vectors in place. An embedder change the profile cannot see
+  takes `restart: true`, which resets every table up front so a later call
+  without the flag still finishes the walk.
+- No lost updates: a page is read inside the single-writer gate and synced as
+  a link on the after-commit chain (`ShardDO.runOrderedAfterWrites`). A write
+  committed while a page embeds has its hook run after the page, so the
+  index ends on the newer vector, or none for a delete.
+
+Codegen emits the `runShardVectorBackfill` override only where it emits
+`ctx.vectors`. Node rates `vectorStore` unsupported, so it gets no override and
+the op answers NOT_IMPLEMENTED; the capability notes say so.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(bindings): match the vector docs to ctx.vectors
+
+The package docs promised three things the typed ctx does not have:
+
+- `upsertMany` on `ctx.vectors` (TS2339 against a real app)
+- a third `namespace` argument on `getByIds`/`deleteByIds` (TS2554); that
+  argument exists on the adapter `@lunora/ai/rag` uses, not on `ctx.vectors`
+- `query` falling back to the index's embedder; it throws without `embed`,
+  and both examples omitted it
+
+The docs now describe the API as it is. Each corrected call was type-checked
+against the blog example. The vector search concept page covers the three
+behaviours this branch changes: soft-deleted rows have no vector, `.global()`
+tables are rejected, and `backfillVectors` indexes pre-existing rows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* refactor(search-core): share backfill pass planning and paging
+
+The vector backfill needs the same three pieces the search backfill already
+has, so they move to neutral names instead of being copied:
+
+- `planSearchBackfillPass` / `SearchBackfillState` / `SearchBackfillPass`
+  become `planBackfillPass` / `BackfillState` / `BackfillPass`; sql-store and
+  shard-engine call the renamed ones.
+- shard-engine's progress reader takes the state table as a parameter
+  (`readBackfillState`); `readSearchBackfillState` is a thin wrapper.
+- the keyset page read (`readKeysetPage`) is lifted out of the search page.
+* **vectors:** `@lunora/search-core` renames `planSearchBackfillPass`,
+`SearchBackfillState` and `SearchBackfillPass` to `planBackfillPass`,
+`BackfillState` and `BackfillPass`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* refactor(server): share the global vector index rejection message
+
+`defineSchema` and codegen's schema discovery each spelled out the same
+refusal for a vector index on a `.global()` table. They share no runtime edge,
+so the wording moves to `shared/global-vector-index.ts` and both import it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): check ctx.vectors.upsertNow for user-supplied namespaces
+
+The namespace-from-user-input lint watched `query`, `upsert` and `upsertMany`.
+`upsertMany` is not a `ctx.vectors` method: the facade `createContextVectors`
+builds has no such member, so it was never reachable and matched nothing.
+`upsertNow` is a method and takes the same `{ namespace }` input, but it wasn't
+checked. Swap it in, and correct the lint text that listed `upsertMany`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(do): harden the vector backfill against actions, bad rows and slow pages
+
+Action writes could be overwritten by a page. `deferAfterCommit` joined the
+after-commit chain only when a transaction was open and otherwise ran the
+hook inline. An action's patch or delete therefore landed before a page the
+chain was still holding, and the page's stale snapshot then overwrote it: a
+hard-deleted row got its vector back. With no transaction open, the work is
+now its own link on the chain, and the call waits for it (bounded by
+`AFTER_COMMIT_WAIT_MS`, like a mutation), so the action still sees its hook's
+result and error. The cost: an action now also waits for work committed before
+it. Nothing on the chain writes through a hook-carrying `ctx.db` outside a
+transaction; if something did, the bounded wait would turn that into a stall,
+not a deadlock.
+
+One bad row wedged the backfill for good. A non-string source, text the
+model refuses or metadata Vectorize rejects failed the page on every retry,
+and so blocked every later table. These failures are now kept separate:
+- Row failures are counted, the first 20 ids are reported, and the row is
+  skipped.
+- A page that fails as a whole keeps its cursor. That is two or more attempts
+  all failing, or a failed delete. The call returns the progress made so far
+  with `error` set; the admin op answers 503 with that body and records it in
+  the audit log.
+
+A page held the write-hook chain for a remote call per row. Pages now hold 50
+rows. They are embedded 8 at a time and written with one `upsertMany` and one
+`deleteByIds` per index. A refused batch is retried one row at a time to find
+the bad row. At ~300 ms per embed, a page takes about 2 s, well under the 15 s
+stall bound. `maxPages` is capped at 20.
+
+Also:
+- a table ending on a page boundary no longer spends a call on an empty
+  page: the page read peeks one row past the page.
+- the generated override builds its adapters through one `vectorSync(env)`
+  method shared with `buildCtx`, and throws `LunoraError("NOT_IMPLEMENTED")`.
+- `runOrderedAfterWrites` returns the work's result.
+- the search and vector admin ops share `maxPages` parsing. Search still
+  defaults to running to completion; vectors default to one page.
+- `VECTOR_BACKFILL_PAGE_ROWS` and `OrderedAfterWrites` are no longer exported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(platform-node): sync the vectorStore note with NODE_CAPABILITIES
+
+The capabilities matrix gained a note about the backfillVectors admin op answering
+NOT_IMPLEMENTED on Node; the docs table must restate it verbatim. Also formats a
+soft-delete companion test with Prettier.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **vectors:** sync gaps — global tables, pre-existing rows, soft deletes ([#818](https://github.com/anolilab/lunora/issues/818)) ([89d2c3f](https://github.com/anolilab/lunora/commit/89d2c3feace888c2bf5238687cd077d6f5cfa395))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.153
+* **@lunora/agent:** upgraded to 1.0.0-alpha.134
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+* **@lunora/queue:** upgraded to 1.0.0-alpha.65
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.84
+* **@lunora/do:** upgraded to 1.0.0-alpha.161
+* **@lunora/server:** upgraded to 1.0.0-alpha.142
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.82
+
 ## @lunora/codegen [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.208...@lunora/codegen@1.0.0-alpha.209) (2026-09-25)
 
 
