@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { containerBuildTag } from "@lunora/container";
+import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type {
@@ -809,8 +810,10 @@ const declaredConsumerTuning = (queue: InferredQueue): Partial<QueueConsumerEntr
     Object.fromEntries(CONSUMER_TUNING_KEYS.filter(([option]) => queue.tuning[option] !== undefined).map(([option, key]) => [key, queue.tuning[option]]));
 
 /**
- * The consumer tuning fields reconcile wrote on its last pass, keyed by the
- * consumer's `queue` name. Recorded per scope — `"queues"` for the top level,
+ * The consumer tuning fields `defineQueue` declared on reconcile's last pass,
+ * keyed by the consumer's `queue` name. A hand-set value that equalled the
+ * declared one is recorded like any other, so dropping the option removes it:
+ * removing the option is taken as the intent. Recorded per scope — `"queues"` for the top level,
  * `"env.<name>.queues"` for an environment block — in the project's
  * `package.json` under `lunora.queueTuning`, the same place and for the same
  * reasons as `lunora.crons` (see `reconcile-crons.ts`).
@@ -819,6 +822,32 @@ type OwnedTuning = Record<string, Partial<QueueConsumerEntry>>;
 
 /** The `package.json` key {@link OwnedTuning} is recorded under. */
 const QUEUE_TUNING_RECORD = "queueTuning";
+
+/** What may follow a property on its own line: its comma, then a `//` comment. */
+const REST_OF_LINE = /^[\t ]*(?:,[\t ]*)?(?:\/\/[^\n\r]*)?\r?\n/u;
+
+/**
+ * Delete the property at `path`. A property on a line of its own goes with
+ * the whole line, trailing `//` comment included; left to `jsonc-parser`, that
+ * comment stays behind and ends up describing the property above it. Any other
+ * layout falls back to `jsonc-parser`'s structural removal.
+ */
+const removeProperty = (text: string, path: ReadonlyArray<number | string>): string => {
+    const tree = parseTree(text);
+    const property = tree === undefined ? undefined : findNodeAtLocation(tree, [...path])?.parent;
+
+    if (property?.type === "property") {
+        const end = property.offset + property.length;
+        const lineStart = text.lastIndexOf("\n", property.offset - 1) + 1;
+        const rest = REST_OF_LINE.exec(text.slice(end));
+
+        if (rest !== null && text.slice(lineStart, property.offset).trim() === "") {
+            return text.slice(0, lineStart) + text.slice(end + rest[0].length);
+        }
+    }
+
+    return applyModify(text, path, undefined);
+};
 
 /** What {@link retuneConsumers} did to one scope's consumers. */
 interface ConsumerRetune {
@@ -836,9 +865,10 @@ interface ConsumerRetune {
  * line with the `defineQueue` export `match` returns for it.
  *
  * A field the export declares is written when it differs. A field the export
- * no longer declares is removed only when `owned` shows reconcile wrote it and
- * it still holds that value: without the record, "reconcile wrote this" and
- * "set by hand" look the same, and deleting the second is the failure to avoid.
+ * no longer declares is removed only when `owned` shows it was declared and it
+ * still holds that value: without the record, "declared" and "set by hand"
+ * look the same, and deleting the second is the failure to avoid. When a
+ * trailing `//` comment shares the field's line, it goes with the field.
  * A recorded field whose value has changed since was edited by hand, so it is
  * kept and named in a warning. `omit` lists fields never written in this scope.
  *
@@ -878,7 +908,7 @@ const retuneConsumers = (
         }
 
         for (const key of removed) {
-            nextText = applyModify(nextText, [...path, index, key], undefined);
+            nextText = removeProperty(nextText, [...path, index, key]);
         }
 
         for (const [key, value] of previous) {
@@ -886,7 +916,7 @@ const retuneConsumers = (
 
             if (current !== undefined && current !== value) {
                 warnings.push(
-                    `${label}/${entry.queue}: ${key} is no longer declared by defineQueue, but it was changed by hand to ${JSON.stringify(current)} after reconcile wrote ${JSON.stringify(value)}, so it was kept. Delete it from wrangler.jsonc if it should go.`,
+                    `${label}/${entry.queue}: ${key} is no longer declared by defineQueue, but it was changed by hand to ${JSON.stringify(current)} from the declared ${JSON.stringify(value)}, so it was kept. Delete it from wrangler.jsonc if it should go.`,
                 );
             }
         }
@@ -925,7 +955,7 @@ interface QueueStep extends ReconcileStep {
  * `deadLetterQueue` or `maxRetries` added afterwards never reached wrangler, so
  * the broker kept dropping exhausted messages the code said were
  * dead-lettered. A field the export leaves unset is untouched unless `owned`
- * records that reconcile wrote it, which is what lets an option REMOVED from
+ * records that `defineQueue` declared it, which is what lets an option REMOVED from
  * `defineQueue` be taken back out.
  *
  * Add-only for ENTRIES: a producer or consumer no `defineQueue` export declares
@@ -1008,12 +1038,26 @@ const reconcileEnvQueues = (text: string, parsed: WranglerShape, queues: Readonl
     const block = parsed.env?.[environment] as { queues?: QueuesShape } | undefined;
     const consumers = block?.queues?.consumers ?? [];
     const producers = block?.queues?.producers ?? [];
+    // By the block's own producer first. The name is a fallback only for a
+    // queue whose binding the block does not map: once it maps the binding to
+    // another queue, a consumer that happens to carry the declared name is not
+    // that queue's.
     const match = (entry: QueueConsumerEntry): InferredQueue | undefined => {
         const binding = producers.find((producer) => producer.queue === entry.queue)?.binding;
 
-        return queues.find((queue) => binding !== undefined && queue.bindingName === binding) ?? queues.find((queue) => queue.name === entry.queue);
+        if (binding !== undefined) {
+            return queues.find((queue) => queue.bindingName === binding);
+        }
+
+        return queues.find((queue) => queue.name === entry.queue && !producers.some((producer) => producer.binding === queue.bindingName));
     };
     const retune = retuneConsumers(text, consumers, ["env", environment, "queues", "consumers"], match, owned, new Set(["dead_letter_queue"]));
+    const unmatched = consumers
+        .filter((entry) => entry.queue !== undefined && match(entry) === undefined)
+        .map(
+            (entry) =>
+                `env.${environment}.queues.consumers/${String(entry.queue)}: no defineQueue export matches it — this block declares no producer mapping one of their bindings to "${String(entry.queue)}", and no export is named that — so it was not retuned. A consumer for a queue another worker produces is skipped the same way.`,
+        );
     const missingDeadLetter = consumers.flatMap((entry) => {
         const declared = match(entry)?.tuning.deadLetterQueue;
 
@@ -1024,7 +1068,7 @@ const reconcileEnvQueues = (text: string, parsed: WranglerShape, queues: Readonl
               ];
     });
 
-    return { added: [], owned: retune.owned, text: retune.text, updated: retune.updated, warnings: [...retune.warnings, ...missingDeadLetter] };
+    return { added: [], owned: retune.owned, text: retune.text, updated: retune.updated, warnings: [...retune.warnings, ...missingDeadLetter, ...unmatched] };
 };
 
 /**
@@ -1240,9 +1284,19 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // Ownership is recorded only once the config it describes is on disk, never
     // before: a record ahead of the file would let the next pass remove a field
     // this one never managed to write.
-    const recordOwnership = (): void => {
-        if (manifest !== undefined && Object.keys(ownedScopes).length > 0) {
+    const recordOwnership = (wranglerWritten: boolean): void => {
+        if (manifest === undefined || Object.keys(ownedScopes).length === 0) {
+            return;
+        }
+
+        // Its own failure, not the caller's "binding inference skipped": the
+        // config change it describes may already be on disk.
+        try {
             recordOwnedTuning(manifest, ownedTuning, ownedScopes);
+        } catch (error: unknown) {
+            warnings.push(
+                `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the queue tuning reconcile owns in ${manifest.path} (lunora.queueTuning) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, an option removed from defineQueue stays deployed.`,
+            );
         }
     };
 
@@ -1257,13 +1311,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     }
 
     if (text === original) {
-        recordOwnership();
+        recordOwnership(false);
 
         return { added: [], changed: false, exportGaps, reason: "bindings already in sync", updated: [], warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");
-    recordOwnership();
+    recordOwnership(true);
 
     return { added, changed: true, exportGaps, updated, warnings, wranglerPath };
 };

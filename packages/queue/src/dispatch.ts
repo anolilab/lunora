@@ -70,8 +70,9 @@ interface CapturedQueueMessage {
      * by `lunora dev`, `deploy` and `prepare`) keeps the two in step: it writes
      * every declared tuning field onto the consumer, including onto one that
      * already exists, and takes a field back out once `defineQueue` drops it
-     * (it records what it wrote in `package.json` `lunora.queueTuning`). The
-     * gaps that remain: a field changed by hand after reconcile wrote it is
+     * (it records what `defineQueue` declared in `package.json`
+     * `lunora.queueTuning`). The gaps that remain: a field changed by hand to
+     * another value than the declared one is
      * kept when the declaration drops it, so a hand-set DLQ still reads
      * `false` here; a `--env` deploy retunes the `env.<name>` consumers but
      * never writes their `dead_letter_queue`, which that block names itself;

@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import type { FormattingOptions } from "jsonc-parser";
-import { applyEdits, modify } from "jsonc-parser";
+import { applyEdits, findNodeAtLocation, modify, parseTree } from "jsonc-parser";
 
 import join from "../path";
 
@@ -67,6 +67,68 @@ const readManifest = (projectRoot: string): Manifest | undefined => {
     }
 };
 
+/** `value` as JSON with every object's keys sorted, so two orderings of one record compare equal. Array order is kept: it is data. */
+const canonical = (value: unknown): string | undefined =>
+    JSON.stringify(value, (_key, item: unknown) =>
+        typeof item === "object" && item !== null && !Array.isArray(item)
+            ? Object.fromEntries(Object.entries(item).toSorted(([a], [b]) => a.localeCompare(b)))
+            : item,
+    );
+
+/**
+ * Set the property at `path` (one or two keys deep) to `value`, touching only
+ * that property's own text.
+ *
+ * Not `modify(..., { formattingOptions })`: its formatter works on whole lines,
+ * and an insertion starts on the line of the property before it, so a sibling
+ * a formatter keeps inline (`"scripts": { "dev": "…" }`) was expanded as a side
+ * effect of recording ownership.
+ */
+const writeKey = (text: string, path: ReadonlyArray<string>, value: unknown): string => {
+    const formatting = formattingFor(text);
+    const unit = formatting.insertSpaces === false ? "\t" : " ".repeat(formatting.tabSize ?? 4);
+    const eol = formatting.eol ?? "\n";
+    const pad = unit.repeat(path.length);
+    const pretty = JSON.stringify(value, undefined, unit)
+        .split("\n")
+        .join(eol + pad);
+    const tree = parseTree(text);
+    const existing = tree === undefined ? undefined : findNodeAtLocation(tree, [...path]);
+
+    if (existing !== undefined) {
+        return text.slice(0, existing.offset) + pretty + text.slice(existing.offset + existing.length);
+    }
+
+    let parent = tree;
+
+    if (tree !== undefined && path.length > 1) {
+        parent = findNodeAtLocation(tree, path.slice(0, -1));
+    }
+    const key = JSON.stringify(path.at(-1));
+
+    if (parent === undefined && path.length > 1) {
+        // `lunora` itself is absent: write it, holding the key.
+        return writeKey(text, path.slice(0, -1), { [path.at(-1) as string]: value });
+    }
+
+    if (parent?.type !== "object") {
+        // No manifest object to anchor to: let jsonc-parser build it.
+        return applyEdits(text, modify(text, [...path], value, { formattingOptions: formatting }));
+    }
+
+    const last = parent.children?.at(-1);
+
+    if (last === undefined) {
+        const inner = `${eol}${pad}${key}: ${pretty}${eol}${unit.repeat(path.length - 1)}`;
+
+        return `${text.slice(0, parent.offset + 1)}${inner}${text.slice(parent.offset + parent.length - 1)}`;
+    }
+
+    const end = last.offset + last.length;
+
+    return `${text.slice(0, end)},${eol}${pad}${key}: ${pretty}${text.slice(end)}`;
+};
+
 /**
  * Set `lunora.<key>` to `value`, or drop it when `value` is `undefined` — and
  * the `lunora` object with it, when nothing else lives there, so a project with
@@ -88,14 +150,15 @@ const recordManifestKey = (manifest: Manifest, key: string, value: unknown): voi
         return;
     }
 
-    const path = value === undefined && onlyOwnKey ? ["lunora"] : ["lunora", key];
-    const edits = modify(manifest.text, path, value, { formattingOptions: formattingFor(manifest.text) });
-
-    if (edits.length === 0) {
+    // Compared as data, not as text: a record a formatter keeps inline, or in
+    // another key order, is the same record, and rewriting it into
+    // jsonc-parser's layout would dirty package.json on every pass.
+    if (canonical(manifest.lunora?.[key]) === canonical(value)) {
         return;
     }
 
-    const next = applyEdits(manifest.text, edits);
+    const path = value === undefined && onlyOwnKey ? ["lunora"] : ["lunora", key];
+    const next = value === undefined ? applyEdits(manifest.text, modify(manifest.text, path, undefined, {})) : writeKey(manifest.text, path, value);
 
     if (next !== manifest.text) {
         writeFileSync(manifest.path, next, "utf8");
