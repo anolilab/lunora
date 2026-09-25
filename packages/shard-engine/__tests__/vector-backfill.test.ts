@@ -19,9 +19,25 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * `@lunora/do`.
  */
 
+/** An error the way an HTTP-backed embedder reports one: the response status rides on it. */
+const httpError = (status: number): Error => Object.assign(new Error(`embedder answered ${String(status)}`), { status });
+
 const embed = async (value: string): Promise<ReadonlyArray<number>> => {
     if (value === "the model rejects this") {
         throw new Error("embedding refused");
+    }
+
+    // A real model refuses empty input on every attempt.
+    if (value.trim() === "") {
+        throw new Error("empty input");
+    }
+
+    if (value.startsWith("http ")) {
+        throw httpError(Number(value.slice(5, 8)));
+    }
+
+    if (value === "opaque") {
+        throw new Error("model failed");
     }
 
     return [value.length];
@@ -208,6 +224,98 @@ describe("backfillVectorIndexes", () => {
         await expect(run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true, pages: 2, rows: PRE_EXISTING - VECTOR_BACKFILL_PAGE_ROWS }));
 
         expect(vectors.store.size).toBe(PRE_EXISTING);
+    });
+
+    it("purges rather than embeds rows whose source is empty or whitespace", async () => {
+        expect.assertions(3);
+
+        const blank: Record<number, string> = { 4: "", 5: "  \t " };
+        const { run, vectors } = await deploy(PRE_EXISTING, { bodyOf: (index) => blank[index] ?? `body ${String(index)}` });
+
+        vectors.store.set("p_0005", "stale");
+        vectors.store.set("p_0006", "stale");
+
+        await expect(run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true, pages: 3, rows: PRE_EXISTING }));
+
+        expect(vectors.store.has("p_0005") || vectors.store.has("p_0006")).toBe(false);
+        expect(vectors.store.size).toBe(PRE_EXISTING - 2);
+    });
+
+    it("moves past a page whose every row the embedder refuses as invalid (4xx)", async () => {
+        expect.assertions(2);
+
+        // The whole first page is input the model rejects: a 400 is about the row, not the service.
+        const { run, vectors } = await deploy(PRE_EXISTING, { bodyOf: (index) => (index < VECTOR_BACKFILL_PAGE_ROWS ? "http 400" : `body ${String(index)}`) });
+
+        await expect(run({ maxPages: 10 })).resolves.toMatchObject({ done: true, failed: VECTOR_BACKFILL_PAGE_ROWS, pages: 3, rows: PRE_EXISTING });
+
+        expect(vectors.store.size).toBe(PRE_EXISTING - VECTOR_BACKFILL_PAGE_ROWS);
+    });
+
+    it("holds the cursor on a 5xx for as many calls as it takes, never skipping the page", async () => {
+        expect.assertions(2);
+
+        const { run } = await deploy(PRE_EXISTING, { bodyOf: (index) => (index < VECTOR_BACKFILL_PAGE_ROWS ? "http 503" : `body ${String(index)}`) });
+        const outcomes = [];
+
+        for (let call = 0; call < 5; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- consecutive calls, as an operator retries
+            outcomes.push(await run({ maxPages: 10 }));
+        }
+
+        expect(outcomes.filter((outcome) => outcome.error !== undefined)).toHaveLength(5);
+        expect(outcomes.reduce((total, outcome) => total + outcome.rows, 0)).toBe(0);
+    });
+
+    it("skips a page that fails as a whole on three consecutive calls, records its rows, and reaches the next table", async () => {
+        expect.assertions(5);
+
+        const tables = {
+            notes: { indexes: [], shape: { body: { kind: "string" } }, vectorIndexes: [{ embed, field: "body", name: "notes_body" }] },
+            posts: { indexes: [], shape: { body: { kind: "string" } }, vectorIndexes: [{ embed, field: "body", name: "posts_body" }] },
+        };
+        const schema = { tables, vectorIndexes: {} } as never as SchemaLike & VectorSchemaLike;
+
+        runShardMigrations(harness.sql, schema);
+
+        const writer = createShardCtxDb({ clock: () => 1, idGenerator: nextId, schema, sql: harness.sql });
+
+        // `posts` (walked first) holds one page the embedder fails on with no status to classify it by.
+        for (let index = 0; index < 3; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential ids
+            await writer.insert("posts", { body: "opaque" });
+        }
+
+        await writer.insert("notes", { body: "fine" });
+
+        const vectors = memoryVectors();
+        const sync = createVectorBackfillSync({ allowSharedNamespace: true, schema, upsertMany: vectors.upsertMany as never, vectors });
+        const targets = vectorBackfillTargets(schema).toSorted((a, b) => b.table.localeCompare(a.table));
+        const run = async (): ReturnType<typeof backfillVectorIndexes> => backfillVectorIndexes(harness.sql, targets, sync, { maxPages: 10, ordered: inline });
+
+        await expect(run()).resolves.toStrictEqual(progress({ error: "model failed" }));
+        await expect(run()).resolves.toStrictEqual(progress({ error: "model failed" }));
+        // Third strike at the same cursor: the page is written off, and the walk goes on.
+        await expect(run()).resolves.toStrictEqual(progress({ done: true, failed: 3, failedIds: ["p_0001", "p_0002", "p_0003"], pages: 2, rows: 4 }));
+
+        expect(vectors.store.get("p_0004")).toBe("fine");
+        await expect(run()).resolves.toStrictEqual(progress({ done: true }));
+    });
+
+    it("upgrades a progress table from before strikes were counted, keeping its cursor", async () => {
+        expect.assertions(1);
+
+        const { run } = await deploy(PRE_EXISTING);
+
+        await run();
+
+        // Rebuild the table in its earlier shape, with the progress just recorded.
+        harness.raw(`CREATE TABLE "old" ("companion" TEXT PRIMARY KEY, "cursor" TEXT, "done" INTEGER NOT NULL DEFAULT 0, "profile" TEXT)`);
+        harness.raw(`INSERT INTO "old" SELECT "companion", "cursor", "done", "profile" FROM "__lunora_vector_backfill"`);
+        harness.raw(`DROP TABLE "__lunora_vector_backfill"`);
+        harness.raw(`ALTER TABLE "old" RENAME TO "__lunora_vector_backfill"`);
+
+        await expect(run({ maxPages: 10 })).resolves.toStrictEqual(progress({ done: true, pages: 2, rows: PRE_EXISTING - VECTOR_BACKFILL_PAGE_ROWS }));
     });
 
     it("re-walks the table when the index config changes", async () => {

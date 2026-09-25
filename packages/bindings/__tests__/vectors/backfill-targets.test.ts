@@ -32,4 +32,30 @@ describe(vectorBackfillTargets, () => {
         );
         expect(after?.profile).not.toBe(before?.profile);
     });
+
+    it("changes the fingerprint when a table's soft-delete field changes, for both index shapes", () => {
+        expect.assertions(4);
+
+        const inlineOnly = (field?: string) => {
+            return {
+                tables: {
+                    posts: { softDeleteMode: field === undefined ? undefined : { field }, vectorIndexes: [{ embed, field: "body", name: "posts_body" }] },
+                },
+                vectorIndexes: {},
+            };
+        };
+        const standaloneOnly = (field?: string) => {
+            return {
+                tables: { posts: { softDeleteMode: field === undefined ? undefined : { field } } },
+                vectorIndexes: { posts_mixed: { embed, select: () => "", table: "posts" } },
+            };
+        };
+
+        // Rows hidden under the new marker still carry vectors, so the walk must restart.
+        expect(vectorBackfillTargets(inlineOnly("deletedAt"))[0]?.profile).not.toBe(vectorBackfillTargets(inlineOnly("archivedAt"))[0]?.profile);
+        expect(vectorBackfillTargets(standaloneOnly("deletedAt"))[0]?.profile).not.toBe(vectorBackfillTargets(standaloneOnly("archivedAt"))[0]?.profile);
+        // Turning soft delete on is a change too.
+        expect(vectorBackfillTargets(inlineOnly("deletedAt"))[0]?.profile).not.toBe(vectorBackfillTargets(inlineOnly())[0]?.profile);
+        expect(vectorBackfillTargets(standaloneOnly("deletedAt"))[0]?.profile).not.toBe(vectorBackfillTargets(standaloneOnly())[0]?.profile);
+    });
 });

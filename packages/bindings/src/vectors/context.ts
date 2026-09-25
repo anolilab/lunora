@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import { resolveDocumentPath } from "../../../../shared/document-path";
 import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
 import type { LunoraVectors, VectorizeVector } from "./types";
@@ -427,6 +429,35 @@ interface RowSyncPlan {
 }
 
 /**
+ * Queue `upsert` — or, when its text is blank (empty or whitespace only), the
+ * purge of the row's vector from that index: there is nothing to embed.
+ */
+const place = (plan: RowSyncPlan, upsert: PlannedUpsert): void => {
+    if (upsert.input.trim() === "") {
+        plan.deletes.push(upsert.name);
+    } else {
+        plan.upserts.push(upsert);
+    }
+};
+
+/** A Shape A index's source text, or `undefined` when the field is nullish. */
+const inlineSource = (row: Record<string, unknown>, index: TableVectorIndexLike, table: string): string | undefined => {
+    const value = resolveDocumentPath(row, index.field);
+
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (typeof value !== "string") {
+        throw new TypeError(
+            `@lunora/bindings/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
+        );
+    }
+
+    return value;
+};
+
+/**
  * Decide what one row write means for its vector indexes — shared by the live
  * write hook and the backfill, so the two cannot disagree about which rows have
  * a vector. `undefined` when no index is sourced from the table (or an update
@@ -471,24 +502,23 @@ const planRowSync = (schema: SchemaLike, event: WriteEvent): RowSyncPlan | undef
     // event.doc on update is the FULL merged row, so an inline (Shape A) index
     // whose source field was just cleared (now nullish) must be PURGED —
     // skipping the upsert would leave the stale vector searchable. Shape B has
-    // no per-field source to clear; its `select` defines the value, so it always
-    // upserts.
+    // no per-field source to clear; its `select` defines the value.
+    //
+    // Blank text (empty or whitespace only) is a delete too, for both shapes:
+    // there is nothing to embed, and an embedder refuses it on every attempt —
+    // which, across a whole page of such rows, reads as the service being down.
     for (const index of inlineIndexes) {
-        const value = resolveDocumentPath(row, index.field);
+        const input = inlineSource(row, index, event.table);
 
-        if (value === undefined || value === null) {
+        if (input === undefined) {
             plan.deletes.push(index.name);
-        } else if (typeof value === "string") {
-            plan.upserts.push({ embed: index.embed, input: value, metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined, name: index.name });
         } else {
-            throw new TypeError(
-                `@lunora/bindings/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
-            );
+            place(plan, { embed: index.embed, input, metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined, name: index.name });
         }
     }
 
     for (const [name, definition] of standaloneIndexes) {
-        plan.upserts.push({ embed: definition.embed, input: definition.select(row), metadata: definition.metadata?.(row), name });
+        place(plan, { embed: definition.embed, input: definition.select(row), metadata: definition.metadata?.(row), name });
     }
 
     return plan;
@@ -590,7 +620,9 @@ interface VectorBackfillFailure {
 /**
  * Index one page of rows for the shard's vector backfill. Resolves with the rows
  * that failed on their own; REJECTS when the failure is the service's rather than
- * a row's, so the caller holds its cursor and retries the page.
+ * a row's, so the caller holds its cursor and retries the page — with a
+ * `SERVICE_UNAVAILABLE` `LunoraError` when the error shows the failure to be
+ * transient, and with the raw error when only the whole page failing suggests it.
  */
 type VectorBackfillSync = (table: string, rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>) => Promise<ReadonlyArray<VectorBackfillFailure>>;
 
@@ -608,10 +640,55 @@ const chunk = <T>(items: ReadonlyArray<T>, size: number): T[][] => {
 };
 
 /**
- * Run `attempt` over each item and split the results; if two or more items were
- * tried and EVERY one failed, rethrow the first — that is the embedder or index
- * being down, not a set of bad rows, and recording each row as failed would move
- * the cursor past a page that was never tried.
+ * What one failed call says, as far as the error itself tells.
+ *
+ * `row` — the request was refused as invalid: an HTTP 4xx other than 408/429, or
+ * a `TypeError`/`RangeError` raised before anything was sent. It fails the same
+ * way on every retry.
+ *
+ * `service` — the call itself failed: an HTTP 5xx, 408 or 429, or a
+ * `TimeoutError`/`AbortError`. Retrying can succeed.
+ *
+ * `unknown` — anything else. The Workers AI and Vectorize bindings throw plain
+ * `Error`s whose only detail is the message, so this is the common case for them.
+ */
+const classifyFailure = (error: unknown): "row" | "service" | "unknown" => {
+    if (typeof error !== "object" || error === null) {
+        return "unknown";
+    }
+
+    const { name, status, statusCode } = error as { name?: unknown; status?: unknown; statusCode?: unknown };
+    const code = typeof status === "number" ? status : statusCode;
+
+    if (typeof code === "number") {
+        if (code >= 500 || code === 408 || code === 429) {
+            return "service";
+        }
+
+        if (code >= 400) {
+            return "row";
+        }
+    }
+
+    if (name === "TimeoutError" || name === "AbortError") {
+        return "service";
+    }
+
+    return error instanceof TypeError || error instanceof RangeError ? "row" : "unknown";
+};
+
+/**
+ * Run `attempt` over each item and split the results into rows that went
+ * through and rows that failed on their own. Rejects instead — so the caller
+ * holds its cursor and retries the page — when the failure is the service's.
+ *
+ * That is any failure classified `service` ({@link classifyFailure}): that row
+ * was never really tried, and recording it as failed would move past it.
+ *
+ * It is also two or more items tried and EVERY one failed, unless every failure
+ * is classified `row`. With no status to go on, a whole group failing is far
+ * more likely an outage than a set of bad rows. A group that fails this way
+ * deterministically is written off by the backfill's strike count instead.
  */
 const settleEach = async <T, U>(
     items: ReadonlyArray<T>,
@@ -627,7 +704,13 @@ const settleEach = async <T, U>(
     const ok = settled.flatMap((entry) => (entry.ok ? [{ item: entry.item, value: entry.value }] : []));
     const failed = settled.flatMap((entry) => (entry.ok ? [] : [{ error: entry.error, item: entry.item }]));
 
-    if (items.length >= 2 && ok.length === 0) {
+    const service = failed.find(({ error }) => classifyFailure(error) === "service");
+
+    if (service) {
+        throw service.error;
+    }
+
+    if (items.length >= 2 && ok.length === 0 && failed.some(({ error }) => classifyFailure(error) !== "row")) {
         throw failed[0]?.error;
     }
 
@@ -649,10 +732,14 @@ const settleEach = async <T, U>(
  * these too, and a backfill that stopped on one would never finish.
  *
  * A SERVICE failure is transient: the embedder or Vectorize is unreachable. The
- * call rejects, so the page is retried. It is recognised as every attempt in a
+ * call rejects, so the page is retried. It is recognised by the error where the
+ * error says (an HTTP 5xx/408/429 status, a timeout — see {@link classifyFailure};
+ * these reject as `SERVICE_UNAVAILABLE`), and otherwise as every attempt in a
  * group of two or more failing, and as a failed `deleteByIds` (which has no row
  * content to blame). A batch `upsertMany` that fails is retried one row at a
- * time to tell the two apart.
+ * time to tell the two apart. A group that fails whole on every retry — each
+ * row refused for the same reason, with no status to show it — rejects each
+ * time too; the backfill writes such a page off after a few consecutive tries.
  *
  * `upsertMany` is the raw binding call, so the namespace is passed explicitly —
  * the same `namespace` the live hook scopes by.
@@ -735,37 +822,56 @@ const writeIndex = async (
     }
 };
 
+const syncPage = async (
+    options: BackfillSyncOptions,
+    table: string,
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>,
+): Promise<ReadonlyArray<VectorBackfillFailure>> => {
+    const failed = new Map<string, unknown>();
+    const { deletes, pending } = planPage(options.schema, table, rows, failed);
+    const embedded = await settleEach(pending, async ({ upsert }) => upsert.embed(upsert.input));
+    const byIndex = new Map<string, { id: string; upsert: PlannedUpsert; values: ReadonlyArray<number> }[]>();
+
+    for (const { error, item } of embedded.failed) {
+        failed.set(item.id, error);
+    }
+
+    for (const { item, value } of embedded.ok) {
+        byIndex.set(item.upsert.name, [...(byIndex.get(item.upsert.name) ?? []), { ...item, values: value }]);
+    }
+
+    for (const [name, ids] of deletes) {
+        for (const batch of chunk(ids, MAX_BATCH)) {
+            // eslint-disable-next-line no-await-in-loop -- one batch call per index at a time keeps the subrequest count flat
+            await options.vectors.deleteByIds(name, batch);
+        }
+    }
+
+    for (const [name, entries] of byIndex) {
+        // eslint-disable-next-line no-await-in-loop -- indexes one at a time keeps the subrequest count flat
+        await writeIndex(options, name, entries, failed);
+    }
+
+    return [...failed].map(([id, error]) => {
+        return { error, id };
+    });
+};
+
 const createVectorBackfillSync =
     (options: BackfillSyncOptions): VectorBackfillSync =>
     async (table, rows) => {
-        const failed = new Map<string, unknown>();
-        const { deletes, pending } = planPage(options.schema, table, rows, failed);
-        const embedded = await settleEach(pending, async ({ upsert }) => upsert.embed(upsert.input));
-        const byIndex = new Map<string, { id: string; upsert: PlannedUpsert; values: ReadonlyArray<number> }[]>();
-
-        for (const { error, item } of embedded.failed) {
-            failed.set(item.id, error);
-        }
-
-        for (const { item, value } of embedded.ok) {
-            byIndex.set(item.upsert.name, [...(byIndex.get(item.upsert.name) ?? []), { ...item, values: value }]);
-        }
-
-        for (const [name, ids] of deletes) {
-            for (const batch of chunk(ids, MAX_BATCH)) {
-                // eslint-disable-next-line no-await-in-loop -- one batch call per index at a time keeps the subrequest count flat
-                await options.vectors.deleteByIds(name, batch);
+        try {
+            return await syncPage(options, table, rows);
+        } catch (error) {
+            // A failure the error itself shows to be transient is re-thrown as
+            // `SERVICE_UNAVAILABLE`, so the backfill holds its cursor on it without
+            // counting it toward writing the page off.
+            if (classifyFailure(error) === "service") {
+                throw new LunoraError("SERVICE_UNAVAILABLE", error instanceof Error ? error.message : String(error), { cause: error });
             }
-        }
 
-        for (const [name, entries] of byIndex) {
-            // eslint-disable-next-line no-await-in-loop -- indexes one at a time keeps the subrequest count flat
-            await writeIndex(options, name, entries, failed);
+            throw error;
         }
-
-        return [...failed].map(([id, error]) => {
-            return { error, id };
-        });
     };
 
 /**
@@ -774,15 +880,18 @@ const createVectorBackfillSync =
  * backfill, which re-walks a table whose fingerprint changed.
  *
  * Covers what the schema can see: index names, the inline source field,
- * dimensions, metric, inline metadata fields and the declared `model`. A
+ * dimensions, metric, inline metadata fields, the declared `model`, and the
+ * table's `.softDelete()` field — a row hidden by a newly chosen marker keeps
+ * its vector until the table is walked again. A
  * function (`embed`, a Shape B `select`/`metadata`) has no stable identity to
  * fingerprint — its source text changes with unrelated rebuilds of the bundle,
  * which would re-embed whole tables for nothing — so the declared `model` string
  * stands in for `embed`, and any other change is announced by calling the
  * backfill with `restart: true`.
  *
- * `model` joins a descriptor only when declared, so an index without one keeps
- * the fingerprint it was recorded under and is not re-embedded for it.
+ * `model` joins a descriptor only when declared, and the soft-delete field only
+ * when the table has one, so an index without either keeps the fingerprint it
+ * was recorded under and is not re-embedded for it.
  */
 const vectorBackfillTargets = (schema: SchemaLike): { profile: string; table: string }[] => {
     const byTable = new Map<string, string[]>();
@@ -803,7 +912,10 @@ const vectorBackfillTargets = (schema: SchemaLike): { profile: string; table: st
     }
 
     return [...byTable].map(([table, descriptors]) => {
-        return { profile: descriptors.toSorted((a, b) => a.localeCompare(b)).join("|"), table };
+        const softDeleteField = schema.tables[table]?.softDeleteMode?.field;
+        const described = softDeleteField === undefined ? descriptors : [...descriptors, JSON.stringify(["(softDelete)", softDeleteField])];
+
+        return { profile: described.toSorted((a, b) => a.localeCompare(b)).join("|"), table };
     });
 };
 
