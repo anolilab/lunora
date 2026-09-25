@@ -69,12 +69,15 @@ interface CapturedQueueMessage {
      * true of the deployed broker only as far as Lunora's binding reconcile (run
      * by `lunora dev`, `deploy` and `prepare`) keeps the two in step: it writes
      * every declared tuning field onto the consumer, including onto one that
-     * already exists. It does NOT remove a field taken out of `defineQueue` —
-     * dropping `deadLetterQueue` leaves the deployed DLQ in place, so this then
-     * reads `false` for messages that were in fact dead-lettered — and it never
-     * writes wrangler's `env.<name>` blocks, so a `--env` deploy uses whatever
-     * that block says. A bare `wrangler deploy` over a hand-edited consumer can
-     * disagree too, and nothing on this side can see any of it.
+     * already exists, and takes a field back out once `defineQueue` drops it
+     * (it records what `defineQueue` declared in `package.json`
+     * `lunora.queueTuning`). The gaps that remain: a field changed by hand to
+     * another value than the declared one is
+     * kept when the declaration drops it, so a hand-set DLQ still reads
+     * `false` here; a `--env` deploy retunes the `env.<name>` consumers but
+     * never writes their `dead_letter_queue`, which that block names itself;
+     * and a bare `wrangler deploy` over a hand-edited consumer can disagree
+     * too. Nothing on this side can see any of it.
      */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
