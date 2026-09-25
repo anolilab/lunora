@@ -652,10 +652,15 @@ const instanceHandleFor = (
 /**
  * Prefix of the instance names `.any()` / `.pool()` pick. Reserved, so a
  * `.get(name)` for an entity can never land on a pool member's Durable Object
- * and share its disk or lifecycle — with a bare `pool-N`, `.get("pool-0")`
- * was the pool's first instance, and its `destroy()` stopped a pool member.
+ * and share its disk or lifecycle — `.get("pool-0")` used to BE the pool's
+ * first instance, and its `destroy()` stopped a pool member.
+ *
+ * The pool keeps the `pool-N` names rather than moving to a new prefix: the
+ * names are Durable Object ids, and renaming them would start a second set of
+ * instances while the warm old ones still count against `max_instances`
+ * until they sleep — a deploy that could leave no capacity at all.
  */
-const POOL_INSTANCE_PREFIX = `${RESERVED_PATH_SEGMENT}-pool-`;
+const POOL_INSTANCE_PREFIX = "pool-";
 
 /** A random pool-instance name in `[0, size)`. */
 const randomPoolName = (size: number): string =>
@@ -667,7 +672,7 @@ const assertInstanceNameNotReserved = (name: string, spec: ContainerBindingSpec)
     if (name.startsWith(POOL_INSTANCE_PREFIX)) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `${handleLabel(spec)}.get(): instance names starting with "${POOL_INSTANCE_PREFIX}" are reserved for .any()/.pool(). Pick another name.`,
+            `${handleLabel(spec)}.get(${JSON.stringify(name)}): the "${POOL_INSTANCE_PREFIX}" prefix is reserved for the instances .any()/.pool() pick, so this name would share a container (disk, lifecycle) with a pool member. Pick a name that does not start with "${POOL_INSTANCE_PREFIX}".`,
         );
     }
 };

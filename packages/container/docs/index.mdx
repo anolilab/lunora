@@ -109,9 +109,9 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 
 - **`.get(name)`**: one container instance per name. Use it for stateful,
   per-entity work: a sandbox per user, a room per game, a worker per job id. The
-  same name always reaches the same instance. Names starting with
-  `__lunora-pool-` are reserved for the pool below and rejected, so an entity
-  can never share an instance (disk, lifecycle) with a pool member.
+  same name always reaches the same instance. Names starting with `pool-` are
+  reserved for the instances `.any()` / `.pool()` pick and are rejected, so an
+  entity can never share an instance (disk, lifecycle) with a pool member.
 - **`.any(count?)`**: a random instance from a fixed pool (defaults to
   `maxInstances`, else 3). Use it for stateless, interchangeable work where any
   instance can serve the request.
