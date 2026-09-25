@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.83...@lunora/shard-engine@1.0.0-alpha.84) (2026-09-25)
+
+### Bug Fixes
+
+* **server:** keep the legacy reader's LIMIT behind rls() ([#824](https://github.com/anolilab/lunora/issues/824)) ([7b00d5a](https://github.com/anolilab/lunora/commit/7b00d5a8fb3288619169bab9ad262e2f483f9b60)), closes [#822](https://github.com/anolilab/lunora/issues/822) [#822](https://github.com/anolilab/lunora/issues/822)
+
 ## @lunora/shard-engine [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.82...@lunora/shard-engine@1.0.0-alpha.83) (2026-09-25)
 
 ### Features
