@@ -16,7 +16,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planBackfillPass, searchIndexProfile } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -166,6 +166,19 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
 };
 
 /**
+ * Up to `limit` stored rows of `tableName` past `cursor`, in `id` order — the
+ * keyset page every backfill walks (search here, vectors in `vector-backfill`).
+ * `undefined` starts at the top of the table.
+ */
+const readKeysetPage = (sql: SqlExec, tableName: string, cursor: string | undefined, limit: number): Record<string, unknown>[] =>
+    runDrizzle(
+        sql,
+        cursor === undefined
+            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(limit))}`
+            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(limit))}`,
+    ).toArray();
+
+/**
  * One page of a search backfill: `SEARCH_BACKFILL_BATCH_ROWS` documents in `id`
  * order, starting after `cursor`.
  *
@@ -198,7 +211,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // still matched. Shared with the sql-store plane so the two cannot disagree
     // about when a rebuild is owed.
     const profile = searchIndexProfile(index);
-    const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
+    const pass = planBackfillPass(readSearchBackfillState(sql, ftName), profile);
 
     if (pass.finished) {
         return { done: true, rows: 0 };
@@ -216,12 +229,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // old one until its turn: stale analysis on a shrinking suffix, rather than
     // no row at all.
     const { cursor } = pass;
-    const rows = runDrizzle(
-        sql,
-        cursor === undefined
-            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`
-            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
-    ).toArray();
+    const rows = readKeysetPage(sql, tableName, cursor, SEARCH_BACKFILL_BATCH_ROWS);
 
     // Seeded from the resume point, never from nothing: a page whose rows all
     // fail the id check would otherwise write back an empty cursor and send the
@@ -305,7 +313,7 @@ const searchIndexCoversTable = (sql: SqlExec, tableName: string, index: SearchIn
     // The finished case first, and on its own: it is every read of a healthy
     // index, and it answers from the same single primary-key lookup the backfill
     // page above already makes.
-    if (planSearchBackfillPass(readSearchBackfillState(sql, companion), profile).finished) {
+    if (planBackfillPass(readSearchBackfillState(sql, companion), profile).finished) {
         return true;
     }
 
@@ -444,4 +452,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, searchIndexCoversTable };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, readKeysetPage, searchIndexCoversTable };
