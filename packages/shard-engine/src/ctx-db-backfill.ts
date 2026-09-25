@@ -16,7 +16,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import { analyzedSearchText, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -29,6 +29,7 @@ import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
+import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { isLiveForCompanion } from "./query-args";
 import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
@@ -184,8 +185,8 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
  * number of rows this pass walked — `0` marks the "already complete" no-op, the
  * one outcome a page-budgeted caller must not charge for.
  *
- * Each document is written DELETE-then-INSERT, so re-running a page (a retry
- * after a crash, two cold starts racing) converges instead of duplicating —
+ * Each document's entry is replaced at its mapped rowid, so re-running a page
+ * (a retry after a crash, two cold starts racing) converges instead of duplicating —
  * which on the FTS5 path would otherwise surface as the *same document twice*
  * in a result set, since that query has no `GROUP BY` to collapse it.
  */
@@ -211,7 +212,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // took a COMPLETE index down to nothing and then rebuilt it 500 rows a
     // pass — on a 1M-row table, thousands of requests served from an index
     // covering a fraction of the rows, with the read path querying it either
-    // way. Each row below is written DELETE-then-INSERT, so the re-walk
+    // way. Each row below is replaced at its mapped rowid, so the re-walk
     // converges on the new analysis in place while every row keeps serving the
     // old one until its turn: stale analysis on a shrinking suffix, rather than
     // no row at all.
@@ -238,26 +239,18 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
-        // Drop whatever the companion still holds for this id first: the
-        // DELETE-then-INSERT makes re-running a page converge, and on an
-        // unparseable document it clears a stale row serving text the
-        // document no longer has — worse than the row being unsearchable.
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
         // Safe-parsing, not `rowToDocument`: this runs inside
         // `runShardMigrations`, so an unparseable document would brick the
         // whole shard's cold start. The cursor still advances past it, so the
-        // pass makes progress.
+        // pass makes progress. An unparseable document has its entry purged
+        // rather than kept: a stale row serving text the document no longer
+        // has is worse than the row being unsearchable.
         const record = tryRowToDocument(row);
+        const statements = record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index)) : ftsPurgeDocument(ftName, id);
 
-        if (!record) {
-            continue;
+        for (const statement of statements) {
+            runDrizzle(sql, statement);
         }
-
-        runDrizzle(
-            sql,
-            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,
-        );
     }
 
     const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;

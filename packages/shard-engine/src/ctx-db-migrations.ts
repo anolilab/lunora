@@ -18,7 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName } from "@lunora/search-core";
+import { ftsTableName } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -40,6 +40,7 @@ import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { renderSql } from "./drizzle";
 import { migrateDurableStreams } from "./durable-stream";
+import { adoptFtsCompanion, ftsCompanionDdl, ftsRowidMapName } from "./fts-companion";
 import { rankTableName, sortColumnName } from "./rank";
 import { migrateReactorState } from "./reactor-state";
 import { recordSchemaVersion } from "./schema-history";
@@ -236,7 +237,9 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
  * Create the FTS5 shadow tables for a table's `.searchIndex()` declarations,
  * only on engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
  * runner doesn't, where `.search()` transparently falls back to a scan).
- * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row.
+ * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row,
+ * and the `__ids` map beside it finds a document's row without a scan (see
+ * `fts-companion.ts`).
  *
  * A freshly created shadow is then backfilled from the rows already in the
  * table, so declaring a search index on a table that already holds data makes
@@ -251,19 +254,20 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
 
     for (const index of definition.searchIndexes) {
         const ftName = ftsTableName(tableName, index.name);
+        // A companion built before the rowid map existed holds rows the map
+        // knows nothing about; adopt them the one time the map is created.
+        const mapExisted =
+            runDrizzle(sql, dsql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${ftsRowidMapName(ftName)}`).toArray().length > 0;
 
-        runDrizzle(
-            sql,
-            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(ftName)} USING fts5(${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
-        );
-        // The vocabulary view over that index: one row per term *instance*, so a
-        // term's frequency in a document is a COUNT. It is what lets the reader
-        // rank by the shared scorer in SQL instead of approximating it over a
-        // bm25-selected window — see `searchViaFts`.
-        runDrizzle(
-            sql,
-            dsql`CREATE VIRTUAL TABLE IF NOT EXISTS ${dsql.identifier(`${ftName}__vocab`)} USING fts5vocab(${dsql.identifier(ftName)}, ${dsql.raw("instance")})`,
-        );
+        for (const statement of ftsCompanionDdl(ftName)) {
+            runDrizzle(sql, statement);
+        }
+
+        if (!mapExisted) {
+            for (const statement of adoptFtsCompanion(ftName)) {
+                runDrizzle(sql, statement);
+            }
+        }
     }
 
     backfillSearchIndexesForTable(sql, tableName, definition);

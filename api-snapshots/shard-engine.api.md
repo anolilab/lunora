@@ -3406,6 +3406,12 @@ interface WriteEvent {
 type WriteHook = (event: WriteEvent) => Promise<void> | void;
 ```
 
+### `adoptFtsCompanion` (const)
+
+```ts
+const adoptFtsCompanion: (companion: string) => SQL[];
+```
+
 ### `advanceClientWatermark` (const)
 
 ```ts
@@ -4026,6 +4032,30 @@ const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string
 
 ```ts
 const forgetScheduleOutbox: (sql: SqlExec, id: string) => void;
+```
+
+### `ftsCompanionDdl` (const)
+
+```ts
+const ftsCompanionDdl: (companion: string) => SQL[];
+```
+
+### `ftsPurgeDocument` (const)
+
+```ts
+const ftsPurgeDocument: (companion: string, id: string) => SQL[];
+```
+
+### `ftsRowidMapName` (const)
+
+```ts
+const ftsRowidMapName: (companion: string) => string;
+```
+
+### `ftsWriteDocument` (const)
+
+```ts
+const ftsWriteDocument: (companion: string, id: string, text: string, guard?: SQL) => SQL[];
 ```
 
 ### `gateReplicaDispatch` (const)
