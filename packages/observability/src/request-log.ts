@@ -37,7 +37,8 @@
 
 import { fingerprintError } from "@lunora/fingerprint";
 import type { SqlExec } from "@lunora/shard-engine";
-import { redact, standardRules } from "@visulima/redact";
+import type { Rules } from "@visulima/redact";
+import { createRedactor, standardRules } from "@visulima/redact";
 
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -230,31 +231,83 @@ interface ReadIssuesOptions {
 }
 
 /**
+ * Key-name fragments that mark a credential. `standardRules` matches only a
+ * handful of EXACT key names (`password`, `token`, `apiKey`, `secret`, …), so the
+ * everyday spellings of the same secret — `accessToken`, `refreshToken`,
+ * `clientSecret`, `privateKey`, `api_key`, `cookie`, `newPassword`,
+ * `stripeSecretKey` — went through in the clear. Each fragment matches as a
+ * case-insensitive substring of the key.
+ */
+const CREDENTIAL_KEY_FRAGMENTS = [
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "api-key",
+    "cookie",
+    "privatekey",
+    "private_key",
+    "private-key",
+    "credential",
+    "authorization",
+] as const;
+
+/**
+ * Masks what a credential key holds. A number, boolean or `null` is kept: no
+ * credential is one, and `tokenCount` / `maxTokens` / `inputTokens` are the usage
+ * figures an AI app most needs to read. Everything else is masked — objects too,
+ * because the walk does not descend into a value a rule already matched, so
+ * returning `{ credentials: { apiKey } }` untouched would leak the nested key.
+ */
+const maskCredential = (value: unknown): unknown => (typeof value === "number" || typeof value === "boolean" || value === null ? value : "<REDACTED>");
+
+/**
+ * `name=value` inside a plain string (a message, a URL query, a form body): the
+ * value is masked, the name kept. Anchored on the fragment rather than a leading
+ * `[\w-]*`, so `new_password=…` still matches (from `password`) without the
+ * quadratic backtracking a leading run costs on a long dashed value.
+ */
+const CREDENTIAL_ASSIGNMENT = /(?:password|passwd|secret|token|api[-_]?key|private[-_]?key|credential|cookie)[\w-]*=[^\s&;,"']+/gi;
+
+const REDACT_RULES: Rules = [
+    ...standardRules,
+    ...CREDENTIAL_KEY_FRAGMENTS.map((fragment) => {
+        return { key: `*${fragment}*`, replacement: maskCredential };
+    }),
+    {
+        key: "credential_assignment",
+        pattern: CREDENTIAL_ASSIGNMENT,
+        replacement: (match: unknown) => `${String(match).slice(0, String(match).indexOf("="))}=<REDACTED>`,
+    },
+];
+
+const redactValue = createRedactor(REDACT_RULES);
+
+/**
  * Redact the secrets / PII out of a value before it reaches the durable log or a
- * Logpush event, via `@visulima/redact`'s `standardRules`. Unlike a blunt
- * type-tag stamp this masks sensitive values by PATTERN (not just by key name)
- * while leaving benign values readable, so the studio's args/identity columns
- * stay useful. `null` / `undefined` pass through unchanged.
+ * Logpush event: `@visulima/redact`'s `standardRules` plus the credential rules
+ * above. `null` / `undefined` pass through unchanged.
  *
- * What `standardRules` actually catches differs by shape, verified against its
- * real behavior rather than assumed from its name: on a KEYED object (`args`,
- * `identity`) it also matches by key name, so `{ password: "hunter2" }` and
- * `{ token: "…" }` ARE masked regardless of the value's shape. On a PLAIN
- * STRING — which is what `errorMessage`/log `fields`-as-rendered-text are —
- * only pattern-shaped matches apply: emails, long digit runs / structured
- * numeric IDs (credit-card, phone, SSN, AWS-access-key-style), and an explicit
- * `Bearer <token>` / `token=…`-shaped substring. A free-text `password=hunter2`
- * or a bare provider API key embedded in prose (e.g. `sk-live-…`) is NOT
- * caught on a plain string — there is no key to match against, and neither is
- * a recognized value pattern. So this is a PII-pattern net for rendered text,
- * not a general secrets scrubber; a handler that echoes a raw credential into
- * an error message or a log string can still leak it through here. Works on a
- * plain string too (`redact` traverses whatever value it's handed), which is
- * how {@link appendRequestLogEntry} and {@link emitRequestLogEvent} reuse this
- * for `errorMessage` — a validation error echoes the offending value, a
- * constraint error quotes the conflicting row, so the error message is at
- * least as PII-dense as args and gets the same treatment (with the free-text
- * caveat above).
+ * On a KEYED object (`args`, `identity`), a key containing one of
+ * {@link CREDENTIAL_KEY_FRAGMENTS} (`accessToken`, `client_secret`, `X-Api-Key`,
+ * `sessionCookie`) has its value masked unless that value is a number, boolean
+ * or `null`, so `tokenCount` stays readable.
+ *
+ * On a PLAIN STRING (`errorMessage`, a URL), a `name=value` assignment whose name
+ * contains one of those fragments (`token=abc`, `password=hunter2`, `?api_key=…`)
+ * has its value masked, as do `standardRules`' value patterns — emails, long
+ * digit runs / structured numeric IDs, `Bearer <token>`, JWTs.
+ *
+ * Still NOT caught: a bare credential in prose with no name attached
+ * (`failed with sk_live_…`). This is a credential-and-PII net, not proof that no
+ * secret can reach the log — a handler that echoes an unnamed raw secret into a
+ * message still leaks it. {@link appendRequestLogEntry} and
+ * {@link emitRequestLogEvent} run `errorMessage` through here as well, since a
+ * validation error echoes the offending value and a constraint error quotes the
+ * conflicting row.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
@@ -267,7 +320,7 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
         return value;
     }
 
-    return redact(value, standardRules);
+    return redactValue(value);
 };
 
 /**

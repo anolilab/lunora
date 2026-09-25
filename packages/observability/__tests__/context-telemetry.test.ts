@@ -266,6 +266,67 @@ describe("createTracedFetch error-message redaction", () => {
 
         expect(recorded[0]?.error?.message).toBe("fetch failed for user 12345");
     });
+
+    it("drops the query string of every URL inside the thrown message", async () => {
+        expect.assertions(2);
+
+        // `sig` has no credential-looking name, so only URL redaction catches it.
+        const url = "https://api.example.com/v1/charge?sig=s1&api_key=k1";
+        const { fetch, recorded } = setupFetch(new TypeError(`fetch failed: ${url} (after retry)`));
+
+        await expect(fetch(url)).rejects.toThrow(TypeError);
+        // `standardRules` masks the domain as well; the path stays readable.
+        expect(recorded[0]?.error?.message).toBe("fetch failed: https://<DOMAIN>/v1/charge (after retry)");
+    });
+});
+
+describe("span attribute redaction", () => {
+    it("masks credential attributes on a ctx.trace span by default", async () => {
+        expect.assertions(1);
+
+        const { recorded, trace } = setup();
+
+        await trace(
+            "charge",
+            (_span, handle) => {
+                handle.setAttribute("stripeSecretKey", "sk_live_x");
+            },
+            { accessToken: "tok", plan: "pro", tokenCount: 42 },
+        );
+
+        expect(recorded[0]!.attributes).toStrictEqual({ accessToken: "<REDACTED>", plan: "pro", stripeSecretKey: "<REDACTED>", tokenCount: 42 });
+    });
+
+    it("keeps raw attributes when captureRaw is true", async () => {
+        expect.assertions(1);
+
+        const { recorded, trace } = setup({ captureRaw: true });
+
+        await trace("charge", () => undefined, { accessToken: "tok" });
+
+        expect(recorded[0]!.attributes).toStrictEqual({ accessToken: "tok" });
+    });
+
+    it("masks credential attributes a ctx.span wide event wrote onto the dispatch span", () => {
+        expect.assertions(1);
+
+        const collector = createSpanCollector({ spanId: "span000000000001", traceId: anchor.traceId });
+
+        collector.handle.setAttributes({ plan: "pro", refreshToken: "rt-1" });
+
+        const span = dispatchRootSpan({
+            anchor,
+            collected: collector.collected,
+            durationMs: 1,
+            failure: undefined,
+            functionPath: "messages:list",
+            shardKey: undefined,
+            startTs: 0,
+            userId: undefined,
+        });
+
+        expect(span.attributes).toStrictEqual({ plan: "pro", refreshToken: "<REDACTED>" });
+    });
 });
 
 describe("ctx.trace start-attribute bound", () => {

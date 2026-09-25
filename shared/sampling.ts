@@ -113,7 +113,12 @@ const traceIdToUnitInterval = (traceId: string): number => {
  * `<= 0` drops every trace; otherwise keep when the id's stable unit value is
  * below the rate.
  */
-const isTraceHeadSampled = (traceId: string, headRate: number = DEFAULT_TRACE_HEAD_RATE): boolean => {
+const isTraceHeadSampled = (traceId: string, rate: number = DEFAULT_TRACE_HEAD_RATE): boolean => {
+    // A non-finite rate is a misconfiguration (`Number(env.UNSET_VAR)` is NaN),
+    // not a request to drop everything: NaN fails both comparisons below and
+    // the final `<`, so it used to disable all non-error tracing silently.
+    const headRate = Number.isFinite(rate) ? rate : DEFAULT_TRACE_HEAD_RATE;
+
     if (headRate >= 1) {
         return true;
     }

@@ -48,6 +48,24 @@ describe("normalizeSql", () => {
         expect(normalizeSql("SELECT * FROM table1")).toBe("SELECT * FROM table1");
     });
 
+    it("strips unspaced, signed, exponent and blob literals so they share one row", () => {
+        expect.assertions(5);
+
+        expect(normalizeSql("SELECT * FROM t WHERE age>42")).toBe("SELECT * FROM t WHERE age>?");
+        expect(normalizeSql("SELECT * FROM t WHERE b = -7")).toBe("SELECT * FROM t WHERE b = ?");
+        expect(normalizeSql("SELECT * FROM t WHERE x = 1e5 OR y=1.5e-3")).toBe("SELECT * FROM t WHERE x = ? OR y=?");
+        expect(normalizeSql("SELECT * FROM t WHERE c = X'ABCD'")).toBe("SELECT * FROM t WHERE c = ?");
+        // Two values of the same statement must collapse to one metrics key.
+        expect(new Set([1, 42, 1000].map((n) => normalizeSql(`SELECT * FROM "t1" WHERE "age">${String(n)}`))).size).toBe(1);
+    });
+
+    it("keeps numbered parameters, double-quoted identifiers and subtraction intact", () => {
+        expect.assertions(2);
+
+        expect(normalizeSql(`SELECT "col2" FROM "t" WHERE a = ?1 AND b = :2`)).toBe(`SELECT "col2" FROM "t" WHERE a = ?1 AND b = :2`);
+        expect(normalizeSql("SELECT a - 7 FROM t")).toBe("SELECT a - ? FROM t");
+    });
+
     it("collapses runs of whitespace to single space", () => {
         expect.assertions(1);
 

@@ -150,6 +150,9 @@ const redactUrl = (raw: string): string => {
     }
 };
 
+/** An absolute http(s) URL embedded in free text, up to the first whitespace or quote/bracket delimiter. */
+const URL_IN_TEXT = /https?:\/\/[^\s"'<>()[\]{}]+/gi;
+
 /** Host of a URL, or the raw string when it will not parse. Used for low-cardinality span names. */
 const safeHost = (raw: string): string => {
     try {
@@ -619,6 +622,11 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
                     assignBoundedAttributes(merged, normalized);
                     assignBoundedAttributes(merged, collected.attributes);
+
+                    // Redacted like `ctx.log` fields: `ctx.trace(name, fn, args)`
+                    // and `span.setAttributes(...)` take whatever the handler holds,
+                    // and a span is what ships to a third-party collector.
+                    const attributes = captureRaw ? merged : (redactArgs(merged) as LogFields);
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];
@@ -632,7 +640,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // can't lose it.
                     try {
                         record({
-                            ...(Object.keys(merged).length === 0 ? {} : { attributes: merged }),
+                            ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
                             durationMs,
                             ...(collected.events.length === 0 ? {} : { events: collected.events }),
                             ...(error === undefined ? {} : { error }),
@@ -660,7 +668,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     if (hostSpan !== undefined) {
                         try {
                             applyHostSpanAttributes(hostSpan, {
-                                attributes: merged,
+                                attributes,
                                 durationMs,
                                 error,
                                 functionPath,
@@ -820,14 +828,16 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            // Redacted like every other span error: a `fetch` failure message
-            // routinely embeds the full request URL (query string included), and
-            // this is the span pipeline — the one sink with third-party fan-out.
-            // Shipping it raw here would leak exactly what `redactUrl` strips off
-            // `url.full` two lines below.
+            // A `fetch` failure message routinely embeds the full request URL,
+            // query string included, and this is the span pipeline — the one sink
+            // with third-party fan-out. `redactArgs` alone only masks a query
+            // parameter whose NAME looks like a credential, so a `sig=` or
+            // `X-Amz-Signature=` would survive: every URL in the message gets the
+            // same `redactUrl` treatment as `url.full` below first.
             const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+            const message = captureRaw ? rawMessage : rawMessage.replaceAll(URL_IN_TEXT, (url) => redactUrl(url));
 
-            error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
+            error = { message: redactArgs(message, captureRaw) as string, type: toErrorType(error_) };
 
             throw error_;
         } finally {
@@ -950,7 +960,9 @@ export const dispatchRootSpan = (input: {
     userId: string | undefined;
 }): SpanEvent => {
     const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
-    const attributes = collected?.attributes ?? {};
+    // Redacted like `ctx.log` fields and `ctx.trace` attributes: `ctx.span`
+    // writes whatever the handler holds onto the span a collector receives.
+    const attributes = captureRaw ? (collected?.attributes ?? {}) : (redactArgs(collected?.attributes ?? {}) as LogFields);
 
     return {
         ...(Object.keys(attributes).length === 0 ? {} : { attributes }),

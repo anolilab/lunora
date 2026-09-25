@@ -156,8 +156,8 @@ const buildTraceparent = (traceId: string, spanId: string, sampled = true): stri
 /**
  * Parse a W3C `traceparent` into `{ traceId, parentSpanId }`, or `undefined` when
  * malformed. Validates the `version-traceId-spanId-flags` shape (2-hex version,
- * 32-hex trace id, 16-hex span id, 2-hex flags) and rejects the all-zero ids the
- * spec forbids. Only the two ids are returned — the version/flags are validated
+ * 32-hex trace id, 16-hex span id, 2-hex flags, all lowercase, no surrounding
+ * whitespace) and rejects the all-zero ids the spec forbids. Only the two ids are returned — the version/flags are validated
  * but not surfaced.
  *
  * Forward-compatible per the spec: version `00` is strict (exactly four fields),
@@ -174,7 +174,10 @@ const parseTraceparent = (header: null | string | undefined): { parentSpanId: st
         return undefined;
     }
 
-    const parts = header.trim().toLowerCase().split("-");
+    // Neither trimmed nor lowercased: W3C Trace Context requires lowercase hex
+    // and says a header that fails to parse MUST be ignored, and the Fetch API
+    // already strips the only whitespace HTTP allows around a header value.
+    const parts = header.split("-");
     const [version, traceId, parentSpanId, flags] = parts;
 
     if (

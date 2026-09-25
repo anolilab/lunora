@@ -69,6 +69,15 @@ const EXPLAIN_ISSUE_CONTEXT_CAP = 200;
 const UNTRUSTED_FENCE = "-----BEGIN UNTRUSTED ERROR REPORT-----";
 
 /**
+ * The marker as a model reads it, not as `===` does: a model treats
+ * `-----begin untrusted error report-----` or a re-spaced copy as the same
+ * boundary, so matching only the exact casing left those free to close the block.
+ * The words are what make it a marker, so they are what gets replaced; the dashes
+ * left around `[fence]` carry no meaning on their own.
+ */
+const UNTRUSTED_FENCE_LOOKALIKE = /BEGIN\s+UNTRUSTED\s+ERROR\s+REPORT/gi;
+
+/**
  * Deadline for one explainer inference. `binding.run` is awaited on a
  * single-threaded DO's admin dispatch, so a hung model would hold that dispatch
  * open indefinitely; racing a timer degrades to the grounded hint instead.
@@ -83,7 +92,7 @@ const EXPLAIN_ISSUE_TIMEOUT_MS = 10_000;
  * marker is still a real error the operator needs explained, and refusing it
  * would turn a cosmetic collision into a denied explanation.
  */
-const fenceSafe = (value: string): string => value.replaceAll(UNTRUSTED_FENCE, "[fence]");
+const fenceSafe = (value: string): string => value.replaceAll(UNTRUSTED_FENCE_LOOKALIKE, "[fence]");
 
 /**
  * Structural projection of the Workers `AI` binding's `run` method — declared
