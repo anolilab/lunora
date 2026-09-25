@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.85...@lunora/platform-node@1.0.0-alpha.86) (2026-09-25)
+
+### Features
+
+* **vectors:** re-embed a table when its declared model changes ([#820](https://github.com/anolilab/lunora/issues/820)) ([ddbafa6](https://github.com/anolilab/lunora/commit/ddbafa6c35bf9b3d9ae68ed3db115465da876d38))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.133
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+* **@lunora/queue:** upgraded to 1.0.0-alpha.66
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.135
+* **@lunora/do:** upgraded to 1.0.0-alpha.162
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.51
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.142
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+* **@lunora/storage:** upgraded to 1.0.0-alpha.79
+
 ## @lunora/platform-node [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.84...@lunora/platform-node@1.0.0-alpha.85) (2026-09-25)
 
 ### ⚠ BREAKING CHANGES
