@@ -158,6 +158,7 @@ interface DeployCommandResult {
         blocked: boolean;
         reason: string;
     };
+    target?: string;
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;

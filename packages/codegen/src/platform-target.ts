@@ -19,9 +19,10 @@
  * `native` and `emulated` both emit as-is — `emulated` means Lunora builds the
  * feature on lower-level primitives, which is still a working surface.
  *
- * Cloudflare and Node are registered (their matrices live in `@lunora/platform`
- * as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES`); other hosts register
- * their matrices as their per-target `@lunora/platform-<target>` packages land.
+ * Cloudflare, Node, and celld are registered (their matrices live in
+ * `@lunora/platform` as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES` /
+ * `CELLD_CAPABILITIES`); other hosts register their matrices as their
+ * per-target `@lunora/platform-<target>` packages land.
  * An unregistered `target` is a configuration error, reported as
  * `platform_unknown_target` — and, crucially, the usage set is left untouched
  * so codegen never silently omits a surface against a matrix it does not have.
@@ -38,7 +39,7 @@
  */
 
 import type { PlatformCapabilities } from "@lunora/platform";
-import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
+import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
@@ -120,9 +121,11 @@ const readTargetDiagnostics = (projectRoot: string, explicit?: string): Platform
 /**
  * The capability matrices codegen can gate against, keyed by target id. One
  * entry per host package that ships a `PlatformCapabilities` — Cloudflare and
- * Node, both of which also ship a `@lunora/config` deploy driver.
+ * Node, plus celld (see `@lunora/platform-celld`); each also has a
+ * `@lunora/config` deploy driver.
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
+    celld: CELLD_CAPABILITIES,
     cloudflare: CLOUDFLARE_CAPABILITIES,
     node: NODE_CAPABILITIES,
 };
@@ -253,6 +256,8 @@ interface PlatformSignals {
     agents?: boolean;
     /** A `.commitOrdered()` table. */
     commitOrderedTables?: boolean;
+    /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
+    containerEgressPolicy?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
@@ -269,12 +274,15 @@ interface PlatformSignals {
     secrets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
     vectorStore?: boolean;
+    /** A `defineStep({ rollback })` compensation. */
+    workflowRollback?: boolean;
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
 const PLATFORM_SIGNAL_KEYS = [
     "agents",
     "commitOrderedTables",
+    "containerEgressPolicy",
     "cronTriggers",
     "crossShardFanout",
     "durableStreams",
@@ -283,12 +291,14 @@ const PLATFORM_SIGNAL_KEYS = [
     "relationGraph",
     "secrets",
     "vectorStore",
+    "workflowRollback",
 ] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
 const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = {
     agents: "durable agents (`defineAgent`)",
     commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
+    containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
@@ -297,6 +307,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
     vectorStore: "vector indexes (`.vectorize()`)",
+    workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */

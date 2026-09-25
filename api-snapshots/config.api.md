@@ -307,6 +307,7 @@ const DEV_VARS_KEY_PATTERN: RegExp;
 interface DeployDriver {
     readonly id: string;
     readonly name: string;
+    readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -315,6 +316,7 @@ interface DeployDriver {
 
 ```ts
 interface DeployRequest {
+    configPath?: string;
     dryRun?: boolean;
     entry?: string;
     environment?: string;
@@ -464,9 +466,11 @@ interface DockerLike {
 interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     dev: (request: DevRequest) => ToolchainCommand;
-    secretList: (request: SecretRequest) => ToolchainCommand;
-    secretPut: (request: SecretRequest) => ToolchainCommand;
-    tail: (request: TailRequest) => ToolchainCommand;
+    readonly devServer: "own" | "workerd";
+    readonly prebuildsContainerImages: boolean;
+    secretList?: (request: SecretRequest) => ToolchainCommand;
+    secretPut?: (request: SecretRequest) => ToolchainCommand;
+    tail?: (request: TailRequest) => ToolchainCommand;
 }
 ```
 
@@ -814,6 +818,22 @@ interface PostCodegenHookResult {
 }
 ```
 
+### `ProjectedConfig` (interface)
+
+```ts
+interface ProjectedConfig {
+    configPath: string;
+    dropped: ReadonlyArray<string>;
+    write: () => void;
+}
+```
+
+### `ProjectionPurpose` (type)
+
+```ts
+type ProjectionPurpose = "deploy" | "dev";
+```
+
 ### `ROOT_SKILL_NAME` (const)
 
 ```ts
@@ -973,6 +993,7 @@ interface TailRequest {
 ```ts
 interface ToolchainCommand {
     args: ReadonlyArray<string>;
+    onPath?: boolean;
     tool: string;
 }
 ```
@@ -1492,6 +1513,15 @@ const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[]
 
 ```ts
 const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
+```
+
+### `toolchainExecArgs` (const)
+
+```ts
+const toolchainExecArgs: (manager: PackageManager, command: ToolchainCommand) => {
+    args: string[];
+    command: string;
+};
 ```
 
 ### `updateDevServerState` (const)

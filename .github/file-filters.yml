@@ -363,3 +363,27 @@ node_capabilities_docs:
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
+
+# The `test-celld` job: a live celld (GitHub release), moto (pipx) and a Docker Hub
+# image, so it runs only when something it can observe changes — the packages its
+# harness (packages/platform-celld/__tests__/celld) builds on, the inlined `shared/`
+# source, and the lockfile — plus its own workflow and this file, per the self-listing
+# rule above.
+celld:
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "shared/**"
+    - "packages/bindings/**"
+    - "packages/config/**"
+    - "packages/container/**"
+    - "packages/d1/**"
+    - "packages/platform/**"
+    - "packages/platform-celld/**"
+    - "packages/platform-cloudflare/**"
+    - "packages/queue/**"
+    - "packages/shard-engine/**"
+    - "packages/sql-store/**"
+    - "packages/storage/**"
+    - "packages/workflow/**"

@@ -177,6 +177,54 @@ describe("gatePlatformFeatures", () => {
             "images",
         ]);
     });
+
+    // `celld` is the second spike target (see `@lunora/platform-celld`): a
+    // Workers-compatible self-hosted Durable Objects runtime whose matrix
+    // (`CELLD_CAPABILITIES`, tracking celld v0.5.1) rates the bindings celld
+    // actually ships — KV, R2, D1, Queues, Workflows, Cron Triggers — as real
+    // support, so those (and the queue-backed `mail`) must survive gating. What
+    // it gates is the managed Cloudflare services celld has no binding for.
+    /** The capability key the remediation names (`… marks "workflowRollback" as …`). */
+    const QUOTED_KEY = /"(\w+)"/u;
+
+    // Both fail at first use on celld rather than run without the feature, so
+    // they are gated from the app's declaration, not discovered in production.
+    it.each([
+        ["celld", ["containerEgressPolicy", "workflowRollback"]],
+        ["node", ["containerEgressPolicy"]],
+        ["cloudflare", []],
+    ])("gates step rollback and container egress policies per target (%s)", async (target, refused) => {
+        expect.assertions(1);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { containerEgressPolicy: true, workflowRollback: true });
+
+        expect(
+            result.diagnostics
+                .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+                .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1])
+                .toSorted((a, b) => String(a).localeCompare(String(b))),
+        ).toStrictEqual(refused);
+    });
+
+    it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
+        expect.assertions(6);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, ai: true, kv: true, mail: true, scheduler: true, storage: true, vectors: true };
+
+        const result = gatePlatformFeatures(usage, "celld");
+
+        expect(result.usage.kv).toBe(true);
+        expect(result.usage.storage).toBe(true);
+        expect(result.usage.scheduler).toBe(true);
+        expect(result.usage.mail).toBe(true);
+        expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
+            "ai",
+            "vectors",
+        ]);
+    });
 });
 
 describe("project-declared target", () => {
@@ -223,6 +271,17 @@ describe("project-declared target", () => {
         // resolved through the real registry (`PLATFORM_MATRICES`), not
         // rejected as `platform_unknown_target` the way "aws" is.
         writeConfig(`{ "target": "node" }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("recognises celld as a registered target end-to-end through runCodegen", () => {
+        expect.assertions(1);
+
+        // Same shape as the `node` case: the fixture uses no gated ctx.*
+        // surface, so a registered target resolves through `PLATFORM_MATRICES`
+        // with no diagnostics rather than failing as `platform_unknown_target`.
+        writeConfig(`{ "target": "celld" }`);
 
         expect(diagnosticNames()).toStrictEqual([]);
     });
@@ -531,6 +590,30 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.cronTriggers).toStrictEqual(["0 3 * * *"]);
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(result.platformDiagnostics[0]?.message).toContain("cron");
+    });
+
+    // The whole path: the declaration in `lunora/`, the discovery pass, the
+    // declaration surface handing the signal to the gate, and the diagnostic
+    // `lunora deploy` blocks on.
+    it("gates a step rollback and a container egress policy declared in lunora/ on celld", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+        write(
+            "steps.ts",
+            `import { defineStep } from "@lunora/workflow";\n\nexport const charge = defineStep("charge", { args: {}, handler: async () => 1, rollback: async () => {} });\n`,
+        );
+        write(
+            "containers.ts",
+            `import { defineContainer } from "@lunora/container";\n\nexport const box = defineContainer({ allowedHosts: ["example.com"], image: "./Dockerfile" });\n`,
+        );
+
+        const messages = codegen()
+            .platformDiagnostics.filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+            .map((diagnostic) => diagnostic.message);
+
+        expect(messages.some((message) => message.includes("workflow step rollback"))).toBe(true);
+        expect(messages.some((message) => message.includes("container egress policies"))).toBe(true);
     });
 
     it("gates a schema-declared vector index the target has no binding for", () => {

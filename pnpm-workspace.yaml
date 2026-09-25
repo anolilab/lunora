@@ -323,8 +323,9 @@ catalogs:
     # (ERR_PACKAGE_PATH_NOT_EXPORTED), and no published version peers on vitest 5 --
     # 5.7.1 and the 6.0.0 betas all declare `vitest: ^3.2 || ^4`. Locally the plugin
     # is a pass-through so this fails only in CodSpeed CI. Move all four together
-    # once the plugin ships vitest 5 support.
+    # once the plugin ships vitest 5 support (and `@vitest/expect` with them).
     "@vitest/coverage-v8": 4.1.10
+    "@vitest/expect": 4.1.10
     "@vitest/ui": 4.1.10
     fake-indexeddb: 6.2.5
     vitest: 4.1.10

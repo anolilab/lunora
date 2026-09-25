@@ -1,0 +1,27 @@
+// The TCK worker `celld dev` runs for the `celld` vitest project. Not deployed
+// anywhere: it exists so celld can resolve the cell classes and their SQLite
+// migrations the way a Lunora app's config would.
+{
+    "name": "lunora-celld-tck",
+    "main": "tck-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "TCK", "class_name": "TckCell" },
+            { "name": "ECHO", "class_name": "EchoCell" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell"] }],
+    // The binding-backed checks (tck-bindings.ts). The queue's consumer is this
+    // same worker, which also exports `fetch` — the topology a Lunora app has.
+    "d1_databases": [{ "binding": "DB", "database_name": "tck", "database_id": "tck" }],
+    "kv_namespaces": [{ "binding": "KV", "id": "tck-kv" }],
+    "r2_buckets": [{ "binding": "R2", "bucket_name": "tck" }],
+    "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "tck-jobs" }],
+        "consumers": [{ "queue": "tck-jobs", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 3, "retry_delay": 0 }],
+    },
+    "workflows": [{ "binding": "TCK_FLOW", "name": "tck-flow", "class_name": "TckWorkflow" }],
+    "triggers": { "crons": ["* * * * *"] },
+}

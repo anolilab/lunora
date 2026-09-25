@@ -20,6 +20,9 @@ import type { DeployDriver, DriverToolchain } from "../deploy-driver";
  * for the project's package manager.
  */
 const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
+    devServer: "workerd",
+    prebuildsContainerImages: true,
+
     deploy: (request) => {
         // `versions upload` publishes a new Version with a preview URL instead
         // of taking production traffic.

@@ -24,7 +24,17 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
-export type { DeployDriver, DeployRequest, DevRequest, DriverToolchain, SecretRequest, TailRequest, ToolchainCommand } from "./deploy-driver";
+export type {
+    DeployDriver,
+    DeployRequest,
+    DevRequest,
+    DriverToolchain,
+    ProjectedConfig,
+    ProjectionPurpose,
+    SecretRequest,
+    TailRequest,
+    ToolchainCommand,
+} from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -66,7 +76,16 @@ export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";
 export type { PackageManager, PackageManagerProbe } from "./package-manager";
-export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand } from "./package-manager";
+export {
+    addArgsFor,
+    detectInstalledManagers,
+    detectPackageManager,
+    execArgsFor,
+    installArgsFor,
+    runScriptArgsFor,
+    runScriptCommand,
+    toolchainExecArgs,
+} from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";

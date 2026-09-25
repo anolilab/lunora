@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { isRunnableTarget, resolveDeployDriver, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -90,6 +90,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     }
 
     const projectRoot = input.projectRoot ?? process.cwd();
+    const target = resolveRunnableTargetOrThrow(projectRoot, input.target);
 
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
@@ -111,7 +112,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         // `lunora.config.*`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
         // fails here rather than emitting the default surface silently.
-        target: resolveRunnableTargetOrThrow(projectRoot, input.target),
+        target,
         validateWrangler: input.validateWrangler ?? true,
     };
 };
@@ -209,6 +210,21 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
         plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
+
+        // A host with its own dev server (celld) deploys the Vite BUILD output,
+        // so composing the Cloudflare plugin is right for `vite build` — but
+        // `vite dev` then serves the worker in workerd, not on the target. Say
+        // so instead of letting it pass for the target.
+        if (resolveDeployDriver(resolved.target).toolchain?.devServer === "own") {
+            plugins.push({
+                configureServer(server) {
+                    server.config.logger.warn(
+                        `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,
+                    );
+                },
+                name: "lunora:target-runtime-notice",
+            });
+        }
     }
 
     return plugins;

@@ -46,7 +46,7 @@ import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
-import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { EXIT_CODE } from "../../util/exit-code";
 import { findAvailablePort } from "../../util/free-port";
@@ -71,6 +71,7 @@ import {
     viteDevCommand,
     withViteChildEnv,
 } from "./lifecycle";
+import { planOwnDevServer, resolveTargetFlavor } from "./own-dev-server";
 
 /**
  * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
@@ -439,6 +440,26 @@ const resolveInspectorPort = (options: DevCommandOptions, cwd: string): number |
 };
 
 /**
+ * The `framework-worker` flavor's `wrangler dev` sidecar, run from the
+ * committed `wrangler.dev.jsonc`.
+ */
+const planWorkerSidecar = (options: DevCommandOptions, cwd: string, manager: ReturnType<typeof detectPackageManager>): SpawnDescriptor & { tag: string } => {
+    // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
+    // `wrangler.jsonc` — check its own `dev.ip` first.
+    const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
+    // The toolchain is the target's, not always wrangler's. `options.target` is
+    // the resolved target when `runDevCommand` plans; the config's otherwise,
+    // for a direct caller.
+    const devCommand = resolveDeployDriver(options.target ?? resolveProjectTarget(cwd)).toolchain?.dev({
+        configPath: DEV_WRANGLER_CONFIG,
+        extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
+    });
+    const exec = devCommand === undefined ? execArgsFor(manager, "wrangler", []) : toolchainExecArgs(manager, devCommand);
+
+    return { args: exec.args, command: exec.command, cwd, tag: "worker" };
+};
+
+/**
  * Plan `lunora dev`. Wrangler flavor: the worker runs via `wrangler dev` and
  * nothing else as a child process. Vite flavor (`@lunora/vite` declared): the
  * plugin already runs the worker inside the Vite dev server, so the one child
@@ -473,18 +494,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         let sidecar: (SpawnDescriptor & { tag: string }) | undefined;
 
         if (flavor === "framework-worker") {
-            // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
-            // `wrangler.jsonc` — check its own `dev.ip` first.
-            const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
-            // The toolchain is the target's, not always wrangler's — resolving from the
-            // project keeps a non-default target from shelling out to the wrong CLI.
-            const devCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.dev({
-                configPath: DEV_WRANGLER_CONFIG,
-                extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
-            });
-            const sidecarExec = execArgsFor(manager, devCommand?.tool ?? "wrangler", devCommand?.args ?? []);
-
-            sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
+            sidecar = planWorkerSidecar(options, cwd, manager);
         }
 
         if (options.worker === false) {
@@ -1031,6 +1041,12 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
     // Same split for the inspector: the other flavors get the flag back as a
     // warning (see `planDevCommand`), so the wrangler-config fallback is only
     // read where a `wrangler dev` argv exists to carry it.
+    const driver = resolveDeployDriver(options.target);
+
+    if (driver.toolchain?.devServer === "own") {
+        return planOwnDevServer({ cwd, driver, options, studioPort: options.port ?? DEFAULT_STUDIO_PORT, workerPort: workerPort ?? DEFAULT_WORKER_PORT });
+    }
+
     const inspectorPort = flavor === "wrangler" ? resolveInspectorPort(options, cwd) : options.inspectorPort;
 
     return planDevCommand({ ...options, cwd, flavor, inspectorPort, workerPort });
@@ -1223,6 +1239,10 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
     }
 };
 
+/** The startup line: Vite owns everything on its flavor; otherwise it names the worker's dev server (the child's tag). */
+const startBanner = (plan: DevCommandPlan): string =>
+    plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : `starting ${plan.wrangler.tag} dev + studio`;
+
 /**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
@@ -1235,7 +1255,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // the pre-plan work below sees exactly the project (and flavor) the plan
     // will describe.
     const cwd = options.cwd ?? process.cwd();
-    const flavor = options.flavor ?? detectDevFlavor(cwd);
+    const detectedFlavor = options.flavor ?? detectDevFlavor(cwd);
     // Resolved for every flavor, not just the ones that run the codegen watcher:
     // the `vite` and `framework-worker` flavors have `runsCodegenWatch === false`,
     // so gating on it accepted `--target` and then used it nowhere — while
@@ -1261,6 +1281,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
     const { target } = resolvedTarget;
 
+    const flavor = resolveTargetFlavor(target, detectedFlavor, logger);
+
     // Auto-provision the bindings the project's code implies, the same way
     // `@lunora/vite` does on every dev-server start — for the wrangler flavor
     // there is no plugin to do it, so a newly exported `SchedulerDO` /
@@ -1280,7 +1302,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         await provisionBindings(cwd, logger, undefined, target, undefined);
     }
 
-    const plan = await buildDevPlan({ ...options, flavor });
+    const plan = await buildDevPlan({ ...options, flavor, target });
     // Torn down on every exit path, including a throw during startup (the
     // `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
@@ -1329,9 +1351,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         await offerDevVariablesScaffold(options, cwd);
 
-        logger.info(
-            plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : "starting wrangler dev + studio",
-        );
+        logger.info(startBanner(plan));
 
         if (plan.ipv4LoopbackForced) {
             logger.info(
