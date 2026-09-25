@@ -563,6 +563,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
 export type { DeclinedMessageContext, DeclinedMessageLike };
 export {
     createDispatchRunner,
+    DEFAULT_DISPATCH_TIMEOUT_MS,
     DEFAULT_QUEUE_MAX_RETRIES,
     DISPATCH_DECLINE_RETRY_DELAY_SECONDS,
     getDispatchMessageId,

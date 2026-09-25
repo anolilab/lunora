@@ -5,6 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { hasRequeueKey, REQUEUED_KEY } from "./requeue-envelope";
 import type { LunoraQueuesOptions, MessageSendRequestLike, QueueBindingLike, QueueProducer, Queues, QueueSendBatchOptions, QueueSendOptions } from "./types";
 
 /**
@@ -38,11 +39,24 @@ const assertDelay = (delaySeconds: number | undefined, where: string): void => {
     }
 };
 
+/**
+ * Refuse a body carrying the key the consumer's re-enqueued copies use. The
+ * consumer only unwraps a copy whose MAC verifies, so this is not what keeps a
+ * forged one out; it keeps an app from shipping a body the consumer would read
+ * differently from what the app sent.
+ */
+const assertNoRequeueKey = (body: unknown, where: string): void => {
+    if (hasRequeueKey(body)) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/queue: ${where} body may not contain the reserved key "${REQUEUED_KEY}"`);
+    }
+};
+
 /** Wrap a single Cloudflare `Queue` binding in the {@link QueueProducer} surface. */
 const producerFor = (binding: QueueBindingLike): QueueProducer => {
     return {
         send: async (body: unknown, options?: QueueSendOptions): Promise<void> => {
             assertDelay(options?.delaySeconds, "send");
+            assertNoRequeueKey(body, "send");
 
             await binding.send(body, options);
         },
@@ -70,6 +84,7 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
 
             for (const [index, message] of batch.entries()) {
                 assertDelay(message.delaySeconds, `sendBatch message ${String(index)}`);
+                assertNoRequeueKey(message.body, `sendBatch message ${String(index)}`);
             }
 
             await binding.sendBatch(batch, options);

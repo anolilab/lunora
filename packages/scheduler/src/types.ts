@@ -405,15 +405,6 @@ export interface QueueJob {
      */
     args?: Record<string, unknown>;
     functionPath: string;
-
-    /**
-     * Set by `createQueueConsumer` on the delayed copy it re-enqueues when a
-     * job's dispatch is declined on its last delivery: the id of the message it
-     * replaces. The copy dispatches under that id, so the shard serves the
-     * declined call's result instead of running it a second time, and a copy
-     * is never re-enqueued again.
-     */
-    requeuedFrom?: string;
     /** Routing hint forwarded to the Worker so the call lands on the right shard. */
     shardKey?: string;
 }
@@ -463,20 +454,25 @@ export interface QueueConsumerOptions {
     /**
      * The consumer's `max_retries` as deployed in `wrangler.jsonc`, which a
      * consumer cannot read at runtime. Used only to recognise a message's last
-     * delivery, where a declined dispatch is re-enqueued through `queue` (or
+     * delivery, where a declined dispatch is re-enqueued through `requeue` (or
      * logged as the drop or dead-letter it becomes without one). Defaults to
      * Cloudflare's default of 3.
      */
     maxRetries?: number;
 
     /**
-     * The producer binding of the queue this consumer reads (the one handed to
-     * `createQueueWorkpool`). With it, a job whose dispatch is declined on its
-     * last delivery is re-enqueued as a copy delayed past the in-flight claim,
-     * with a fresh retry budget, instead of being dead-lettered or dropped
-     * while its call is still running. Without it that loss is only logged.
+     * Re-enqueue a job whose dispatch is declined on its last delivery as a
+     * copy delayed past the in-flight claim, with a fresh retry budget, instead
+     * of letting it be dead-lettered or dropped while its call is still
+     * running. Without it that loss is only logged.
+     *
+     * `queue` is the producer binding of the queue this consumer reads (the
+     * one handed to `createQueueWorkpool`). `secret` keys the MAC the copy
+     * carries — pass the admin token (`LUNORA_ADMIN_TOKEN`). The copy
+     * dispatches under the replaced message's id so the shard serves the
+     * declined call's result, and without a valid MAC no body can claim an id.
      */
-    queue?: QueueLike<QueueJob>;
+    requeue?: { queue: QueueLike<QueueJob>; secret: string };
 }
 
 /** Options for the `httpDispatcher` — the default HTTP dispatcher. */

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defineQueue } from "../src/define-queue";
 import type { CapturedQueueMessage, QueueCaptureSink } from "../src/dispatch";
 import { dispatchQueueBatch } from "../src/dispatch";
+import { sealRequeue } from "../src/requeue-envelope";
 import type { MessageBatchLike, MessageLike } from "../src/types";
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
@@ -1034,6 +1035,65 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
         }
     });
 
+    // A queue body is app data, often forwarded from outside. One that merely
+    // looks like a re-enqueued copy must not pick the id `message.run` derives
+    // its dedup ids from — that id is how one message's calls reach another's
+    // cached results.
+    describe("a body imitating a re-enqueued copy", () => {
+        const seen: { body: unknown; id: string }[] = [];
+        const dedupIds: unknown[] = [];
+        const recording = defineQueue({
+            handler: async (_context, b) => {
+                for (const m of b.messages) {
+                    seen.push({ body: m.body, id: m.id });
+                    // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
+                    await m.run({ __lunoraRef: "fn" });
+                    m.ack();
+                }
+            },
+        });
+        const deliver = async (body: unknown): Promise<void> => {
+            seen.length = 0;
+            dedupIds.length = 0;
+
+            await dispatchQueueBatch(
+                batch("q", [captureMessage(body, { id: "broker-7" })]),
+                { q: { definition: recording, exportName: "q" } },
+                {
+                    env: DISPATCH_ENV,
+                    fetchImpl: async (_url, init) => {
+                        dedupIds.push((JSON.parse(init?.body as string) as { id?: unknown }).id);
+
+                        return Response.json({ result: null });
+                    },
+                },
+            );
+        };
+
+        it.each([
+            ["no MAC", { "$lunora.requeued$": { body: JSON.stringify({ order: 7 }), id: "victim-1" } }],
+            ["a forged MAC", { "$lunora.requeued$": { body: JSON.stringify({ order: 7 }), id: "victim-1", mac: "0".repeat(64) } }],
+            ["the unauthenticated shape", { "$lunora.requeued$": { body: { order: 7 }, id: "victim-1" } }],
+        ])("with %s is delivered as the plain body it is, under the broker's id", async (_label, body) => {
+            expect.assertions(2);
+
+            await deliver(body);
+
+            expect(seen).toStrictEqual([{ body, id: "broker-7" }]);
+            expect(dedupIds).toStrictEqual(["broker-7#1"]);
+        });
+
+        it("signed with a different admin token is not unwrapped", async () => {
+            expect.assertions(1);
+
+            const body = await sealRequeue("another-token", "victim-1", { order: 7 });
+
+            await deliver(body);
+
+            expect(dedupIds).toStrictEqual(["broker-7#1"]);
+        });
+    });
+
     describe("on the last delivery, with the queue's producer binding", () => {
         type Send = (body: unknown, options?: unknown) => Promise<undefined>;
 
@@ -1056,9 +1116,7 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
             });
 
             // COUNTS: one copy, delayed past the claim; the original acked, never retried.
-            expect(queue.send.mock.calls).toStrictEqual([
-                [{ "$lunora.requeued$": { body: { id: "m1" }, id: "m1" } }, { contentType: "v8", delaySeconds: 900 }],
-            ]);
+            expect(queue.send.mock.calls).toStrictEqual([[await sealRequeue("tok", "m1", { id: "m1" }), { contentType: "json", delaySeconds: 900 }]]);
             expect(last.acked).toBe(true);
             expect(retryOptions(last)).toStrictEqual([]);
 
@@ -1087,7 +1145,7 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
                     }
                 },
             });
-            const copy = captureMessage({ "$lunora.requeued$": { body: { order: 7 }, id: "m1" } }, { attempts: 1, id: "copy-1" });
+            const copy = captureMessage(await sealRequeue("tok", "m1", { order: 7 }), { attempts: 1, id: "copy-1" });
 
             await dispatchQueueBatch(
                 batch("q", [copy]),
@@ -1114,7 +1172,7 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
 
             try {
                 const queue = producer();
-                const copy = captureMessage({ "$lunora.requeued$": { body: { id: "m1" }, id: "m1" } }, { attempts: 4, id: "copy-1" });
+                const copy = captureMessage(await sealRequeue("tok", "m1", { id: "m1" }), { attempts: 4, id: "copy-1" });
 
                 await dispatchQueueBatch(batch("q", [copy]), registry, {
                     env: { ...DISPATCH_ENV, QUEUE_Q: queue },
@@ -1155,6 +1213,55 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
             } finally {
                 error.mockRestore();
             }
+        });
+
+        it.each([
+            [
+                "the copy would exceed the 128 KB message limit",
+                { id: "m1", pad: "é".repeat(70_000) },
+                DISPATCH_ENV,
+                /over the 131072-byte queue message limit/u,
+            ],
+        ])("keeps the delayed retry, sends nothing and logs when %s", async (_label, body, env, logged) => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            try {
+                const queue = producer();
+                const last = captureMessage(body, { attempts: 4, id: "m1" });
+
+                await dispatchQueueBatch(batch("q", [last]), registry, {
+                    env: { ...env, QUEUE_Q: queue },
+                    fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS"),
+                }).catch(() => undefined);
+
+                expect(queue.send).not.toHaveBeenCalled();
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(String(error.mock.calls[0]?.[0])).toMatch(logged);
+            } finally {
+                error.mockRestore();
+            }
+        });
+
+        it("carries a bigint, a Date and bytes through the copy intact", async () => {
+            expect.assertions(1);
+
+            const body = { at: new Date(5), bytes: new Uint8Array([1, 2]).buffer, n: 7n };
+            const seen: unknown[] = [];
+            const queue = defineQueue({
+                handler: (_context, b) => {
+                    seen.push(...b.messages.map((m) => m.body));
+                },
+            });
+
+            await dispatchQueueBatch(
+                batch("q", [captureMessage(await sealRequeue("tok", "m1", body), { id: "copy-1" })]),
+                { q: { definition: queue, exportName: "q" } },
+                { env: DISPATCH_ENV },
+            );
+
+            expect(seen).toStrictEqual([body]);
         });
     });
 });

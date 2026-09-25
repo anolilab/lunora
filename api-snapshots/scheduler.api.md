@@ -224,7 +224,10 @@ interface MonthlySchedule extends DailySchedule {
 interface QueueConsumerOptions {
     dispatch: QueueDispatch;
     maxRetries?: number;
-    queue?: QueueLike<QueueJob>;
+    requeue?: {
+        queue: QueueLike<QueueJob>;
+        secret: string;
+    };
 }
 ```
 
@@ -249,7 +252,6 @@ interface QueueEnqueueOptions {
 interface QueueJob {
     args?: Record<string, unknown>;
     functionPath: string;
-    requeuedFrom?: string;
     shardKey?: string;
 }
 ```

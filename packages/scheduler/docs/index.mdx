@@ -215,7 +215,9 @@ export const queueHandler = createQueueConsumer({
     dispatch: httpDispatcher({ originUrl: "https://app.acme.test", adminToken: env.LUNORA_ADMIN_TOKEN }),
     // The same producer: a job whose earlier delivery is still running when
     // its last delivery arrives is re-enqueued, delayed, instead of dropped.
-    queue: env.JOBS,
+    // The copy carries a MAC keyed by `secret`, so no other body can claim
+    // the id it dispatches under.
+    requeue: { queue: env.JOBS, secret: env.LUNORA_ADMIN_TOKEN },
 });
 ```
 

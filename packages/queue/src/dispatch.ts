@@ -20,6 +20,7 @@ import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions
 import { DEFAULT_QUEUE_MAX_RETRIES, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
+import { openRequeue, sealRequeue } from "./requeue-envelope";
 import { createQueueRunContext } from "./run-context";
 import type { MessageBatchLike, MessageLike, QueueBindingLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
 
@@ -163,16 +164,12 @@ interface CaptureHarness {
 }
 
 /**
- * Body key of a copy {@link resolveDeclinedBatch} re-enqueued. It wraps the
- * original body and id, so the copy reads as the message it replaces.
- */
-const REQUEUED_KEY = "$lunora.requeued$";
-
-/**
  * A message as the handler sees it. For a re-enqueued copy that is the message
- * it replaces: its `id` and `body` come from the envelope, so `message.run`
- * derives the same dedup ids and a call the declined delivery was waiting on is
- * served from the replay cache, not applied twice.
+ * it replaces: its `id` and `body` come from the authenticated envelope
+ * (`requeue-envelope.ts`), so `message.run` derives the same dedup ids and a
+ * call the declined delivery was waiting on is served from the replay cache,
+ * not applied twice. Every other message, including one whose body merely
+ * LOOKS like an envelope, keeps the broker's id and its own body.
  */
 interface MessageView {
     body: unknown;
@@ -181,18 +178,18 @@ interface MessageView {
     requeued: boolean;
 }
 
-const viewOf = (message: MessageLike): MessageView => {
-    const { body } = message;
+/** The {@link MessageView} of `message`; `secret` is the admin token the envelope's MAC is keyed by. */
+const viewOf = async (message: MessageLike, secret: string | undefined): Promise<MessageView> => {
+    const copy = await openRequeue(secret, message.body).catch(() => undefined);
 
-    if (typeof body === "object" && body !== null && Object.hasOwn(body, REQUEUED_KEY)) {
-        const envelope = (body as Record<typeof REQUEUED_KEY, { body?: unknown; id?: unknown } | undefined>)[REQUEUED_KEY];
+    return copy === undefined ? { body: message.body, id: message.id, requeued: false } : { ...copy, requeued: true };
+};
 
-        if (typeof envelope?.id === "string") {
-            return { body: envelope.body, id: envelope.id, requeued: true };
-        }
-    }
+/** The admin token on `env`, which keys the requeue MAC; `undefined` when unset. */
+const requeueSecret = (env: Record<string, unknown>): string | undefined => {
+    const token = env["LUNORA_ADMIN_TOKEN"];
 
-    return { body, id: message.id, requeued: false };
+    return typeof token === "string" && token.length > 0 ? token : undefined;
 };
 
 /**
@@ -333,18 +330,20 @@ const wrapBatch = (
  * wrapped (not mutated) because a real workerd `Message`/`MessageBatch` is a
  * non-extensible host object — reassigning `message.ack` would throw.
  */
-const instrumentBatch = (batch: MessageBatchLike, run: DispatchRunFunction): CaptureHarness => {
+const instrumentBatch = async (batch: MessageBatchLike, run: DispatchRunFunction, secret: string | undefined): Promise<CaptureHarness> => {
     const dispositions = new Map<MessageLike, QueueMessageOutcome>();
     const originals = batch.messages;
     const views = new Map<MessageLike, MessageView>();
 
-    const wrappedMessages = originals.map((message) => {
-        const view = viewOf(message);
+    const wrappedMessages: QueueMessage[] = [];
+
+    for (const message of originals) {
+        // eslint-disable-next-line no-await-in-loop -- one MAC check per message, in batch order; batches are at most 100
+        const view = await viewOf(message, secret);
 
         views.set(message, view);
-
-        return wrapMessage(message, view, dispositions, run);
-    });
+        wrappedMessages.push(wrapMessage(message, view, dispositions, run));
+    }
 
     /** Fill the disposition for every message the handler didn't explicitly decide. */
     const fillUndecided = (outcome: QueueMessageOutcome): void => {
@@ -360,8 +359,12 @@ const instrumentBatch = (batch: MessageBatchLike, run: DispatchRunFunction): Cap
     return { dispositions, originals, requeued: new Set(), views, wrappedBatch };
 };
 
+/** `message`'s {@link MessageView}; every original has one, built before the handler runs. */
+const viewIn = (harness: CaptureHarness, message: MessageLike): MessageView =>
+    harness.views.get(message) ?? { body: message.body, id: message.id, requeued: false };
+
 /** The id `message.run` pinned for `message`: its own, or for a re-enqueued copy the one it replaces. */
-const idOf = (harness: CaptureHarness, message: MessageLike): string => harness.views.get(message)?.id ?? message.id;
+const idOf = (harness: CaptureHarness, message: MessageLike): string => viewIn(harness, message).id;
 
 /** Best-effort human-readable message for a thrown value that may not be an `Error`. */
 const describeThrownError = (handlerError: unknown): string => {
@@ -430,7 +433,7 @@ const buildCaptureRecords = (
         const decided = harness.dispositions.get(message);
         const outcome: QueueMessageOutcome = isAttributed ? "error" : (decided ?? undecided);
         const attempts = typeof message.attempts === "number" ? message.attempts : 1;
-        const view = harness.views.get(message) ?? viewOf(message);
+        const view = viewIn(harness, message);
 
         return {
             attempts,
@@ -534,11 +537,14 @@ const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike
  * back to its own queue through {@link QueueRegistryEntry.binding} as a copy
  * delayed past the ceiling, with a fresh attempt budget, and the original is
  * acked only once the send resolved. The copy wraps the original id and body
- * ({@link viewOf}), so its `message.run` calls carry the same dedup ids and
- * the declined call is replayed, not re-applied. A copy is never re-enqueued
- * again, so a call that is slow forever cannot loop the message forever; its
- * own last-delivery decline is dead-lettered or dropped and logged, as is
- * every such decline on a registry entry without a binding.
+ * in an envelope MAC'd with the admin token (`requeue-envelope.ts`), so its
+ * `message.run` calls carry the same dedup ids and the declined call is
+ * replayed, not re-applied, while a body that merely imitates the envelope
+ * cannot claim an id. A copy is never re-enqueued again, so a call that is
+ * slow forever cannot loop the message forever; its own last-delivery decline
+ * is dead-lettered or dropped and logged, as is every such decline on a
+ * registry entry without a binding, with no admin token, or whose copy would
+ * be too large or has no wire encoding.
  */
 const resolveDeclinedBatch = async (
     harness: CaptureHarness,
@@ -547,6 +553,7 @@ const resolveDeclinedBatch = async (
     queue: string,
     env: Record<string, unknown>,
 ): Promise<void> => {
+    const secret = requeueSecret(env);
     const declinedId = getDispatchMessageId(handlerError);
     const scoped = harness.originals.find((candidate) => idOf(harness, candidate) === declinedId && !harness.dispositions.has(candidate));
     const where = `@lunora/queue: queue "${queue}" (${entry.exportName})`;
@@ -571,14 +578,16 @@ const resolveDeclinedBatch = async (
 
     await Promise.all(
         delayed.map(async (candidate) => {
-            const view = harness.views.get(candidate) ?? viewOf(candidate);
+            const view = viewIn(harness, candidate);
+            // No admin token, no MAC: without one a copy could not be told apart
+            // from a forged envelope on the way back in, so it is not sent.
             const requeue =
-                typeof producer?.send !== "function" || view.requeued
+                typeof producer?.send !== "function" || view.requeued || secret === undefined
                     ? undefined
                     : async (delaySeconds: number): Promise<void> => {
-                          // `v8`, not the queue's content type: the original may be `bytes`
-                          // or `v8` itself, and structured clone carries every one of them.
-                          await producer.send({ [REQUEUED_KEY]: { body: view.body, id: view.id } }, { contentType: "v8", delaySeconds });
+                          // `json`: the envelope is JSON text by construction, whatever
+                          // content type the original was sent with.
+                          await producer.send(await sealRequeue(secret, view.id, view.body), { contentType: "json", delaySeconds });
                       };
 
             if ((await retryDeclinedMessage(candidate, { maxRetries: declaredMaxRetries(entry), requeue, where })) === "requeued") {
@@ -626,7 +635,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     // message its pinned `run`, and poison-message isolation is a DELIVERY
     // property — gating it on the dev capture sink left it inert in production,
     // where a single bad message still took its whole batch down with it.
-    const harness = instrumentBatch(batch, context.run);
+    const harness = await instrumentBatch(batch, context.run, requeueSecret(options.env));
     // A separate flag, not `handlerError !== undefined`: a handler can throw a
     // falsy/undefined value (`throw undefined`, `Promise.reject()`), which must
     // still record `error` and re-throw — testing the captured value would

@@ -14,6 +14,7 @@ import { createExecutionContext, createMessageBatch, env, getQueueResult } from 
 import { describe, expect, it, vi } from "vitest";
 
 import createQueues from "../../src/create-queues";
+import { sealRequeue } from "../../src/requeue-envelope";
 import type { QueueBindingLike } from "../../src/types";
 import type { SmokeBody } from "./test-worker";
 import testWorker, { declineDeliveries, deliveries, requeuedSends } from "./test-worker";
@@ -125,7 +126,30 @@ describe("@lunora/queue (workerd)", () => {
         expect(result.explicitAcks).toStrictEqual(["decline-last-1"]);
         expect(result.retryMessages).toStrictEqual([]);
         expect(requeuedSends.slice(sendsBefore)).toStrictEqual([
-            { body: { "$lunora.requeued$": { body: { text: "last-try" }, id: "decline-last-1" } }, options: { contentType: "v8", delaySeconds: 900 } },
+            { body: await sealRequeue("test-token", "decline-last-1", { text: "last-try" }), options: { contentType: "json", delaySeconds: 900 } },
         ]);
+    });
+
+    // Sent straight through the binding, past `ctx.queues`' own refusal: an
+    // envelope without a valid MAC must not make the handler see another id.
+    it("delivers a body imitating a re-enqueued copy as-is, under the broker's own id", async () => {
+        expect.hasAssertions();
+
+        const before = deliveries.length;
+        const forged = { "$lunora.requeued$": { body: JSON.stringify({ text: "forged" }), id: "victim-1", mac: "0".repeat(64) } };
+
+        await env.QUEUE_SMOKE_QUEUE.send(forged as unknown as SmokeBody);
+
+        await vi.waitFor(
+            () => {
+                expect(deliveries.slice(before)).toHaveLength(1);
+            },
+            { interval: 50, timeout: 5000 },
+        );
+
+        const [delivered] = deliveries.slice(before);
+
+        expect(delivered?.body).toStrictEqual(forged);
+        expect(delivered?.id).not.toBe("victim-1");
     });
 });

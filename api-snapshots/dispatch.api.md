@@ -15,6 +15,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : never;
 ```
 
+### `DEFAULT_DISPATCH_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_DISPATCH_TIMEOUT_MS = 3e4;
+```
+
 ### `DEFAULT_QUEUE_MAX_RETRIES` (const)
 
 ```ts
@@ -126,6 +132,18 @@ const isDispatchDecline: (error: unknown) => error is LunoraError;
 
 ```ts
 const retryDeclinedMessage: (message: DeclinedMessageLike, context: DeclinedMessageContext) => Promise<"requeued" | "retried">;
+```
+
+### `signRequeue` (const)
+
+```ts
+const signRequeue: (secret: string, scope: string, id: string, payload: string) => Promise<string>;
+```
+
+### `verifyRequeue` (const)
+
+```ts
+const verifyRequeue: (secret: string, scope: string, id: string, payload: string, mac: unknown) => Promise<boolean>;
 ```
 
 ## Referenced internal declarations
