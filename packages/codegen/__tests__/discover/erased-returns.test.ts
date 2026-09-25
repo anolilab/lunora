@@ -15,8 +15,10 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCodegen } from "../../src/index";
@@ -223,5 +225,85 @@ describe("procedure_return_type_erased", () => {
         );
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getOther", "getTree"]);
+    }, 300_000);
+});
+
+/**
+ * A unique-symbol brand on a type the handler reaches from ANOTHER module. The
+ * alias `Id` is inlined by the checker, so its own name never appears — but its
+ * text, `string & { readonly [brand]: true; }`, still spells the VALUE `brand`,
+ * which resolves nowhere from `_generated/`.
+ */
+const BRANDED_LEAF = {
+    "leaf.ts": `
+    declare const brand: unique symbol;
+
+    type Id = string & { readonly [brand]: true };
+
+    interface Leaf { id: Id; name: string }
+
+    export const makeLeaf = (): Leaf => ({ id: "x" as Id, name: "n" });
+`,
+    "leaves.ts": `
+    import { query } from "@lunora/server";
+
+    import { makeLeaf } from "./leaf";
+
+    export const getLeaf = query({ args: {}, handler: async () => makeLeaf() });
+`,
+};
+
+describe("procedure_return_type_erased (compiled output)", () => {
+    // Beside the fixtures, not in `os.tmpdir()`: the emitted `api.ts` imports
+    // `@lunora/server`, and only a workdir with `node_modules` up its path lets
+    // the compile below mean anything. `.workdir-*` is gitignored for exactly
+    // this (see `golden-fixtures.ts`).
+    const fixturesDirectory = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(fixturesDirectory, ".workdir-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("falls back to `unknown` for a type spelling a module-scoped value, and the emitted `api.ts` compiles", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor(BRANDED_LEAF).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getLeaf"]);
+
+        // Compiled, not string-matched: the failure was text that LOOKED like a
+        // type and named something that does not exist where it was written.
+        const project = new Project({
+            compilerOptions: {
+                module: ModuleKind.NodeNext,
+                moduleResolution: ModuleResolutionKind.NodeNext,
+                noEmit: true,
+                skipLibCheck: true,
+                strict: true,
+                target: ScriptTarget.ES2022,
+            },
+            skipAddingFilesFromTsConfig: true,
+        });
+        const api = project.addSourceFileAtPath(join(workdir, "lunora", "_generated", "api.ts"));
+
+        // TS2307 aside: `@lunora/client` is not a dependency of this package, so
+        // its import cannot resolve here. That leaves the names inside the
+        // emitted types as the only thing left to fail — which is the point.
+        const diagnostics = api
+            .getPreEmitDiagnostics()
+            .filter((diagnostic) => diagnostic.getCode() !== 2307)
+            .map((diagnostic) => {
+                const message = diagnostic.getMessageText();
+
+                return `TS${String(diagnostic.getCode())}: ${typeof message === "string" ? message : message.getMessageText()}`;
+            });
+
+        expect(diagnostics).toStrictEqual([]);
     }, 300_000);
 });

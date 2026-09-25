@@ -32,8 +32,10 @@ const childTypes = (type: Type): Type[] => {
 
 /**
  * An object type whose members we can faithfully reproduce structurally: a plain
- * object/interface with no call/construct signatures and no index signatures
- * (those can't be re-expressed as `{ name: type; … }` without losing meaning).
+ * object/interface with no call/construct signatures, no index signatures, and
+ * no symbol-keyed members (none of those can be re-expressed as
+ * `{ name: type; … }` without losing meaning — a symbol key's name is the
+ * checker's internal `__@brand@12`, which would render as a STRING key).
  */
 const isExpandableObject = (type: Type): boolean => {
     if (!type.isObject() || type.isArray() || type.isTuple()) {
@@ -44,7 +46,11 @@ const isExpandableObject = (type: Type): boolean => {
         return false;
     }
 
-    return type.getStringIndexType() === undefined && type.getNumberIndexType() === undefined;
+    return (
+        type.getStringIndexType() === undefined &&
+        type.getNumberIndexType() === undefined &&
+        !type.getProperties().some((property) => property.getName().startsWith("__@"))
+    );
 };
 
 /**

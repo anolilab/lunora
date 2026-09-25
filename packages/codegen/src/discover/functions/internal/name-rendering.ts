@@ -480,6 +480,81 @@ const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: str
     return isUnresolvableSpecifier(qualified.specifier, node) ? EXPAND : { kind: "qualify", qualified };
 };
 
+/** Declarations the checker can print as `typeof <name>` — only these gate the (expensive) text check. */
+const VALUE_DECLARATION_KINDS = new Set<SyntaxKind>([
+    SyntaxKind.ClassDeclaration,
+    SyntaxKind.EnumDeclaration,
+    SyntaxKind.FunctionDeclaration,
+    SyntaxKind.ModuleDeclaration,
+]);
+
+/** Whether every declaration of `symbol` is global — the script-mode test {@link isGloballyDeclared} applies to types. */
+const isGlobalSymbol = (symbol: TsSymbol | undefined): boolean => {
+    const declarations = symbol?.getDeclarations() ?? [];
+
+    return declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().getSymbol() === undefined);
+};
+
+/** The leftmost identifier of a computed key — `brand` in `[brand]`, `Symbol` in `[Symbol.iterator]`. */
+const computedKeyRoot = (property: TsSymbol): Node | undefined => {
+    for (const declaration of property.getDeclarations()) {
+        const name = declaration.getFirstChildByKind(SyntaxKind.ComputedPropertyName);
+
+        if (name !== undefined) {
+            let root: Node = name.getExpression();
+
+            while (Node.isPropertyAccessExpression(root)) {
+                root = root.getExpression();
+            }
+
+            return root;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Whether the checker's text for `type` spells a module-scoped VALUE name — a
+ * `[brand]` key of a `declare const brand: unique symbol`, or the `typeof helper`
+ * it prints for a function, class, enum or namespace object.
+ *
+ * Neither resolves from `_generated/` (TS2304), and neither has a type-space
+ * spelling to qualify with — so such a type needs renaming, which ends in the
+ * `unknown` fallback because expansion declines both shapes. `unknown` compiles;
+ * the text does not. This is what made an INLINED alias unsafe to print verbatim:
+ * inlining removes the alias's own name, not the value names inside it.
+ *
+ * `[Symbol.iterator]` and a `typeof` of a global are printable from anywhere and
+ * stay verbatim.
+ */
+const spellsModuleScopedValue = (type: Type, printedText: () => string): boolean => {
+    // `__@name@id` is how the checker names a property keyed by a unique symbol.
+    const symbolKeyed = type.getProperties().some((property) => {
+        if (!property.getName().startsWith("__@")) {
+            return false;
+        }
+
+        const root = computedKeyRoot(property);
+
+        // No declaration to read the key from: nothing proves it global.
+        return root === undefined || !isGlobalSymbol(root.getSymbol());
+    });
+
+    if (symbolKeyed) {
+        return true;
+    }
+
+    const symbol = type.getSymbol();
+
+    return (
+        symbol !== undefined &&
+        symbol.getDeclarations().some((declaration) => VALUE_DECLARATION_KINDS.has(declaration.getKind())) &&
+        !isGlobalSymbol(symbol) &&
+        printedText().startsWith("typeof ")
+    );
+};
+
 /**
  * Classify a type by the declarations behind it.
  *
@@ -513,7 +588,7 @@ const classifyType = (type: Type, node: Node, handlerFilePath: string): NameRend
         needsRenaming ||= rendering.kind !== "verbatim";
     }
 
-    return needsRenaming ? EXPAND : VERBATIM;
+    return needsRenaming || spellsModuleScopedValue(type, printedText) ? EXPAND : VERBATIM;
 };
 
 /**
