@@ -19,6 +19,7 @@ import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../shared/sch
 import type { CapabilityKey, CapabilityTier } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
+import declaredOutputWins from "./declared-output";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
     AgentIR,
@@ -852,19 +853,11 @@ const referencedDataModelImports = (body: string): ReadonlyArray<"Doc" | "Id"> =
  * the `stream` member). Preferring an unenforced, untyped declaration there
  * would describe chunks the handler does not yield.
  */
-const referenceReturnType = (definition: FunctionIR): string => {
-    // `parseValidator` yields `{ kind: "any" }` for anything that is not a call
-    // expression, which includes the perfectly ordinary
-    // `.output(sharedValidator)` where the validator lives in another binding.
-    // Preferring that over the handler would replace a precise inferred type
-    // with `unknown` — reintroducing, on every procedure with a hoisted output
-    // validator, exactly the leak this function exists to stop.
-    if (definition.output === undefined || definition.output.kind === "any" || definition.kind === "stream") {
-        return definition.returnType;
-    }
-
-    return validatorToType(definition.output);
-};
+const referenceReturnType = (definition: FunctionIR): string =>
+    // A hoisted `.output(sharedValidator)` parses as `{ kind: "any" }`, and
+    // preferring THAT would replace a precise inferred type with `unknown` —
+    // `declaredOutputWins` owns that rule, shared with discovery.
+    declaredOutputWins(definition) ? validatorToType(definition.output) : definition.returnType;
 
 /** Group entries by `filePath`, entries sorted by file for deterministic output. */
 const groupByFileSorted = <T extends { filePath: string }>(entries: ReadonlyArray<T>): [string, T[]][] => {

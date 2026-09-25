@@ -98,6 +98,25 @@ const RECURSIVE_INPUT = `
         .query(async () => "ok");
 `;
 
+/**
+ * An erasing handler behind a DECLARED output. `api.ts` carries the `.output()`
+ * type, never the handler's, so the handler's `Tree` erasing reaches nothing —
+ * and the advisory's own remedy ("declare the shape with `.output(...)`") is
+ * already applied.
+ */
+const RECURSIVE_BEHIND_OUTPUT = `
+    import { query, v } from "@lunora/server";
+
+    interface Tree { value: string; child: Tree }
+
+    declare const tree: Tree;
+
+    export const getOutlined = query
+        .input({})
+        .output(v.object({ value: v.string() }))
+        .query(async () => tree);
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -111,13 +130,15 @@ const EXPANDABLE = `
 
 let workdir: string;
 
-const advisoriesFor = (sources: Record<string, string>): ReturnType<typeof runCodegen>["advisories"] => {
+const runCodegenFor = (sources: Record<string, string>): ReturnType<typeof runCodegen> => {
     for (const [name, text] of Object.entries(sources)) {
         writeFileSync(join(workdir, "lunora", name), text, "utf8");
     }
 
-    return runCodegen({ projectRoot: workdir }).advisories;
+    return runCodegen({ projectRoot: workdir });
 };
+
+const advisoriesFor = (sources: Record<string, string>): ReturnType<typeof runCodegen>["advisories"] => runCodegenFor(sources).advisories;
 
 describe("procedure_return_type_erased", () => {
     beforeEach(() => {
@@ -142,7 +163,19 @@ describe("procedure_return_type_erased", () => {
             level: "WARN",
             metadata: { exportName: "getTree", filePath: "trees", rendered: "Tree" },
         });
-    });
+    }, 300_000);
+
+    it("does not report a handler erasure a declared `.output(...)` replaces", () => {
+        expect.assertions(2);
+
+        const result = runCodegenFor({ "outlined.ts": RECURSIVE_BEHIND_OUTPUT });
+        const findings = result.advisories.filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(0);
+        // Guards the guard: the declared output really is what `api.ts` carries,
+        // so there is no `unknown` anywhere for the advisory to be about.
+        expect(result.generated.api).toContain('getOutlined: FunctionReference<"query", {}, { value: string }>');
+    }, 300_000);
 
     it("reports a DECLARED `.output(v.from(…))` the expander could not reproduce", () => {
         expect.assertions(1);

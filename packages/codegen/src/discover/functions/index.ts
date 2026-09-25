@@ -1,11 +1,13 @@
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 
+import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
 import sanitizeNamespace from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import type { LifecycleMoment } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
+import { checkpointErasedReturns } from "./internal/erased-returns";
 import { argsFromCall, exposeFromBuilderChain } from "./internal/expose";
 import { exportCallsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
 
@@ -38,13 +40,22 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     if (classified.receiver) {
         const expose = exposeFromBuilderChain(classified.receiver);
         const output = outputFromBuilderChain(classified.receiver);
+        // The handler's type is still inferred, but when the declared output is
+        // what `api.ts` carries, an erasure in it never reaches the output and
+        // must not be reported as one.
+        const rewindErasedReturns = checkpointErasedReturns();
+        const returnType = returnTypeFromBuilderCall(call);
+
+        if (declaredOutputWins({ kind: classified.kind, output })) {
+            rewindErasedReturns();
+        }
 
         return {
             args: argsFromBuilderChain(classified.receiver),
             ...(expose ? { expose } : {}),
             kind: classified.kind,
             ...(output ? { output } : {}),
-            returnType: returnTypeFromBuilderCall(call),
+            returnType,
             visibility: classified.visibility,
         };
     }
